@@ -1,0 +1,286 @@
+# ============================================
+# Hummingbot Trading Infrastructure
+# docker-compose.yml - Production Configuration
+# ============================================
+# Usage:
+#   cp ../env/.env.template ../env/.env  # then edit with real values
+#   docker compose --env-file ../env/.env -f docker-compose.yml up -d
+# ============================================
+
+name: hbot
+
+# ---- Networks ----
+networks:
+  trading:
+    driver: bridge
+    name: hbot-trading
+  monitoring:
+    driver: bridge
+    name: hbot-monitoring
+
+# ---- Volumes ----
+volumes:
+  prometheus-data:
+    driver: local
+  grafana-data:
+    driver: local
+
+# ---- Logging anchor ----
+x-logging: &default-logging
+  driver: json-file
+  options:
+    max-size: "${LOG_MAX_SIZE:-50m}"
+    max-file: "${LOG_MAX_FILE:-5}"
+
+# ---- Hummingbot base anchor ----
+x-hbot-base: &hbot-base
+  image: ${HUMMINGBOT_IMAGE:-hummingbot/hummingbot:version-2.12.0}
+  restart: unless-stopped
+  logging: *default-logging
+  networks:
+    - trading
+  environment:
+    - TZ=${TZ:-UTC}
+  stdin_open: true
+  tty: true
+
+# ============================================
+# Services
+# ============================================
+services:
+
+  # ==========================================
+  # BOT 1
+  # ==========================================
+  bot1:
+    <<: *hbot-base
+    container_name: hbot-bot1
+    volumes:
+      # ---- V2 controllers (individual files — preserves built-in controllers) ----
+      - ../controllers/market_making/pmm_rsi_llm.py:/home/hummingbot/controllers/market_making/pmm_rsi_llm.py:ro
+      - ../controllers/market_making/pmm_avellaneda_v2.py:/home/hummingbot/controllers/market_making/pmm_avellaneda_v2.py:ro
+      - ../controllers/directional_trading/systematic_alpha_v1.py:/home/hummingbot/controllers/directional_trading/systematic_alpha_v1.py:ro
+      - ../controllers/directional_trading/directional_max_min_v1.py:/home/hummingbot/controllers/directional_trading/directional_max_min_v1.py:ro
+      # ---- Bot config, data, logs ----
+      - ../data/bot1/conf:/home/hummingbot/conf
+      - ../data/bot1/logs:/home/hummingbot/logs
+      - ../data/bot1/data:/home/hummingbot/data
+      - ../data/bot1/scripts:/home/hummingbot/scripts
+      - ../data/bot1/pmm_scripts:/home/hummingbot/pmm_scripts
+      # ---- Legacy V1 strategies (still usable) ----
+      - ../scripts/strategies:/home/hummingbot/custom_strategies:ro
+      - ../scripts/utils:/home/hummingbot/custom_utils:ro
+    environment:
+      - TZ=${TZ:-UTC}
+      # CONFIG_PASSWORD auto-logins on boot.  On FIRST RUN, leave it empty
+      # so you can set the password interactively via `docker attach`.
+      # After the first login, .password_verification is created and
+      # CONFIG_PASSWORD works for unattended restarts.
+      - CONFIG_PASSWORD=${BOT1_PASSWORD:-}
+      - LLM_API_KEY=${LLM_API_KEY:-}
+      - LLM_FALLBACK_API_KEY=${LLM_FALLBACK_API_KEY:-}
+    deploy:
+      resources:
+        limits:
+          memory: 1G
+          cpus: "1.0"
+        reservations:
+          memory: 256M
+          cpus: "0.25"
+
+  # ==========================================
+  # BOT 2 (scale replica)
+  # ==========================================
+  bot2:
+    <<: *hbot-base
+    container_name: hbot-bot2
+    profiles:
+      - multi
+    volumes:
+      # ---- V2 controllers (individual files) ----
+      - ../controllers/market_making/pmm_rsi_llm.py:/home/hummingbot/controllers/market_making/pmm_rsi_llm.py:ro
+      - ../controllers/market_making/pmm_avellaneda_v2.py:/home/hummingbot/controllers/market_making/pmm_avellaneda_v2.py:ro
+      - ../controllers/directional_trading/systematic_alpha_v1.py:/home/hummingbot/controllers/directional_trading/systematic_alpha_v1.py:ro
+      - ../controllers/directional_trading/directional_max_min_v1.py:/home/hummingbot/controllers/directional_trading/directional_max_min_v1.py:ro
+      # ---- Bot config, data, logs ----
+      - ../data/bot2/conf:/home/hummingbot/conf
+      - ../data/bot2/logs:/home/hummingbot/logs
+      - ../data/bot2/data:/home/hummingbot/data
+      - ../data/bot2/scripts:/home/hummingbot/scripts
+      - ../data/bot2/pmm_scripts:/home/hummingbot/pmm_scripts
+      # ---- Legacy V1 strategies ----
+      - ../scripts/strategies:/home/hummingbot/custom_strategies:ro
+      - ../scripts/utils:/home/hummingbot/custom_utils:ro
+    environment:
+      - TZ=${TZ:-UTC}
+      - CONFIG_PASSWORD=${BOT2_PASSWORD:-admin}
+      - LLM_API_KEY=${LLM_API_KEY:-}
+      - LLM_FALLBACK_API_KEY=${LLM_FALLBACK_API_KEY:-}
+    deploy:
+      resources:
+        limits:
+          memory: 1G
+          cpus: "1.0"
+        reservations:
+          memory: 256M
+          cpus: "0.25"
+
+  # ==========================================
+  # Monitoring Stack
+  # ==========================================
+
+  # ---- Prometheus ----
+  prometheus:
+    image: prom/prometheus:v2.51.2
+    container_name: hbot-prometheus
+    restart: unless-stopped
+    logging: *default-logging
+    command:
+      - "--config.file=/etc/prometheus/prometheus.yml"
+      - "--storage.tsdb.path=/prometheus"
+      - "--storage.tsdb.retention.time=${PROMETHEUS_RETENTION:-30d}"
+      - "--storage.tsdb.retention.size=${PROMETHEUS_RETENTION_SIZE:-5GB}"
+      - "--web.enable-lifecycle"
+      - "--web.enable-admin-api"
+    volumes:
+      - ../monitoring/prometheus/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - ../monitoring/prometheus/alert_rules.yml:/etc/prometheus/alert_rules.yml:ro
+      - prometheus-data:/prometheus
+    ports:
+      - "${MONITORING_BIND_IP:-127.0.0.1}:9090:9090"
+    networks:
+      - monitoring
+    healthcheck:
+      test: ["CMD", "wget", "--quiet", "--tries=1", "--spider", "http://localhost:9090/-/healthy"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 15s
+    deploy:
+      resources:
+        limits:
+          memory: 512M
+          cpus: "0.5"
+
+  # ---- Grafana ----
+  grafana:
+    image: grafana/grafana:10.4.2
+    container_name: hbot-grafana
+    restart: unless-stopped
+    logging: *default-logging
+    environment:
+      - GF_SECURITY_ADMIN_USER=${GF_ADMIN_USER:-admin}
+      - GF_SECURITY_ADMIN_PASSWORD=${GF_ADMIN_PASSWORD:-admin}
+      - GF_SERVER_ROOT_URL=${GF_SERVER_ROOT_URL:-http://localhost:3000}
+      - GF_SERVER_SERVE_FROM_SUB_PATH=${GF_SERVER_SERVE_FROM_SUB_PATH:-false}
+      - GF_USERS_ALLOW_SIGN_UP=false
+      - GF_USERS_ALLOW_ORG_CREATE=false
+      - GF_AUTH_ANONYMOUS_ENABLED=false
+      - GF_LOG_LEVEL=warn
+      - GF_INSTALL_PLUGINS=grafana-clock-panel
+    volumes:
+      - grafana-data:/var/lib/grafana
+      - ../monitoring/grafana/provisioning:/etc/grafana/provisioning:ro
+      - ../monitoring/grafana/dashboards:/var/lib/grafana/dashboards:ro
+    ports:
+      - "${MONITORING_BIND_IP:-127.0.0.1}:3000:3000"
+    networks:
+      - monitoring
+    depends_on:
+      prometheus:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "wget", "--quiet", "--tries=1", "--spider", "http://localhost:3000/api/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 30s
+    deploy:
+      resources:
+        limits:
+          memory: 256M
+          cpus: "0.5"
+
+  # ---- Node Exporter ----
+  node-exporter:
+    image: prom/node-exporter:v1.8.1
+    container_name: hbot-node-exporter
+    restart: unless-stopped
+    logging: *default-logging
+    command:
+      - "--path.procfs=/host/proc"
+      - "--path.sysfs=/host/sys"
+      - "--path.rootfs=/host/root"
+      - "--collector.filesystem.mount-points-exclude=^/(sys|proc|dev|host|etc)($$|/)"
+    volumes:
+      - /proc:/host/proc:ro
+      - /sys:/host/sys:ro
+      - /:/host/root:ro
+    ports:
+      - "${MONITORING_BIND_IP:-127.0.0.1}:9100:9100"
+    networks:
+      - monitoring
+    pid: host
+    healthcheck:
+      test: ["CMD", "wget", "--quiet", "--tries=1", "--spider", "http://localhost:9100/metrics"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+    deploy:
+      resources:
+        limits:
+          memory: 128M
+          cpus: "0.25"
+
+  # ---- cAdvisor ----
+  cadvisor:
+    image: gcr.io/cadvisor/cadvisor:v0.49.1
+    container_name: hbot-cadvisor
+    restart: unless-stopped
+    logging: *default-logging
+    volumes:
+      - /:/rootfs:ro
+      - /var/run:/var/run:ro
+      - /sys:/sys:ro
+      - /var/lib/docker/:/var/lib/docker:ro
+      - /dev/disk/:/dev/disk:ro
+    ports:
+      - "${MONITORING_BIND_IP:-127.0.0.1}:8080:8080"
+    networks:
+      - monitoring
+    privileged: true
+    devices:
+      - /dev/kmsg:/dev/kmsg
+    healthcheck:
+      test: ["CMD", "wget", "--quiet", "--tries=1", "--spider", "http://localhost:8080/healthz"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+    deploy:
+      resources:
+        limits:
+          memory: 256M
+          cpus: "0.5"
+
+  # ---- Alertmanager (optional, activate with profile) ----
+  alertmanager:
+    image: prom/alertmanager:v0.27.0
+    container_name: hbot-alertmanager
+    restart: unless-stopped
+    logging: *default-logging
+    profiles:
+      - alerts
+    command:
+      - "--config.file=/etc/alertmanager/alertmanager.yml"
+      - "--storage.path=/alertmanager"
+    volumes:
+      - ../monitoring/alertmanager/alertmanager.yml:/etc/alertmanager/alertmanager.yml:ro
+    ports:
+      - "${MONITORING_BIND_IP:-127.0.0.1}:9093:9093"
+    networks:
+      - monitoring
+    deploy:
+      resources:
+        limits:
+          memory: 64M
+          cpus: "0.1"
