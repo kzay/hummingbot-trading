@@ -1,0 +1,27 @@
+# ============================================================================
+#  V2 Script Configuration — Systematic Alpha V1
+# ============================================================================
+#  Multi-factor quant directional strategy.
+#
+#  Usage:
+#    start --script v2_with_controllers.py --conf v2_systematic_alpha.yml
+#
+#  Expected behavior:
+#    - Mostly flat (waiting for signal alignment)
+#    - Trades 0-3 times per day when multiple factors align
+#    - Holds positions for hours to 2 days
+#    - Position size adapts to volatility automatically
+#    - Stops adapt to ATR (tighter in calm markets, wider in volatile)
+# ============================================================================
+
+script_file_name: v2_with_controllers.py
+
+markets: ""
+candles_config: ""
+
+controllers_config:
+  - systematic_alpha_v1_1.yml
+
+# ---- Drawdown Protection ----
+max_global_drawdown_quote: 150.0
+max_controller_drawdown_quote: 100.0

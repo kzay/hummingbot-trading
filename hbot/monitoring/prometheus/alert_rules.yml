@@ -1,0 +1,117 @@
+# ============================================
+# Prometheus Alert Rules
+# ============================================
+
+groups:
+
+  # ---- Infrastructure Alerts ----
+  - name: infrastructure
+    rules:
+
+      - alert: ContainerDown
+        expr: |
+          time() - container_last_seen{name=~"hbot-.*"} > 60
+        for: 2m
+        labels:
+          severity: critical
+        annotations:
+          summary: "Container {{ $labels.name }} is down"
+          description: "Container {{ $labels.name }} has not been seen for more than 60 seconds."
+
+      - alert: ContainerRestartLoop
+        expr: |
+          increase(container_restart_count{name=~"hbot-.*"}[15m]) > 3
+        for: 5m
+        labels:
+          severity: critical
+        annotations:
+          summary: "Container {{ $labels.name }} is in a restart loop"
+          description: "Container {{ $labels.name }} has restarted more than 3 times in the last 15 minutes."
+
+      - alert: HighCpuUsage
+        expr: |
+          100 - (avg by(instance) (rate(node_cpu_seconds_total{mode="idle"}[5m])) * 100) > 90
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "High CPU usage on {{ $labels.instance }}"
+          description: "CPU usage has been above 90% for more than 5 minutes. Current value: {{ $value }}%"
+
+      - alert: HighMemoryUsage
+        expr: |
+          (1 - (node_memory_MemAvailable_bytes / node_memory_MemTotal_bytes)) * 100 > 85
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "High memory usage on {{ $labels.instance }}"
+          description: "Memory usage has been above 85% for more than 5 minutes. Current value: {{ $value }}%"
+
+      - alert: HighDiskUsage
+        expr: |
+          (1 - (node_filesystem_avail_bytes{fstype!~"tmpfs|fuse.lxcfs"} / node_filesystem_size_bytes{fstype!~"tmpfs|fuse.lxcfs"})) * 100 > 80
+        for: 10m
+        labels:
+          severity: warning
+        annotations:
+          summary: "High disk usage on {{ $labels.instance }}"
+          description: "Disk usage on {{ $labels.mountpoint }} is above 80%. Current value: {{ $value }}%"
+
+      - alert: DiskAlmostFull
+        expr: |
+          (1 - (node_filesystem_avail_bytes{fstype!~"tmpfs|fuse.lxcfs"} / node_filesystem_size_bytes{fstype!~"tmpfs|fuse.lxcfs"})) * 100 > 95
+        for: 5m
+        labels:
+          severity: critical
+        annotations:
+          summary: "Disk almost full on {{ $labels.instance }}"
+          description: "Disk usage on {{ $labels.mountpoint }} is above 95%. Current value: {{ $value }}%"
+
+  # ---- Container Resource Alerts ----
+  - name: container_resources
+    rules:
+
+      - alert: ContainerHighCpu
+        expr: |
+          rate(container_cpu_usage_seconds_total{name=~"hbot-.*"}[5m]) * 100 > 80
+        for: 10m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Container {{ $labels.name }} high CPU"
+          description: "Container {{ $labels.name }} CPU usage is above 80% for 10 minutes."
+
+      - alert: ContainerHighMemory
+        expr: |
+          container_memory_usage_bytes{name=~"hbot-.*"} / container_spec_memory_reservation_limit_bytes{name=~"hbot-.*"} * 100 > 90
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Container {{ $labels.name }} high memory"
+          description: "Container {{ $labels.name }} memory usage is above 90%."
+
+      - alert: ContainerOomKilled
+        expr: |
+          increase(container_oom_events_total{name=~"hbot-.*"}[5m]) > 0
+        for: 0m
+        labels:
+          severity: critical
+        annotations:
+          summary: "Container {{ $labels.name }} OOM killed"
+          description: "Container {{ $labels.name }} was killed due to out-of-memory."
+
+  # ---- Network Alerts ----
+  - name: network
+    rules:
+
+      - alert: HighNetworkErrorRate
+        expr: |
+          rate(node_network_receive_errs_total[5m]) + rate(node_network_transmit_errs_total[5m]) > 10
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "High network error rate on {{ $labels.instance }}"
+          description: "Network errors detected. Receive+Transmit error rate: {{ $value }}/s"

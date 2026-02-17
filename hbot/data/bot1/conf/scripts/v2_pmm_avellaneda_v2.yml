@@ -1,0 +1,21 @@
+# ============================================================================
+#  V2 Script Configuration — PMM Avellaneda V2
+# ============================================================================
+#  Usage:
+#    start --script v2_with_controllers.py --conf v2_pmm_avellaneda_v2.yml
+# ============================================================================
+
+script_file_name: v2_with_controllers.py
+
+# Markets and candles auto-populated from controller configs below.
+markets: ""
+candles_config: ""
+
+# Reference the controller config YAML(s) in conf/controllers/
+controllers_config:
+  - pmm_avellaneda_v2_1.yml
+
+# ---- Global Drawdown Protection ----
+# Halt everything if total loss exceeds this amount in quote (USDT)
+max_global_drawdown_quote: 100.0     # Stop at $100 loss
+max_controller_drawdown_quote: 75.0  # Stop single controller at $75 loss

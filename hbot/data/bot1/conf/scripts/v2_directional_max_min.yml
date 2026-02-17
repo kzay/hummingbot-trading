@@ -1,0 +1,30 @@
+# ============================================================================
+#  V2 Script Configuration — Directional MAX/MIN V1
+# ============================================================================
+#  Systematic directional trading based on N-day breakout + seasonality.
+#
+#  Usage:
+#    start --script v2_with_controllers.py --conf v2_directional_max_min.yml
+#
+#  Expected behavior:
+#    - Checks every hour if BTC is at 10-day high or low
+#    - Enters LONG on breakout (momentum) or dip (bounce)
+#    - Trades 0-3 times per day (mostly flat)
+#    - Holds positions for hours to days
+#    - Boosts entries during 21:00-23:00 UTC (best hours from research)
+# ============================================================================
+
+script_file_name: v2_with_controllers.py
+
+# Markets and candles auto-populated from controller config.
+markets: ""
+candles_config: ""
+
+# Reference the controller config
+controllers_config:
+  - directional_max_min_v1_1.yml
+
+# ---- Global Drawdown Protection ----
+# Hard stop: halt everything if losses exceed these limits
+max_global_drawdown_quote: 150.0     # Stop at $150 total loss
+max_controller_drawdown_quote: 100.0 # Stop single controller at $100 loss

@@ -1,0 +1,19 @@
+# ============================================================================
+#  V2 Script Configuration — Systematic Alpha V1 (PAPER TRADE)
+# ============================================================================
+#  Same strategy, no real money. Uses simulated fills against live prices.
+#
+#  Usage:
+#    start --script v2_with_controllers.py --conf v2_systematic_alpha_paper.yml
+# ============================================================================
+
+script_file_name: v2_with_controllers.py
+
+markets: ""
+candles_config: ""
+
+controllers_config:
+  - systematic_alpha_v1_paper.yml
+
+max_global_drawdown_quote: null
+max_controller_drawdown_quote: null

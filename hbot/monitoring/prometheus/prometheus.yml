@@ -1,0 +1,57 @@
+# ============================================
+# Prometheus Configuration
+# ============================================
+
+global:
+  scrape_interval: 15s
+  evaluation_interval: 15s
+  scrape_timeout: 10s
+
+  external_labels:
+    cluster: "hbot-prod"
+    environment: "production"
+
+# ---- Alert Rules ----
+rule_files:
+  - "/etc/prometheus/alert_rules.yml"
+
+# ---- Alertmanager ----
+alerting:
+  alertmanagers:
+    - static_configs:
+        - targets:
+            - "alertmanager:9093"
+
+# ---- Scrape Targets ----
+scrape_configs:
+
+  # Prometheus self-monitoring
+  - job_name: "prometheus"
+    static_configs:
+      - targets: ["localhost:9090"]
+        labels:
+          instance: "prometheus"
+
+  # Node Exporter - host-level metrics (CPU, RAM, disk, network)
+  - job_name: "node-exporter"
+    scrape_interval: 10s
+    static_configs:
+      - targets: ["node-exporter:9100"]
+        labels:
+          instance: "vps-host"
+
+  # cAdvisor - container-level metrics
+  - job_name: "cadvisor"
+    scrape_interval: 10s
+    static_configs:
+      - targets: ["cadvisor:8080"]
+        labels:
+          instance: "docker-containers"
+
+  # Grafana self-monitoring
+  - job_name: "grafana"
+    scrape_interval: 30s
+    static_configs:
+      - targets: ["grafana:3000"]
+        labels:
+          instance: "grafana"

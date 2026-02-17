@@ -1,0 +1,60 @@
+# ============================================
+# Hummingbot Infrastructure - .gitignore
+# ============================================
+
+# Secrets - NEVER commit
+env/.env
+env/.env.*
+!env/.env.template
+*.pem
+*.key
+*.crt
+
+# Bot runtime data
+data/*/logs/*.log
+data/*/logs/*.log.*
+data/*/data/*.sqlite
+data/*/data/*.db
+data/*/data/*.json
+!data/*/conf/.gitkeep
+
+# Built-in scripts copied from image (not our code)
+data/*/scripts/*.py
+data/*/scripts/basic/
+data/*/scripts/community/
+data/*/scripts/utility/
+!data/*/scripts/.gitkeep
+
+# Grafana runtime
+monitoring/grafana/grafana.db
+monitoring/grafana/plugins/
+
+# Prometheus runtime
+monitoring/prometheus/data/
+
+# Backups (large binary files)
+backups/*.tar.gz
+backups/*.zip
+backups/*.sql
+
+# Docker override (local dev only)
+docker-compose.override.yml
+
+# OS files
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# Python
+__pycache__/
+*.pyc
+*.pyo
+.venv/
+venv/

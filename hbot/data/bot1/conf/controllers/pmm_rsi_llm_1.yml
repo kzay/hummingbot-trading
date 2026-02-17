@@ -1,0 +1,62 @@
+# ============================================================================
+#  PMM + RSI + LLM Sentiment — Controller Configuration (Bot 1)
+# ============================================================================
+#  This file is loaded by the v2_with_controllers script.
+#  Edit values here; the controller picks them up on the next refresh cycle.
+# ============================================================================
+
+# ---- Identity ----
+controller_name: pmm_rsi_llm
+controller_type: market_making
+
+# ---- Exchange & Market ----
+connector_name: binance_perpetual
+trading_pair: BTC-USDT
+
+# ---- Capital & Sizing ----
+total_amount_quote: 1000            # Total quote asset budget (e.g., 1000 USDT)
+
+# ---- Spreads (in NATR units) ----
+# 1 = 1× current normalized ATR.  Lower = tighter, higher = wider.
+buy_spreads: "1,2"
+sell_spreads: "1,2"
+# buy_amounts_pct / sell_amounts_pct: leave empty for equal distribution
+
+# ---- Executor Lifecycle ----
+executor_refresh_time: 300          # 5 min — how long before stale orders are replaced
+cooldown_time: 15                   # seconds between replacing a traded executor
+
+# ---- Leverage & Position Mode ----
+leverage: 5
+position_mode: HEDGE
+
+# ---- Triple Barrier (Risk Management) ----
+stop_loss: 0.015                    # 1.5 %
+take_profit: 0.03                   # 3.0 %
+time_limit: 7200                    # 2 hours
+take_profit_order_type: LIMIT
+# trailing_stop: "0.015,0.005"     # Uncomment: activate at 1.5%, trail by 0.5%
+
+# ---- Candle Data ----
+candles_connector: ""               # Empty = same as connector_name
+candles_trading_pair: ""            # Empty = same as trading_pair
+interval: "1m"                      # Candle interval
+
+# ---- RSI ----
+rsi_length: 14
+rsi_oversold: 30.0
+rsi_overbought: 70.0
+rsi_price_shift_factor: 0.5        # Max RSI price shift = 0.5 × NATR
+
+# ---- NATR / Volatility ----
+natr_length: 14
+volatility_pause_threshold: 0.0     # 0 = never pause.  Set e.g. 5.0 to pause at NATR > 5%
+
+# ---- LLM Sentiment ----
+llm_enabled: false                  # Set to true and provide API key to activate
+llm_provider: grok
+llm_api_key: ""                     # Resolved from LLM_API_KEY env var if empty
+llm_fallback_provider: openai
+llm_fallback_api_key: ""            # Resolved from LLM_FALLBACK_API_KEY env var if empty
+llm_query_interval: 600             # 10 minutes
+llm_price_shift_factor: 0.3        # Max sentiment price shift = 0.3 × NATR

@@ -1,0 +1,99 @@
+# ============================================================================
+#  PMM Avellaneda V2 — Controller Configuration (Bot 1)
+# ============================================================================
+#  Regime-aware adaptive market making with fee-aware spreads.
+#  This replaces pmm_rsi_llm_1.yml with quantitatively optimized parameters.
+#
+#  Key differences from pmm_rsi_llm:
+#    - TP/SL tuned for market making (tighter, faster exits)
+#    - Executor refresh 5× faster (60s vs 300s)
+#    - Multi-timeframe: 1m vol + 5m signals
+#    - ADX regime detection (trend-follow vs mean-revert)
+#    - Fee-aware spread floor (never loses on fees)
+#    - Corrected RSI direction (now properly mean-reverts)
+#    - Trailing stop for profit capture
+# ============================================================================
+
+# ---- Identity ----
+controller_name: pmm_avellaneda_v2
+controller_type: market_making
+
+# ---- Exchange & Market ----
+connector_name: binance_perpetual
+trading_pair: BTC-USDT
+
+# ---- Capital & Sizing ----
+total_amount_quote: 1000            # Total quote budget (USDT)
+
+# ---- Spreads (NATR units) ----
+# Level 1: 1.0× NATR — tight, high fill rate, bread-and-butter trades
+# Level 2: 2.5× NATR — wider, catches larger moves, lower fill rate
+buy_spreads: "1.0,2.5"
+sell_spreads: "1.0,2.5"
+# Allocation per level (60% tight, 40% wide)
+buy_amounts_pct: "60,40"
+sell_amounts_pct: "60,40"
+
+# ---- Executor Lifecycle ----
+# 60s refresh: keeps orders fresh, reduces adverse selection
+# 15s cooldown: quick re-entry after exits
+executor_refresh_time: 60
+cooldown_time: 15
+
+# ---- Leverage & Position Mode ----
+leverage: 3                         # Conservative leverage (was 5)
+position_mode: HEDGE
+
+# ---- Triple Barrier (Risk Management) ----
+# TUNED FOR MARKET MAKING — tighter than swing trading defaults
+stop_loss: 0.004                    # 0.4%  (was 1.5% — way too wide for MM)
+take_profit: 0.006                  # 0.6%  (was 3.0% — almost never fills from MM entry)
+time_limit: 900                     # 15 min (was 2h — don't hold stale positions)
+take_profit_order_type: LIMIT       # Maker TP exit to save on fees
+trailing_stop: "0.003,0.001"        # Activate at +0.3%, trail by 0.1%
+
+# ---- Candle Data (two timeframes) ----
+candles_connector: ""               # Empty = same as connector_name
+candles_trading_pair: ""            # Empty = same as trading_pair
+interval_vol: "1m"                  # 1m for volatility (NATR)
+interval_signal: "5m"               # 5m for RSI, EMA, ADX
+
+# ---- Risk Aversion (γ) ----
+# Lower = aggressive (tighter spreads, more fills, more risk)
+# Higher = conservative (wider spreads, fewer fills, less risk)
+# 0.3 is a balanced default for BTC perpetuals
+gamma: 0.3
+
+# ---- RSI (on 5m candles) ----
+rsi_length: 14
+rsi_oversold: 30.0
+rsi_overbought: 70.0
+rsi_shift_factor: 0.4               # Max RSI price shift = 0.4 × NATR
+
+# ---- Trend Detection (EMA on 5m candles) ----
+ema_fast_length: 8
+ema_slow_length: 21
+trend_follow_factor: 0.25           # Follow trend at 25% of EMA delta
+
+# ---- Regime Detection (ADX on 5m candles) ----
+adx_length: 14
+adx_trend_threshold: 25.0           # ADX > 25 = trending regime
+
+# ---- Volatility (NATR on 1m candles) ----
+natr_length: 14
+volatility_pause_threshold: 3.0     # Pause if NATR > 3% (extreme volatility)
+
+# ---- Fee Awareness ----
+# Binance Perpetual maker fee: 0.02% = 2 bps
+# Min profit ensures every fill covers fees + earns minimum
+maker_fee_bps: 2.0
+min_profit_bps: 1.0                 # Min 0.01% profit per side above fees
+
+# ---- LLM Sentiment (optional) ----
+llm_enabled: false                  # Set true + provide API key to activate
+llm_provider: grok
+llm_api_key: ""                     # Resolved from LLM_API_KEY env var
+llm_fallback_provider: openai
+llm_fallback_api_key: ""            # Resolved from LLM_FALLBACK_API_KEY env var
+llm_query_interval: 600
+llm_weight: 0.15                    # Max 15% influence (secondary signal only)
