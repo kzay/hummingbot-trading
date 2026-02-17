@@ -310,9 +310,6 @@ class DirectionalMaxMinV1Controller(DirectionalTradingControllerBase):
         self._daily_lookback = daily_lookback
         self._intraday_lookback = intraday_lookback
 
-        # Track last signal type for executor config customization
-        self._current_signal_type: str = "none"
-
         super().__init__(config, *args, **kwargs)
 
     # ── Core: compute directional signal ──────────────────────────
@@ -349,7 +346,6 @@ class DirectionalMaxMinV1Controller(DirectionalTradingControllerBase):
                 "signal": 0, "signal_type": "warmup",
                 "signal_meta": "Waiting for daily candle data",
             }
-            self._current_signal_type = "none"
             return
 
         # ── 4. N-day MAX/MIN from daily closes ────────────────────
@@ -509,8 +505,6 @@ class DirectionalMaxMinV1Controller(DirectionalTradingControllerBase):
             signal_type = "none"
             signal_meta = "Signal too weak after filters"
 
-        self._current_signal_type = signal_type
-
         # ── Store processed data ──────────────────────────────────
         self.processed_data = {
             "signal": signal,
@@ -542,7 +536,6 @@ class DirectionalMaxMinV1Controller(DirectionalTradingControllerBase):
     def _store_flat(self, signal_type: str, meta: str,
                     price, n_max, n_min, d_max, d_min,
                     ema_f, ema_s, ema_bull, adx, trending, natr):
-        self._current_signal_type = "none"
         self.processed_data = {
             "signal": 0, "signal_type": signal_type, "signal_meta": meta,
             "current_price": price, "n_day_max": n_max, "n_day_min": n_min,
@@ -561,7 +554,7 @@ class DirectionalMaxMinV1Controller(DirectionalTradingControllerBase):
         bounce gets tighter TP + faster time exit.
         """
         signal = self.processed_data.get("signal", 0)
-        signal_type = self._current_signal_type
+        signal_type = self.processed_data.get("signal_type", "none")
 
         side = TradeType.BUY if signal >= 0 else TradeType.SELL
 

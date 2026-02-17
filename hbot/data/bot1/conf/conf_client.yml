@@ -134,7 +134,10 @@ tables_format: psql
 
 paper_trade:
   paper_trade_exchanges:
+  - bitget
+  - bitget_perpetual
   - binance
+  - binance_perpetual
   - kucoin
   - kraken
   - gate_io

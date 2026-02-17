@@ -26,6 +26,7 @@ from __future__ import annotations
 import json
 import logging
 import os
+import threading
 import time as _time
 from concurrent.futures import Future, ThreadPoolExecutor
 from decimal import Decimal
@@ -68,6 +69,7 @@ class _SentimentEngine:
         self.timeout = timeout
         self._score: float = 50.0
         self._reasoning: str = "Awaiting first query"
+        self._lock = threading.Lock()
         self._last_ts: float = 0.0
         self._pool = ThreadPoolExecutor(max_workers=1, thread_name_prefix="llm")
         self._fut: Optional[Future] = None
@@ -75,22 +77,25 @@ class _SentimentEngine:
 
     @property
     def score(self) -> float:
-        return self._score
+        with self._lock:
+            return self._score
 
     @property
     def reasoning(self) -> str:
-        return self._reasoning
+        with self._lock:
+            return self._reasoning
 
     def tick(self, now: float, pair: str) -> None:
         if self._fut is not None and self._fut.done():
             try:
                 res = self._fut.result()
                 if res:
-                    self._score = res["score"]
-                    self._reasoning = res["reasoning"]
+                    with self._lock:
+                        self._score = res["score"]
+                        self._reasoning = res["reasoning"]
                     self._last_ts = now
                     self._fails = 0
-                    logger.info("LLM sentiment: %.1f — %s", self._score, self._reasoning[:80])
+                    logger.info("LLM sentiment: %.1f — %s", self.score, self.reasoning[:80])
                 else:
                     self._fails += 1
             except Exception as exc:
@@ -412,10 +417,10 @@ class PmmRsiLlmController(MarketMakingControllerBase):
 
         # ── Price shift computation ───────────────────────────────────
         # RSI signal: normalized to [-1, +1]
-        # Negative = oversold (buy bias → shift price DOWN)
-        # Positive = overbought (sell bias → shift price UP)
+        # Negative = oversold (buy bias → shift price UP for easier buy fills)
+        # Positive = overbought (sell bias → shift price DOWN for easier sell fills)
         rsi_norm = (rsi - 50.0) / 50.0
-        rsi_shift = rsi_norm * natr * self.config.rsi_price_shift_factor
+        rsi_shift = -rsi_norm * natr * self.config.rsi_price_shift_factor
 
         # Sentiment signal: normalized to [-1, +1]
         # Positive = bullish (buy bias → shift price DOWN)

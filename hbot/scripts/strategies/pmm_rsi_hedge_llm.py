@@ -24,6 +24,7 @@ from __future__ import annotations
 import json
 import logging
 import os
+import threading
 import time as _time
 from collections import deque
 from concurrent.futures import Future, ThreadPoolExecutor
@@ -261,6 +262,7 @@ class SentimentEngine:
 
         self._score: float = 50.0
         self._reasoning: str = "Awaiting first query"
+        self._lock = threading.Lock()
         self._last_query_ts: float = 0.0
         self._pool = ThreadPoolExecutor(max_workers=1,
                                         thread_name_prefix="llm-sent")
@@ -270,11 +272,13 @@ class SentimentEngine:
     # -- public interface ------------------------------------------------
     @property
     def score(self) -> float:
-        return self._score
+        with self._lock:
+            return self._score
 
     @property
     def reasoning(self) -> str:
-        return self._reasoning
+        with self._lock:
+            return self._reasoning
 
     @property
     def is_stale(self) -> bool:
@@ -288,12 +292,13 @@ class SentimentEngine:
             try:
                 res = self._future.result()
                 if res is not None:
-                    self._score = res["score"]
-                    self._reasoning = res["reasoning"]
+                    with self._lock:
+                        self._score = res["score"]
+                        self._reasoning = res["reasoning"]
                     self._last_query_ts = now
                     self._failures = 0
                     logger.info("LLM sentiment: %.1f — %s",
-                                self._score, self._reasoning[:100])
+                                self.score, self.reasoning[:100])
                 else:
                     self._failures += 1
             except Exception as exc:
@@ -415,7 +420,11 @@ class PmmRsiHedgeLlm(ScriptStrategyBase):
     _last_hedge_ts: float = 0.0
     _initial_base_balance: Optional[Decimal] = None
     _initial_quote_balance: Optional[Decimal] = None
+    _initial_perp_quote_balance: Optional[Decimal] = None
     _hedge_position_amount: Decimal = Decimal("0")
+    _hedge_avg_entry_price: Decimal = Decimal("0")
+    _order_roles: Dict[str, str] = {}
+    _atr_history: Deque[float] = deque(maxlen=200)
     _started: bool = False
 
     # ================================================================
@@ -441,6 +450,9 @@ class PmmRsiHedgeLlm(ScriptStrategyBase):
             self._sentiment = None
         self._fills = []
         self._hedge_position_amount = Decimal("0")
+        self._hedge_avg_entry_price = Decimal("0")
+        self._order_roles = {}
+        self._atr_history = deque(maxlen=200)
 
     # ================================================================
     #  on_tick  —  main loop (called every ~1 s)
@@ -468,6 +480,8 @@ class PmmRsiHedgeLlm(ScriptStrategyBase):
         # 3. Compute indicators
         rsi = compute_rsi(self._collector.closes, RSI_PERIOD) if RSI_ENABLED else None
         atr = compute_atr(self._collector.all_candles, ATR_PERIOD) if ATR_ENABLED else None
+        if atr is not None:
+            self._atr_history.append(atr)
 
         # 4. Volatility gate — pause new orders if ATR is extreme
         if self._should_pause_on_volatility(atr, mid):
@@ -539,11 +553,13 @@ class PmmRsiHedgeLlm(ScriptStrategyBase):
             if p.amount <= Decimal("0"):
                 continue
             if p.order_side == TradeType.BUY:
-                self.buy(self.exchange_spot, p.trading_pair,
-                         p.amount, p.order_type, p.price)
+                order_id = self.buy(self.exchange_spot, p.trading_pair,
+                                    p.amount, p.order_type, p.price)
             else:
-                self.sell(self.exchange_spot, p.trading_pair,
-                          p.amount, p.order_type, p.price)
+                order_id = self.sell(self.exchange_spot, p.trading_pair,
+                                     p.amount, p.order_type, p.price)
+            if order_id:
+                self._order_roles[order_id] = "spot_entry"
 
     # ================================================================
     #  Spread Adjustment Engine
@@ -571,8 +587,8 @@ class PmmRsiHedgeLlm(ScriptStrategyBase):
 
         # --- ATR widening ---
         if atr is not None and ATR_ENABLED:
-            mean_atr = atr  # simplified; could track rolling mean
-            if atr > mean_atr * ATR_WIDEN_MULTIPLIER:
+            mean_atr = (sum(self._atr_history) / len(self._atr_history)) if self._atr_history else atr
+            if mean_atr > 0 and atr > mean_atr * ATR_WIDEN_MULTIPLIER:
                 widen = Decimal(str(min(atr / mean_atr, 3.0)))
                 bid = bid * widen
                 ask = ask * widen
@@ -627,9 +643,10 @@ class PmmRsiHedgeLlm(ScriptStrategyBase):
                 [hedge_order], all_or_none=True
             )
             if adjusted and adjusted[0].amount > Decimal("0"):
-                self.buy(self.exchange_perp, self.trading_pair,
-                         adjusted[0].amount, OrderType.MARKET, mid_d)
-                self._hedge_position_amount += adjusted[0].amount
+                order_id = self.buy(self.exchange_perp, self.trading_pair,
+                                    adjusted[0].amount, OrderType.MARKET, mid_d)
+                if order_id:
+                    self._order_roles[order_id] = "hedge"
                 logger.info("Hedge BUY perp %.6f @ ~%.2f",
                             adjusted[0].amount, mid)
         else:
@@ -645,9 +662,10 @@ class PmmRsiHedgeLlm(ScriptStrategyBase):
                 [hedge_order], all_or_none=True
             )
             if adjusted and adjusted[0].amount > Decimal("0"):
-                self.sell(self.exchange_perp, self.trading_pair,
-                          adjusted[0].amount, OrderType.MARKET, mid_d)
-                self._hedge_position_amount -= adjusted[0].amount
+                order_id = self.sell(self.exchange_perp, self.trading_pair,
+                                     adjusted[0].amount, OrderType.MARKET, mid_d)
+                if order_id:
+                    self._order_roles[order_id] = "hedge"
                 logger.info("Hedge SELL perp %.6f @ ~%.2f",
                             adjusted[0].amount, mid)
 
@@ -685,11 +703,13 @@ class PmmRsiHedgeLlm(ScriptStrategyBase):
     def _close_fill(self, fill: TrackedFill, price: Decimal,
                     reason: str) -> None:
         if fill.side == TradeType.BUY:
-            self.sell(fill.exchange, fill.pair, fill.amount,
-                      OrderType.MARKET, price)
+            order_id = self.sell(fill.exchange, fill.pair, fill.amount,
+                                 OrderType.MARKET, price)
         else:
-            self.buy(fill.exchange, fill.pair, fill.amount,
-                     OrderType.MARKET, price)
+            order_id = self.buy(fill.exchange, fill.pair, fill.amount,
+                                OrderType.MARKET, price)
+        if order_id:
+            self._order_roles[order_id] = "spot_exit"
         fill.closed = True
         fill.close_reason = reason
         msg = (f"Triple-barrier exit: {reason} | "
@@ -703,6 +723,15 @@ class PmmRsiHedgeLlm(ScriptStrategyBase):
     # ================================================================
 
     def on_order_filled(self, event: OrderFilledEvent) -> None:
+        role = self._order_roles.get(event.order_id)
+        if role == "hedge":
+            self._apply_hedge_fill(event.trade_type, event.amount, event.price)
+            return
+        if role == "spot_exit":
+            return
+        if role != "spot_entry":
+            return
+
         fill = TrackedFill(
             order_id=event.order_id,
             side=event.trade_type,
@@ -733,6 +762,8 @@ class PmmRsiHedgeLlm(ScriptStrategyBase):
         conn = self.connectors[self.exchange_spot]
         self._initial_base_balance = conn.get_balance(base)
         self._initial_quote_balance = conn.get_balance(quote)
+        if HEDGE_ENABLED and self.exchange_perp in self.connectors:
+            self._initial_perp_quote_balance = self.connectors[self.exchange_perp].get_balance(quote)
         logger.info("Initial balances: %s=%s  %s=%s",
                      base, self._initial_base_balance,
                      quote, self._initial_quote_balance)
@@ -785,10 +816,51 @@ class PmmRsiHedgeLlm(ScriptStrategyBase):
         initial_value = (self._initial_base_balance * mid_d
                          + self._initial_quote_balance)
         current_value = cur_base * mid_d + cur_quote
+        if HEDGE_ENABLED and self.exchange_perp in self.connectors:
+            conn_perp = self.connectors[self.exchange_perp]
+            perp_quote = conn_perp.get_balance(quote)
+            if self._initial_perp_quote_balance is not None:
+                current_value += perp_quote - self._initial_perp_quote_balance
+            current_value += self._estimate_hedge_unrealized_pnl(mid_d)
         if initial_value <= Decimal("0"):
             return False
         drawdown = (initial_value - current_value) / initial_value
         return drawdown >= KILL_SWITCH_LOSS_PCT
+
+    def _estimate_hedge_unrealized_pnl(self, mid: Decimal) -> Decimal:
+        if self._hedge_position_amount == Decimal("0") or self._hedge_avg_entry_price <= Decimal("0"):
+            return Decimal("0")
+        if self._hedge_position_amount > Decimal("0"):
+            return (mid - self._hedge_avg_entry_price) * self._hedge_position_amount
+        return (self._hedge_avg_entry_price - mid) * abs(self._hedge_position_amount)
+
+    def _apply_hedge_fill(self, side: TradeType, amount: Decimal, price: Decimal) -> None:
+        if amount <= Decimal("0") or price <= Decimal("0"):
+            return
+
+        signed_delta = amount if side == TradeType.BUY else -amount
+        current_amount = self._hedge_position_amount
+        current_avg = self._hedge_avg_entry_price
+
+        if current_amount == Decimal("0") or (current_amount > 0 and signed_delta > 0) or (current_amount < 0 and signed_delta < 0):
+            new_amount = current_amount + signed_delta
+            weighted_notional = (abs(current_amount) * current_avg) + (abs(signed_delta) * price)
+            self._hedge_position_amount = new_amount
+            self._hedge_avg_entry_price = (weighted_notional / abs(new_amount)) if new_amount != Decimal("0") else Decimal("0")
+            return
+
+        # Reducing or flipping an existing hedge position.
+        if abs(signed_delta) < abs(current_amount):
+            self._hedge_position_amount = current_amount + signed_delta
+            return
+        if abs(signed_delta) == abs(current_amount):
+            self._hedge_position_amount = Decimal("0")
+            self._hedge_avg_entry_price = Decimal("0")
+            return
+
+        flipped_amount = current_amount + signed_delta
+        self._hedge_position_amount = flipped_amount
+        self._hedge_avg_entry_price = price
 
     def _cancel_all_spot_orders(self) -> None:
         for order in self.get_active_orders(connector_name=self.exchange_spot):

@@ -310,6 +310,59 @@ docker attach hbot-bot1
 - Bot-specific overrides go in `data/botX/scripts/` (not tracked)
 - Never edit strategy files on the VPS directly; push from dev and pull
 
+### 6.5 V2 Normal vs Paper Run Matrix
+
+Before running any paper config, verify the connector is listed under
+`paper_trade.paper_trade_exchanges` in `data/bot1/conf/conf_client.yml`.
+
+Attach to the bot first:
+
+```bash
+docker attach hbot-bot1
+```
+
+Then run one of the following pairs:
+
+#### PMM + RSI + LLM
+
+```text
+Normal:
+>>> start --script v2_with_controllers.py --conf v2_pmm_rsi_llm.yml
+
+Paper:
+>>> start --script v2_with_controllers.py --conf v2_pmm_rsi_llm_paper.yml
+```
+
+#### PMM Avellaneda V2
+
+```text
+Normal:
+>>> start --script v2_with_controllers.py --conf v2_pmm_avellaneda_v2.yml
+
+Paper:
+>>> start --script v2_with_controllers.py --conf v2_pmm_avellaneda_v2_paper.yml
+```
+
+#### Systematic Alpha V1
+
+```text
+Normal:
+>>> start --script v2_with_controllers.py --conf v2_systematic_alpha.yml
+
+Paper:
+>>> start --script v2_with_controllers.py --conf v2_systematic_alpha_paper.yml
+```
+
+#### Directional MAX/MIN V1
+
+```text
+Normal:
+>>> start --script v2_with_controllers.py --conf v2_directional_max_min.yml
+
+Paper:
+>>> start --script v2_with_controllers.py --conf v2_directional_max_min_paper.yml
+```
+
 ---
 
 ## 7. Monitoring & Grafana

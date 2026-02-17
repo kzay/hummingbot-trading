@@ -1,14 +1,14 @@
 # ============================================================================
 #  PMM + RSI + LLM — PAPER TRADE Configuration
 # ============================================================================
-#  Identical to production config but uses paper_trade connector.
-#  No real orders are placed. Simulates fills at market price.
+#  Uses live market data with simulated order execution.
+#  Requires connector_name to be present in conf_client.yml paper_trade_exchanges.
 # ============================================================================
 
 controller_name: pmm_rsi_llm
 controller_type: market_making
 
-# ---- Exchange (micro-live test on perpetual) ----
+# ---- Exchange ----
 connector_name: bitget_perpetual
 trading_pair: BTC-USDT
 

@@ -1,0 +1,19 @@
+# ============================================================================
+#  V2 Script Configuration — PMM + RSI + LLM (PAPER TRADE)
+# ============================================================================
+#  Uses live market data and simulated fills.
+#
+#  Usage:
+#    start --script v2_with_controllers.py --conf v2_pmm_rsi_llm_paper.yml
+# ============================================================================
+
+script_file_name: v2_with_controllers.py
+
+markets: ""
+candles_config: ""
+
+controllers_config:
+  - pmm_rsi_llm_paper.yml
+
+max_global_drawdown_quote: null
+max_controller_drawdown_quote: null
