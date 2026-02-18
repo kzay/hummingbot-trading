@@ -10,7 +10,7 @@ controller_name: pmm_avellaneda_v2
 controller_type: market_making
 
 # ---- Exchange & Market ----
-connector_name: binance_perpetual
+connector_name: binance_perpetual_paper_trade
 trading_pair: BTC-USDT
 
 # ---- Capital & Sizing (small for paper validation) ----

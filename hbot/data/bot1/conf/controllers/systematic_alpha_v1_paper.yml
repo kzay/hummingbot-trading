@@ -30,7 +30,7 @@ controller_type: directional_trading
 # ---- Exchange & Market ----
 # Paper trade: uses real price feed, simulated fills
 # Enabled by adding "bitget_perpetual" to paper_trade_exchanges in conf_client.yml
-connector_name: bitget_perpetual
+connector_name: bitget_perpetual_paper_trade
 trading_pair: SOL-USDT
 
 # ---- Capital ----

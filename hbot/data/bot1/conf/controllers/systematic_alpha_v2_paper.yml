@@ -5,7 +5,7 @@
 controller_name: systematic_alpha_v2
 controller_type: directional_trading
 
-connector_name: bitget_perpetual
+connector_name: bitget_perpetual_paper_trade
 trading_pair: BTC-USDT
 total_amount_quote: 25
 leverage: 2

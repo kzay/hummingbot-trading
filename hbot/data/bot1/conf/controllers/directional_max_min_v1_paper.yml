@@ -10,7 +10,7 @@ controller_name: directional_max_min_v1
 controller_type: directional_trading
 
 # ---- Exchange & Market ----
-connector_name: bitget
+connector_name: bitget_paper_trade
 trading_pair: BTC-USDT
 
 # ---- Capital ----

@@ -69,11 +69,8 @@ class PaperSmokeTestV1Controller(DirectionalTradingControllerBase):
         epoch = max(1, self.config.flip_interval_seconds)
         cycle = (now // epoch) % 2
 
-        # Pull market price from a non-paper connector (if configured) so
-        # paper-trade connector aliases do not require a dedicated data module.
-        price_connector = self.config.candles_connector or self.config.connector_name
         price = self.market_data_provider.get_price_by_type(
-            price_connector, self.config.trading_pair
+            self.config.connector_name, self.config.trading_pair
         )
 
         if cycle == 0:

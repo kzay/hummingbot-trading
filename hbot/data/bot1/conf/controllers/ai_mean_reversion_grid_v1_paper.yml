@@ -5,7 +5,7 @@
 controller_name: ai_mean_reversion_grid_v1
 controller_type: directional_trading
 
-connector_name: bitget_perpetual
+connector_name: bitget_perpetual_paper_trade
 trading_pair: BTC-USDT
 total_amount_quote: 60
 leverage: 1
