@@ -1,0 +1,64 @@
+# ============================================================================
+#  Systematic Alpha V2 — Cost-Aware Long/Short (Perpetual)
+# ============================================================================
+
+controller_name: systematic_alpha_v2
+controller_type: directional_trading
+
+# Perpetual long/short venue
+connector_name: bitget_perpetual
+trading_pair: BTC-USDT
+total_amount_quote: 150
+leverage: 2
+
+# Fallback barriers
+stop_loss: 0.02
+take_profit: 0.035
+time_limit: 86400
+
+# Data
+candles_connector: ""
+candles_trading_pair: ""
+interval_slow: "1h"
+interval_fast: "15m"
+
+# Signal stack
+breakout_lookback: 20
+ema_fast: 20
+ema_slow: 80
+adx_length: 14
+adx_trend_threshold: 24.0
+rsi_length: 14
+bb_length: 20
+bb_std: 2.0
+trend_weight: 0.55
+reversion_weight: 0.45
+breakout_weight: 0.25
+min_signal_threshold: 0.22
+short_enabled: true
+
+# Volatility + sizing
+atr_length: 14
+natr_pause_threshold: 4.5
+target_annual_vol: 0.30
+min_position_scalar: 0.35
+max_position_scalar: 2.0
+signal_power: 1.15
+
+# Asymmetric risk
+atr_sl_mult_long: 1.9
+atr_tp_mult_long: 2.9
+atr_sl_mult_short: 1.6
+atr_tp_mult_short: 2.4
+trailing_enabled: true
+trailing_activation_atr_mult: 1.2
+trailing_delta_atr_mult: 0.45
+max_time_limit_seconds: 86400
+
+# Cost model
+taker_fee_bps: 6.0
+slippage_bps: 4.0
+funding_bps_per_day: 2.0
+expected_holding_hours: 12.0
+edge_capture_ratio: 0.60
+min_expected_edge_bps: 8.0

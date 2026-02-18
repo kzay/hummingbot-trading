@@ -1,0 +1,13 @@
+# ============================================================================
+#  V2 Script Configuration — Paper Smoke Test V1 (PAPER)
+# ============================================================================
+
+script_file_name: v2_with_controllers.py
+markets: ""
+candles_config: ""
+
+controllers_config:
+  - paper_smoke_test_v1_paper.yml
+
+max_global_drawdown_quote: null
+max_controller_drawdown_quote: null

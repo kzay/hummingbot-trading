@@ -353,6 +353,16 @@ Paper:
 >>> start --script v2_with_controllers.py --conf v2_systematic_alpha_paper.yml
 ```
 
+#### AI Trend Following V1
+
+```text
+Normal:
+>>> start --script v2_with_controllers.py --conf v2_ai_trend_following_v1.yml
+
+Paper:
+>>> start --script v2_with_controllers.py --conf v2_ai_trend_following_v1_paper.yml
+```
+
 #### Directional MAX/MIN V1
 
 ```text

@@ -1,0 +1,60 @@
+{
+  "timestamp_utc": "2026-02-18T19:16:31.998250+00:00",
+  "database": "hbot/scripts/analysis/reports/ab_empty.sqlite",
+  "baseline": {
+    "name": "directional_max_min_v1",
+    "metrics": {
+      "rows": 0,
+      "trades": 0,
+      "gross_pnl": 0.0,
+      "net_pnl": 0.0,
+      "max_drawdown": 0.0,
+      "sharpe_proxy": 0.0,
+      "profit_factor": 0.0,
+      "win_rate": 0.0,
+      "turnover": 0.0
+    }
+  },
+  "candidate": {
+    "name": "systematic_alpha_v2",
+    "metrics": {
+      "rows": 0,
+      "trades": 0,
+      "gross_pnl": 0.0,
+      "net_pnl": 0.0,
+      "max_drawdown": 0.0,
+      "sharpe_proxy": 0.0,
+      "profit_factor": 0.0,
+      "win_rate": 0.0,
+      "turnover": 0.0
+    }
+  },
+  "gate_results": [
+    {
+      "name": "min_trades",
+      "pass": false,
+      "detail": "baseline=0 candidate=0 min=100"
+    },
+    {
+      "name": "net_pnl_improvement_pct",
+      "pass": false,
+      "detail": "delta=0.00% threshold>=5.0%"
+    },
+    {
+      "name": "max_drawdown_increase_pct",
+      "pass": true,
+      "detail": "increase=0.00% threshold<=0.0%"
+    },
+    {
+      "name": "sharpe_delta",
+      "pass": true,
+      "detail": "delta=0.0000 threshold>=0.0"
+    },
+    {
+      "name": "profit_factor_delta",
+      "pass": true,
+      "detail": "delta=0.0000 threshold>=0.0"
+    }
+  ],
+  "overall_pass": false
+}

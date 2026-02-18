@@ -1,0 +1,13 @@
+# ============================================================================
+#  V2 Script Configuration — Systematic Alpha V2
+# ============================================================================
+
+script_file_name: v2_with_controllers.py
+markets: ""
+candles_config: ""
+
+controllers_config:
+  - systematic_alpha_v2_1.yml
+
+max_global_drawdown_quote: 150.0
+max_controller_drawdown_quote: 100.0

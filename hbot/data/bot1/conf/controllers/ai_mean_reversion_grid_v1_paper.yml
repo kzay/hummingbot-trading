@@ -1,0 +1,63 @@
+# ============================================================================
+#  AI Mean Reversion Grid V1 — PAPER
+# ============================================================================
+
+controller_name: ai_mean_reversion_grid_v1
+controller_type: directional_trading
+
+connector_name: bitget_perpetual
+trading_pair: BTC-USDT
+total_amount_quote: 60
+leverage: 1
+
+stop_loss: 0.015
+take_profit: 0.012
+time_limit: 28800
+
+candles_connector: ""
+candles_trading_pair: ""
+interval_fast: "15m"
+interval_slow: "1h"
+interval_confirm: "4h"
+
+rsi_length: 14
+bb_length: 20
+bb_std: 2.0
+zscore_length: 40
+adx_length: 14
+adx_range_threshold: 20.0
+adx_breakout_threshold: 25.0
+stoch_k: 14
+stoch_d: 3
+stoch_smooth_k: 3
+atr_length: 14
+
+kalman_process_var: 0.00001
+kalman_measurement_var: 0.01
+
+ai_model_path: ""
+ai_probability_threshold: 0.80
+expected_mean_blend: 0.65
+ai_feature_window: 64
+
+grid_levels_min: 10
+grid_levels_max: 20
+grid_band_min_pct: 0.010
+grid_band_max_pct: 0.020
+dca_max_levels: 5
+
+max_total_exposure_ratio: 0.05
+level_size_min_pct: 0.002
+level_size_max_pct: 0.005
+max_leverage: 2
+halt_drawdown_ratio: 0.10
+
+pairs_candidates_csv: "ETH-USDT,SOL-USDT,BNB-USDT"
+pairs_corr_threshold: 0.80
+coint_pvalue_threshold: 0.05
+adf_pvalue_threshold: 0.10
+pairs_refresh_minutes: 120
+hedge_enabled: true
+
+short_enabled: true
+min_signal_strength: 0.20

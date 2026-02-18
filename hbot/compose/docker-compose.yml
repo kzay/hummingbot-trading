@@ -56,16 +56,15 @@ services:
     <<: *hbot-base
     container_name: hbot-bot1
     volumes:
-      # ---- V2 controllers (individual files — preserves built-in controllers) ----
-      - ../controllers/market_making/pmm_rsi_llm.py:/home/hummingbot/controllers/market_making/pmm_rsi_llm.py:ro
-      - ../controllers/market_making/pmm_avellaneda_v2.py:/home/hummingbot/controllers/market_making/pmm_avellaneda_v2.py:ro
-      - ../controllers/directional_trading/systematic_alpha_v1.py:/home/hummingbot/controllers/directional_trading/systematic_alpha_v1.py:ro
-      - ../controllers/directional_trading/directional_max_min_v1.py:/home/hummingbot/controllers/directional_trading/directional_max_min_v1.py:ro
+      # ---- V2 controllers (directory mounts; scales better than file-by-file) ----
+      - ../controllers/market_making:/home/hummingbot/controllers/market_making:ro
+      - ../controllers/directional_trading:/home/hummingbot/controllers/directional_trading:ro
       # ---- Bot config, data, logs ----
       - ../data/bot1/conf:/home/hummingbot/conf
       - ../data/bot1/logs:/home/hummingbot/logs
       - ../data/bot1/data:/home/hummingbot/data
-      - ../data/bot1/scripts:/home/hummingbot/scripts
+      # Keep built-in /home/hummingbot/scripts available (contains v2_with_controllers.py)
+      - ../data/bot1/scripts:/home/hummingbot/custom_scripts
       - ../data/bot1/pmm_scripts:/home/hummingbot/pmm_scripts
       # ---- Legacy V1 strategies (still usable) ----
       - ../scripts/strategies:/home/hummingbot/custom_strategies:ro
@@ -97,16 +96,15 @@ services:
     profiles:
       - multi
     volumes:
-      # ---- V2 controllers (individual files) ----
-      - ../controllers/market_making/pmm_rsi_llm.py:/home/hummingbot/controllers/market_making/pmm_rsi_llm.py:ro
-      - ../controllers/market_making/pmm_avellaneda_v2.py:/home/hummingbot/controllers/market_making/pmm_avellaneda_v2.py:ro
-      - ../controllers/directional_trading/systematic_alpha_v1.py:/home/hummingbot/controllers/directional_trading/systematic_alpha_v1.py:ro
-      - ../controllers/directional_trading/directional_max_min_v1.py:/home/hummingbot/controllers/directional_trading/directional_max_min_v1.py:ro
+      # ---- V2 controllers (directory mounts; scales better than file-by-file) ----
+      - ../controllers/market_making:/home/hummingbot/controllers/market_making:ro
+      - ../controllers/directional_trading:/home/hummingbot/controllers/directional_trading:ro
       # ---- Bot config, data, logs ----
       - ../data/bot2/conf:/home/hummingbot/conf
       - ../data/bot2/logs:/home/hummingbot/logs
       - ../data/bot2/data:/home/hummingbot/data
-      - ../data/bot2/scripts:/home/hummingbot/scripts
+      # Keep built-in /home/hummingbot/scripts available (contains v2_with_controllers.py)
+      - ../data/bot2/scripts:/home/hummingbot/custom_scripts
       - ../data/bot2/pmm_scripts:/home/hummingbot/pmm_scripts
       # ---- Legacy V1 strategies ----
       - ../scripts/strategies:/home/hummingbot/custom_strategies:ro
