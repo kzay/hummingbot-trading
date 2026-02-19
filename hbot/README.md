@@ -19,6 +19,7 @@ Production-ready, Docker-based Hummingbot infrastructure for Bitget Spot trading
 11. [Security](#11-security)
 12. [Operating Model](#12-operating-model)
 13. [Troubleshooting](#13-troubleshooting)
+16. [Documentation Hub](#16-documentation-hub)
 
 ---
 
@@ -35,7 +36,8 @@ hbot/
 │   │   ├── data/                     # SQLite databases, trade history
 │   │   ├── scripts/                  # Bot-specific scripts
 │   │   └── pmm_scripts/             # PMM script overrides
-│   └── bot2/                         # Same structure, additional bot
+│   ├── bot2/                         # Same structure, Bot D no-trade monitor
+│   └── bot3/                         # Paper trade smoke test instance
 ├── monitoring/
 │   ├── prometheus/
 │   │   ├── prometheus.yml            # Prometheus scrape configuration
@@ -56,6 +58,14 @@ hbot/
 │   ├── rollback.sh                   # Restore from backup
 │   ├── add-bot.sh                    # Add new bot instance
 │   └── status.sh                     # Quick status check
+├── docs/                             # Centralized documentation hub
+│   ├── architecture/                 # System and data-flow views
+│   ├── strategy/                     # EPP and ML strategy specs
+│   ├── risk/                         # Risk policy and kill switches
+│   ├── infra/                        # Deployment, secrets, profiles
+│   ├── ops/                          # Runbooks and incident response
+│   ├── validation/                   # Test plans and release gates
+│   └── governance/                   # Doc standards and change log
 ├── env/
 │   └── .env.template                 # Environment variable template
 ├── backups/                          # Backup archives (gitignored)
@@ -63,6 +73,21 @@ hbot/
 ├── .gitignore                        # Git exclusions
 └── README.md                         # This file
 ```
+
+## 16. Documentation Hub
+
+Comprehensive documentation is organized under:
+
+- `docs/README.md` (index)
+- `docs/infra/`
+- `docs/techspec/`
+- `docs/architecture/`
+- `docs/financial/`
+- `docs/strategy/`
+- `docs/risk/`
+- `docs/ops/`
+- `docs/validation/`
+- `docs/governance/`
 
 ### What goes where
 
@@ -789,8 +814,50 @@ Disabled stubs (Phase 0 only):
 
 ### 14.2 Run Paper Mode
 
-Paper mode is enforced through `conf_client.yml -> paper_trade.paper_trade_exchanges`.
-For this setup, `connector_name: bitget` in EPP controller YAML is routed to paper execution.
+There are **two independent** paper trading mechanisms. Choose one:
+
+#### Option A: Hummingbot Framework Paper Trade (recommended for standalone scripts)
+
+The framework wraps the real connector with `PaperTradeExchange`, simulating
+fills locally.  Orders never reach the exchange.
+
+**Requirements:**
+- `conf_client.yml` must list the exchange in `paper_trade_exchanges`:
+  ```yaml
+  paper_trade:
+    paper_trade_exchanges:
+      - bitget
+    paper_trade_account_balance:
+      BTC: 1.0
+      USDT: 10000.0
+  ```
+- Scripts/controllers must use the **`_paper_trade` suffix** as connector name:
+  ```python
+  markets = {"bitget_paper_trade": {"BTC-USDT"}}   # correct
+  # markets = {"bitget": {"BTC-USDT"}}              # WRONG: sends real orders!
+  ```
+- Bitget spot account must have **some balance** (even 2 USDT dust) so the
+  underlying connector initializes (order book, trading rules).  The paper
+  wrapper overrides balances with the configured `paper_trade_account_balance`.
+
+> **WARNING:** Using `connector_name: bitget` with `paper_trade_exchanges: [bitget]`
+> does **NOT** auto-wrap the connector.  `self.buy("bitget", ...)` sends real
+> orders to the exchange.  You must use `bitget_paper_trade` explicitly.
+> (Verified against Hummingbot v2.12.0 source: `connector_manager.py` line 68.)
+
+#### Option B: Controller-Level Paper Mode (used by EPP v2.4)
+
+The EPP controller has built-in paper simulation via `paper_mode: true`.
+It uses the real connector only for market data (mid-price, order book) and
+tracks virtual balances internally (`paper_start_quote`, `paper_start_base`).
+
+**Requirements:**
+- `conf_client.yml`: `paper_trade_exchanges: []` (empty -- no framework wrapping)
+- Controller YAML: `connector_name: bitget` + `paper_mode: true`
+- Bitget spot account must have **some balance** so `connector.ready` returns
+  `True` (the `account_balance` check requires `len(_account_balances) > 0`).
+
+#### Starting Paper Mode
 
 1. Start bot containers:
 
@@ -799,63 +866,89 @@ cd hbot/compose
 docker compose --env-file ../env/.env --profile multi up -d bot1 bot2
 ```
 
-2. Ensure both bot conf files include `bitget` in:
-   - `data/bot1/conf/conf_client.yml`
-   - `data/bot2/conf/conf_client.yml`
-
-3. Start bot1 strategy:
+2. Start bot1 strategy:
 
 ```bash
 docker attach hbot-bot1
 start --script v2_with_controllers.py --conf v2_epp_v2_4_bot_a.yml
 ```
 
-4. Start bot2 monitor (no trades):
+3. Start bot2 monitor (no trades):
 
 ```bash
 docker attach hbot-bot2
 start --script v2_with_controllers.py --conf v2_epp_v2_4_bot_d.yml
 ```
 
-5. Validate paper run:
-   - Bot1 creates simulated orders/fills.
+4. Validate paper run:
+   - Bot1 creates simulated orders/fills (check CSV logs + `status`).
    - Bot2 stays no-trade (`variant: d`, `no_trade: true`).
    - CSV logs appear under `data/bot1/logs/epp_v24/...` and `data/bot2/logs/epp_v24/...`.
 
 ### 14.3 Run Live Micro Mode
 
-1. Configure encrypted connector credentials via `connect bitget`.
-2. Set `paper_mode: false` in the bot controller YAML.
+Promotion from paper to live is a **single-field change** in the controller YAML:
+
+1. Ensure encrypted connector credentials are configured (`connect bitget`).
+2. In the controller YAML, change `paper_mode: false`.
+   (`connector_name` stays `bitget` -- the V2 controller uses the real connector
+   for both paper and live; only `paper_mode` controls simulation.)
 3. Keep conservative `total_amount_quote` and leave Bot D as `no_trade: true`.
-4. Restart strategy from the same `v2_with_controllers.py` script configs.
+4. Recreate the container:
+   ```bash
+   docker compose --env-file ../env/.env -f docker-compose.yml up -d --force-recreate bot1
+   ```
+5. Attach and start the strategy.
 
-### 14.6 After Paper Pass -> Bitget Switch
+### 14.6 After Paper Pass -> Live Switch
 
-Use this migration sequence after your paper validation window passes:
+Promotion from paper to live for the V2 EPP controller requires **one field change**
+per controller YAML (`connector_name` already points to `bitget`):
 
-1. Update controller connectors to Bitget:
-   - `data/bot1/conf/controllers/epp_v2_4_bot_a.yml` -> `connector_name: bitget`
-   - `data/bot2/conf/controllers/epp_v2_4_bot_d.yml` -> `connector_name: bitget`
+| Field | Paper (current) | Live |
+|-------|----------------|------|
+| `paper_mode` | `true` | `false` |
+| `connector_name` | `bitget` (unchanged) | `bitget` (unchanged) |
+
+Steps:
+
+1. In `data/bot1/conf/controllers/epp_v2_4_bot_a.yml`: set `paper_mode: false`.
 2. Keep Bot D protections unchanged: `variant: d`, `no_trade: true`.
-3. Attach to each bot and configure credentials:
-   - `connect bitget`
-4. Start with micro notional (`total_amount_quote`) and observe for 5-7 days.
-5. Confirm logs and ops guard remain healthy before increasing capital.
+3. Ensure encrypted connector credentials are configured (`connect bitget`).
+4. Recreate the container:
+   ```bash
+   docker compose --env-file ../env/.env -f docker-compose.yml up -d --force-recreate bot1
+   ```
+5. Start with micro notional (`total_amount_quote`) and observe for 5-7 days.
+6. Confirm logs and ops guard remain healthy before increasing capital.
 
-### 14.4 Go-Live Checklist (12 items)
+> **Note:** `connector_name` stays `bitget` in both modes because the V2 controller
+> framework's `MarketDataProvider` cannot resolve `bitget_paper_trade` as a module.
+> Paper simulation is handled entirely by the controller's `paper_mode` flag.
+> For standalone scripts (bot3), use `bitget_paper_trade` in the `markets` dict instead.
 
-1. Connector login succeeds for both bot1 and bot2.
-2. `bot1` uses `variant: a` with `enabled: true` and `no_trade: false`.
-3. `bot2` uses `variant: d` with `no_trade: true`.
-4. Bot B/C configs remain `enabled: false`.
-5. Spread floor and turnover cap are set and non-zero.
-6. Runtime turnover remains below `3x/day` (target `<2x/day`).
-7. Fees/gross profit stays below `35-40%`.
-8. Profit factor remains above `1.25` in validation window.
-9. Drawdown is below `3-4%` over the validation window.
-10. No repeated cancel failures or balance mismatch events.
-11. CSV logs are being written for fills/minute/daily on both instances.
-12. Ops guard transitions (`running`, `soft_pause`, `hard_stop`) are visible in status/logs.
+### 14.4 Go-Live Checklist (15 items)
+
+**Paper-to-live verification:**
+
+1. Controller YAML has `paper_mode: false`.
+2. `status` does NOT show "Paper Trading Active".
+3. Bitget spot account has sufficient balance for the configured `total_amount_quote`.
+
+**Operational checks:**
+
+4. Connector login succeeds for both bot1 and bot2.
+5. `bot1` uses `variant: a` with `enabled: true` and `no_trade: false`.
+6. `bot2` uses `variant: d` with `no_trade: true`.
+7. Bot B/C configs remain `enabled: false`.
+8. Spread floor and turnover cap are set and non-zero.
+9. Runtime turnover remains below `3x/day` (target `<2x/day`).
+10. Fees/gross profit stays below `35-40%`.
+11. Profit factor remains above `1.25` in validation window.
+12. Drawdown is below `3-4%` over the validation window.
+13. No repeated cancel failures or balance mismatch events.
+14. CSV logs are being written for fills/minute/daily on both instances.
+15. Ops guard transitions (`running`, `soft_pause`, `hard_stop`) are visible in status/logs.
 
 ### 14.5 EPP Split CSV Logs
 
@@ -868,6 +961,141 @@ How to read quickly:
 - `fills.csv`: execution-level records (price/amount/notional/fee/state)
 - `minute.csv`: 1-minute health + edge + turnover snapshot
 - `daily.csv`: equity open/now, PnL, turnover, ops events
+
+---
+
+## 15. External Signal/Risk (Redis Streams)
+
+The project now supports a hybrid external orchestration model:
+
+- Hummingbot remains the exchange data and execution gateway.
+- External services generate signal and risk decisions.
+- Hummingbot keeps final local safety authority (connector readiness, local kill/soft pause behavior).
+
+### 15.1 Enable External Stack
+
+Set in `env/.env`:
+
+```bash
+EXT_SIGNAL_RISK_ENABLED=true
+BUS_SOFT_PAUSE_ON_OUTAGE=true
+REDIS_HOST=redis
+REDIS_PORT=6379
+REDIS_DB=0
+REDIS_CONSUMER_GROUP=hb_group_v1
+EVENT_POLL_MS=1000
+RISK_MAX_ABS_SIGNAL=0.25
+```
+
+Start with external profile:
+
+```bash
+cd hbot/compose
+docker compose --env-file ../env/.env --profile multi --profile external up -d
+```
+
+### 15.2 Stream Flow
+
+- `hb.market_data.v1`: market/controller snapshots from Hummingbot.
+- `hb.signal.v1`: normalized signal events from signal service.
+- `hb.ml_signal.v1`: ML inference events (model version, confidence, latency).
+- `hb.risk_decision.v1`: approve/reject decisions from risk service.
+- `hb.execution_intent.v1`: intents consumed by Hummingbot bridge.
+- `hb.audit.v1`: audit/ops events from Hummingbot.
+- `hb.dead_letter.v1`: invalid or rejected intent events.
+
+### 15.3 Safety Behavior
+
+- If Redis connectivity degrades and outage protection is enabled, Hummingbot can soft-pause external intent application.
+- Local Hummingbot controls remain authoritative.
+- External intents are idempotent by `event_id` and rejected if expired.
+
+Detailed architecture: `docs/external_signal_risk_architecture.md`
+
+### 15.4 ML Signal Injection (MVP)
+
+ML is injected with the same external pipeline:
+
+`market_data -> ml_signal -> risk_decision -> execution_intent -> Hummingbot`
+
+Enable in `env/.env`:
+
+```bash
+ML_ENABLED=true
+ML_RUNTIME=sklearn_joblib
+ML_MODEL_SOURCE=local
+ML_MODEL_URI=/workspace/hbot/models/current/model.joblib
+ML_CONFIDENCE_MIN=0.60
+ML_MAX_SIGNAL_AGE_MS=3000
+ML_INFERENCE_TIMEOUT_MS=200
+ML_HORIZON_S=60
+ML_FEATURE_SET=v1
+```
+
+For custom class runtime:
+
+```bash
+ML_RUNTIME=custom_python
+ML_CUSTOM_CLASS_PATH=your_module_path:YourModelClass
+```
+
+The model directory is mounted to signal-service at `/workspace/hbot/models`.
+Keep the first rollout in shadow mode and verify `hb.ml_signal.v1` before increasing intent authority.
+
+---
+
+## Common Issues & Fixes
+
+### "bitget is not ready" -- connector never becomes ready
+
+**Symptom:** The log repeats `bitget is not ready. Please wait...` indefinitely.
+
+**Root cause:** `ExchangePyBase.ready` requires ALL five conditions to be True:
+
+| Condition | What it checks |
+|-----------|---------------|
+| `symbols_mapping_initialized` | REST API fetched trading pair symbols |
+| `order_books_initialized` | WebSocket order book has data |
+| `account_balance` | `len(_account_balances) > 0` |
+| `trading_rule_initialized` | REST API fetched trading rules |
+| `user_stream_initialized` | Private WebSocket received a message |
+
+The most common blocker is **`account_balance: False`** when the Bitget spot
+account is empty.  Even in paper mode, the underlying connector must initialize.
+
+**Fix:** Transfer a small amount (2 USDT) to the Bitget spot account.
+
+**Diagnostic:** Add this to any controller/script to see which condition fails:
+```python
+for name, conn in self.connectors.items():
+    print(f"{name} status_dict={conn.status_dict}")
+```
+
+### Controller config missing `id` field
+
+**Symptom:** `status` shows controller name as `nan` and controller never ticks.
+
+**Fix:** Add an explicit `id` to the controller YAML:
+```yaml
+id: epp_v2_4_bot_a          # <-- add this
+controller_name: epp_v2_4
+controller_type: market_making
+```
+
+### Stale `.pyc` bytecache after controller code changes
+
+**Symptom:** Code changes to mounted `epp_v2_4.py` have no effect. Old errors
+repeat despite the source file being updated.
+
+**Fix:** Clear the cache and recreate the container:
+```bash
+docker exec hbot-bot1 rm -rf /home/hummingbot/controllers/__pycache__ \
+    /home/hummingbot/controllers/market_making/__pycache__
+docker compose --env-file ../env/.env -f docker-compose.yml up -d --force-recreate bot1
+```
+
+`docker restart` alone is NOT sufficient -- it preserves the container's
+writable layer where `.pyc` files live.
 
 ---
 

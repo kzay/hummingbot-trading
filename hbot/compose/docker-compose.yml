@@ -67,12 +67,9 @@ services:
       - ../controllers/price_buffer.py:/home/hummingbot/controllers/price_buffer.py:ro
       - ../controllers/ops_guard.py:/home/hummingbot/controllers/ops_guard.py:ro
       - ../controllers/epp_logging.py:/home/hummingbot/controllers/epp_logging.py:ro
+      - ../services:/home/hummingbot/services:ro
     environment:
       - TZ=${TZ:-UTC}
-      # CONFIG_PASSWORD auto-logins on boot.  On FIRST RUN, leave it empty
-      # so you can set the password interactively via `docker attach`.
-      # After the first login, .password_verification is created and
-      # CONFIG_PASSWORD works for unattended restarts.
       - CONFIG_PASSWORD=${BOT1_PASSWORD:-}
     deploy:
       resources:
@@ -103,6 +100,7 @@ services:
       - ../controllers/price_buffer.py:/home/hummingbot/controllers/price_buffer.py:ro
       - ../controllers/ops_guard.py:/home/hummingbot/controllers/ops_guard.py:ro
       - ../controllers/epp_logging.py:/home/hummingbot/controllers/epp_logging.py:ro
+      - ../services:/home/hummingbot/services:ro
     environment:
       - TZ=${TZ:-UTC}
       - CONFIG_PASSWORD=${BOT2_PASSWORD:-admin}
@@ -114,6 +112,157 @@ services:
         reservations:
           memory: 256M
           cpus: "0.25"
+
+  # ==========================================
+  # BOT 3 (paper trading smoke test)
+  # ==========================================
+  bot3:
+    <<: *hbot-base
+    container_name: hbot-bot3
+    profiles:
+      - test
+    volumes:
+      - ../data/bot3/conf:/home/hummingbot/conf
+      - ../data/bot3/logs:/home/hummingbot/logs
+      - ../data/bot3/data:/home/hummingbot/data
+      - ../data/bot3/scripts:/home/hummingbot/custom_scripts
+      - ../data/bot3/pmm_scripts:/home/hummingbot/pmm_scripts
+      # Mount test script into the scripts dir so `start --script` finds it
+      - ../data/bot3/scripts/paper_test.py:/home/hummingbot/scripts/paper_test.py:ro
+    environment:
+      - TZ=${TZ:-UTC}
+      - CONFIG_PASSWORD=${BOT3_PASSWORD:-${BOT1_PASSWORD:-}}
+    deploy:
+      resources:
+        limits:
+          memory: 512M
+          cpus: "0.5"
+        reservations:
+          memory: 128M
+          cpus: "0.25"
+
+  # ==========================================
+  # External Signal/Risk Stack
+  # ==========================================
+  redis:
+    image: redis:7.2-alpine
+    container_name: hbot-redis
+    profiles:
+      - external
+    restart: unless-stopped
+    logging: *default-logging
+    command: ["redis-server", "--appendonly", "yes"]
+    ports:
+      - "${REDIS_BIND_IP:-127.0.0.1}:${REDIS_PORT:-6379}:6379"
+    networks:
+      - trading
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  signal-service:
+    image: python:3.11-slim
+    container_name: hbot-signal-service
+    profiles:
+      - external
+    restart: unless-stopped
+    logging: *default-logging
+    command: >
+      /bin/sh -lc "pip install --no-cache-dir redis pydantic joblib scikit-learn requests boto3 &&
+      PYTHONPATH=/workspace/hbot python /workspace/hbot/services/signal_service/main.py"
+    environment:
+      - EXT_SIGNAL_RISK_ENABLED=${EXT_SIGNAL_RISK_ENABLED:-false}
+      - REDIS_HOST=${REDIS_HOST:-redis}
+      - REDIS_PORT=${REDIS_PORT:-6379}
+      - REDIS_DB=${REDIS_DB:-0}
+      - REDIS_PASSWORD=${REDIS_PASSWORD:-}
+      - REDIS_CONSUMER_GROUP=${REDIS_CONSUMER_GROUP:-hb_group_v1}
+      - EVENT_POLL_MS=${EVENT_POLL_MS:-1000}
+      - ML_ENABLED=${ML_ENABLED:-false}
+      - ML_RUNTIME=${ML_RUNTIME:-sklearn_joblib}
+      - ML_MODEL_SOURCE=${ML_MODEL_SOURCE:-local}
+      - ML_MODEL_URI=${ML_MODEL_URI:-/workspace/hbot/models/current/model.joblib}
+      - ML_MODEL_REFRESH_SEC=${ML_MODEL_REFRESH_SEC:-300}
+      - ML_CONFIDENCE_MIN=${ML_CONFIDENCE_MIN:-0.60}
+      - ML_MAX_SIGNAL_AGE_MS=${ML_MAX_SIGNAL_AGE_MS:-3000}
+      - ML_INFERENCE_TIMEOUT_MS=${ML_INFERENCE_TIMEOUT_MS:-200}
+      - ML_HORIZON_S=${ML_HORIZON_S:-60}
+      - ML_FEATURE_SET=${ML_FEATURE_SET:-v1}
+      - ML_CUSTOM_CLASS_PATH=${ML_CUSTOM_CLASS_PATH:-}
+      - ML_S3_HTTP_TIMEOUT_SEC=${ML_S3_HTTP_TIMEOUT_SEC:-10}
+      - HB_INSTANCE_NAME=bot1
+      - EVENT_PRODUCER_NAME=signal_service
+    volumes:
+      - ..:/workspace/hbot:ro
+      - ../models:/workspace/hbot/models:ro
+    depends_on:
+      redis:
+        condition: service_healthy
+    networks:
+      - trading
+
+  risk-service:
+    image: python:3.11-slim
+    container_name: hbot-risk-service
+    profiles:
+      - external
+    restart: unless-stopped
+    logging: *default-logging
+    command: >
+      /bin/sh -lc "pip install --no-cache-dir redis pydantic &&
+      PYTHONPATH=/workspace/hbot python /workspace/hbot/services/risk_service/main.py"
+    environment:
+      - EXT_SIGNAL_RISK_ENABLED=${EXT_SIGNAL_RISK_ENABLED:-false}
+      - REDIS_HOST=${REDIS_HOST:-redis}
+      - REDIS_PORT=${REDIS_PORT:-6379}
+      - REDIS_DB=${REDIS_DB:-0}
+      - REDIS_PASSWORD=${REDIS_PASSWORD:-}
+      - REDIS_CONSUMER_GROUP=${REDIS_CONSUMER_GROUP:-hb_group_v1}
+      - EVENT_POLL_MS=${EVENT_POLL_MS:-1000}
+      - RISK_MAX_ABS_SIGNAL=${RISK_MAX_ABS_SIGNAL:-0.25}
+      - ML_ENABLED=${ML_ENABLED:-false}
+      - ML_CONFIDENCE_MIN=${ML_CONFIDENCE_MIN:-0.60}
+      - ML_MAX_SIGNAL_AGE_MS=${ML_MAX_SIGNAL_AGE_MS:-3000}
+      - RISK_MAX_ABS_PREDICTED_RETURN=${RISK_MAX_ABS_PREDICTED_RETURN:-0.05}
+      - HB_INSTANCE_NAME=bot1
+      - EVENT_PRODUCER_NAME=risk_service
+    volumes:
+      - ..:/workspace/hbot:ro
+    depends_on:
+      redis:
+        condition: service_healthy
+    networks:
+      - trading
+
+  coordination-service:
+    image: python:3.11-slim
+    container_name: hbot-coordination-service
+    profiles:
+      - external
+    restart: unless-stopped
+    logging: *default-logging
+    command: >
+      /bin/sh -lc "pip install --no-cache-dir redis pydantic &&
+      PYTHONPATH=/workspace/hbot python /workspace/hbot/services/coordination_service/main.py"
+    environment:
+      - EXT_SIGNAL_RISK_ENABLED=${EXT_SIGNAL_RISK_ENABLED:-false}
+      - REDIS_HOST=${REDIS_HOST:-redis}
+      - REDIS_PORT=${REDIS_PORT:-6379}
+      - REDIS_DB=${REDIS_DB:-0}
+      - REDIS_PASSWORD=${REDIS_PASSWORD:-}
+      - REDIS_CONSUMER_GROUP=${REDIS_CONSUMER_GROUP:-hb_group_v1}
+      - EVENT_POLL_MS=${EVENT_POLL_MS:-1000}
+      - HB_INSTANCE_NAME=bot1
+      - EVENT_PRODUCER_NAME=coordination_service
+    volumes:
+      - ..:/workspace/hbot:ro
+    depends_on:
+      redis:
+        condition: service_healthy
+    networks:
+      - trading
 
   # ==========================================
   # Monitoring Stack

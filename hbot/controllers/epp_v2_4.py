@@ -169,6 +169,11 @@ class EppV24Controller(MarketMakingControllerBase):
         self._paper_quote_balance: Decimal = config.paper_start_quote
         self._paper_base_balance: Decimal = config.paper_start_base
         self._paper_last_fill_minute_key: Optional[int] = None
+        self._external_soft_pause: bool = False
+        self._external_pause_reason: str = ""
+        self._external_target_base_pct_override: Optional[Decimal] = None
+        self._last_external_model_version: str = ""
+        self._last_external_intent_reason: str = ""
 
     async def update_processed_data(self):
         now = float(self.market_data_provider.time())
@@ -184,6 +189,8 @@ class EppV24Controller(MarketMakingControllerBase):
 
         regime_name, regime_spec = self._detect_regime(mid)
         target_base_pct = regime_spec.target_base_pct
+        if self._external_target_base_pct_override is not None:
+            target_base_pct = _clip(self._external_target_base_pct_override, Decimal("0"), Decimal("1"))
 
         inv_error = base_pct - target_base_pct
         skew = _clip(inv_error * Decimal("0.5"), Decimal("-0.002"), Decimal("0.002"))
@@ -222,6 +229,8 @@ class EppV24Controller(MarketMakingControllerBase):
             state = self._ops_guard.force_hard_stop("phase0_stub_disabled")
         if self.config.no_trade or self.config.variant == "d":
             state = GuardState.SOFT_PAUSE
+        if self._external_soft_pause:
+            state = GuardState.SOFT_PAUSE
 
         levels = self._pick_levels(regime_spec, turnover_x)
         if self._cancel_per_min(now) > self.config.cancel_budget_per_min:
@@ -252,6 +261,12 @@ class EppV24Controller(MarketMakingControllerBase):
             "turnover_x": turnover_x,
             "skew": skew,
             "adverse_drift_30s": adverse_drift,
+            "equity_quote": equity_quote,
+            "mid": mid,
+            "external_soft_pause": self._external_soft_pause,
+            "external_pause_reason": self._external_pause_reason,
+            "external_model_version": self._last_external_model_version,
+            "external_intent_reason": self._last_external_intent_reason,
         }
 
         if state != GuardState.RUNNING:
@@ -335,6 +350,40 @@ class EppV24Controller(MarketMakingControllerBase):
 
     def get_custom_info(self) -> dict:
         return dict(self.processed_data)
+
+    def set_external_soft_pause(self, active: bool, reason: str) -> None:
+        self._external_soft_pause = bool(active)
+        self._external_pause_reason = reason
+
+    def apply_execution_intent(self, intent: Dict[str, object]) -> Tuple[bool, str]:
+        action = str(intent.get("action", "")).strip()
+        metadata = intent.get("metadata", {})
+        metadata = metadata if isinstance(metadata, dict) else {}
+        self._last_external_model_version = str(metadata.get("model_version", ""))
+        self._last_external_intent_reason = str(metadata.get("reason", ""))
+        if action == "soft_pause":
+            reason = str(metadata.get("reason", "external_intent"))
+            self.set_external_soft_pause(True, reason)
+            return True, "ok"
+        if action == "resume":
+            self.set_external_soft_pause(False, "resume")
+            return True, "ok"
+        if action == "kill_switch":
+            self._ops_guard.force_hard_stop("external_kill_switch")
+            return True, "ok"
+        if action == "set_target_base_pct":
+            value = intent.get("target_base_pct")
+            if value is None:
+                return False, "missing_target_base_pct"
+            try:
+                candidate = _d(value)
+                if candidate < Decimal("0") or candidate > Decimal("1"):
+                    return False, "target_base_pct_out_of_range"
+                self._external_target_base_pct_override = _clip(candidate, Decimal("0"), Decimal("1"))
+                return True, "ok"
+            except Exception:
+                return False, "invalid_target_base_pct"
+        return False, "unsupported_action"
 
     def _detect_regime(self, mid: Decimal) -> Tuple[str, RegimeSpec]:
         ema50 = self._price_buffer.ema(50)
@@ -424,7 +473,10 @@ class EppV24Controller(MarketMakingControllerBase):
         self.config.cooldown_time = max(5, int(self.config.cooldown_time))
 
     def _connector(self):
-        return self.market_data_provider.get_connector(self.config.connector_name)
+        try:
+            return self.market_data_provider.get_connector(self.config.connector_name)
+        except Exception:
+            return None
 
     def _get_mid_price(self) -> Decimal:
         try:
@@ -442,6 +494,8 @@ class EppV24Controller(MarketMakingControllerBase):
         if self.config.paper_mode:
             return self._paper_base_balance, self._paper_quote_balance
         connector = self._connector()
+        if connector is None:
+            return Decimal("0"), Decimal("0")
         base_asset, quote_asset = self.config.trading_pair.split("-")
         base = Decimal("0")
         quote = Decimal("0")
@@ -464,12 +518,16 @@ class EppV24Controller(MarketMakingControllerBase):
         if self.config.paper_mode:
             return self._get_mid_price() > 0
         connector = self._connector()
+        if connector is None:
+            return False
         return bool(getattr(connector, "ready", False))
 
     def _balances_consistent(self) -> bool:
         if self.config.paper_mode:
             return self._paper_base_balance >= 0 and self._paper_quote_balance >= 0
         connector = self._connector()
+        if connector is None:
+            return False
         base_asset, quote_asset = self.config.trading_pair.split("-")
         try:
             base_total = _d(connector.get_balance(base_asset))
@@ -492,6 +550,8 @@ class EppV24Controller(MarketMakingControllerBase):
 
     def _min_notional_quote(self) -> Decimal:
         connector = self._connector()
+        if connector is None:
+            return Decimal("0")
         rule = None
         try:
             trading_rules = getattr(connector, "trading_rules", {})

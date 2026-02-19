@@ -1,0 +1,22 @@
+from __future__ import annotations
+
+MARKET_DATA_STREAM = "hb.market_data.v1"
+SIGNAL_STREAM = "hb.signal.v1"
+ML_SIGNAL_STREAM = "hb.ml_signal.v1"
+RISK_DECISION_STREAM = "hb.risk_decision.v1"
+EXECUTION_INTENT_STREAM = "hb.execution_intent.v1"
+AUDIT_STREAM = "hb.audit.v1"
+DEAD_LETTER_STREAM = "hb.dead_letter.v1"
+
+STREAM_RETENTION_MAXLEN = {
+    MARKET_DATA_STREAM: 50_000,
+    SIGNAL_STREAM: 50_000,
+    ML_SIGNAL_STREAM: 50_000,
+    RISK_DECISION_STREAM: 50_000,
+    EXECUTION_INTENT_STREAM: 50_000,
+    AUDIT_STREAM: 100_000,
+    DEAD_LETTER_STREAM: 100_000,
+}
+
+DEFAULT_CONSUMER_GROUP = "hb_group_v1"
+

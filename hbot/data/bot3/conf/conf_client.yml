@@ -2,7 +2,7 @@
 ###   client_config_map config   ###
 ####################################
 
-instance_id: d1099beb62e1afd3346d241dfaf9eec8d239b0f4
+instance_id: bot3_paper_test_instance
 
 # Fetch trading pairs from all exchanges if True, otherwise fetch only from connected exchanges.
 fetch_pairs_from_all_exchanges: false
@@ -63,38 +63,7 @@ db_mode:
 #     BTC: 0.1
 #     USDT: 1000
 balance_asset_limit:
-  htx: {}
-  bybit: {}
-  gate_io: {}
-  derive: {}
-  kucoin: {}
-  bitstamp: {}
-  hyperliquid: {}
-  foxbit: {}
-  kucoin_hft: {}
-  cube: {}
-  ndax: {}
-  okx: {}
-  mexc: {}
-  derive_testnet: {}
-  vertex: {}
-  dexalot: {}
-  bing_x: {}
-  ascend_ex: {}
-  btc_markets: {}
-  vertex_testnet: {}
-  kraken: {}
-  dexalot_testnet: {}
-  bitget:
-    USDT: 100.0
-  bybit_testnet: {}
-  xrpl: {}
-  hyperliquid_testnet: {}
-  coinbase_advanced_trade: {}
-  ndax_testnet: {}
-  bitrue: {}
-  injective_v2: {}
-  bitmart: {}
+  bitget: {}
 
 # Fixed gas price (in Gwei) for Ethereum transactions
 manual_gas_price: 50.0
@@ -137,13 +106,8 @@ paper_trade:
   - bitget
   paper_trade_account_balance:
     BTC: 1.0
-    SOL: 100.0
     USDT: 10000.0
-    USDC: 10000.0
-    ETH: 20.0
-    WETH: 20.0
-    DOGE: 1000000.0
-    HBOT: 10000000.0
+    ETH: 10.0
 
 color:
   top_pane: '#000000'

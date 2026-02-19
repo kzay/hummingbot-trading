@@ -1,4 +1,5 @@
 # EPP v2.4 - Phase 0 - Bot B STUB (DISABLED)
+id: epp_v2_4_bot_b_stub
 controller_name: epp_v2_4
 controller_type: market_making
 

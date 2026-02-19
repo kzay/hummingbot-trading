@@ -1,16 +1,19 @@
 # EPP v2.4 - Phase 0 - Bot D (NO TRADE / PARKING)
+id: epp_v2_4_bot_d
 controller_name: epp_v2_4
 controller_type: market_making
 
-# Paper-test mode:
-# Keep connector_name as the real connector id and rely on conf_client.yml
-# paper_trade.paper_trade_exchanges to route orders to paper trading.
+# Paper mode uses the real connector for market data only.
+# The controller's paper_mode: true handles simulation internally.
+# To go live: set paper_mode: false (connector_name stays bitget).
 connector_name: bitget
 trading_pair: BTC-USDT
 
 total_amount_quote: 0
 buy_spreads: ""
 sell_spreads: ""
+buy_amounts_pct: "50,50"
+sell_amounts_pct: "50,50"
 executor_refresh_time: 120
 cooldown_time: 5
 leverage: 1
