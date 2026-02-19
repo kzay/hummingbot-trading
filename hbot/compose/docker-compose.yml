@@ -56,19 +56,17 @@ services:
     <<: *hbot-base
     container_name: hbot-bot1
     volumes:
-      # ---- V2 controllers (directory mounts; scales better than file-by-file) ----
-      - ../controllers/market_making:/home/hummingbot/controllers/market_making:ro
-      - ../controllers/directional_trading:/home/hummingbot/controllers/directional_trading:ro
       # ---- Bot config, data, logs ----
       - ../data/bot1/conf:/home/hummingbot/conf
       - ../data/bot1/logs:/home/hummingbot/logs
       - ../data/bot1/data:/home/hummingbot/data
-      # Keep built-in /home/hummingbot/scripts available (contains v2_with_controllers.py)
       - ../data/bot1/scripts:/home/hummingbot/custom_scripts
       - ../data/bot1/pmm_scripts:/home/hummingbot/pmm_scripts
-      # ---- Legacy V1 strategies (still usable) ----
-      - ../scripts/strategies:/home/hummingbot/custom_strategies:ro
-      - ../scripts/utils:/home/hummingbot/custom_utils:ro
+      # ---- EPP v2.4 custom controller + helpers ----
+      - ../controllers/epp_v2_4.py:/home/hummingbot/controllers/market_making/epp_v2_4.py:ro
+      - ../controllers/price_buffer.py:/home/hummingbot/controllers/price_buffer.py:ro
+      - ../controllers/ops_guard.py:/home/hummingbot/controllers/ops_guard.py:ro
+      - ../controllers/epp_logging.py:/home/hummingbot/controllers/epp_logging.py:ro
     environment:
       - TZ=${TZ:-UTC}
       # CONFIG_PASSWORD auto-logins on boot.  On FIRST RUN, leave it empty
@@ -76,8 +74,6 @@ services:
       # After the first login, .password_verification is created and
       # CONFIG_PASSWORD works for unattended restarts.
       - CONFIG_PASSWORD=${BOT1_PASSWORD:-}
-      - LLM_API_KEY=${LLM_API_KEY:-}
-      - LLM_FALLBACK_API_KEY=${LLM_FALLBACK_API_KEY:-}
     deploy:
       resources:
         limits:
@@ -96,24 +92,20 @@ services:
     profiles:
       - multi
     volumes:
-      # ---- V2 controllers (directory mounts; scales better than file-by-file) ----
-      - ../controllers/market_making:/home/hummingbot/controllers/market_making:ro
-      - ../controllers/directional_trading:/home/hummingbot/controllers/directional_trading:ro
       # ---- Bot config, data, logs ----
       - ../data/bot2/conf:/home/hummingbot/conf
       - ../data/bot2/logs:/home/hummingbot/logs
       - ../data/bot2/data:/home/hummingbot/data
-      # Keep built-in /home/hummingbot/scripts available (contains v2_with_controllers.py)
       - ../data/bot2/scripts:/home/hummingbot/custom_scripts
       - ../data/bot2/pmm_scripts:/home/hummingbot/pmm_scripts
-      # ---- Legacy V1 strategies ----
-      - ../scripts/strategies:/home/hummingbot/custom_strategies:ro
-      - ../scripts/utils:/home/hummingbot/custom_utils:ro
+      # ---- EPP v2.4 custom controller + helpers ----
+      - ../controllers/epp_v2_4.py:/home/hummingbot/controllers/market_making/epp_v2_4.py:ro
+      - ../controllers/price_buffer.py:/home/hummingbot/controllers/price_buffer.py:ro
+      - ../controllers/ops_guard.py:/home/hummingbot/controllers/ops_guard.py:ro
+      - ../controllers/epp_logging.py:/home/hummingbot/controllers/epp_logging.py:ro
     environment:
       - TZ=${TZ:-UTC}
       - CONFIG_PASSWORD=${BOT2_PASSWORD:-admin}
-      - LLM_API_KEY=${LLM_API_KEY:-}
-      - LLM_FALLBACK_API_KEY=${LLM_FALLBACK_API_KEY:-}
     deploy:
       resources:
         limits:

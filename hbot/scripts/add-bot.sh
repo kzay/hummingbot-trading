@@ -58,8 +58,6 @@ cat << COMPOSE_BLOCK
       - ../data/${BOT_NAME}/data:/home/hummingbot/data
       - ../data/${BOT_NAME}/scripts:/home/hummingbot/scripts
       - ../data/${BOT_NAME}/pmm_scripts:/home/hummingbot/pmm_scripts
-      - ../scripts/strategies:/home/hummingbot/custom_strategies:ro
-      - ../scripts/utils:/home/hummingbot/custom_utils:ro
     environment:
       - TZ=\${TZ:-UTC}
       - CONFIG_PASSWORD=\${BOT${BOT_NUM}_PASSWORD:-admin}

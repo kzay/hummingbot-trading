@@ -57,7 +57,7 @@ loggers:
         handlers: [console, file_handler]
         mqtt: true
     hummingbot.connector:
-        level: DEBUG
+        level: NETWORK
         propagate: false
         handlers: [console, file_handler]
         mqtt: true

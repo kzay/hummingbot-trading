@@ -11,7 +11,7 @@ Production-ready, Docker-based Hummingbot infrastructure for Bitget Spot trading
 3. [Prerequisites](#3-prerequisites)
 4. [Deployment Procedure](#4-deployment-procedure)
 5. [Bitget Configuration](#5-bitget-configuration)
-6. [Custom Strategies](#6-custom-strategies)
+6. [Custom Strategy Layer](#6-custom-strategy-layer)
 7. [Monitoring & Grafana](#7-monitoring--grafana)
 8. [Scaling to Multiple Bots](#8-scaling-to-multiple-bots)
 9. [Update Procedure](#9-update-procedure)
@@ -48,9 +48,6 @@ hbot/
 │   └── alertmanager/
 │       └── alertmanager.yml          # Alert routing config
 ├── scripts/                          # Operational scripts
-│   ├── strategies/                   # Shared strategy Python files
-│   │   ├── bitget_spot_mm.py         # Example market-making strategy
-│   │   └── config_bitget_spot_mm.yml # Strategy YAML config
 │   ├── utils/                        # Shared utilities
 │   │   └── health_check.py           # System health checker
 │   ├── deploy.sh                     # First-time VPS setup
@@ -75,7 +72,6 @@ hbot/
 | `data/botX/conf/` | Bot configuration, encrypted API keys | Partial (.gitkeep only) |
 | `data/botX/logs/` | Runtime logs | No |
 | `data/botX/data/` | SQLite DB, trade history | No |
-| `scripts/strategies/` | Shared strategy code | Yes |
 | `scripts/utils/` | Shared utilities | Yes |
 | `monitoring/` | Prometheus, Grafana configs | Yes |
 | `env/` | Environment variables (.env) | Template only |
@@ -186,7 +182,7 @@ docker attach hbot-bot1
 #   1. Set password when prompted
 #   2. connect bitget
 #   3. Enter API key, secret, passphrase
-#   4. start --script bitget_spot_mm.py
+#   4. start with your selected built-in script/config
 
 # Detach without stopping: Ctrl+P then Ctrl+Q
 ```
@@ -264,114 +260,13 @@ The current setup targets Spot. To add Perpetual support:
 
 ---
 
-## 6. Custom Strategies
+## 6. Custom Strategy Layer
 
-### 6.1 Strategy Files
+The repository is intentionally clean of custom strategy/controller code.
 
-Strategies live in `scripts/strategies/` and are mounted read-only into every bot container at `/home/hummingbot/custom_strategies/`.
-
-```
-scripts/
-├── strategies/
-│   ├── bitget_spot_mm.py              # Market making strategy
-│   └── config_bitget_spot_mm.yml      # YAML configuration
-└── utils/
-    └── health_check.py                # Shared utility
-```
-
-### 6.2 Mounting into Containers
-
-In `docker-compose.yml`, each bot has:
-```yaml
-volumes:
-  - ../scripts/strategies:/home/hummingbot/custom_strategies:ro
-  - ../scripts/utils:/home/hummingbot/custom_utils:ro
-```
-
-The `:ro` flag ensures bots cannot modify shared strategy code.
-
-### 6.3 Running a Strategy
-
-```bash
-docker attach hbot-bot1
-
-# Start with script
->>> start --script bitget_spot_mm.py
-
-# Or start with script + config
->>> start --script bitget_spot_mm.py --conf config_bitget_spot_mm.yml
-```
-
-### 6.4 Versioning Strategies
-
-- All strategies are in `scripts/strategies/` and tracked by Git
-- Use meaningful commit messages: `feat(strategy): add trailing-stop to spot MM`
-- Tag stable versions: `git tag v1.0.0-strategy-stable`
-- Bot-specific overrides go in `data/botX/scripts/` (not tracked)
-- Never edit strategy files on the VPS directly; push from dev and pull
-
-### 6.5 V2 Normal vs Paper Run Matrix
-
-Before running any paper config, verify the connector is listed under
-`paper_trade.paper_trade_exchanges` in `data/bot1/conf/conf_client.yml`.
-
-Attach to the bot first:
-
-```bash
-docker attach hbot-bot1
-```
-
-Then run one of the following pairs:
-
-#### PMM + RSI + LLM
-
-```text
-Normal:
->>> start --script v2_with_controllers.py --conf v2_pmm_rsi_llm.yml
-
-Paper:
->>> start --script v2_with_controllers.py --conf v2_pmm_rsi_llm_paper.yml
-```
-
-#### PMM Avellaneda V2
-
-```text
-Normal:
->>> start --script v2_with_controllers.py --conf v2_pmm_avellaneda_v2.yml
-
-Paper:
->>> start --script v2_with_controllers.py --conf v2_pmm_avellaneda_v2_paper.yml
-```
-
-#### Systematic Alpha V1
-
-```text
-Normal:
->>> start --script v2_with_controllers.py --conf v2_systematic_alpha.yml
-
-Paper:
->>> start --script v2_with_controllers.py --conf v2_systematic_alpha_paper.yml
-```
-
-#### AI Trend Following V1
-
-```text
-Normal:
->>> start --script v2_with_controllers.py --conf v2_ai_trend_following_v1.yml
-
-Paper:
->>> start --script v2_with_controllers.py --conf v2_ai_trend_following_v1_paper.yml
-```
-
-#### Directional MAX/MIN V1
-
-```text
-Normal:
->>> start --script v2_with_controllers.py --conf v2_directional_max_min.yml
-
-Paper:
->>> start --script v2_with_controllers.py --conf v2_directional_max_min_paper.yml
-```
+- No files are mounted from `controllers/` or `scripts/strategies/`.
+- Bot runtime should use built-in Hummingbot scripts/configs or newly added project-specific code.
+- Keep bot-specific runtime scripts under `data/botX/scripts/` when needed.
 
 ---
 
@@ -868,6 +763,111 @@ ssh -L 3000:127.0.0.1:3000 -L 9090:127.0.0.1:9090 user@vps-ip
 # Grafana:    http://localhost:3000
 # Prometheus: http://localhost:9090
 ```
+
+---
+
+## 14. EPP v2.4 (Phase 0)
+
+Phase 0 mapping in this repository:
+- `bot1` = Bot A (spot inventory engine, active trading)
+- `bot2` = Bot D (cash parking/monitoring, no-trade mode)
+- Bot B / Bot C exist only as disabled config stubs in `conf/controllers/`
+
+### 14.1 Config Files
+
+Bot A (`bot1`):
+- `data/bot1/conf/controllers/epp_v2_4_bot_a.yml`
+- `data/bot1/conf/scripts/v2_epp_v2_4_bot_a.yml`
+
+Bot D (`bot2`):
+- `data/bot2/conf/controllers/epp_v2_4_bot_d.yml`
+- `data/bot2/conf/scripts/v2_epp_v2_4_bot_d.yml`
+
+Disabled stubs (Phase 0 only):
+- `data/bot1/conf/controllers/epp_v2_4_bot_b_stub.yml`
+- `data/bot1/conf/controllers/epp_v2_4_bot_c_stub.yml`
+
+### 14.2 Run Paper Mode
+
+Paper mode is enforced through `conf_client.yml -> paper_trade.paper_trade_exchanges`.
+For this setup, `connector_name: bitget` in EPP controller YAML is routed to paper execution.
+
+1. Start bot containers:
+
+```bash
+cd hbot/compose
+docker compose --env-file ../env/.env --profile multi up -d bot1 bot2
+```
+
+2. Ensure both bot conf files include `bitget` in:
+   - `data/bot1/conf/conf_client.yml`
+   - `data/bot2/conf/conf_client.yml`
+
+3. Start bot1 strategy:
+
+```bash
+docker attach hbot-bot1
+start --script v2_with_controllers.py --conf v2_epp_v2_4_bot_a.yml
+```
+
+4. Start bot2 monitor (no trades):
+
+```bash
+docker attach hbot-bot2
+start --script v2_with_controllers.py --conf v2_epp_v2_4_bot_d.yml
+```
+
+5. Validate paper run:
+   - Bot1 creates simulated orders/fills.
+   - Bot2 stays no-trade (`variant: d`, `no_trade: true`).
+   - CSV logs appear under `data/bot1/logs/epp_v24/...` and `data/bot2/logs/epp_v24/...`.
+
+### 14.3 Run Live Micro Mode
+
+1. Configure encrypted connector credentials via `connect bitget`.
+2. Set `paper_mode: false` in the bot controller YAML.
+3. Keep conservative `total_amount_quote` and leave Bot D as `no_trade: true`.
+4. Restart strategy from the same `v2_with_controllers.py` script configs.
+
+### 14.6 After Paper Pass -> Bitget Switch
+
+Use this migration sequence after your paper validation window passes:
+
+1. Update controller connectors to Bitget:
+   - `data/bot1/conf/controllers/epp_v2_4_bot_a.yml` -> `connector_name: bitget`
+   - `data/bot2/conf/controllers/epp_v2_4_bot_d.yml` -> `connector_name: bitget`
+2. Keep Bot D protections unchanged: `variant: d`, `no_trade: true`.
+3. Attach to each bot and configure credentials:
+   - `connect bitget`
+4. Start with micro notional (`total_amount_quote`) and observe for 5-7 days.
+5. Confirm logs and ops guard remain healthy before increasing capital.
+
+### 14.4 Go-Live Checklist (12 items)
+
+1. Connector login succeeds for both bot1 and bot2.
+2. `bot1` uses `variant: a` with `enabled: true` and `no_trade: false`.
+3. `bot2` uses `variant: d` with `no_trade: true`.
+4. Bot B/C configs remain `enabled: false`.
+5. Spread floor and turnover cap are set and non-zero.
+6. Runtime turnover remains below `3x/day` (target `<2x/day`).
+7. Fees/gross profit stays below `35-40%`.
+8. Profit factor remains above `1.25` in validation window.
+9. Drawdown is below `3-4%` over the validation window.
+10. No repeated cancel failures or balance mismatch events.
+11. CSV logs are being written for fills/minute/daily on both instances.
+12. Ops guard transitions (`running`, `soft_pause`, `hard_stop`) are visible in status/logs.
+
+### 14.5 EPP Split CSV Logs
+
+Per instance logs are written under:
+- `data/<bot>/logs/epp_v24/<instance>_<variant>/fills.csv`
+- `data/<bot>/logs/epp_v24/<instance>_<variant>/minute.csv`
+- `data/<bot>/logs/epp_v24/<instance>_<variant>/daily.csv`
+
+How to read quickly:
+- `fills.csv`: execution-level records (price/amount/notional/fee/state)
+- `minute.csv`: 1-minute health + edge + turnover snapshot
+- `daily.csv`: equity open/now, PnL, turnover, ops events
 
 ---
 

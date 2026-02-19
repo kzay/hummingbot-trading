@@ -1,0 +1,30 @@
+# EPP v2.4 - Phase 0 - Bot D (NO TRADE / PARKING)
+controller_name: epp_v2_4
+controller_type: market_making
+
+# Paper-test mode:
+# Keep connector_name as the real connector id and rely on conf_client.yml
+# paper_trade.paper_trade_exchanges to route orders to paper trading.
+connector_name: bitget
+trading_pair: BTC-USDT
+
+total_amount_quote: 0
+buy_spreads: ""
+sell_spreads: ""
+executor_refresh_time: 120
+cooldown_time: 5
+leverage: 1
+position_mode: ONEWAY
+stop_loss: 0.005
+take_profit: 0.005
+time_limit: 900
+
+variant: d
+enabled: true
+no_trade: true
+instance_name: bot2
+paper_mode: true
+log_dir: /home/hummingbot/logs
+
+spot_fee_pct: 0.0010
+slippage_est_pct: 0.0005

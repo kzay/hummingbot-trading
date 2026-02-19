@@ -1,0 +1,24 @@
+# EPP v2.4 - Phase 0 - Bot B STUB (DISABLED)
+controller_name: epp_v2_4
+controller_type: market_making
+
+connector_name: bitget_perpetual
+trading_pair: BTC-USDT
+
+total_amount_quote: 0
+buy_spreads: ""
+sell_spreads: ""
+executor_refresh_time: 120
+cooldown_time: 5
+leverage: 1
+position_mode: ONEWAY
+stop_loss: 0.005
+take_profit: 0.005
+time_limit: 900
+
+variant: b
+enabled: false
+no_trade: true
+instance_name: bot1
+paper_mode: true
+log_dir: /home/hummingbot/logs

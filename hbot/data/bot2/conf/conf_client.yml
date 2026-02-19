@@ -2,12 +2,12 @@
 ###   client_config_map config   ###
 ####################################
 
-instance_id: d1099beb62e1afd3346d241dfaf9eec8d239b0f4
+instance_id: b29ab44c7f2a7e9ec86d2b1c1a0f3a6f7d24b901
 
 # Fetch trading pairs from all exchanges if True, otherwise fetch only from connected exchanges.
 fetch_pairs_from_all_exchanges: false
 
-log_level: DEBUG
+log_level: INFO
 
 debug_console: false
 
@@ -85,8 +85,7 @@ balance_asset_limit:
   vertex_testnet: {}
   kraken: {}
   dexalot_testnet: {}
-  bitget:
-    USDT: 100.0
+  bitget: {}
   bybit_testnet: {}
   xrpl: {}
   hyperliquid_testnet: {}
@@ -133,7 +132,9 @@ commands_timeout:
 tables_format: psql
 
 paper_trade:
-  paper_trade_exchanges: []
+  paper_trade_exchanges:
+  - bitget
+  - bitget_perpetual
   paper_trade_account_balance:
     BTC: 1.0
     SOL: 100.0
