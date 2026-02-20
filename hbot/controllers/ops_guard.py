@@ -21,36 +21,46 @@ class OpsSnapshot:
 
 @dataclass
 class OpsGuard:
-    max_soft_pause_cycles: int = 6
+    max_operational_pause_cycles: int = 6
     hard_stop_cancel_fail_streak: int = 8
     state: GuardState = GuardState.RUNNING
-    _soft_pause_cycles: int = 0
+    _operational_pause_cycles: int = 0
     reasons: List[str] = field(default_factory=list)
 
     def update(self, snapshot: OpsSnapshot) -> GuardState:
         reasons: List[str] = []
+        operational_failure = False
+
         if not snapshot.connector_ready:
             reasons.append("connector_not_ready")
+            operational_failure = True
         if not snapshot.balances_consistent:
             reasons.append("balance_mismatch")
+            operational_failure = True
         if snapshot.edge_gate_blocked:
             reasons.append("edge_gate_blocked")
+
         if snapshot.cancel_fail_streak >= self.hard_stop_cancel_fail_streak:
             reasons.append("cancel_fail_hard_limit")
             self.reasons = reasons
             self.state = GuardState.HARD_STOP
             return self.state
 
-        if reasons:
-            self._soft_pause_cycles += 1
+        if operational_failure:
+            self._operational_pause_cycles += 1
             self.reasons = reasons
-            if self._soft_pause_cycles >= self.max_soft_pause_cycles:
+            if self._operational_pause_cycles >= self.max_operational_pause_cycles:
                 self.state = GuardState.HARD_STOP
             else:
                 self.state = GuardState.SOFT_PAUSE
             return self.state
 
-        self._soft_pause_cycles = 0
+        if reasons:
+            self.reasons = reasons
+            self.state = GuardState.SOFT_PAUSE
+            return self.state
+
+        self._operational_pause_cycles = 0
         self.reasons = []
         self.state = GuardState.RUNNING
         return self.state

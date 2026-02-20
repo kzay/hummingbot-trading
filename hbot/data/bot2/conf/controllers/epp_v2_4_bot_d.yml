@@ -3,10 +3,8 @@ id: epp_v2_4_bot_d
 controller_name: epp_v2_4
 controller_type: market_making
 
-# Paper mode uses the real connector for market data only.
-# The controller's paper_mode: true handles simulation internally.
-# To go live: set paper_mode: false (connector_name stays bitget).
-connector_name: bitget
+# Paper: use bitget_paper_trade.  Live: change to bitget.
+connector_name: bitget_paper_trade
 trading_pair: BTC-USDT
 
 total_amount_quote: 0
@@ -21,13 +19,14 @@ position_mode: ONEWAY
 stop_loss: 0.005
 take_profit: 0.005
 time_limit: 900
+skip_rebalance: true
 
 variant: d
 enabled: true
 no_trade: true
 instance_name: bot2
-paper_mode: true
 log_dir: /home/hummingbot/logs
 
 spot_fee_pct: 0.0010
 slippage_est_pct: 0.0005
+min_net_edge_bps: 2

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import logging
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from decimal import Decimal
@@ -19,6 +20,31 @@ from hummingbot.strategy_v2.executors.position_executor.data_types import Positi
 from controllers.epp_logging import CsvSplitLogger
 from controllers.ops_guard import GuardState, OpsGuard, OpsSnapshot
 from controllers.price_buffer import MidPriceBuffer
+
+# --- Patch: allow *_paper_trade connector names in V2 controller framework ---
+# MarketDataProvider._create_non_trading_connector calls get_connector_class()
+# which fails for paper trade connectors (no real module). We strip the suffix
+# so it creates a base connector for price data while the main connector
+# (created by connector_manager) remains a PaperTradeExchange wrapper.
+_pt_log = logging.getLogger("epp_paper_trade_patch")
+try:
+    from hummingbot.data_feed.market_data_provider import MarketDataProvider as _MDP
+    if not getattr(_MDP, "_paper_trade_patched", False):
+        _orig_create = _MDP._create_non_trading_connector
+
+        def _patched_create(self, connector_name):
+            if connector_name.endswith("_paper_trade"):
+                base_name = connector_name.replace("_paper_trade", "")
+                _pt_log.info(f"Paper trade: creating non-trading connector as '{base_name}' (was '{connector_name}')")
+                return _orig_create(self, base_name)
+            return _orig_create(self, connector_name)
+
+        _MDP._create_non_trading_connector = _patched_create
+        _MDP._paper_trade_patched = True
+        _pt_log.info("MarketDataProvider patched for paper trade connector support")
+except Exception as e:
+    _pt_log.warning(f"Paper trade patch failed: {e}")
+# --- End patch ---
 
 
 def _d(value: Any) -> Decimal:
@@ -51,9 +77,6 @@ class EppV24Config(MarketMakingControllerConfigBase):
     no_trade: bool = Field(default=False, json_schema_extra={"prompt": "No-trade mode: ", "prompt_on_new": True})
     instance_name: str = Field(default="bot1", json_schema_extra={"prompt": "Instance name: ", "prompt_on_new": True})
     log_dir: str = Field(default="/home/hummingbot/logs")
-    paper_mode: bool = Field(default=True)
-    paper_start_quote: Decimal = Field(default=Decimal("10000"))
-    paper_start_base: Decimal = Field(default=Decimal("0"))
     candles_connector: Optional[str] = Field(default=None)
     candles_trading_pair: Optional[str] = Field(default=None)
 
@@ -67,17 +90,13 @@ class EppV24Config(MarketMakingControllerConfigBase):
     high_vol_band_pct: Decimal = Field(default=Decimal("0.0080"))
     shock_drift_30s_pct: Decimal = Field(default=Decimal("0.0100"))
     trend_eps_pct: Decimal = Field(default=Decimal("0.0010"))
-    z1_normal: Decimal = Field(default=Decimal("1.0"))
-    z1_high_vol: Decimal = Field(default=Decimal("1.5"))
 
     # Runtime controls
     sample_interval_s: int = Field(default=10, ge=5, le=30)
     spread_floor_recalc_s: int = Field(default=300)
     daily_rollover_hour_utc: int = Field(default=0, ge=0, le=23)
     cancel_budget_per_min: int = Field(default=50)
-    max_age_neutral_s: int = Field(default=90)
-    max_age_trend_s: int = Field(default=60)
-    max_age_high_vol_s: int = Field(default=40)
+    min_net_edge_bps: int = Field(default=2)
 
     @field_validator("variant", mode="before")
     @classmethod
@@ -91,14 +110,14 @@ class EppV24Config(MarketMakingControllerConfigBase):
     @classmethod
     def _set_candles_connector(cls, v: Optional[str], info: ValidationInfo) -> str:
         if v in (None, ""):
-            return str(info.data.get("connector_name", "bitget"))
+            return str(info.data.get("connector_name", ""))
         return str(v)
 
     @field_validator("candles_trading_pair", mode="before")
     @classmethod
     def _set_candles_pair(cls, v: Optional[str], info: ValidationInfo) -> str:
         if v in (None, ""):
-            return str(info.data.get("trading_pair", "BTC-USDT"))
+            return str(info.data.get("trading_pair", ""))
         return str(v)
 
 
@@ -166,9 +185,6 @@ class EppV24Controller(MarketMakingControllerBase):
         self._cancel_fail_streak: int = 0
         self._soft_pause_edge: bool = False
         self._last_minute_key: Optional[int] = None
-        self._paper_quote_balance: Decimal = config.paper_start_quote
-        self._paper_base_balance: Decimal = config.paper_start_base
-        self._paper_last_fill_minute_key: Optional[int] = None
         self._external_soft_pause: bool = False
         self._external_pause_reason: str = ""
         self._external_target_base_pct_override: Optional[Decimal] = None
@@ -209,10 +225,15 @@ class EppV24Controller(MarketMakingControllerBase):
 
         spread_pct = self._pick_spread_pct(regime_spec, turnover_x)
         spread_pct = max(spread_pct, self._spread_floor_pct)
-        net_edge = Decimal("0.5") * spread_pct - self.config.spot_fee_pct - self.config.slippage_est_pct - max(
-            Decimal("0"), adverse_drift
+        min_edge_threshold = Decimal(self.config.min_net_edge_bps) / Decimal("10000")
+        net_edge = (
+            Decimal("0.5") * spread_pct
+            - self.config.spot_fee_pct
+            - self.config.slippage_est_pct
+            - max(Decimal("0"), adverse_drift)
+            - turnover_penalty
         )
-        self._soft_pause_edge = net_edge <= 0
+        self._soft_pause_edge = net_edge <= min_edge_threshold
 
         connector_ready = self._connector_ready()
         balance_ok = self._balances_consistent()
@@ -273,16 +294,6 @@ class EppV24Controller(MarketMakingControllerBase):
             self.config.buy_spreads = ""
             self.config.sell_spreads = ""
             self.config.total_amount_quote = Decimal("0")
-        elif self.config.paper_mode:
-            self._paper_trade_tick(
-                now_ts=now,
-                mid=mid,
-                equity_quote=equity_quote,
-                base_pct=base_pct,
-                target_base_pct=target_base_pct,
-                quote_size_pct=(regime_spec.quote_size_pct_min + regime_spec.quote_size_pct_max) / Decimal("2"),
-                state=state,
-            )
 
         self._log_minute(now, mid, equity_quote, base_pct, target_base_pct, spread_pct, net_edge, turnover_x, state)
 
@@ -408,12 +419,11 @@ class EppV24Controller(MarketMakingControllerBase):
             return regime_spec.levels_min
         ratio = _clip(turnover_x / max(self.config.turnover_cap_x, Decimal("0.0001")), Decimal("0"), Decimal("1"))
         span = regime_spec.levels_max - regime_spec.levels_min
-        return int(regime_spec.levels_max - int(round(float(ratio) * span)))
+        return max(regime_spec.levels_min, int(regime_spec.levels_max - int(round(float(ratio) * span))))
 
     def _build_side_spreads(
         self, spread_pct: Decimal, skew: Decimal, levels: int, one_sided: str
     ) -> Tuple[List[Decimal], List[Decimal]]:
-        # Spread is percent, and order placement around mid is based on half spread.
         half = spread_pct / Decimal("2")
         step = half * Decimal("0.4")
         buy: List[Decimal] = []
@@ -439,12 +449,6 @@ class EppV24Controller(MarketMakingControllerBase):
         mid: Decimal,
         quote_size_pct: Decimal,
     ) -> None:
-        if self.config.paper_mode:
-            # Internal paper simulator handles virtual fills; avoid real order placement.
-            self.config.buy_spreads = ""
-            self.config.sell_spreads = ""
-            self.config.total_amount_quote = Decimal("0")
-            return
         if self.config.no_trade or self.config.variant == "d":
             self.config.buy_spreads = ""
             self.config.sell_spreads = ""
@@ -491,8 +495,6 @@ class EppV24Controller(MarketMakingControllerBase):
             return Decimal("0")
 
     def _get_balances(self) -> Tuple[Decimal, Decimal]:
-        if self.config.paper_mode:
-            return self._paper_base_balance, self._paper_quote_balance
         connector = self._connector()
         if connector is None:
             return Decimal("0"), Decimal("0")
@@ -515,16 +517,12 @@ class EppV24Controller(MarketMakingControllerBase):
         return equity, base_pct
 
     def _connector_ready(self) -> bool:
-        if self.config.paper_mode:
-            return self._get_mid_price() > 0
         connector = self._connector()
         if connector is None:
             return False
         return bool(getattr(connector, "ready", False))
 
     def _balances_consistent(self) -> bool:
-        if self.config.paper_mode:
-            return self._paper_base_balance >= 0 and self._paper_quote_balance >= 0
         connector = self._connector()
         if connector is None:
             return False
@@ -638,60 +636,3 @@ class EppV24Controller(MarketMakingControllerBase):
                 "orders_active": len(self.executors_info),
             }
         )
-
-    def _paper_trade_tick(
-        self,
-        now_ts: float,
-        mid: Decimal,
-        equity_quote: Decimal,
-        base_pct: Decimal,
-        target_base_pct: Decimal,
-        quote_size_pct: Decimal,
-        state: GuardState,
-    ) -> None:
-        if self.config.variant != "a" or self.config.no_trade or state != GuardState.RUNNING:
-            return
-        minute_key = int(now_ts // 60)
-        if self._paper_last_fill_minute_key == minute_key:
-            return
-
-        threshold = Decimal("0.02")
-        notional = max(Decimal("5"), equity_quote * quote_size_pct)
-        side: Optional[str] = None
-        amount_base = Decimal("0")
-        if base_pct < target_base_pct - threshold and self._paper_quote_balance > Decimal("1"):
-            side = "buy"
-            notional = min(notional, self._paper_quote_balance)
-            amount_base = notional / mid
-            self._paper_quote_balance -= notional
-            self._paper_base_balance += amount_base
-        elif base_pct > target_base_pct + threshold and self._paper_base_balance > Decimal("0"):
-            side = "sell"
-            amount_base = min(self._paper_base_balance, notional / mid)
-            notional = amount_base * mid
-            self._paper_base_balance -= amount_base
-            self._paper_quote_balance += notional
-
-        if side is not None and amount_base > 0:
-            fee_quote = notional * self.config.spot_fee_pct
-            if side == "buy":
-                self._paper_quote_balance = max(Decimal("0"), self._paper_quote_balance - fee_quote)
-            else:
-                self._paper_quote_balance = max(Decimal("0"), self._paper_quote_balance - fee_quote)
-            self._traded_notional_today += notional
-            self._fills_count_today += 1
-            self._paper_last_fill_minute_key = minute_key
-            self._csv.log_fill(
-                {
-                    "bot_variant": self.config.variant,
-                    "exchange": f"{self.config.connector_name}_paper_sim",
-                    "trading_pair": self.config.trading_pair,
-                    "side": side,
-                    "price": str(mid),
-                    "amount_base": str(amount_base),
-                    "notional_quote": str(notional),
-                    "fee_quote": str(fee_quote),
-                    "order_id": f"paper-{minute_key}-{side}",
-                    "state": self._ops_guard.state.value,
-                }
-            )

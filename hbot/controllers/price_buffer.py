@@ -114,8 +114,7 @@ class MidPriceBuffer:
                 break
         if older is None or older <= 0:
             return Decimal("0")
-        # Conservatively treat positive short-term drift as adverse.
-        return max(Decimal("0"), (now_mid - older) / older)
+        return abs(now_mid - older) / older
 
     @staticmethod
     def minute_iso(minute_ts: int) -> str:
