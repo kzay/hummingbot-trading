@@ -3,7 +3,7 @@ from __future__ import annotations
 import csv
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Dict, Iterable
+from typing import Dict, Iterable, Optional
 
 
 class CsvSplitLogger:
@@ -30,8 +30,8 @@ class CsvSplitLogger:
                 writer.writeheader()
             writer.writerow(row)
 
-    def log_fill(self, data: Dict[str, object]) -> None:
-        row = {"ts": self._now_iso(), **data}
+    def log_fill(self, data: Dict[str, object], ts: Optional[str] = None) -> None:
+        row = {"ts": ts or self._now_iso(), **data}
         fields = (
             "ts",
             "bot_variant",
@@ -47,28 +47,35 @@ class CsvSplitLogger:
         )
         self._append("fills", row, fields)
 
-    def log_minute(self, data: Dict[str, object]) -> None:
-        row = {"ts": self._now_iso(), **data}
+    def log_minute(self, data: Dict[str, object], ts: Optional[str] = None) -> None:
+        row = {"ts": ts or self._now_iso(), **data}
         fields = (
             "ts",
             "bot_variant",
             "exchange",
             "trading_pair",
             "state",
+            "regime",
             "mid",
             "equity_quote",
             "base_pct",
             "target_base_pct",
             "spread_pct",
+            "spread_floor_pct",
             "net_edge_pct",
+            "skew",
+            "adverse_drift_30s",
+            "soft_pause_edge",
+            "base_balance",
+            "quote_balance",
             "turnover_today_x",
             "cancel_per_min",
             "orders_active",
         )
         self._append("minute", row, fields)
 
-    def log_daily(self, data: Dict[str, object]) -> None:
-        row = {"ts": self._now_iso(), **data}
+    def log_daily(self, data: Dict[str, object], ts: Optional[str] = None) -> None:
+        row = {"ts": ts or self._now_iso(), **data}
         fields = (
             "ts",
             "bot_variant",

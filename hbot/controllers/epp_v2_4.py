@@ -22,10 +22,6 @@ from controllers.ops_guard import GuardState, OpsGuard, OpsSnapshot
 from controllers.price_buffer import MidPriceBuffer
 
 # --- Patch: allow *_paper_trade connector names in V2 controller framework ---
-# MarketDataProvider._create_non_trading_connector calls get_connector_class()
-# which fails for paper trade connectors (no real module). We strip the suffix
-# so it creates a base connector for price data while the main connector
-# (created by connector_manager) remains a PaperTradeExchange wrapper.
 _pt_log = logging.getLogger("epp_paper_trade_patch")
 try:
     from hummingbot.data_feed.market_data_provider import MarketDataProvider as _MDP
@@ -71,7 +67,6 @@ class RegimeSpec:
 class EppV24Config(MarketMakingControllerConfigBase):
     controller_name: str = "epp_v2_4"
 
-    # Phase & bot role
     variant: str = Field(default="a", json_schema_extra={"prompt": "Variant a/b/c/d: ", "prompt_on_new": True})
     enabled: bool = Field(default=True, json_schema_extra={"prompt": "Enabled (true/false): ", "prompt_on_new": True})
     no_trade: bool = Field(default=False, json_schema_extra={"prompt": "No-trade mode: ", "prompt_on_new": True})
@@ -81,10 +76,10 @@ class EppV24Config(MarketMakingControllerConfigBase):
     candles_trading_pair: Optional[str] = Field(default=None)
 
     # Exchange profile (VIP0)
-    spot_fee_pct: Decimal = Field(default=Decimal("0.0010"))  # 0.10%
+    spot_fee_pct: Decimal = Field(default=Decimal("0.0010"))
     slippage_est_pct: Decimal = Field(default=Decimal("0.0005"))
     turnover_cap_x: Decimal = Field(default=Decimal("3.0"))
-    turnover_penalty_step: Decimal = Field(default=Decimal("0.0005"))
+    turnover_penalty_step: Decimal = Field(default=Decimal("0.0010"))
 
     # Regime detection
     high_vol_band_pct: Decimal = Field(default=Decimal("0.0080"))
@@ -97,6 +92,7 @@ class EppV24Config(MarketMakingControllerConfigBase):
     daily_rollover_hour_utc: int = Field(default=0, ge=0, le=23)
     cancel_budget_per_min: int = Field(default=50)
     min_net_edge_bps: int = Field(default=2)
+    cancel_pause_cooldown_s: int = Field(default=120)
 
     @field_validator("variant", mode="before")
     @classmethod
@@ -190,6 +186,7 @@ class EppV24Controller(MarketMakingControllerBase):
         self._external_target_base_pct_override: Optional[Decimal] = None
         self._last_external_model_version: str = ""
         self._last_external_intent_reason: str = ""
+        self._cancel_pause_until: float = 0
 
     async def update_processed_data(self):
         now = float(self.market_data_provider.time())
@@ -208,32 +205,43 @@ class EppV24Controller(MarketMakingControllerBase):
         if self._external_target_base_pct_override is not None:
             target_base_pct = _clip(self._external_target_base_pct_override, Decimal("0"), Decimal("1"))
 
+        # ext6: stronger skew in trend regimes
+        skew_factor = Decimal("0.8") if regime_name in {"up", "down"} else Decimal("0.5")
         inv_error = base_pct - target_base_pct
-        skew = _clip(inv_error * Decimal("0.5"), Decimal("-0.002"), Decimal("0.002"))
+        skew = _clip(inv_error * skew_factor, Decimal("-0.002"), Decimal("0.002"))
+
         adverse_drift = self._price_buffer.adverse_drift_30s(now)
         turnover_x = self._traded_notional_today / equity_quote if equity_quote > 0 else Decimal("0")
         turnover_penalty = max(Decimal("0"), turnover_x - self.config.turnover_cap_x) * self.config.turnover_penalty_step
 
+        # ext5: add ATR volatility term to spread floor
+        vol_penalty = (self._price_buffer.band_pct(14) or Decimal("0")) * Decimal("0.5")
         if now - self._last_floor_recalc_ts >= self.config.spread_floor_recalc_s:
             self._spread_floor_pct = (
                 Decimal("2") * self.config.spot_fee_pct
                 + self.config.slippage_est_pct
                 + max(Decimal("0"), adverse_drift)
                 + turnover_penalty
+                + vol_penalty
             )
             self._last_floor_recalc_ts = now
 
         spread_pct = self._pick_spread_pct(regime_spec, turnover_x)
         spread_pct = max(spread_pct, self._spread_floor_pct)
         min_edge_threshold = Decimal(self.config.min_net_edge_bps) / Decimal("10000")
+        # ext4: realistic fill rate (0.4 instead of 0.5)
         net_edge = (
-            Decimal("0.5") * spread_pct
+            Decimal("0.4") * spread_pct
             - self.config.spot_fee_pct
             - self.config.slippage_est_pct
             - max(Decimal("0"), adverse_drift)
             - turnover_penalty
         )
         self._soft_pause_edge = net_edge <= min_edge_threshold
+
+        # ext9: detect high_vol and spread collapse for OpsGuard
+        band_pct = self._price_buffer.band_pct(14) or Decimal("0")
+        is_high_vol = band_pct >= self.config.high_vol_band_pct
 
         connector_ready = self._connector_ready()
         balance_ok = self._balances_consistent()
@@ -243,6 +251,7 @@ class EppV24Controller(MarketMakingControllerBase):
                 balances_consistent=balance_ok,
                 cancel_fail_streak=self._cancel_fail_streak,
                 edge_gate_blocked=self._soft_pause_edge,
+                high_vol=is_high_vol,
             )
         )
 
@@ -253,12 +262,15 @@ class EppV24Controller(MarketMakingControllerBase):
         if self._external_soft_pause:
             state = GuardState.SOFT_PAUSE
 
+        # ext7: cancel budget breach triggers SOFT_PAUSE for cooldown period
+        cancel_rate = self._cancel_per_min(now)
+        if cancel_rate > self.config.cancel_budget_per_min:
+            self._cancel_pause_until = now + self.config.cancel_pause_cooldown_s
+        if now < self._cancel_pause_until:
+            state = GuardState.SOFT_PAUSE
+
         levels = self._pick_levels(regime_spec, turnover_x)
-        if self._cancel_per_min(now) > self.config.cancel_budget_per_min:
-            levels = max(1, levels - 1)
-            self.config.executor_refresh_time = int(regime_spec.refresh_s + 10)
-        else:
-            self.config.executor_refresh_time = int(regime_spec.refresh_s)
+        self.config.executor_refresh_time = int(regime_spec.refresh_s)
 
         buy_spreads, sell_spreads = self._build_side_spreads(spread_pct, skew, levels, regime_spec.one_sided)
         self._apply_runtime_spreads_and_sizing(
@@ -270,6 +282,7 @@ class EppV24Controller(MarketMakingControllerBase):
             quote_size_pct=(regime_spec.quote_size_pct_min + regime_spec.quote_size_pct_max) / Decimal("2"),
         )
 
+        base_bal, quote_bal = self._get_balances()
         self.processed_data = {
             "reference_price": mid,
             "spread_multiplier": Decimal("1"),
@@ -278,12 +291,16 @@ class EppV24Controller(MarketMakingControllerBase):
             "base_pct": base_pct,
             "state": state.value,
             "spread_pct": spread_pct,
+            "spread_floor_pct": self._spread_floor_pct,
             "net_edge_pct": net_edge,
             "turnover_x": turnover_x,
             "skew": skew,
             "adverse_drift_30s": adverse_drift,
             "equity_quote": equity_quote,
             "mid": mid,
+            "base_balance": base_bal,
+            "quote_balance": quote_bal,
+            "soft_pause_edge": self._soft_pause_edge,
             "external_soft_pause": self._external_soft_pause,
             "external_pause_reason": self._external_pause_reason,
             "external_model_version": self._last_external_model_version,
@@ -295,7 +312,11 @@ class EppV24Controller(MarketMakingControllerBase):
             self.config.sell_spreads = ""
             self.config.total_amount_quote = Decimal("0")
 
-        self._log_minute(now, mid, equity_quote, base_pct, target_base_pct, spread_pct, net_edge, turnover_x, state)
+        # ext1: pass event timestamp, not log time
+        event_ts = datetime.fromtimestamp(now, tz=timezone.utc).isoformat()
+        self._log_minute(now, event_ts, mid, equity_quote, base_pct, base_bal, quote_bal,
+                         target_base_pct, spread_pct, net_edge, turnover_x, state,
+                         regime_name, adverse_drift, skew)
 
     def get_executor_config(self, level_id: str, price: Decimal, amount: Decimal):
         return PositionExecutorConfig(
@@ -320,6 +341,7 @@ class EppV24Controller(MarketMakingControllerBase):
             fee_quote = _d(event.trade_fee.fee_amount_in_token(quote_asset, event.price, event.amount))
         except Exception:
             pass
+        event_ts = datetime.fromtimestamp(event.timestamp, tz=timezone.utc).isoformat()
         self._csv.log_fill(
             {
                 "bot_variant": self.config.variant,
@@ -332,7 +354,8 @@ class EppV24Controller(MarketMakingControllerBase):
                 "fee_quote": str(fee_quote),
                 "order_id": event.order_id,
                 "state": self._ops_guard.state.value,
-            }
+            },
+            ts=event_ts,
         )
 
     def did_cancel_order(self, cancelled_event: OrderCancelledEvent):
@@ -570,18 +593,20 @@ class EppV24Controller(MarketMakingControllerBase):
             return Decimal("0")
         return quote_min / ref_price
 
+    # ext10: roll on day change only, remove hour condition
     def _maybe_roll_day(self, now_ts: float) -> None:
         dt = datetime.fromtimestamp(now_ts, tz=timezone.utc)
         day_key = dt.strftime("%Y-%m-%d")
         if self._daily_key is None:
             self._daily_key = day_key
             return
-        if day_key != self._daily_key and dt.hour >= self.config.daily_rollover_hour_utc:
+        if day_key != self._daily_key:
             mid = self._get_mid_price()
             equity_now, _ = self._compute_equity_and_base_pct(mid)
             equity_open = self._daily_equity_open or equity_now
             pnl = equity_now - equity_open
             pnl_pct = (pnl / equity_open) if equity_open > 0 else Decimal("0")
+            event_ts = datetime.fromtimestamp(now_ts, tz=timezone.utc).isoformat()
             self._csv.log_daily(
                 {
                     "bot_variant": self.config.variant,
@@ -595,7 +620,8 @@ class EppV24Controller(MarketMakingControllerBase):
                     "turnover_x": str(self._traded_notional_today / equity_now) if equity_now > 0 else "0",
                     "fills_count": self._fills_count_today,
                     "ops_events": "|".join(self._ops_guard.reasons),
-                }
+                },
+                ts=event_ts,
             )
             self._daily_key = day_key
             self._daily_equity_open = equity_now
@@ -603,17 +629,24 @@ class EppV24Controller(MarketMakingControllerBase):
             self._fills_count_today = 0
             self._cancel_events_ts = []
 
+    # ext2: enriched minute.csv with all debug signals
     def _log_minute(
         self,
         now_ts: float,
+        event_ts: str,
         mid: Decimal,
         equity_quote: Decimal,
         base_pct: Decimal,
+        base_balance: Decimal,
+        quote_balance: Decimal,
         target_base_pct: Decimal,
         spread_pct: Decimal,
         net_edge: Decimal,
         turnover_x: Decimal,
         state: GuardState,
+        regime: str,
+        adverse_drift: Decimal,
+        skew: Decimal,
     ) -> None:
         minute_key = int(now_ts // 60)
         if self._last_minute_key == minute_key:
@@ -625,14 +658,22 @@ class EppV24Controller(MarketMakingControllerBase):
                 "exchange": self.config.connector_name,
                 "trading_pair": self.config.trading_pair,
                 "state": state.value,
+                "regime": regime,
                 "mid": str(mid),
                 "equity_quote": str(equity_quote),
                 "base_pct": str(base_pct),
                 "target_base_pct": str(target_base_pct),
                 "spread_pct": str(spread_pct),
+                "spread_floor_pct": str(self._spread_floor_pct),
                 "net_edge_pct": str(net_edge),
+                "skew": str(skew),
+                "adverse_drift_30s": str(adverse_drift),
+                "soft_pause_edge": str(self._soft_pause_edge),
+                "base_balance": str(base_balance),
+                "quote_balance": str(quote_balance),
                 "turnover_today_x": str(turnover_x),
                 "cancel_per_min": self._cancel_per_min(now_ts),
                 "orders_active": len(self.executors_info),
-            }
+            },
+            ts=event_ts,
         )

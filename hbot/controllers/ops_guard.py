@@ -17,6 +17,8 @@ class OpsSnapshot:
     balances_consistent: bool
     cancel_fail_streak: int
     edge_gate_blocked: bool = False
+    high_vol: bool = False
+    market_spread_too_small: bool = False
 
 
 @dataclass
@@ -39,6 +41,10 @@ class OpsGuard:
             operational_failure = True
         if snapshot.edge_gate_blocked:
             reasons.append("edge_gate_blocked")
+        if snapshot.high_vol:
+            reasons.append("high_vol")
+        if snapshot.market_spread_too_small:
+            reasons.append("market_spread_too_small")
 
         if snapshot.cancel_fail_streak >= self.hard_stop_cancel_fail_streak:
             reasons.append("cancel_fail_hard_limit")
