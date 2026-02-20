@@ -1,0 +1,96 @@
+{
+  "annotations": {"list": []},
+  "editable": true,
+  "fiscalYearStartMonth": 0,
+  "graphTooltip": 1,
+  "id": null,
+  "links": [],
+  "liveNow": false,
+  "panels": [
+    {
+      "title": "Current State",
+      "type": "stat",
+      "gridPos": {"h": 6, "w": 6, "x": 0, "y": 0},
+      "datasource": {"type": "prometheus", "uid": "prometheus"},
+      "targets": [{"expr": "hbot_bot_state{bot=~\"$bot\", state=~\"running|soft_pause|hard_stop\"}", "legendFormat": "{{state}}", "instant": true}]
+    },
+    {
+      "title": "Maker/Taker Fee %",
+      "type": "timeseries",
+      "gridPos": {"h": 6, "w": 9, "x": 6, "y": 0},
+      "datasource": {"type": "prometheus", "uid": "prometheus"},
+      "targets": [
+        {"expr": "hbot_bot_maker_fee_pct{bot=~\"$bot\"} * 100", "legendFormat": "maker"},
+        {"expr": "hbot_bot_taker_fee_pct{bot=~\"$bot\"} * 100", "legendFormat": "taker"}
+      ],
+      "fieldConfig": {"defaults": {"unit": "percent"}, "overrides": []}
+    },
+    {
+      "title": "Fee Source",
+      "type": "table",
+      "gridPos": {"h": 6, "w": 9, "x": 15, "y": 0},
+      "datasource": {"type": "prometheus", "uid": "prometheus"},
+      "targets": [{"expr": "hbot_bot_fee_source_info{bot=~\"$bot\"}", "format": "table", "instant": true}]
+    },
+    {
+      "title": "Net Edge %",
+      "type": "timeseries",
+      "gridPos": {"h": 8, "w": 8, "x": 0, "y": 6},
+      "datasource": {"type": "prometheus", "uid": "prometheus"},
+      "targets": [{"expr": "hbot_bot_net_edge_pct{bot=~\"$bot\", pair=~\"$pair\", exchange=~\"$exchange\"} * 100", "legendFormat": "net_edge"}],
+      "fieldConfig": {"defaults": {"unit": "percent"}, "overrides": []}
+    },
+    {
+      "title": "Spread vs Spread Floor",
+      "type": "timeseries",
+      "gridPos": {"h": 8, "w": 8, "x": 8, "y": 6},
+      "datasource": {"type": "prometheus", "uid": "prometheus"},
+      "targets": [
+        {"expr": "hbot_bot_spread_pct{bot=~\"$bot\", pair=~\"$pair\", exchange=~\"$exchange\"} * 100", "legendFormat": "spread"},
+        {"expr": "hbot_bot_spread_floor_pct{bot=~\"$bot\", pair=~\"$pair\", exchange=~\"$exchange\"} * 100", "legendFormat": "spread_floor"}
+      ],
+      "fieldConfig": {"defaults": {"unit": "percent"}, "overrides": []}
+    },
+    {
+      "title": "Orders Active",
+      "type": "timeseries",
+      "gridPos": {"h": 8, "w": 8, "x": 16, "y": 6},
+      "datasource": {"type": "prometheus", "uid": "prometheus"},
+      "targets": [{"expr": "hbot_bot_orders_active{bot=~\"$bot\"}", "legendFormat": "orders_active"}]
+    },
+    {
+      "title": "Daily PnL + Fills",
+      "type": "timeseries",
+      "gridPos": {"h": 8, "w": 12, "x": 0, "y": 14},
+      "datasource": {"type": "prometheus", "uid": "prometheus"},
+      "targets": [
+        {"expr": "hbot_bot_daily_pnl_quote{bot=~\"$bot\"}", "legendFormat": "daily_pnl_quote"},
+        {"expr": "hbot_bot_daily_fills_count{bot=~\"$bot\"}", "legendFormat": "daily_fills_count"}
+      ]
+    },
+    {
+      "title": "Bot Logs",
+      "type": "logs",
+      "gridPos": {"h": 8, "w": 12, "x": 12, "y": 14},
+      "datasource": {"type": "loki", "uid": "loki"},
+      "targets": [{"expr": "{job=\"bot_logs\", bot=~\"$bot\"}"}]
+    }
+  ],
+  "refresh": "30s",
+  "schemaVersion": 39,
+  "style": "dark",
+  "tags": ["hummingbot", "trading", "deep-dive"],
+  "templating": {
+    "list": [
+      {"name": "bot", "type": "query", "datasource": {"type": "prometheus", "uid": "prometheus"}, "query": "label_values(hbot_bot_state, bot)", "includeAll": true, "multi": true, "current": {"text": "All", "value": ["$__all"]}},
+      {"name": "exchange", "type": "query", "datasource": {"type": "prometheus", "uid": "prometheus"}, "query": "label_values(hbot_bot_state, exchange)", "includeAll": true, "multi": true, "current": {"text": "All", "value": ["$__all"]}},
+      {"name": "pair", "type": "query", "datasource": {"type": "prometheus", "uid": "prometheus"}, "query": "label_values(hbot_bot_state, pair)", "includeAll": true, "multi": true, "current": {"text": "All", "value": ["$__all"]}}
+    ]
+  },
+  "time": {"from": "now-24h", "to": "now"},
+  "timepicker": {},
+  "timezone": "utc",
+  "title": "Hummingbot Bot Deep Dive",
+  "uid": "hbot-bot-deep-dive",
+  "version": 1
+}

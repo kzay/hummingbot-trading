@@ -1,0 +1,46 @@
+﻿server:
+  http_listen_port: 9080
+  grpc_listen_port: 0
+
+positions:
+  filename: /tmp/positions.yaml
+
+clients:
+  - url: http://loki:3100/loki/api/v1/push
+
+scrape_configs:
+  - job_name: bot_logs
+    static_configs:
+      - targets:
+          - localhost
+        labels:
+          job: bot_logs
+          bot: bot1
+          __path__: /workspace/hbot/data/bot1/logs/*.log
+      - targets:
+          - localhost
+        labels:
+          job: bot_logs
+          bot: bot2
+          __path__: /workspace/hbot/data/bot2/logs/*.log
+      - targets:
+          - localhost
+        labels:
+          job: bot_logs
+          bot: bot3
+          __path__: /workspace/hbot/data/bot3/logs/*.log
+
+  - job_name: epp_csv_artifacts
+    static_configs:
+      - targets:
+          - localhost
+        labels:
+          job: epp_csv
+          bot: bot1
+          __path__: /workspace/hbot/data/bot1/logs/epp_v24/*/*.csv
+      - targets:
+          - localhost
+        labels:
+          job: epp_csv
+          bot: bot2
+          __path__: /workspace/hbot/data/bot2/logs/epp_v24/*/*.csv

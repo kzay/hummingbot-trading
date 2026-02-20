@@ -1,0 +1,15 @@
+{
+  "version": 1,
+  "profiles": {
+    "vip0": {
+      "bitget": {
+        "maker": "0.0010",
+        "taker": "0.0010"
+      },
+      "bitget_perpetual": {
+        "maker": "0.0002",
+        "taker": "0.0006"
+      }
+    }
+  }
+}

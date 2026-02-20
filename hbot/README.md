@@ -814,15 +814,18 @@ Disabled stubs (Phase 0 only):
 
 ### 14.2 Run Paper Mode
 
-There are **two independent** paper trading mechanisms. Choose one:
+EPP v2.4 now uses an **internal Level-2 paper engine adapter** behind the
+`bitget_paper_trade` connector name. This removes fragile runtime monkey-patches
+and provides deterministic partial-fill simulation with queue/latency controls.
 
-#### Option A: Hummingbot Framework Paper Trade (recommended for standalone scripts)
+#### Internal Paper Engine (EPP v2.4 standard)
 
-The framework wraps the real connector with `PaperTradeExchange`, simulating
-fills locally.  Orders never reach the exchange.
+Orders remain paper-only (no exchange orders sent), while market data and trading
+rules come from the canonical live connector (`bitget`) for realistic validation.
 
 **Requirements:**
-- `conf_client.yml` must list the exchange in `paper_trade_exchanges`:
+- Keep `connector_name: bitget_paper_trade` in controller YAML.
+- Keep `conf_client.yml` with:
   ```yaml
   paper_trade:
     paper_trade_exchanges:
@@ -831,31 +834,13 @@ fills locally.  Orders never reach the exchange.
       BTC: 1.0
       USDT: 10000.0
   ```
-- Scripts/controllers must use the **`_paper_trade` suffix** as connector name:
-  ```python
-  markets = {"bitget_paper_trade": {"BTC-USDT"}}   # correct
-  # markets = {"bitget": {"BTC-USDT"}}              # WRONG: sends real orders!
-  ```
-- Bitget spot account must have **some balance** (even 2 USDT dust) so the
-  underlying connector initializes (order book, trading rules).  The paper
-  wrapper overrides balances with the configured `paper_trade_account_balance`.
-
-> **WARNING:** Using `connector_name: bitget` with `paper_trade_exchanges: [bitget]`
-> does **NOT** auto-wrap the connector.  `self.buy("bitget", ...)` sends real
-> orders to the exchange.  You must use `bitget_paper_trade` explicitly.
-> (Verified against Hummingbot v2.12.0 source: `connector_manager.py` line 68.)
-
-#### Option B: Controller-Level Paper Mode (used by EPP v2.4)
-
-The EPP controller has built-in paper simulation via `paper_mode: true`.
-It uses the real connector only for market data (mid-price, order book) and
-tracks virtual balances internally (`paper_start_quote`, `paper_start_base`).
-
-**Requirements:**
-- `conf_client.yml`: `paper_trade_exchanges: []` (empty -- no framework wrapping)
-- Controller YAML: `connector_name: bitget` + `paper_mode: true`
-- Bitget spot account must have **some balance** so `connector.ready` returns
-  `True` (the `account_balance` check requires `len(_account_balances) > 0`).
+- Optional realism knobs are available in controller YAML:
+  - `internal_paper_enabled`
+  - `paper_latency_ms`
+  - `paper_queue_participation`
+  - `paper_slippage_bps`
+  - `paper_adverse_selection_bps`
+  - `paper_partial_fill_min_ratio` / `paper_partial_fill_max_ratio`
 
 #### Starting Paper Mode
 
@@ -887,12 +872,10 @@ start --script v2_with_controllers.py --conf v2_epp_v2_4_bot_d.yml
 
 ### 14.3 Run Live Micro Mode
 
-Promotion from paper to live is a **single-field change** in the controller YAML:
+Promotion from paper to live is a **connector switch** in the controller YAML:
 
 1. Ensure encrypted connector credentials are configured (`connect bitget`).
-2. In the controller YAML, change `paper_mode: false`.
-   (`connector_name` stays `bitget` -- the V2 controller uses the real connector
-   for both paper and live; only `paper_mode` controls simulation.)
+2. In the controller YAML, change `connector_name: bitget_paper_trade` -> `bitget`.
 3. Keep conservative `total_amount_quote` and leave Bot D as `no_trade: true`.
 4. Recreate the container:
    ```bash
@@ -902,17 +885,16 @@ Promotion from paper to live is a **single-field change** in the controller YAML
 
 ### 14.6 After Paper Pass -> Live Switch
 
-Promotion from paper to live for the V2 EPP controller requires **one field change**
-per controller YAML (`connector_name` already points to `bitget`):
+Promotion from paper to live for EPP v2.4 requires **one connector field change**
+per controller YAML:
 
 | Field | Paper (current) | Live |
 |-------|----------------|------|
-| `paper_mode` | `true` | `false` |
-| `connector_name` | `bitget` (unchanged) | `bitget` (unchanged) |
+| `connector_name` | `bitget_paper_trade` | `bitget` |
 
 Steps:
 
-1. In `data/bot1/conf/controllers/epp_v2_4_bot_a.yml`: set `paper_mode: false`.
+1. In `data/bot1/conf/controllers/epp_v2_4_bot_a.yml`: set `connector_name: bitget`.
 2. Keep Bot D protections unchanged: `variant: d`, `no_trade: true`.
 3. Ensure encrypted connector credentials are configured (`connect bitget`).
 4. Recreate the container:
@@ -922,16 +904,15 @@ Steps:
 5. Start with micro notional (`total_amount_quote`) and observe for 5-7 days.
 6. Confirm logs and ops guard remain healthy before increasing capital.
 
-> **Note:** `connector_name` stays `bitget` in both modes because the V2 controller
-> framework's `MarketDataProvider` cannot resolve `bitget_paper_trade` as a module.
-> Paper simulation is handled entirely by the controller's `paper_mode` flag.
-> For standalone scripts (bot3), use `bitget_paper_trade` in the `markets` dict instead.
+> **Note:** EPP no longer depends on runtime monkey-patching for paper execution.
+> The internal adapter exposes `trading_rules` and in-flight order tracking directly
+> to V2 executors.
 
 ### 14.4 Go-Live Checklist (15 items)
 
 **Paper-to-live verification:**
 
-1. Controller YAML has `paper_mode: false`.
+1. Controller YAML uses `connector_name: bitget` (not `bitget_paper_trade`).
 2. `status` does NOT show "Paper Trading Active".
 3. Bitget spot account has sufficient balance for the configured `total_amount_quote`.
 
@@ -956,6 +937,27 @@ Per instance logs are written under:
 - `data/<bot>/logs/epp_v24/<instance>_<variant>/fills.csv`
 - `data/<bot>/logs/epp_v24/<instance>_<variant>/minute.csv`
 - `data/<bot>/logs/epp_v24/<instance>_<variant>/daily.csv`
+
+### 14.7 Shared Fee Resolution (mandatory-safe mode)
+
+EPP v2.4 supports shared, project-level fee schedules so all bots use a consistent
+source of truth by connector:
+
+- Shared resolver module: `services/common/fee_provider.py`
+- Project file: `config/fee_profiles.json`
+- Container mount: `/home/hummingbot/project_config/fee_profiles.json`
+- Bot fields in controller YAML:
+  - `fee_mode`: `auto | project | manual`
+  - `fee_profile`: e.g. `vip0`
+  - `require_fee_resolution`: `true | false`
+
+Resolution order:
+1. `auto`: exchange API (Bitget user fee endpoint), then connector runtime fee data
+2. shared project profile (`config/fee_profiles.json`)
+3. manual field (`spot_fee_pct`) only if `require_fee_resolution: false`
+
+If `require_fee_resolution: true` and no connector/project fee can be resolved,
+the controller hard-stops with `fee_unresolved`.
 
 How to read quickly:
 - `fills.csv`: execution-level records (price/amount/notional/fee/state)
@@ -1102,3 +1104,49 @@ writable layer where `.pyc` files live.
 ## License
 
 Private infrastructure project. Not for redistribution.
+
+## 15. Trading Desk Dashboards
+
+The monitoring stack now includes a bot KPI exporter plus centralized logs:
+
+- Bot KPI exporter: `services/bot_metrics_exporter.py`
+- Prometheus scrape job: `bot-metrics`
+- Loki + Promtail for log aggregation in Grafana
+- Dashboards:
+  - `monitoring/grafana/dashboards/trading_overview.json`
+  - `monitoring/grafana/dashboards/bot_deep_dive.json`
+
+### 15.1 Start Monitoring Stack
+
+```bash
+cd hbot/compose
+docker compose --env-file ../env/.env up -d prometheus grafana node-exporter cadvisor bot-metrics-exporter loki promtail
+```
+
+### 15.2 Verify Targets
+
+1. Prometheus target health:
+   - Open `http://localhost:9090/targets` via SSH tunnel
+   - Ensure `bot-metrics`, `loki` dependencies, and infra jobs are `UP`
+2. Grafana datasources:
+   - `Prometheus` and `Loki` should both be healthy
+3. Dashboard data:
+   - `Hummingbot Trading Desk Overview`
+   - `Hummingbot Bot Deep Dive`
+
+### 15.3 Key Trading KPIs
+
+- Bot runtime state (`running`, `soft_pause`, `hard_stop`)
+- Net edge %, spread %, spread floor %, turnover x
+- Daily PnL quote and fills count
+- Effective maker/taker fees and fee source (API vs fallback)
+- Recent ERROR line density from bot logs
+
+### 15.4 Trading Alerts Added
+
+- Bot stuck in `hard_stop` or prolonged `soft_pause`
+- Running bot with no fills over window
+- Persistent negative net edge
+- Fee source fallback persistence (not API)
+- Daily PnL drawdown threshold
+- Error-line spike in recent log tail

@@ -19,6 +19,8 @@ class OpsSnapshot:
     edge_gate_blocked: bool = False
     high_vol: bool = False
     market_spread_too_small: bool = False
+    risk_reasons: List[str] = field(default_factory=list)
+    risk_hard_stop: bool = False
 
 
 @dataclass
@@ -45,10 +47,16 @@ class OpsGuard:
             reasons.append("high_vol")
         if snapshot.market_spread_too_small:
             reasons.append("market_spread_too_small")
+        if snapshot.risk_reasons:
+            reasons.extend(snapshot.risk_reasons)
 
         if snapshot.cancel_fail_streak >= self.hard_stop_cancel_fail_streak:
             reasons.append("cancel_fail_hard_limit")
             self.reasons = reasons
+            self.state = GuardState.HARD_STOP
+            return self.state
+        if snapshot.risk_hard_stop:
+            self.reasons = reasons or ["risk_hard_stop"]
             self.state = GuardState.HARD_STOP
             return self.state
 

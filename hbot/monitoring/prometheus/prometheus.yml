@@ -1,4 +1,4 @@
-# ============================================
+﻿# ============================================
 # Prometheus Configuration
 # ============================================
 
@@ -55,3 +55,11 @@ scrape_configs:
       - targets: ["grafana:3000"]
         labels:
           instance: "grafana"
+
+  # Bot metrics exporter (strategy KPIs and bot runtime signals)
+  - job_name: "bot-metrics"
+    scrape_interval: 15s
+    static_configs:
+      - targets: ["bot-metrics-exporter:9400"]
+        labels:
+          instance: "bot-metrics-exporter"

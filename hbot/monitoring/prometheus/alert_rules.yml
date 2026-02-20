@@ -1,4 +1,4 @@
-# ============================================
+﻿# ============================================
 # Prometheus Alert Rules
 # ============================================
 
@@ -115,3 +115,77 @@ groups:
         annotations:
           summary: "High network error rate on {{ $labels.instance }}"
           description: "Network errors detected. Receive+Transmit error rate: {{ $value }}/s"
+
+  # ---- Trading / Bot KPI Alerts ----
+  - name: trading_kpis
+    rules:
+
+      - alert: BotHardStopActive
+        expr: |
+          hbot_bot_state{state="hard_stop"} == 1
+        for: 3m
+        labels:
+          severity: critical
+        annotations:
+          summary: "Bot {{ $labels.bot }} entered hard_stop"
+          description: "Bot {{ $labels.bot }} stayed hard_stop for more than 3 minutes."
+
+      - alert: BotSoftPauseTooLong
+        expr: |
+          hbot_bot_state{state="soft_pause"} == 1
+        for: 20m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Bot {{ $labels.bot }} in soft_pause for too long"
+          description: "Bot {{ $labels.bot }} remained soft_pause for more than 20 minutes."
+
+      - alert: BotNoFillsWhileRunning
+        expr: |
+          increase(hbot_bot_fills_total[30m]) == 0 and on(bot,variant,exchange,pair,regime) hbot_bot_state{state="running"} == 1
+        for: 30m
+        labels:
+          severity: warning
+        annotations:
+          summary: "No fills while bot {{ $labels.bot }} reports running"
+          description: "Running bot {{ $labels.bot }} has no fills increase during the last 30 minutes."
+
+      - alert: BotNegativeEdgePersistent
+        expr: |
+          avg_over_time(hbot_bot_net_edge_pct[15m]) < 0
+        for: 10m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Negative net edge persistence on {{ $labels.bot }}"
+          description: "Net edge remains negative on {{ $labels.bot }} for a sustained period."
+
+      - alert: BotFeeSourceFallback
+        expr: |
+          hbot_bot_fee_source_info{source!="api:bitget:user_fee_query"} == 1
+        for: 30m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Fee source fallback active on {{ $labels.bot }}"
+          description: "Bot {{ $labels.bot }} is not using API fee source for at least 30 minutes."
+
+      - alert: BotDailyPnlDrawdown
+        expr: |
+          hbot_bot_daily_pnl_quote < -50
+        for: 5m
+        labels:
+          severity: critical
+        annotations:
+          summary: "Daily PnL drawdown threshold breached on {{ $labels.bot }}"
+          description: "Bot {{ $labels.bot }} daily PnL is below -50 quote units."
+
+      - alert: BotLogErrorSpike
+        expr: |
+          hbot_bot_recent_error_lines > 20
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Bot {{ $labels.bot }} shows high error density"
+          description: "Recent log tail has more than 20 ERROR lines for {{ $labels.bot }}."
