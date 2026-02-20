@@ -9,8 +9,6 @@ trading_pair: BTC-USDT
 total_amount_quote: 0
 buy_spreads: ""
 sell_spreads: ""
-buy_amounts_pct: "50,50"
-sell_amounts_pct: "50,50"
 executor_refresh_time: 120
 cooldown_time: 5
 leverage: 1
