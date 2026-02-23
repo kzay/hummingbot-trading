@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import logging
 import time
 from dataclasses import dataclass, field
 from decimal import Decimal
@@ -7,10 +8,24 @@ from types import SimpleNamespace
 from typing import Any, Callable, Dict, Iterable, List, Optional, Tuple
 from uuid import uuid4
 
+logger = logging.getLogger(__name__)
+
 try:
     from hummingbot.core.data_type.common import OrderType, PriceType, TradeType
-    from hummingbot.core.event.events import MarketEvent
+    from hummingbot.core.event.events import (
+        BuyOrderCompletedEvent,
+        BuyOrderCreatedEvent,
+        MarketEvent,
+        MarketOrderFailureEvent,
+        OrderCancelledEvent,
+        OrderFilledEvent,
+        SellOrderCompletedEvent,
+        SellOrderCreatedEvent,
+    )
+    from hummingbot.core.utils.estimate_fee import build_trade_fee
+    _HAS_FRAMEWORK_EVENTS = True
 except Exception:  # pragma: no cover - local fallback for unit tests
+    _HAS_FRAMEWORK_EVENTS = False
     class _EnumValue:
         def __init__(self, value: int, name: str):
             self.value = value
@@ -40,8 +55,11 @@ except Exception:  # pragma: no cover - local fallback for unit tests
         OrderFailure = _EnumValue(198, "OrderFailure")
 
 
-def _d(value: Any) -> Decimal:
-    return Decimal(str(value))
+try:
+    from services.common.utils import to_decimal
+except Exception:  # pragma: no cover - standalone test fallback
+    def to_decimal(value: Any) -> Decimal:
+        return Decimal(str(value))
 
 
 @dataclass
@@ -54,6 +72,8 @@ class PaperEngineConfig:
     adverse_selection_bps: Decimal = Decimal("1.5")
     min_partial_fill_ratio: Decimal = Decimal("0.15")
     max_partial_fill_ratio: Decimal = Decimal("0.85")
+    maker_fee_bps: Decimal = Decimal("10.0")
+    taker_fee_bps: Decimal = Decimal("10.0")
 
 
 @dataclass
@@ -119,8 +139,11 @@ class PaperOrder:
 
 
 class _OrderTrackerShim:
+    _PRUNE_INTERVAL = 60.0
+
     def __init__(self):
         self._orders: Dict[str, PaperOrder] = {}
+        self._last_prune_ts: float = 0.0
 
     def track(self, order: PaperOrder) -> None:
         self._orders[order.order_id] = order
@@ -135,6 +158,20 @@ class _OrderTrackerShim:
         for order in list(self._orders.values()):
             if order.is_open:
                 yield order
+
+    def prune_done(self, now_ts: float) -> int:
+        """Remove completed orders older than 60 seconds. Returns count removed."""
+        if now_ts - self._last_prune_ts < self._PRUNE_INTERVAL:
+            return 0
+        self._last_prune_ts = now_ts
+        cutoff = now_ts - 60.0
+        to_remove = [
+            oid for oid, order in self._orders.items()
+            if order.is_done and order.last_update_timestamp < cutoff
+        ]
+        for oid in to_remove:
+            del self._orders[oid]
+        return len(to_remove)
 
 
 @dataclass
@@ -188,7 +225,7 @@ class DepthFillModel:
                 entry = book.ask_entries()[0]
             else:
                 entry = book.bid_entries()[0]
-            return _d(getattr(entry, "price", 0)), _d(getattr(entry, "amount", 0))
+            return to_decimal(getattr(entry, "price", 0)), to_decimal(getattr(entry, "amount", 0))
         except Exception:
             return Decimal("0"), Decimal("0")
 
@@ -260,16 +297,18 @@ class PaperExecutionAdapter:
         self._paper_reject_count = 0
         self._paper_fill_count = 0
         self._paper_total_queue_delay_ms = 0
+        self._dropped_relay_count = 0
 
     @property
     def paper_stats(self) -> Dict[str, Decimal]:
         avg_delay = Decimal("0")
         if self._paper_fill_count > 0:
-            avg_delay = _d(self._paper_total_queue_delay_ms) / Decimal(self._paper_fill_count)
+            avg_delay = to_decimal(self._paper_total_queue_delay_ms) / Decimal(self._paper_fill_count)
         return {
             "paper_fill_count": Decimal(self._paper_fill_count),
             "paper_reject_count": Decimal(self._paper_reject_count),
             "paper_avg_queue_delay_ms": avg_delay,
+            "paper_dropped_relay_count": Decimal(self._dropped_relay_count),
         }
 
     @property
@@ -291,13 +330,33 @@ class PaperExecutionAdapter:
         self._listeners[event_tag] = [item for item in listeners if item != listener]
 
     def trigger_event(self, event_tag: Any, event: Any) -> None:
-        listeners = list(self._listeners.get(event_tag, []))
         tag_value = getattr(event_tag, "value", event_tag)
+        # Fire to local listeners (V2 executors register here).
+        listeners = list(self._listeners.get(event_tag, []))
         for listener in listeners:
             try:
                 listener(tag_value, self, event)
             except TypeError:
                 listener(event)
+        # Also fire through the paper_connector so the strategy's
+        # EventForwarder receives it → controller.did_fill_order().
+        self._relay_to_paper_connector(tag_value, event)
+
+    def _relay_to_paper_connector(self, tag_value: Any, event: Any) -> None:
+        if not _HAS_FRAMEWORK_EVENTS:
+            return
+        pc = self._paper_connector
+        if pc is None:
+            return
+        trigger = getattr(pc, "trigger_event", None) or getattr(pc, "c_trigger_event", None)
+        if trigger is None:
+            return
+        try:
+            trigger(tag_value, event)
+        except Exception:
+            self._dropped_relay_count += 1
+            order_id = getattr(event, "order_id", "?")
+            logger.error("Fill event relay to paper_connector failed for order %s", order_id, exc_info=True)
 
     def get_balance(self, asset: str) -> Decimal:
         return self._ledger.total(asset)
@@ -307,12 +366,12 @@ class PaperExecutionAdapter:
 
     def quantize_order_amount(self, trading_pair: str, amount: Decimal) -> Decimal:
         if hasattr(self._market_connector, "quantize_order_amount"):
-            return _d(self._market_connector.quantize_order_amount(trading_pair, amount))
+            return to_decimal(self._market_connector.quantize_order_amount(trading_pair, amount))
         return amount
 
     def quantize_order_price(self, trading_pair: str, price: Decimal) -> Decimal:
         if hasattr(self._market_connector, "quantize_order_price"):
-            return _d(self._market_connector.quantize_order_price(trading_pair, price))
+            return to_decimal(self._market_connector.quantize_order_price(trading_pair, price))
         return price
 
     def get_price_by_type(self, trading_pair: str, price_type: Any = PriceType.MidPrice):
@@ -325,7 +384,28 @@ class PaperExecutionAdapter:
             trading_pair = args[0]
         elif len(args) >= 2:
             trading_pair = args[1]
-        return self._market_connector.get_order_book(trading_pair)
+        book = self._try_get_order_book(self._market_connector, trading_pair)
+        if book is None:
+            book = self._try_get_order_book(self._paper_connector, trading_pair)
+        if book is None:
+            raise RuntimeError(f"no order book available for {trading_pair}")
+        return book
+
+    @staticmethod
+    def _try_get_order_book(connector: Any, trading_pair: str) -> Any:
+        if connector is None:
+            return None
+        try:
+            book = connector.get_order_book(trading_pair)
+            if book is None:
+                return None
+            asks = book.ask_entries()
+            bids = book.bid_entries()
+            if (asks and len(asks) > 0) or (bids and len(bids) > 0):
+                return book
+        except Exception:
+            pass
+        return None
 
     def cancel(self, trading_pair: str, client_order_id: str):
         order = self._order_tracker.fetch_order(client_order_id)
@@ -355,6 +435,7 @@ class PaperExecutionAdapter:
 
     def refresh_open_orders(self) -> None:
         now_ts = self._time()
+        self._order_tracker.prune_done(now_ts)
         try:
             book = self.get_order_book(self.trading_pair)
         except Exception:
@@ -364,7 +445,7 @@ class PaperExecutionAdapter:
 
     def _submit_order(self, trading_pair: str, amount: Decimal, order_type: Any, side: Any, price: Decimal) -> str:
         now_ts = self._time()
-        amount = max(Decimal("0"), _d(amount))
+        amount = max(Decimal("0"), to_decimal(amount))
         if amount <= 0:
             raise ValueError("amount must be positive")
         price = self._resolve_price(side, price)
@@ -380,7 +461,7 @@ class PaperExecutionAdapter:
             trade_type=side,
             order_type=order_type,
             amount=self.quantize_order_amount(trading_pair, amount),
-            price=self.quantize_order_price(trading_pair, _d(price)),
+            price=self.quantize_order_price(trading_pair, to_decimal(price)),
             creation_timestamp=now_ts,
             base_asset=self._base_asset,
             quote_asset=self._quote_asset,
@@ -431,8 +512,9 @@ class PaperExecutionAdapter:
             return
         fill_price = self.quantize_order_price(order.trading_pair, decision.fill_price)
         fill_quote = fill_qty * fill_price
-        fee_rate = self._config.slippage_bps / Decimal("10000")
-        fee_quote = fill_quote * max(Decimal("0"), fee_rate)
+        fee_bps = self._config.taker_fee_bps if decision.is_taker else self._config.maker_fee_bps
+        fee_rate = max(Decimal("0"), fee_bps) / Decimal("10000")
+        fee_quote = fill_quote * fee_rate
 
         if order.trade_type == TradeType.BUY:
             self._ledger.release(order.quote_asset, min(order.reserved_quote, fill_quote))
@@ -451,10 +533,50 @@ class PaperExecutionAdapter:
         order.last_update_timestamp = now_ts
         order.current_state = "FILLED" if order.executed_amount_base >= order.amount else "PARTIALLY_FILLED"
 
+        self._paper_fill_count += 1
+        self._paper_total_queue_delay_ms += decision.queue_delay_ms
+
+        fill_event = self._build_fill_event(order, fill_price, fill_qty, fee_quote, now_ts, decision.is_taker)
+        self.trigger_event(MarketEvent.OrderFilled, fill_event)
+
+        if order.current_state == "FILLED":
+            completed_event = self._build_completed_event(order, now_ts)
+            if order.trade_type == TradeType.BUY:
+                self.trigger_event(MarketEvent.BuyOrderCompleted, completed_event)
+            else:
+                self.trigger_event(MarketEvent.SellOrderCompleted, completed_event)
+
+    def _build_fill_event(self, order: PaperOrder, fill_price: Decimal, fill_qty: Decimal,
+                          fee_quote: Decimal, now_ts: float, is_taker: bool) -> Any:
+        if _HAS_FRAMEWORK_EVENTS:
+            try:
+                trade_fee = build_trade_fee(
+                    exchange=self.connector_name,
+                    is_maker=not is_taker,
+                    base_currency=order.base_asset,
+                    quote_currency=order.quote_asset,
+                    order_type=order.order_type,
+                    order_side=order.trade_type,
+                    amount=fill_qty,
+                    price=fill_price,
+                )
+                return OrderFilledEvent(
+                    timestamp=now_ts,
+                    order_id=order.order_id,
+                    trading_pair=order.trading_pair,
+                    trade_type=order.trade_type,
+                    order_type=order.order_type,
+                    price=fill_price,
+                    amount=fill_qty,
+                    trade_fee=trade_fee,
+                    exchange_trade_id=f"paper-{uuid4().hex[:12]}",
+                )
+            except Exception:
+                logger.warning("Framework fill event construction failed for %s, using fallback", order.order_id, exc_info=True)
         fee_obj = SimpleNamespace(
             fee_amount_in_token=lambda token, _price, _amount: fee_quote,
         )
-        fill_event = SimpleNamespace(
+        return SimpleNamespace(
             order_id=order.order_id,
             timestamp=now_ts,
             price=fill_price,
@@ -463,27 +585,35 @@ class PaperExecutionAdapter:
             trading_pair=order.trading_pair,
             trade_fee=fee_obj,
         )
-        self._paper_fill_count += 1
-        self._paper_total_queue_delay_ms += decision.queue_delay_ms
-        self.trigger_event(MarketEvent.OrderFilled, fill_event)
 
-        if order.current_state == "FILLED":
-            completed_event = SimpleNamespace(
-                order_id=order.order_id,
-                timestamp=now_ts,
-                base_asset=order.base_asset,
-                quote_asset=order.quote_asset,
-                base_asset_amount=order.executed_amount_base,
-                quote_asset_amount=order.executed_amount_quote,
-            )
-            if order.trade_type == TradeType.BUY:
-                self.trigger_event(MarketEvent.BuyOrderCompleted, completed_event)
-            else:
-                self.trigger_event(MarketEvent.SellOrderCompleted, completed_event)
+    @staticmethod
+    def _build_completed_event(order: PaperOrder, now_ts: float) -> Any:
+        if _HAS_FRAMEWORK_EVENTS:
+            try:
+                cls = BuyOrderCompletedEvent if order.trade_type == TradeType.BUY else SellOrderCompletedEvent
+                return cls(
+                    timestamp=now_ts,
+                    order_id=order.order_id,
+                    base_asset=order.base_asset,
+                    quote_asset=order.quote_asset,
+                    base_asset_amount=order.executed_amount_base,
+                    quote_asset_amount=order.executed_amount_quote,
+                    order_type=order.order_type,
+                )
+            except Exception:
+                pass
+        return SimpleNamespace(
+            order_id=order.order_id,
+            timestamp=now_ts,
+            base_asset=order.base_asset,
+            quote_asset=order.quote_asset,
+            base_asset_amount=order.executed_amount_base,
+            quote_asset_amount=order.executed_amount_quote,
+        )
 
     def _resolve_price(self, side: Any, price: Decimal) -> Decimal:
         try:
-            p = _d(price)
+            p = to_decimal(price)
             if p.is_nan():
                 p = Decimal("0")
         except Exception:
@@ -492,7 +622,7 @@ class PaperExecutionAdapter:
             return p
         ref_type = PriceType.BestAsk if side == TradeType.BUY else PriceType.BestBid
         try:
-            return _d(self._market_connector.get_price_by_type(self.trading_pair, ref_type))
+            return to_decimal(self._market_connector.get_price_by_type(self.trading_pair, ref_type))
         except Exception:
             return Decimal("0")
 
@@ -501,7 +631,7 @@ class PaperExecutionAdapter:
         if connector is None:
             return Decimal("0")
         try:
-            return _d(connector.get_balance(asset))
+            return to_decimal(connector.get_balance(asset))
         except Exception:
             return Decimal("0")
 

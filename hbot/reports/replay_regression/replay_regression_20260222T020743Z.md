@@ -1,0 +1,27 @@
+# Replay Regression Summary
+
+- ts_utc: 2026-02-22T02:07:43.615655+00:00
+- status: fail
+- deterministic_repeat_pass: True
+- repeat_runs: 2
+
+## Blockers
+- run_1_snapshot_failures:portfolio_risk_not_healthy
+- run_2_snapshot_failures:portfolio_risk_not_healthy
+
+## Evidence Paths
+- source_event_file: F:\Environement\git-repo\hummingbot_custo\hbot\reports\event_store\events_20260221.jsonl
+- source_integrity_file: F:\Environement\git-repo\hummingbot_custo\hbot\reports\event_store\integrity_20260221.json
+- frozen_event_file: F:\Environement\git-repo\hummingbot_custo\hbot\reports\replay_regression\pinned_inputs\20260222T020720Z\events_20260221.jsonl
+- frozen_integrity_file: F:\Environement\git-repo\hummingbot_custo\hbot\reports\replay_regression\pinned_inputs\20260222T020720Z\integrity_20260221.json
+- frozen_inputs_dir: F:\Environement\git-repo\hummingbot_custo\hbot\reports\replay_regression\pinned_inputs\20260222T020720Z
+- backtest_regression_latest: F:\Environement\git-repo\hummingbot_custo\hbot\reports\backtest_regression\latest.json
+- reconciliation_latest: F:\Environement\git-repo\hummingbot_custo\hbot\reports\reconciliation\latest.json
+- parity_latest: F:\Environement\git-repo\hummingbot_custo\hbot\reports\parity\latest.json
+- portfolio_risk_latest: F:\Environement\git-repo\hummingbot_custo\hbot\reports\portfolio_risk\latest.json
+- json_report: F:\Environement\git-repo\hummingbot_custo\hbot\reports\replay_regression\replay_regression_20260222T020743Z.json
+- markdown_report: F:\Environement\git-repo\hummingbot_custo\hbot\reports\replay_regression\replay_regression_20260222T020743Z.md
+
+## Run Snapshots
+- run_1: {"parity_failed_bots": 0, "parity_status": "pass", "portfolio_action": "kill_switch", "portfolio_critical_count": 1, "portfolio_status": "critical", "reconciliation_critical_count": 0, "reconciliation_status": "warning", "reconciliation_warning_count": 2, "regression_event_count": 87885, "regression_fingerprint": "f1c9fe78d84f8e8e22bcaccff936a1dcf0fc441fafdab52c3f708ddb53186285", "regression_status": "pass"}
+- run_2: {"parity_failed_bots": 0, "parity_status": "pass", "portfolio_action": "kill_switch", "portfolio_critical_count": 1, "portfolio_status": "critical", "reconciliation_critical_count": 0, "reconciliation_status": "warning", "reconciliation_warning_count": 2, "regression_event_count": 87885, "regression_fingerprint": "f1c9fe78d84f8e8e22bcaccff936a1dcf0fc441fafdab52c3f708ddb53186285", "regression_status": "pass"}

@@ -1,0 +1,11 @@
+{
+  "ts_utc": "2026-02-22T00:41:41.633593+00:00",
+  "checked_bots": 5,
+  "status": "ok",
+  "critical_count": 0,
+  "warning_count": 0,
+  "exchange_source_enabled": true,
+  "exchange_snapshot_path": "/workspace/hbot/reports/exchange_snapshots/latest.json",
+  "thresholds_path": "/workspace/hbot/config/reconciliation_thresholds.json",
+  "findings": []
+}

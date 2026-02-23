@@ -1,0 +1,43 @@
+{
+  "ts_utc": "2026-02-23T02:37:21.890464+00:00",
+  "source": "exchange_snapshot_service",
+  "mode": "proxy_local",
+  "account_map_path": "/workspace/hbot/config/exchange_account_map.json",
+  "note": "Snapshot uses local minute.csv references plus optional exchange probe. For per-bot exchange truth, use dedicated account mapping and direct API pull.",
+  "account_probe": {
+    "status": "disabled",
+    "balances": {},
+    "error": ""
+  },
+  "account_probe_cache": {},
+  "bots": {
+    "bot1": {
+      "base_pct": 0.0,
+      "equity_quote": 1.0,
+      "exchange": "bitget_perpetual",
+      "trading_pair": "BTC-USDT",
+      "source": "local_minute_proxy"
+    },
+    "bot2": {
+      "base_pct": 0.8705203186313687,
+      "equity_quote": 77232.195,
+      "exchange": "bitget_paper_trade",
+      "trading_pair": "BTC-USDT",
+      "source": "local_minute_proxy"
+    },
+    "bot3": {
+      "base_pct": 0.8719013989199879,
+      "equity_quote": 78064.865,
+      "exchange": "bitget_paper_trade",
+      "trading_pair": "BTC-USDT",
+      "source": "local_minute_proxy"
+    },
+    "bot4": {
+      "base_pct": 0.11967119366952034,
+      "equity_quote": 5679.696,
+      "exchange": "binance_perpetual_testnet",
+      "trading_pair": "BTC-USDT",
+      "source": "local_minute_proxy"
+    }
+  }
+}

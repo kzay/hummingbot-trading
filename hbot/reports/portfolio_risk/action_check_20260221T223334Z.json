@@ -1,0 +1,34 @@
+{
+  "ts_utc": "2026-02-21T22:33:34.170970+00:00",
+  "redis_host": "redis",
+  "scan_count": 1200,
+  "since_minutes": 30.0,
+  "since_threshold_ts_ms": 1771711414155,
+  "intent_stream_len": 14901,
+  "audit_stream_len": 3,
+  "portfolio_risk_intent_count": 0,
+  "portfolio_risk_audit_count": 2,
+  "portfolio_risk_intents": [],
+  "portfolio_risk_audits": [
+    {
+      "entry_id": "1771711888940-1",
+      "timestamp_ms": 1771711888940,
+      "event_id": "4cdefa3b-b4db-43bf-a668-6bd4c601ca68",
+      "instance_name": "bot4",
+      "severity": "error",
+      "category": "portfolio_risk_action",
+      "message": "portfolio_risk_kill_switch",
+      "producer": "portfolio_risk_service"
+    },
+    {
+      "entry_id": "1771711888940-0",
+      "timestamp_ms": 1771711888936,
+      "event_id": "e4f7dee4-ea63-4207-8f34-5f6f2dd67ca9",
+      "instance_name": "bot1",
+      "severity": "error",
+      "category": "portfolio_risk_action",
+      "message": "portfolio_risk_kill_switch",
+      "producer": "portfolio_risk_service"
+    }
+  ]
+}

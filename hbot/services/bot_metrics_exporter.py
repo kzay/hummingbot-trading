@@ -1,4 +1,4 @@
-﻿from __future__ import annotations
+from __future__ import annotations
 
 import csv
 import os
@@ -9,32 +9,12 @@ from pathlib import Path
 from typing import Dict, List, Optional
 
 
-def _env_int(name: str, default: int) -> int:
-    value = os.getenv(name)
-    if value is None:
-        return default
-    try:
-        return int(value)
-    except ValueError:
-        return default
-
-
-def _safe_float(value: object, default: float = 0.0) -> float:
-    if value is None or value == "":
-        return default
-    try:
-        return float(str(value))
-    except (TypeError, ValueError):
-        return default
+from services.common.utils import env_int as _env_int, safe_float as _safe_float, parse_iso_ts
 
 
 def _safe_iso_ts_to_epoch(value: str) -> Optional[float]:
-    if not value:
-        return None
-    try:
-        return datetime.fromisoformat(value.replace("Z", "+00:00")).timestamp()
-    except ValueError:
-        return None
+    dt = parse_iso_ts(value)
+    return dt.timestamp() if dt else None
 
 
 def _escape_label(value: str) -> str:
@@ -66,10 +46,26 @@ class BotSnapshot:
     taker_fee_pct: float
     soft_pause_edge: float
     fee_source: str
+    equity_quote: float
+    base_pct: float
+    target_base_pct: float
+    daily_loss_pct: float
+    drawdown_pct: float
+    cancel_per_min: float
+    risk_reasons: str
     daily_pnl_quote: float
     daily_fills_count: float
     fills_total: float
     recent_error_lines: float
+    tick_duration_ms: float
+    indicator_duration_ms: float
+    connector_io_duration_ms: float
+    position_drift_pct: float
+    margin_ratio: float
+    funding_rate: float
+    realized_pnl_today_quote: float
+    ws_reconnect_count: float
+    order_book_stale: float
 
 
 class BotMetricsExporter:
@@ -108,10 +104,26 @@ class BotMetricsExporter:
                     taker_fee_pct=_safe_float(latest_minute.get("taker_fee_pct")),
                     soft_pause_edge=1.0 if str(latest_minute.get("soft_pause_edge", "")).lower() == "true" else 0.0,
                     fee_source=str(latest_minute.get("fee_source", "")),
+                    equity_quote=_safe_float(latest_minute.get("equity_quote")),
+                    base_pct=_safe_float(latest_minute.get("base_pct")),
+                    target_base_pct=_safe_float(latest_minute.get("target_base_pct")),
+                    daily_loss_pct=_safe_float(latest_minute.get("daily_loss_pct")),
+                    drawdown_pct=_safe_float(latest_minute.get("drawdown_pct")),
+                    cancel_per_min=_safe_float(latest_minute.get("cancel_per_min")),
+                    risk_reasons=str(latest_minute.get("risk_reasons", "")),
                     daily_pnl_quote=_safe_float(daily_row.get("pnl_quote")),
                     daily_fills_count=_safe_float(daily_row.get("fills_count")),
                     fills_total=float(fills_total),
                     recent_error_lines=float(recent_error_lines),
+                    tick_duration_ms=_safe_float(latest_minute.get("_tick_duration_ms")),
+                    indicator_duration_ms=_safe_float(latest_minute.get("_indicator_duration_ms")),
+                    connector_io_duration_ms=_safe_float(latest_minute.get("_connector_io_duration_ms")),
+                    position_drift_pct=_safe_float(latest_minute.get("position_drift_pct")),
+                    margin_ratio=_safe_float(latest_minute.get("margin_ratio"), 1.0),
+                    funding_rate=_safe_float(latest_minute.get("funding_rate")),
+                    realized_pnl_today_quote=_safe_float(latest_minute.get("realized_pnl_today_quote")),
+                    ws_reconnect_count=_safe_float(latest_minute.get("ws_reconnect_count")),
+                    order_book_stale=1.0 if str(latest_minute.get("order_book_stale", "")).lower() == "true" else 0.0,
                 )
             )
         return snapshots
@@ -149,6 +161,20 @@ class BotMetricsExporter:
                 "# TYPE hbot_bot_daily_pnl_quote gauge",
                 "# HELP hbot_bot_daily_fills_count Latest daily fills count from daily.csv.",
                 "# TYPE hbot_bot_daily_fills_count gauge",
+                "# HELP hbot_bot_equity_quote Current equity quote from minute snapshot.",
+                "# TYPE hbot_bot_equity_quote gauge",
+                "# HELP hbot_bot_base_pct Current base allocation ratio from minute snapshot.",
+                "# TYPE hbot_bot_base_pct gauge",
+                "# HELP hbot_bot_target_base_pct Target base allocation ratio from minute snapshot.",
+                "# TYPE hbot_bot_target_base_pct gauge",
+                "# HELP hbot_bot_daily_loss_pct Current daily loss percentage from minute snapshot.",
+                "# TYPE hbot_bot_daily_loss_pct gauge",
+                "# HELP hbot_bot_drawdown_pct Current drawdown percentage from minute snapshot.",
+                "# TYPE hbot_bot_drawdown_pct gauge",
+                "# HELP hbot_bot_cancel_per_min Current cancel-per-minute rate from minute snapshot.",
+                "# TYPE hbot_bot_cancel_per_min gauge",
+                "# HELP hbot_bot_risk_reasons_info Risk reasons info marker with reason label.",
+                "# TYPE hbot_bot_risk_reasons_info gauge",
                 "# HELP hbot_bot_fills_total Total fills rows observed in fills.csv.",
                 "# TYPE hbot_bot_fills_total gauge",
                 "# HELP hbot_bot_recent_error_lines Number of ERROR lines in recent bot log tail.",
@@ -180,11 +206,29 @@ class BotMetricsExporter:
             lines.append(f"hbot_bot_taker_fee_pct{_fmt_labels(base_labels)} {snapshot.taker_fee_pct}")
             lines.append(f"hbot_bot_daily_pnl_quote{_fmt_labels(base_labels)} {snapshot.daily_pnl_quote}")
             lines.append(f"hbot_bot_daily_fills_count{_fmt_labels(base_labels)} {snapshot.daily_fills_count}")
+            lines.append(f"hbot_bot_equity_quote{_fmt_labels(base_labels)} {snapshot.equity_quote}")
+            lines.append(f"hbot_bot_base_pct{_fmt_labels(base_labels)} {snapshot.base_pct}")
+            lines.append(f"hbot_bot_target_base_pct{_fmt_labels(base_labels)} {snapshot.target_base_pct}")
+            lines.append(f"hbot_bot_daily_loss_pct{_fmt_labels(base_labels)} {snapshot.daily_loss_pct}")
+            lines.append(f"hbot_bot_drawdown_pct{_fmt_labels(base_labels)} {snapshot.drawdown_pct}")
+            lines.append(f"hbot_bot_cancel_per_min{_fmt_labels(base_labels)} {snapshot.cancel_per_min}")
             lines.append(f"hbot_bot_fills_total{_fmt_labels(base_labels)} {snapshot.fills_total}")
             lines.append(f"hbot_bot_recent_error_lines{_fmt_labels(base_labels)} {snapshot.recent_error_lines}")
             fee_labels = dict(base_labels)
             fee_labels["source"] = snapshot.fee_source or "unknown"
             lines.append(f"hbot_bot_fee_source_info{_fmt_labels(fee_labels)} 1")
+            risk_labels = dict(base_labels)
+            risk_labels["reasons"] = snapshot.risk_reasons or "none"
+            lines.append(f"hbot_bot_risk_reasons_info{_fmt_labels(risk_labels)} 1")
+            lines.append(f"hbot_bot_tick_duration_seconds{_fmt_labels(base_labels)} {snapshot.tick_duration_ms / 1000.0}")
+            lines.append(f"hbot_bot_tick_indicator_seconds{_fmt_labels(base_labels)} {snapshot.indicator_duration_ms / 1000.0}")
+            lines.append(f"hbot_bot_tick_connector_io_seconds{_fmt_labels(base_labels)} {snapshot.connector_io_duration_ms / 1000.0}")
+            lines.append(f"hbot_bot_position_drift_pct{_fmt_labels(base_labels)} {snapshot.position_drift_pct}")
+            lines.append(f"hbot_bot_margin_ratio{_fmt_labels(base_labels)} {snapshot.margin_ratio}")
+            lines.append(f"hbot_bot_funding_rate{_fmt_labels(base_labels)} {snapshot.funding_rate}")
+            lines.append(f"hbot_bot_realized_pnl_today_quote{_fmt_labels(base_labels)} {snapshot.realized_pnl_today_quote}")
+            lines.append(f"hbot_bot_ws_reconnect_total{_fmt_labels(base_labels)} {snapshot.ws_reconnect_count}")
+            lines.append(f"hbot_bot_order_book_stale{_fmt_labels(base_labels)} {snapshot.order_book_stale}")
         return "\n".join(lines) + "\n"
 
     def _read_last_csv_row(self, path: Path) -> Optional[Dict[str, str]]:
@@ -219,9 +263,15 @@ class BotMetricsExporter:
             return 0
         target = log_files[0]
         try:
+            size = target.stat().st_size
+            avg_line_len = 200
+            tail_bytes = self._log_tail_lines * avg_line_len
             with target.open("r", encoding="utf-8", errors="ignore") as fp:
+                if size > tail_bytes:
+                    fp.seek(max(0, size - tail_bytes))
+                    fp.readline()
                 lines = fp.readlines()
-            tail = lines[-self._log_tail_lines :]
+            tail = lines[-self._log_tail_lines:]
             return sum(1 for line in tail if "ERROR" in line)
         except Exception:
             return 0
@@ -232,6 +282,11 @@ class MetricsHandler(BaseHTTPRequestHandler):
     metrics_path: str = "/metrics"
 
     def do_GET(self):
+        if self.path == "/health":
+            self.send_response(200)
+            self.end_headers()
+            self.wfile.write(b'{"status":"ok"}')
+            return
         if self.path != self.metrics_path:
             self.send_response(404)
             self.end_headers()

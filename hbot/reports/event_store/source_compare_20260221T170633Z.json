@@ -1,0 +1,28 @@
+{
+  "ts_utc": "2026-02-21T17:06:33.061593+00:00",
+  "integrity_file": "F:\\Environement\\git-repo\\hummingbot_custo\\hbot\\reports\\event_store\\integrity_20260221.json",
+  "stored_total_events": 6,
+  "stored_events_by_stream": {
+    "hb.audit.v1": 1,
+    "hb.market_data.v1": 1,
+    "hb.risk_decision.v1": 2,
+    "hb.signal.v1": 1,
+    "hb.execution_intent.v1": 1
+  },
+  "source_events_by_stream": {
+    "hb.market_data.v1": 18,
+    "hb.signal.v1": 16,
+    "hb.ml_signal.v1": 0,
+    "hb.risk_decision.v1": 15,
+    "hb.execution_intent.v1": 13,
+    "hb.audit.v1": 1
+  },
+  "delta_source_minus_stored_by_stream": {
+    "hb.market_data.v1": 17,
+    "hb.signal.v1": 15,
+    "hb.ml_signal.v1": 0,
+    "hb.risk_decision.v1": 13,
+    "hb.execution_intent.v1": 12,
+    "hb.audit.v1": 0
+  }
+}

@@ -1,10 +1,20 @@
+"""Mid-price bar builder with running EMA and ATR indicators.
+
+Builds 1-minute bars from mid-price samples and maintains running indicator
+values updated incrementally on each new bar — O(1) per tick instead of
+O(n) recomputation.
+"""
 from __future__ import annotations
 
 from collections import deque
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from decimal import Decimal
-from typing import Deque, List, Optional, Tuple
+from typing import Deque, Dict, List, Optional, Tuple
+
+_ZERO = Decimal("0")
+_ONE = Decimal("1")
+_TWO = Decimal("2")
 
 
 @dataclass
@@ -17,9 +27,10 @@ class MinuteBar:
 
 
 class MidPriceBuffer:
-    """
-    Builds 1-minute bars from mid-price samples.
+    """Builds 1-minute bars from mid-price samples.
+
     Samples are expected every ~10s; missing minute gaps are forward-filled.
+    EMA and ATR are updated incrementally when a new bar completes.
     """
 
     def __init__(self, sample_interval_sec: int = 10, max_minutes: int = 2880):
@@ -27,6 +38,11 @@ class MidPriceBuffer:
         self.max_minutes = max_minutes
         self._bars: Deque[MinuteBar] = deque(maxlen=max_minutes)
         self._samples: Deque[Tuple[float, Decimal]] = deque(maxlen=720)
+
+        self._ema_values: Dict[int, Decimal] = {}
+        self._atr_values: Dict[int, Decimal] = {}
+        self._prev_close: Optional[Decimal] = None
+        self._bar_count: int = 0
 
     @property
     def bars(self) -> List[MinuteBar]:
@@ -41,6 +57,8 @@ class MidPriceBuffer:
             self._bars.append(
                 MinuteBar(ts_minute=minute_ts, open=mid_price, high=mid_price, low=mid_price, close=mid_price)
             )
+            self._bar_count = 1
+            self._prev_close = mid_price
             return
 
         last = self._bars[-1]
@@ -51,17 +69,44 @@ class MidPriceBuffer:
             return
 
         if minute_ts > last.ts_minute:
+            completed_bar = last
+            self._on_bar_complete(completed_bar)
+
             cursor = last.ts_minute + 60
             while cursor < minute_ts:
-                # Gap forward-fill
-                self._bars.append(
-                    MinuteBar(ts_minute=cursor, open=last.close, high=last.close, low=last.close, close=last.close)
+                gap_bar = MinuteBar(
+                    ts_minute=cursor, open=last.close, high=last.close,
+                    low=last.close, close=last.close,
                 )
+                self._bars.append(gap_bar)
                 last = self._bars[-1]
+                self._bar_count += 1
+                self._on_bar_complete(gap_bar)
                 cursor += 60
             self._bars.append(
                 MinuteBar(ts_minute=minute_ts, open=mid_price, high=mid_price, low=mid_price, close=mid_price)
             )
+            self._bar_count += 1
+
+    def _on_bar_complete(self, bar: MinuteBar) -> None:
+        """Update running indicators when a bar finalizes."""
+        close = bar.close
+
+        for period in list(self._ema_values.keys()):
+            alpha = _TWO / Decimal(period + 1)
+            self._ema_values[period] = alpha * close + (_ONE - alpha) * self._ema_values[period]
+
+        if self._prev_close is not None:
+            tr = max(
+                bar.high - bar.low,
+                abs(bar.high - self._prev_close),
+                abs(bar.low - self._prev_close),
+            )
+            for period in list(self._atr_values.keys()):
+                p = Decimal(period)
+                self._atr_values[period] = (self._atr_values[period] * (p - _ONE) + tr) / p
+
+        self._prev_close = close
 
     def ready(self, min_bars: int) -> bool:
         return len(self._bars) >= min_bars
@@ -72,18 +117,26 @@ class MidPriceBuffer:
         return self._bars[-1].close
 
     def ema(self, period: int) -> Optional[Decimal]:
+        """Return the running EMA for *period*. O(1) after warm-up."""
         if period <= 0 or len(self._bars) < period:
             return None
+        if period in self._ema_values:
+            return self._ema_values[period]
         closes = [bar.close for bar in self._bars]
-        alpha = Decimal("2") / Decimal(period + 1)
+        alpha = _TWO / Decimal(period + 1)
+        one_minus_alpha = _ONE - alpha
         ema_value = closes[0]
         for close in closes[1:]:
-            ema_value = alpha * close + (Decimal("1") - alpha) * ema_value
+            ema_value = alpha * close + one_minus_alpha * ema_value
+        self._ema_values[period] = ema_value
         return ema_value
 
     def atr(self, period: int) -> Optional[Decimal]:
+        """Return the running ATR for *period*. O(1) after warm-up."""
         if period <= 0 or len(self._bars) < period + 1:
             return None
+        if period in self._atr_values:
+            return self._atr_values[period]
         bars = list(self._bars)
         trs: List[Decimal] = []
         for i in range(1, len(bars)):
@@ -93,7 +146,9 @@ class MidPriceBuffer:
             tr = max(high - low, abs(high - prev_close), abs(low - prev_close))
             trs.append(tr)
         recent = trs[-period:]
-        return sum(recent, Decimal("0")) / Decimal(len(recent))
+        atr_val = sum(recent, _ZERO) / Decimal(len(recent))
+        self._atr_values[period] = atr_val
+        return atr_val
 
     def band_pct(self, atr_period: int = 14) -> Optional[Decimal]:
         price = self.latest_close()
@@ -104,7 +159,7 @@ class MidPriceBuffer:
 
     def adverse_drift_30s(self, now_ts: float) -> Decimal:
         if len(self._samples) < 2:
-            return Decimal("0")
+            return _ZERO
         now_mid = self._samples[-1][1]
         older: Optional[Decimal] = None
         threshold = now_ts - 30.0
@@ -113,7 +168,7 @@ class MidPriceBuffer:
                 older = sample_mid
                 break
         if older is None or older <= 0:
-            return Decimal("0")
+            return _ZERO
         return abs(now_mid - older) / older
 
     @staticmethod

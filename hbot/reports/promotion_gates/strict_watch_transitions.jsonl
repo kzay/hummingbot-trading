@@ -1,0 +1,1 @@
+{"ts_utc": "2026-02-22T00:20:11.427656+00:00", "from_status": "UNKNOWN", "to_status": "FAIL", "critical_failures": ["regression_backtest_harness", "day2_event_store_gate"], "strict_cycle_latest_path": "F:\\Environement\\git-repo\\hummingbot_custo\\hbot\\reports\\promotion_gates\\strict_cycle_latest.json"}

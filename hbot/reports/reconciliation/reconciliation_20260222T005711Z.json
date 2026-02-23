@@ -1,0 +1,11 @@
+{
+  "ts_utc": "2026-02-22T00:57:11.249538+00:00",
+  "checked_bots": 3,
+  "status": "ok",
+  "critical_count": 0,
+  "warning_count": 0,
+  "exchange_source_enabled": true,
+  "exchange_snapshot_path": "F:\\Environement\\git-repo\\hummingbot_custo\\hbot\\reports\\exchange_snapshots\\latest.json",
+  "thresholds_path": "F:\\Environement\\git-repo\\hummingbot_custo\\hbot\\config\\reconciliation_thresholds.json",
+  "findings": []
+}

@@ -1,0 +1,41 @@
+# EPP v2.4 - Bitget Paper Smoke Profile
+id: epp_v2_4_bitget_paper_smoke
+controller_name: epp_v2_4
+controller_type: market_making
+
+connector_name: bitget_paper_trade
+trading_pair: BTC-USDT
+
+total_amount_quote: 10
+buy_spreads: "0.0030"
+sell_spreads: "0.0030"
+buy_amounts_pct: "100"
+sell_amounts_pct: "100"
+executor_refresh_time: 90
+cooldown_time: 10
+leverage: 1
+position_mode: ONEWAY
+stop_loss: 0.004
+take_profit: 0.004
+time_limit: 600
+take_profit_order_type: LIMIT
+skip_rebalance: true
+
+variant: a
+enabled: true
+no_trade: false
+instance_name: bot1
+log_dir: /home/hummingbot/logs
+
+fee_mode: project
+fee_profile: vip0
+require_fee_resolution: true
+spot_fee_pct: 0.0010
+slippage_est_pct: 0.0005
+turnover_cap_x: 2.0
+turnover_penalty_step: 0.0005
+min_net_edge_bps: 2
+
+sample_interval_s: 10
+spread_floor_recalc_s: 120
+cancel_budget_per_min: 30

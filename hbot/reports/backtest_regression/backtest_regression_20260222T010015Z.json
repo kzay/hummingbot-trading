@@ -1,0 +1,72 @@
+{
+  "ts_utc": "2026-02-22T01:00:15.253838+00:00",
+  "status": "pass",
+  "event_file": "F:\\Environement\\git-repo\\hummingbot_custo\\hbot\\reports\\event_store\\events_20260221.jsonl",
+  "integrity_file": "F:\\Environement\\git-repo\\hummingbot_custo\\hbot\\reports\\event_store\\integrity_20260221.json",
+  "checks": [
+    {
+      "name": "event_count_min",
+      "pass": true,
+      "value": 87610,
+      "required": 1000
+    },
+    {
+      "name": "missing_correlation_zero",
+      "pass": true,
+      "value": 0,
+      "required": 0
+    },
+    {
+      "name": "dataset_fingerprint_present",
+      "pass": true,
+      "value": "a2bd1eba56463aad2db3cb3bb7ff01139f2c38497806431c52096f7a338d3e69",
+      "required": "non_empty_sha256"
+    },
+    {
+      "name": "intent_expiry_present_for_active_actions",
+      "pass": true,
+      "value": 0,
+      "required": 0
+    },
+    {
+      "name": "risk_denied_reason_present",
+      "pass": true,
+      "value": 0,
+      "required": 0
+    }
+  ],
+  "dataset_fingerprint": {
+    "sha256": "a2bd1eba56463aad2db3cb3bb7ff01139f2c38497806431c52096f7a338d3e69",
+    "event_count": 87610,
+    "sample_event_ids": [
+      "0e5861c3-534c-4859-804d-3a4689c4f223",
+      "2beaeda0-f1b5-484f-b282-358f63f2019a",
+      "45b54a22-d351-4c74-97b6-ad0aa116aa4e",
+      "feeb1d0e-1231-4571-8b3c-bd4a43d8ab10",
+      "29f3e908-18c4-4528-9160-ff8efc531245",
+      "12f15487-a32e-4e2e-b393-e5d2147e3dc6",
+      "adf9e35c-259a-4aaf-90b4-48f9b4ca340f",
+      "5f20d239-9236-4130-a505-9a86a8bd15c2",
+      "8d991615-98b8-46ce-a243-6102d068a778",
+      "694e1296-6e05-485d-a606-cf7ba4aa44c9"
+    ],
+    "sample_event_types": [
+      "audit",
+      "market_snapshot",
+      "risk_decision",
+      "strategy_signal",
+      "risk_decision",
+      "execution_intent",
+      "execution_intent",
+      "market_snapshot",
+      "risk_decision",
+      "execution_intent"
+    ]
+  },
+  "invariants": {
+    "execution_intent_count": 21914,
+    "risk_decision_count": 21778,
+    "intent_missing_expiry_count": 0,
+    "risk_denied_missing_reason_count": 0
+  }
+}

@@ -1,0 +1,13 @@
+{
+  "ts_utc": "2026-02-22T16:37:30.199181+00:00",
+  "status": "fail",
+  "max_age_min": 15.0,
+  "events_file": "F:\\Environement\\git-repo\\hummingbot_custo\\hbot\\reports\\event_store\\events_20260222.jsonl",
+  "events_file_exists": true,
+  "events_file_age_min": 506.593,
+  "market_data_event_rows": 690,
+  "checks": {
+    "events_file_fresh": false,
+    "market_data_rows_present": true
+  }
+}

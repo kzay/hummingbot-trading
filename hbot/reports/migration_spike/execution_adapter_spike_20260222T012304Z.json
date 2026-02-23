@@ -1,0 +1,17 @@
+{
+  "ts_utc": "2026-02-22T01:23:04.565752+00:00",
+  "status": "pass",
+  "features_validated": {
+    "connector_stub": true,
+    "order_lifecycle": true,
+    "risk_veto": true,
+    "audit_trail": true
+  },
+  "summary": {
+    "adapter": "paper_only_spike",
+    "intents_total": 3,
+    "executed": 2,
+    "vetoed": 1,
+    "lifecycle_ok": 2
+  }
+}

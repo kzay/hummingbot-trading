@@ -1,0 +1,8 @@
+{
+  "total_events": 238,
+  "events_by_stream": {
+    "hb.market_data.v1": 238
+  },
+  "missing_correlation_count": 0,
+  "last_update_utc": "2026-02-22T01:17:25.094752+00:00"
+}

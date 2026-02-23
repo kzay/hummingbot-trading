@@ -33,3 +33,8 @@ Provide triage and response procedures for common failure scenarios.
 - Operations + Engineering
 - Last-updated: 2026-02-19
 
+- 2026-02-22T00:20:11.428657+00:00 - strict gate status transition to FAIL; critical_failures=['regression_backtest_harness', 'day2_event_store_gate']; evidence=F:\Environement\git-repo\hummingbot_custo\hbot\reports\promotion_gates\strict_cycle_latest.json
+- 2026-02-22T00:46:55.371238+00:00 - strict promotion cycle failed; critical_failures=['day2_event_store_gate']; evidence=F:\Environement\git-repo\hummingbot_custo\hbot\reports\promotion_gates\latest.json
+- 2026-02-22T00:47:26.869905+00:00 - strict promotion cycle failed; critical_failures=['day2_event_store_gate']; evidence=F:\Environement\git-repo\hummingbot_custo\hbot\reports\promotion_gates\latest.json
+- 2026-02-22T00:49:14.661789+00:00 - strict promotion cycle failed; critical_failures=['day2_event_store_gate']; evidence=F:\Environement\git-repo\hummingbot_custo\hbot\reports\promotion_gates\latest.json
+- 2026-02-22T02:08:17.691804+00:00 - bus recovery drill failed delta tolerance check (`delta_since_baseline_within_tolerance=false`, max_delta_observed=22478) before and after Redis restart; evidence=F:\Environement\git-repo\hummingbot_custo\hbot\reports\bus_recovery\bus_recovery_post_restart_20260222T020817Z.json

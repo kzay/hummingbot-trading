@@ -1,0 +1,13 @@
+{
+  "ts_utc": "2026-02-22T13:21:46.245947+00:00",
+  "status": "pass",
+  "errors": [],
+  "details": {
+    "policy_path": "F:\\Environement\\git-repo\\hummingbot_custo\\hbot\\config\\coordination_policy_v1.json",
+    "multi_bot_policy_path": "F:\\Environement\\git-repo\\hummingbot_custo\\hbot\\config\\multi_bot_policy_v1.json",
+    "compose_path": "F:\\Environement\\git-repo\\hummingbot_custo\\hbot\\compose\\docker-compose.yml",
+    "allowed_instances": [
+      "bot1"
+    ]
+  }
+}

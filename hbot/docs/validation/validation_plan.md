@@ -21,11 +21,15 @@ Define validation procedure for strategy and orchestration changes.
     spread calculations, and CSV log output before promoting to live.
 - Runtime smoke:
   - compose profile startup and health checks
+  - target matrix:
+    - `v2_epp_v2_4_binance_demo_smoke.yml`
+    - `v2_epp_v2_4_bitget_paper_smoke.yml`
 
 ## Acceptance Checks
 - No schema validation regressions.
 - Deterministic rejection reasons for invalid/stale/low-confidence signals.
 - Local authority rejects unsafe intents.
+- Preflight rejects connector/profile mismatches with actionable errors.
 
 ## Evidence
 - test logs

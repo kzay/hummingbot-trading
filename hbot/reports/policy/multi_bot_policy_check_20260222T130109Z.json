@@ -1,0 +1,30 @@
+{
+  "ts_utc": "2026-02-22T13:01:09.911154+00:00",
+  "status": "pass",
+  "errors": [],
+  "details": {
+    "policy_bots": [
+      "bot1",
+      "bot2",
+      "bot3",
+      "bot4"
+    ],
+    "portfolio_action_scope_policy": [
+      "bot1",
+      "bot4"
+    ],
+    "portfolio_action_scope_portfolio": [
+      "bot1",
+      "bot4"
+    ],
+    "disabled_scope": [
+      "bot2"
+    ],
+    "paths": {
+      "policy": "F:\\Environement\\git-repo\\hummingbot_custo\\hbot\\config\\multi_bot_policy_v1.json",
+      "exchange_account_map": "F:\\Environement\\git-repo\\hummingbot_custo\\hbot\\config\\exchange_account_map.json",
+      "portfolio_limits": "F:\\Environement\\git-repo\\hummingbot_custo\\hbot\\config\\portfolio_limits_v1.json",
+      "reconciliation_thresholds": "F:\\Environement\\git-repo\\hummingbot_custo\\hbot\\config\\reconciliation_thresholds.json"
+    }
+  }
+}

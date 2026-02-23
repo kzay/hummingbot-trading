@@ -1,0 +1,29 @@
+{
+  "ts_utc": "2026-02-22T13:02:07.270577+00:00",
+  "status": "fail",
+  "rc": 1,
+  "groups": {
+    "unit": {
+      "selected": 3
+    },
+    "service": {
+      "selected": 3
+    },
+    "integration": {
+      "selected": 2
+    }
+  },
+  "selected_tests": [
+    "tests/controllers/test_paper_engine.py",
+    "tests/services/test_event_schemas.py",
+    "tests/services/test_intent_idempotency.py",
+    "tests/services/test_ml_risk_gates.py",
+    "tests/services/test_ml_feature_builder.py",
+    "tests/services/test_ml_model_loader.py",
+    "tests/integration/test_signal_risk_flow.py",
+    "tests/integration/test_ml_signal_to_intent_flow.py"
+  ],
+  "cov_fail_under": 5.0,
+  "runtime_used": "host",
+  "output_tail": ".........F\n================================== FAILURES ===================================\n_______________________ test_deduplicates_same_event_id _______________________\n\n    def test_deduplicates_same_event_id():\n        fake = _FakeRedis()\n        consumer = HBIntentConsumer(fake, group=\"g1\", consumer_name=\"c1\", dedup_ttl_sec=60)\n        fake._entries = [(\"1-0\", _intent(\"same-id\")), (\"2-0\", _intent(\"same-id\"))]\n        first = consumer.poll()\n>       assert len(first) == 1\nE       AssertionError: assert 2 == 1\nE        +  where 2 = len([('1-0', ExecutionIntentEvent(schema_version='1.0', event_type='execution_intent', event_id='same-id', correlation_id=...stance_name='bot1', controller_id='epp_v2_4', action='resume', target_base_pct=None, expires_at_ms=None, metadata={}))])\n\ntests\\services\\test_intent_idempotency.py:47: AssertionError\n=========================== short test summary info ===========================\nFAILED tests/services/test_intent_idempotency.py::test_deduplicates_same_event_id\n!!!!!!!!!!!!!!!!!!!!!!!!!! stopping after 1 failures !!!!!!!!!!!!!!!!!!!!!!!!!!\n1 failed, 9 passed in 0.79s\n"
+}

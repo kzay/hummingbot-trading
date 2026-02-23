@@ -1,0 +1,9 @@
+script_file_name: v2_with_controllers.py
+
+markets: ""
+candles_config: ""
+controllers_config:
+  - epp_v2_4_bot1_bitget_live_microcap.yml
+
+max_global_drawdown_quote: null
+max_controller_drawdown_quote: null

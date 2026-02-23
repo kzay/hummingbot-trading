@@ -1,0 +1,171 @@
+{
+  "ts_utc": "2026-02-22T01:19:39.101358+00:00",
+  "status": "pass",
+  "repeat_runs": 2,
+  "deterministic_repeat_pass": true,
+  "signature_baseline": {
+    "regression_status": "pass",
+    "regression_fingerprint": "f1c9fe78d84f8e8e22bcaccff936a1dcf0fc441fafdab52c3f708ddb53186285",
+    "regression_event_count": 87885,
+    "reconciliation_status": "warning",
+    "reconciliation_critical_count": 0,
+    "reconciliation_warning_count": 1,
+    "parity_status": "pass",
+    "parity_failed_bots": 0,
+    "portfolio_status": "ok",
+    "portfolio_critical_count": 0,
+    "portfolio_action": "allow"
+  },
+  "blockers": [],
+  "runs": [
+    {
+      "steps": [
+        {
+          "name": "backtest_regression",
+          "rc": 0,
+          "output": ""
+        },
+        {
+          "name": "reconciliation_once",
+          "rc": 0,
+          "output": ""
+        },
+        {
+          "name": "parity_once",
+          "rc": 0,
+          "output": ""
+        },
+        {
+          "name": "portfolio_risk_once",
+          "rc": 0,
+          "output": ""
+        }
+      ],
+      "step_failures": [],
+      "snapshot": {
+        "regression": {
+          "status": "pass",
+          "event_count": 87885,
+          "fingerprint": "f1c9fe78d84f8e8e22bcaccff936a1dcf0fc441fafdab52c3f708ddb53186285",
+          "path": "F:\\Environement\\git-repo\\hummingbot_custo\\hbot\\reports\\backtest_regression\\latest.json"
+        },
+        "reconciliation": {
+          "status": "warning",
+          "critical_count": 0,
+          "warning_count": 1,
+          "checked_bots": 3,
+          "path": "F:\\Environement\\git-repo\\hummingbot_custo\\hbot\\reports\\reconciliation\\latest.json"
+        },
+        "parity": {
+          "status": "pass",
+          "failed_bots": 0,
+          "checked_bots": 2,
+          "path": "F:\\Environement\\git-repo\\hummingbot_custo\\hbot\\reports\\parity\\latest.json"
+        },
+        "portfolio_risk": {
+          "status": "ok",
+          "critical_count": 0,
+          "warning_count": 0,
+          "portfolio_action": "allow",
+          "path": "F:\\Environement\\git-repo\\hummingbot_custo\\hbot\\reports\\portfolio_risk\\latest.json"
+        }
+      },
+      "snapshot_ok": true,
+      "snapshot_failures": [],
+      "signature": {
+        "regression_status": "pass",
+        "regression_fingerprint": "f1c9fe78d84f8e8e22bcaccff936a1dcf0fc441fafdab52c3f708ddb53186285",
+        "regression_event_count": 87885,
+        "reconciliation_status": "warning",
+        "reconciliation_critical_count": 0,
+        "reconciliation_warning_count": 1,
+        "parity_status": "pass",
+        "parity_failed_bots": 0,
+        "portfolio_status": "ok",
+        "portfolio_critical_count": 0,
+        "portfolio_action": "allow"
+      }
+    },
+    {
+      "steps": [
+        {
+          "name": "backtest_regression",
+          "rc": 0,
+          "output": ""
+        },
+        {
+          "name": "reconciliation_once",
+          "rc": 0,
+          "output": ""
+        },
+        {
+          "name": "parity_once",
+          "rc": 0,
+          "output": ""
+        },
+        {
+          "name": "portfolio_risk_once",
+          "rc": 0,
+          "output": ""
+        }
+      ],
+      "step_failures": [],
+      "snapshot": {
+        "regression": {
+          "status": "pass",
+          "event_count": 87885,
+          "fingerprint": "f1c9fe78d84f8e8e22bcaccff936a1dcf0fc441fafdab52c3f708ddb53186285",
+          "path": "F:\\Environement\\git-repo\\hummingbot_custo\\hbot\\reports\\backtest_regression\\latest.json"
+        },
+        "reconciliation": {
+          "status": "warning",
+          "critical_count": 0,
+          "warning_count": 1,
+          "checked_bots": 3,
+          "path": "F:\\Environement\\git-repo\\hummingbot_custo\\hbot\\reports\\reconciliation\\latest.json"
+        },
+        "parity": {
+          "status": "pass",
+          "failed_bots": 0,
+          "checked_bots": 2,
+          "path": "F:\\Environement\\git-repo\\hummingbot_custo\\hbot\\reports\\parity\\latest.json"
+        },
+        "portfolio_risk": {
+          "status": "ok",
+          "critical_count": 0,
+          "warning_count": 0,
+          "portfolio_action": "allow",
+          "path": "F:\\Environement\\git-repo\\hummingbot_custo\\hbot\\reports\\portfolio_risk\\latest.json"
+        }
+      },
+      "snapshot_ok": true,
+      "snapshot_failures": [],
+      "signature": {
+        "regression_status": "pass",
+        "regression_fingerprint": "f1c9fe78d84f8e8e22bcaccff936a1dcf0fc441fafdab52c3f708ddb53186285",
+        "regression_event_count": 87885,
+        "reconciliation_status": "warning",
+        "reconciliation_critical_count": 0,
+        "reconciliation_warning_count": 1,
+        "parity_status": "pass",
+        "parity_failed_bots": 0,
+        "portfolio_status": "ok",
+        "portfolio_critical_count": 0,
+        "portfolio_action": "allow"
+      }
+    }
+  ],
+  "evidence_paths": {
+    "source_event_file": "F:\\Environement\\git-repo\\hummingbot_custo\\hbot\\reports\\event_store\\events_20260221.jsonl",
+    "source_integrity_file": "F:\\Environement\\git-repo\\hummingbot_custo\\hbot\\reports\\event_store\\integrity_20260221.json",
+    "frozen_event_file": "F:\\Environement\\git-repo\\hummingbot_custo\\hbot\\reports\\replay_regression\\pinned_inputs\\20260222T011935Z\\events_20260221.jsonl",
+    "frozen_integrity_file": "F:\\Environement\\git-repo\\hummingbot_custo\\hbot\\reports\\replay_regression\\pinned_inputs\\20260222T011935Z\\integrity_20260221.json",
+    "frozen_inputs_dir": "F:\\Environement\\git-repo\\hummingbot_custo\\hbot\\reports\\replay_regression\\pinned_inputs\\20260222T011935Z",
+    "backtest_regression_latest": "F:\\Environement\\git-repo\\hummingbot_custo\\hbot\\reports\\backtest_regression\\latest.json",
+    "reconciliation_latest": "F:\\Environement\\git-repo\\hummingbot_custo\\hbot\\reports\\reconciliation\\latest.json",
+    "parity_latest": "F:\\Environement\\git-repo\\hummingbot_custo\\hbot\\reports\\parity\\latest.json",
+    "portfolio_risk_latest": "F:\\Environement\\git-repo\\hummingbot_custo\\hbot\\reports\\portfolio_risk\\latest.json",
+    "json_report": "F:\\Environement\\git-repo\\hummingbot_custo\\hbot\\reports\\replay_regression\\replay_regression_20260222T011939Z.json",
+    "markdown_report": "F:\\Environement\\git-repo\\hummingbot_custo\\hbot\\reports\\replay_regression\\replay_regression_20260222T011939Z.md"
+  }
+}

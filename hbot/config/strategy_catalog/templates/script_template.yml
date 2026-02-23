@@ -1,0 +1,14 @@
+# Template: v2_<strategy>_<version>_<bot>_<venue>_<mode>.yml
+script_file_name: v2_with_controllers.py
+
+markets:
+  bitget_paper_trade:
+    - BTC-USDT
+
+# Controller file names resolved from /home/hummingbot/conf/controllers
+controllers_config:
+  - epp_v2_4_botX_bitget_paper_smoke.yml
+
+# Optional drawdown controls at script level
+max_global_drawdown_quote: null
+max_controller_drawdown_quote: null

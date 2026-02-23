@@ -1,0 +1,69 @@
+{
+  "version": 1,
+  "policy_id": "multi_bot_policy_v1",
+  "bots": {
+    "bot1": {
+      "role": "live_microcap_primary",
+      "mode": "live",
+      "enabled": true,
+      "portfolio_action_enabled": true,
+      "exchange": "bitget_perpetual",
+      "allowed_symbols": [
+        "BTC-USDT"
+      ],
+      "max_notional_quote": 100.0,
+      "compose_profiles": [],
+      "failure_isolation": "bot-local restart only; no policy broadening"
+    },
+    "bot2": {
+      "role": "reserved_scale_slot",
+      "mode": "disabled",
+      "enabled": false,
+      "portfolio_action_enabled": false,
+      "exchange": "none",
+      "allowed_symbols": [],
+      "max_notional_quote": 0.0,
+      "compose_profiles": [
+        "multi"
+      ],
+      "failure_isolation": "must remain stopped unless policy + gate update"
+    },
+    "bot3": {
+      "role": "paper_validation",
+      "mode": "paper_only",
+      "enabled": true,
+      "portfolio_action_enabled": false,
+      "exchange": "bitget_paper_trade",
+      "allowed_symbols": [
+        "BTC-USDT"
+      ],
+      "max_notional_quote": 0.0,
+      "compose_profiles": [
+        "test"
+      ],
+      "failure_isolation": "paper-only checks; no live credentials required"
+    },
+    "bot4": {
+      "role": "connector_validation",
+      "mode": "testnet_probe",
+      "enabled": true,
+      "portfolio_action_enabled": true,
+      "exchange": "binance_perpetual_testnet",
+      "allowed_symbols": [
+        "BTC-USDT"
+      ],
+      "max_notional_quote": 0.0,
+      "compose_profiles": [
+        "test"
+      ],
+      "failure_isolation": "validation-only; no production capital allocation"
+    }
+  },
+  "gating_contract": {
+    "promotion_gate_check": "scripts/release/check_multi_bot_policy.py",
+    "required_on_promotion": true,
+    "risk_scope_source": "config/portfolio_limits_v1.json:bot_action_scope",
+    "account_mode_source": "config/exchange_account_map.json",
+    "reconciliation_source": "config/reconciliation_thresholds.json"
+  }
+}

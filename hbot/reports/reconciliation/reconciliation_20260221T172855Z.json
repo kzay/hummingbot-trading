@@ -1,0 +1,54 @@
+{
+  "ts_utc": "2026-02-21T17:28:55.888795+00:00",
+  "checked_bots": 5,
+  "status": "warning",
+  "critical_count": 0,
+  "warning_count": 5,
+  "findings": [
+    {
+      "severity": "warning",
+      "check": "inventory",
+      "message": "inventory_drift_warning",
+      "bot": "bot1",
+      "details": {
+        "drift": 0.380451425054654
+      }
+    },
+    {
+      "severity": "warning",
+      "check": "inventory",
+      "message": "inventory_drift_warning",
+      "bot": "bot2",
+      "details": {
+        "drift": 0.3705203186313687
+      }
+    },
+    {
+      "severity": "warning",
+      "check": "inventory",
+      "message": "inventory_drift_warning",
+      "bot": "bot3",
+      "details": {
+        "drift": 0.37190139891998786
+      }
+    },
+    {
+      "severity": "warning",
+      "check": "inventory",
+      "message": "inventory_drift_warning",
+      "bot": "bot4",
+      "details": {
+        "drift": 0.3802150758322494
+      }
+    },
+    {
+      "severity": "warning",
+      "check": "inventory",
+      "message": "inventory_drift_warning",
+      "bot": "bot4",
+      "details": {
+        "drift": 0.38032880633047966
+      }
+    }
+  ]
+}

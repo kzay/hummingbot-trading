@@ -1,4 +1,4 @@
-﻿# ============================================
+# ============================================
 # Prometheus Configuration
 # ============================================
 
@@ -63,3 +63,11 @@ scrape_configs:
       - targets: ["bot-metrics-exporter:9400"]
         labels:
           instance: "bot-metrics-exporter"
+
+  # Control-plane metrics exporter (gate health + freshness)
+  - job_name: "control-plane-metrics"
+    scrape_interval: 15s
+    static_configs:
+      - targets: ["control-plane-metrics-exporter:9401"]
+        labels:
+          instance: "control-plane-metrics-exporter"

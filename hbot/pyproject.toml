@@ -1,0 +1,84 @@
+[project]
+name = "hbot-desk"
+version = "0.1.0"
+description = "Semi-pro crypto trading desk automation built on Hummingbot"
+requires-python = ">=3.11"
+dependencies = [
+    "redis>=7.2",
+    "pydantic>=2.12",
+    "joblib>=1.5",
+    "scikit-learn>=1.8",
+    "requests>=2.32",
+    "boto3>=1.42",
+    "ccxt>=4.5",
+    "psycopg[binary]>=3.2",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=8.4",
+    "pytest-cov>=7.0",
+    "hypothesis>=6.100",
+    "mypy>=1.11",
+    "ruff>=0.5",
+]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+python_files = ["test_*.py"]
+python_classes = ["Test*"]
+python_functions = ["test_*"]
+addopts = "--tb=short -q"
+
+[tool.mypy]
+python_version = "3.11"
+warn_return_any = true
+warn_unused_configs = true
+disallow_untyped_defs = false
+check_untyped_defs = true
+
+[[tool.mypy.overrides]]
+module = "controllers.*"
+disallow_untyped_defs = true
+warn_unreachable = true
+
+[[tool.mypy.overrides]]
+module = "services.contracts.*"
+disallow_untyped_defs = true
+
+[[tool.mypy.overrides]]
+module = "hummingbot.*"
+ignore_missing_imports = true
+
+[tool.ruff]
+target-version = "py311"
+line-length = 120
+fix = true
+
+[tool.ruff.lint]
+select = [
+    "E",     # pycodestyle errors
+    "W",     # pycodestyle warnings
+    "F",     # pyflakes
+    "I",     # isort
+    "UP",    # pyupgrade
+    "B",     # flake8-bugbear
+    "SIM",   # flake8-simplify
+    "RUF",   # ruff-specific
+]
+ignore = [
+    "E501",  # line too long (handled by formatter)
+    "B008",  # do not perform function calls in argument defaults (pydantic Field)
+    "SIM108", # use ternary operator (reduces readability for complex conditions)
+]
+
+[tool.ruff.lint.isort]
+known-first-party = ["controllers", "services", "scripts"]
+
+[tool.coverage.run]
+source = ["controllers", "services"]
+omit = ["*/tests/*", "scripts/*"]
+
+[tool.coverage.report]
+show_missing = true
+fail_under = 50

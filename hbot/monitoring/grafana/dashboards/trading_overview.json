@@ -1,5 +1,5 @@
 {
-  "annotations": {"list": []},
+  "annotations": { "list": [] },
   "editable": true,
   "fiscalYearStartMonth": 0,
   "graphTooltip": 1,
@@ -8,73 +8,111 @@
   "liveNow": false,
   "panels": [
     {
-      "title": "Bot State",
+      "title": "Aggregate Equity (Quote)",
       "type": "stat",
-      "gridPos": {"h": 8, "w": 8, "x": 0, "y": 0},
-      "datasource": {"type": "prometheus", "uid": "prometheus"},
-      "targets": [{"expr": "sum by (bot, state) (hbot_bot_state)", "legendFormat": "{{bot}} {{state}}"}]
+      "gridPos": { "h": 6, "w": 6, "x": 0, "y": 0 },
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "targets": [{ "expr": "sum(hbot_bot_equity_quote)", "refId": "A" }],
+      "fieldConfig": { "defaults": { "unit": "currencyUSD" }, "overrides": [] }
     },
     {
-      "title": "Net Edge % by Bot",
+      "title": "Aggregate Daily PnL",
+      "type": "stat",
+      "gridPos": { "h": 6, "w": 6, "x": 6, "y": 0 },
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "targets": [{ "expr": "sum(hbot_bot_daily_pnl_quote)", "refId": "A" }],
+      "fieldConfig": { "defaults": { "unit": "currencyUSD" }, "overrides": [] }
+    },
+    {
+      "title": "Max Drawdown %",
+      "type": "stat",
+      "gridPos": { "h": 6, "w": 6, "x": 12, "y": 0 },
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "targets": [{ "expr": "max(hbot_bot_drawdown_pct) * 100", "refId": "A" }],
+      "fieldConfig": { "defaults": { "unit": "percent" }, "overrides": [] }
+    },
+    {
+      "title": "Rolling 1h Mean Daily PnL",
+      "type": "stat",
+      "gridPos": { "h": 6, "w": 6, "x": 18, "y": 0 },
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "targets": [{ "expr": "avg(avg_over_time(hbot_bot_daily_pnl_quote[1h]))", "refId": "A" }],
+      "fieldConfig": { "defaults": { "unit": "currencyUSD" }, "overrides": [] }
+    },
+    {
+      "title": "Equity Curve by Bot",
       "type": "timeseries",
-      "gridPos": {"h": 8, "w": 8, "x": 8, "y": 0},
-      "datasource": {"type": "prometheus", "uid": "prometheus"},
-      "targets": [{"expr": "hbot_bot_net_edge_pct * 100", "legendFormat": "{{bot}}"}],
-      "fieldConfig": {"defaults": {"unit": "percent"}, "overrides": []}
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 6 },
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "targets": [{ "expr": "hbot_bot_equity_quote", "legendFormat": "{{bot}}" }],
+      "fieldConfig": { "defaults": { "unit": "currencyUSD" }, "overrides": [] }
     },
     {
-      "title": "Daily PnL Quote",
+      "title": "Drawdown Curve by Bot",
       "type": "timeseries",
-      "gridPos": {"h": 8, "w": 8, "x": 16, "y": 0},
-      "datasource": {"type": "prometheus", "uid": "prometheus"},
-      "targets": [{"expr": "hbot_bot_daily_pnl_quote", "legendFormat": "{{bot}}"}],
-      "fieldConfig": {"defaults": {"unit": "currencyUSD"}, "overrides": []}
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 6 },
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "targets": [{ "expr": "hbot_bot_drawdown_pct * 100", "legendFormat": "{{bot}}" }],
+      "fieldConfig": { "defaults": { "unit": "percent" }, "overrides": [] }
     },
     {
-      "title": "Orders Active",
+      "title": "Daily PnL Distribution (Current by Bot)",
+      "type": "bargauge",
+      "gridPos": { "h": 8, "w": 8, "x": 0, "y": 14 },
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "targets": [{ "expr": "hbot_bot_daily_pnl_quote", "legendFormat": "{{bot}}", "instant": true }],
+      "fieldConfig": { "defaults": { "unit": "currencyUSD" }, "overrides": [] }
+    },
+    {
+      "title": "Daily Loss % by Bot",
       "type": "timeseries",
-      "gridPos": {"h": 8, "w": 8, "x": 0, "y": 8},
-      "datasource": {"type": "prometheus", "uid": "prometheus"},
-      "targets": [{"expr": "hbot_bot_orders_active", "legendFormat": "{{bot}}"}]
+      "gridPos": { "h": 8, "w": 8, "x": 8, "y": 14 },
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "targets": [{ "expr": "hbot_bot_daily_loss_pct * 100", "legendFormat": "{{bot}}" }],
+      "fieldConfig": { "defaults": { "unit": "percent" }, "overrides": [] }
     },
     {
-      "title": "Turnover Today (x)",
+      "title": "Cancel Rate / Min by Bot",
       "type": "timeseries",
-      "gridPos": {"h": 8, "w": 8, "x": 8, "y": 8},
-      "datasource": {"type": "prometheus", "uid": "prometheus"},
-      "targets": [{"expr": "hbot_bot_turnover_today_x", "legendFormat": "{{bot}}"}]
+      "gridPos": { "h": 8, "w": 8, "x": 16, "y": 14 },
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "targets": [{ "expr": "hbot_bot_cancel_per_min", "legendFormat": "{{bot}}" }]
     },
     {
-      "title": "Fee Source",
+      "title": "Base vs Target Allocation",
+      "type": "timeseries",
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 22 },
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "targets": [
+        { "expr": "hbot_bot_base_pct", "legendFormat": "{{bot}} base" },
+        { "expr": "hbot_bot_target_base_pct", "legendFormat": "{{bot}} target" }
+      ],
+      "fieldConfig": { "defaults": { "unit": "percentunit" }, "overrides": [] }
+    },
+    {
+      "title": "Risk Reasons Info",
       "type": "table",
-      "gridPos": {"h": 8, "w": 8, "x": 16, "y": 8},
-      "datasource": {"type": "prometheus", "uid": "prometheus"},
-      "targets": [{"expr": "hbot_bot_fee_source_info", "format": "table", "instant": true}]
-    },
-    {
-      "title": "Recent Error Lines",
-      "type": "timeseries",
-      "gridPos": {"h": 8, "w": 12, "x": 0, "y": 16},
-      "datasource": {"type": "prometheus", "uid": "prometheus"},
-      "targets": [{"expr": "hbot_bot_recent_error_lines", "legendFormat": "{{bot}}"}]
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 22 },
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "targets": [{ "expr": "hbot_bot_risk_reasons_info", "format": "table", "instant": true }]
     },
     {
       "title": "Bot Errors (Loki)",
       "type": "logs",
-      "gridPos": {"h": 8, "w": 12, "x": 12, "y": 16},
-      "datasource": {"type": "loki", "uid": "loki"},
-      "targets": [{"expr": "{job=\"bot_logs\"} |= \"ERROR\""}]
+      "gridPos": { "h": 8, "w": 24, "x": 0, "y": 30 },
+      "datasource": { "type": "loki", "uid": "loki" },
+      "targets": [{ "expr": "{job=\"bot_logs\"} |= \"ERROR\"" }]
     }
   ],
   "refresh": "30s",
   "schemaVersion": 39,
   "style": "dark",
-  "tags": ["hummingbot", "trading"],
-  "templating": {"list": []},
-  "time": {"from": "now-6h", "to": "now"},
+  "tags": ["hummingbot", "trading", "performance"],
+  "templating": { "list": [] },
+  "time": { "from": "now-12h", "to": "now" },
   "timepicker": {},
   "timezone": "utc",
   "title": "Hummingbot Trading Desk Overview",
   "uid": "hbot-trading-overview",
-  "version": 1
+  "version": 2
 }

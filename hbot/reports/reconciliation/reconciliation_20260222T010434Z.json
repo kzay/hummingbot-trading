@@ -1,0 +1,23 @@
+{
+  "ts_utc": "2026-02-22T01:04:34.587712+00:00",
+  "checked_bots": 3,
+  "status": "warning",
+  "critical_count": 0,
+  "warning_count": 1,
+  "exchange_source_enabled": false,
+  "exchange_snapshot_path": "F:\\Environement\\git-repo\\hummingbot_custo\\hbot\\reports\\exchange_snapshots\\latest.json",
+  "thresholds_path": "F:\\Environement\\git-repo\\hummingbot_custo\\hbot\\config\\reconciliation_thresholds.json",
+  "findings": [
+    {
+      "severity": "warning",
+      "check": "inventory",
+      "message": "inventory_drift_warning",
+      "bot": "bot4",
+      "details": {
+        "drift": 0.5297686426532421,
+        "warn_threshold": 0.4,
+        "critical_threshold": 0.55
+      }
+    }
+  ]
+}

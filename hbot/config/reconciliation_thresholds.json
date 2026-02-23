@@ -1,0 +1,35 @@
+{
+  "version": 1,
+  "defaults": {
+    "enabled": true,
+    "inventory_check_enabled": true,
+    "exchange_check_enabled": true,
+    "fill_parity_check_enabled": true,
+    "accounting_check_enabled": true,
+    "inventory_warn": 0.25,
+    "inventory_critical": 0.45,
+    "exchange_drift_warn": 0.10,
+    "exchange_drift_critical": 0.20,
+    "fee_drop_warn": 0.05,
+    "fee_drop_critical": 0.20,
+    "turnover_fee_gap_warn": 0.05
+  },
+  "bots": {
+    "bot1": {
+      "inventory_warn": 0.40,
+      "inventory_critical": 0.55
+    },
+    "bot2": {
+      "enabled": false
+    },
+    "bot3": {
+      "exchange_check_enabled": false,
+      "inventory_warn": 0.45,
+      "inventory_critical": 0.65
+    },
+    "bot4": {
+      "inventory_warn": 0.40,
+      "inventory_critical": 0.55
+    }
+  }
+}

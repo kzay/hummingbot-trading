@@ -1,0 +1,10 @@
+{
+  "ts_utc": "2026-02-22T00:20:57.130642+00:00",
+  "run_count": 1,
+  "last_status": "FAIL",
+  "last_rc": 2,
+  "last_failures": [
+    "day2_event_store_gate"
+  ],
+  "strict_cycle_latest_path": "F:\\Environement\\git-repo\\hummingbot_custo\\hbot\\reports\\promotion_gates\\strict_cycle_latest.json"
+}

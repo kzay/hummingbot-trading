@@ -1,0 +1,63 @@
+{
+  "version": 1,
+  "default_mode": "dry_run",
+  "rules": [
+    {
+      "name": "event_store",
+      "glob": "reports/event_store/*",
+      "keep_days": 14
+    },
+    {
+      "name": "reconciliation",
+      "glob": "reports/reconciliation/*",
+      "keep_days": 30
+    },
+    {
+      "name": "parity",
+      "glob": "reports/parity/**/*",
+      "keep_days": 30
+    },
+    {
+      "name": "portfolio_risk",
+      "glob": "reports/portfolio_risk/*",
+      "keep_days": 30
+    },
+    {
+      "name": "promotion_gates",
+      "glob": "reports/promotion_gates/*",
+      "keep_days": 60
+    },
+    {
+      "name": "replay_regression",
+      "glob": "reports/replay_regression/**/*",
+      "keep_days": 60
+    },
+    {
+      "name": "readiness",
+      "glob": "reports/readiness/*",
+      "keep_days": 90
+    },
+    {
+      "name": "soak",
+      "glob": "reports/soak/*",
+      "keep_days": 30
+    },
+    {
+      "name": "dev_checks",
+      "glob": "reports/dev_checks/*",
+      "keep_days": 14
+    }
+  ],
+  "protect_latest": [
+    "reports/promotion_gates/latest.json",
+    "reports/replay_regression/latest.json",
+    "reports/replay_regression/latest.md",
+    "reports/reconciliation/latest.json",
+    "reports/parity/latest.json",
+    "reports/portfolio_risk/latest.json",
+    "reports/readiness/final_decision_latest.json",
+    "reports/soak/latest.json",
+    "reports/dev_checks/latest.json",
+    "reports/event_store/day2_gate_eval_latest.json"
+  ]
+}

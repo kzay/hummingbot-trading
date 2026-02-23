@@ -3,6 +3,9 @@
 ## Purpose
 Document environment variables, credential handling, and secret hygiene.
 
+Related runbook:
+- `docs/ops/secrets_and_key_rotation.md`
+
 ## Scope
 All runtime services using `env/.env` and encrypted connector configs.
 

@@ -1,0 +1,94 @@
+{
+  "ts_utc": "2026-02-22T00:52:19.650920+00:00",
+  "status": "FAIL",
+  "critical_failures": [
+    "day2_event_store_gate"
+  ],
+  "checks": [
+    {
+      "name": "preflight_checks",
+      "severity": "critical",
+      "pass": true,
+      "reason": "required files present",
+      "evidence_paths": [
+        "F:\\Environement\\git-repo\\hummingbot_custo\\hbot\\config\\reconciliation_thresholds.json",
+        "F:\\Environement\\git-repo\\hummingbot_custo\\hbot\\config\\parity_thresholds.json",
+        "F:\\Environement\\git-repo\\hummingbot_custo\\hbot\\config\\portfolio_limits_v1.json",
+        "F:\\Environement\\git-repo\\hummingbot_custo\\hbot\\scripts\\release\\run_backtest_regression.py",
+        "F:\\Environement\\git-repo\\hummingbot_custo\\hbot\\docs\\validation\\backtest_regression_spec.md"
+      ]
+    },
+    {
+      "name": "smoke_checks",
+      "severity": "critical",
+      "pass": true,
+      "reason": "bot4 smoke activity artifacts found",
+      "evidence_paths": [
+        "F:\\Environement\\git-repo\\hummingbot_custo\\hbot\\data\\bot4\\logs\\epp_v24\\bot4_a\\minute.csv",
+        "F:\\Environement\\git-repo\\hummingbot_custo\\hbot\\data\\bot4\\logs\\epp_v24\\bot4_d\\minute.csv"
+      ]
+    },
+    {
+      "name": "paper_smoke_matrix",
+      "severity": "critical",
+      "pass": true,
+      "reason": "bot3 paper-mode intent verified",
+      "evidence_paths": [
+        "F:\\Environement\\git-repo\\hummingbot_custo\\hbot\\reports\\exchange_snapshots\\latest.json"
+      ]
+    },
+    {
+      "name": "regression_backtest_harness",
+      "severity": "critical",
+      "pass": true,
+      "reason": "regression harness PASS",
+      "evidence_paths": [
+        "F:\\Environement\\git-repo\\hummingbot_custo\\hbot\\reports\\backtest_regression\\latest.json",
+        "F:\\Environement\\git-repo\\hummingbot_custo\\hbot\\scripts\\release\\run_backtest_regression.py"
+      ]
+    },
+    {
+      "name": "reconciliation_status",
+      "severity": "critical",
+      "pass": true,
+      "reason": "reconciliation healthy and fresh",
+      "evidence_paths": [
+        "F:\\Environement\\git-repo\\hummingbot_custo\\hbot\\reports\\reconciliation\\latest.json"
+      ]
+    },
+    {
+      "name": "parity_thresholds",
+      "severity": "critical",
+      "pass": true,
+      "reason": "parity pass and fresh",
+      "evidence_paths": [
+        "F:\\Environement\\git-repo\\hummingbot_custo\\hbot\\reports\\parity\\latest.json"
+      ]
+    },
+    {
+      "name": "alerting_health",
+      "severity": "critical",
+      "pass": true,
+      "reason": "alert webhook evidence is present/recent",
+      "evidence_paths": [
+        "F:\\Environement\\git-repo\\hummingbot_custo\\hbot\\reports\\reconciliation\\last_webhook_sent.json"
+      ]
+    },
+    {
+      "name": "day2_event_store_gate",
+      "severity": "critical",
+      "pass": false,
+      "reason": "day2 gate not yet GO",
+      "evidence_paths": [
+        "F:\\Environement\\git-repo\\hummingbot_custo\\hbot\\reports\\event_store\\day2_gate_eval_latest.json"
+      ]
+    }
+  ],
+  "notes": {
+    "regression_runner_output": "",
+    "require_day2_go": true,
+    "refresh_parity_once": true,
+    "parity_refresh_rc": 0,
+    "parity_refresh_output": ""
+  }
+}

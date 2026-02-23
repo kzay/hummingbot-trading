@@ -1,0 +1,52 @@
+{
+  "ts_utc": "2026-02-21T19:24:31.186864+00:00",
+  "baseline_file": "/workspace/hbot/reports/event_store/baseline_counts.json",
+  "stored_total_events": 8884,
+  "stored_events_by_stream": {
+    "hb.audit.v1": 1,
+    "hb.market_data.v1": 2202,
+    "hb.risk_decision.v1": 2205,
+    "hb.signal.v1": 2137,
+    "hb.execution_intent.v1": 2339
+  },
+  "source_events_by_stream": {
+    "hb.market_data.v1": 3593,
+    "hb.signal.v1": 3506,
+    "hb.ml_signal.v1": 0,
+    "hb.risk_decision.v1": 3486,
+    "hb.execution_intent.v1": 3399,
+    "hb.audit.v1": 1
+  },
+  "delta_source_minus_stored_by_stream_abs": {
+    "hb.market_data.v1": 1391,
+    "hb.signal.v1": 1369,
+    "hb.ml_signal.v1": 0,
+    "hb.risk_decision.v1": 1281,
+    "hb.execution_intent.v1": 1060,
+    "hb.audit.v1": 0
+  },
+  "produced_since_baseline_by_stream": {
+    "hb.market_data.v1": 2114,
+    "hb.signal.v1": 2114,
+    "hb.ml_signal.v1": 0,
+    "hb.risk_decision.v1": 2114,
+    "hb.execution_intent.v1": 2114,
+    "hb.audit.v1": 0
+  },
+  "ingested_since_baseline_by_stream": {
+    "hb.market_data.v1": 2114,
+    "hb.signal.v1": 2114,
+    "hb.ml_signal.v1": 0,
+    "hb.risk_decision.v1": 2114,
+    "hb.execution_intent.v1": 2114,
+    "hb.audit.v1": 0
+  },
+  "delta_produced_minus_ingested_since_baseline": {
+    "hb.market_data.v1": 0,
+    "hb.signal.v1": 0,
+    "hb.ml_signal.v1": 0,
+    "hb.risk_decision.v1": 0,
+    "hb.execution_intent.v1": 0,
+    "hb.audit.v1": 0
+  }
+}

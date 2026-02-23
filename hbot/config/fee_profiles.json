@@ -6,9 +6,25 @@
         "maker": "0.0010",
         "taker": "0.0010"
       },
+      "bitget_paper_trade": {
+        "maker": "0.0010",
+        "taker": "0.0010"
+      },
       "bitget_perpetual": {
         "maker": "0.0002",
         "taker": "0.0006"
+      },
+      "binance": {
+        "maker": "0.0010",
+        "taker": "0.0010"
+      },
+      "binance_perpetual_testnet": {
+        "maker": "0.0002",
+        "taker": "0.0004"
+      },
+      "binance_perpetual": {
+        "maker": "0.0002",
+        "taker": "0.0004"
       }
     }
   }

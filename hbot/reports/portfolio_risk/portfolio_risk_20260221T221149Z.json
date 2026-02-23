@@ -1,0 +1,74 @@
+{
+  "ts_utc": "2026-02-21T22:11:49.046298+00:00",
+  "status": "critical",
+  "critical_count": 1,
+  "warning_count": 0,
+  "portfolio_action": "kill_switch",
+  "limits_path": "/workspace/hbot/config/portfolio_limits_v1.json",
+  "publish_actions_enabled": true,
+  "synthetic_breach": false,
+  "metrics": {
+    "portfolio_daily_loss_pct": 2.9879859621242916e-06,
+    "abs_net_exposure_quote": 106655.661,
+    "max_equity_share_pct": 0.4684201216543133,
+    "total_equity_quote": 166655.66100000002
+  },
+  "bots": {
+    "bot1": {
+      "equity_quote": 5678.905,
+      "base_pct": 0.11954857494534597,
+      "daily_loss_pct": 7.817797427134694e-05,
+      "drawdown_pct": 0.00011206890556218314,
+      "directional_exposure_quote": -4321.094999999999,
+      "base_exposure_abs_quote": 678.905
+    },
+    "bot2": {
+      "equity_quote": 77232.195,
+      "base_pct": 0.8705203186313687,
+      "daily_loss_pct": 0.0,
+      "drawdown_pct": 0.0,
+      "directional_exposure_quote": 57232.19500000001,
+      "base_exposure_abs_quote": 67232.195
+    },
+    "bot3": {
+      "equity_quote": 78064.865,
+      "base_pct": 0.8719013989199879,
+      "daily_loss_pct": 0.0,
+      "drawdown_pct": 2.9077536917423702e-05,
+      "directional_exposure_quote": 58064.865,
+      "base_exposure_abs_quote": 68064.865
+    },
+    "bot4": {
+      "equity_quote": 5679.696,
+      "base_pct": 0.11967119366952034,
+      "daily_loss_pct": 9.507460715700515e-06,
+      "drawdown_pct": 1.100398899002484e-05,
+      "directional_exposure_quote": -4320.304,
+      "base_exposure_abs_quote": 679.696
+    }
+  },
+  "findings": [
+    {
+      "severity": "critical",
+      "check": "cross_bot_net_exposure_cap",
+      "message": "cross_bot_net_exposure_breach",
+      "details": {
+        "abs_net_exposure_quote": 106655.661,
+        "cap_quote": 25000.0,
+        "warn_level_quote": 20000.0
+      }
+    }
+  ],
+  "actions": [
+    {
+      "bot": "bot1",
+      "action": "kill_switch",
+      "event_id": "c9854d61-b05b-4391-b0b0-7495098f6d50"
+    },
+    {
+      "bot": "bot4",
+      "action": "kill_switch",
+      "event_id": "c8ee61b3-d4c7-4df8-aaaf-f3616eba3e5c"
+    }
+  ]
+}

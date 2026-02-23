@@ -1,0 +1,11 @@
+script_file_name: v2_with_controllers.py
+
+markets:
+  binance_perpetual_testnet:
+    - BTC-USDT
+candles_config: ""
+controllers_config:
+  - epp_v2_4_bot4_binance_manual_fee.yml
+
+max_global_drawdown_quote: null
+max_controller_drawdown_quote: null

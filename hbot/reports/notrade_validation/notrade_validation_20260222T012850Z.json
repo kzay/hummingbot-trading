@@ -1,0 +1,15 @@
+{
+  "ts_utc": "2026-02-22T01:28:50.246260+00:00",
+  "status": "fail",
+  "minute_csv": "data\\bot1\\logs\\epp_v24\\bot1_a\\minute.csv",
+  "sample_count": 127,
+  "expected_exchange": "bitget_paper_trade",
+  "fills_increase": 0.0,
+  "max_orders_active": 8.0,
+  "checks": {
+    "min_samples": true,
+    "exchange_match": false,
+    "fills_not_increasing": true,
+    "orders_active_zero": false
+  }
+}

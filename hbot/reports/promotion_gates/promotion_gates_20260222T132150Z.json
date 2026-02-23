@@ -1,0 +1,398 @@
+{
+  "ts_utc": "2026-02-22T13:21:50.993994+00:00",
+  "status": "FAIL",
+  "critical_failures": [
+    "unit_service_integration_tests",
+    "day2_event_store_gate"
+  ],
+  "checks": [
+    {
+      "name": "preflight_checks",
+      "severity": "critical",
+      "pass": true,
+      "reason": "required files present",
+      "evidence_paths": [
+        "F:\\Environement\\git-repo\\hummingbot_custo\\hbot\\config\\reconciliation_thresholds.json",
+        "F:\\Environement\\git-repo\\hummingbot_custo\\hbot\\config\\parity_thresholds.json",
+        "F:\\Environement\\git-repo\\hummingbot_custo\\hbot\\config\\portfolio_limits_v1.json",
+        "F:\\Environement\\git-repo\\hummingbot_custo\\hbot\\config\\multi_bot_policy_v1.json",
+        "F:\\Environement\\git-repo\\hummingbot_custo\\hbot\\scripts\\release\\run_backtest_regression.py",
+        "F:\\Environement\\git-repo\\hummingbot_custo\\hbot\\scripts\\release\\run_replay_regression_cycle.py",
+        "F:\\Environement\\git-repo\\hummingbot_custo\\hbot\\scripts\\release\\check_multi_bot_policy.py",
+        "F:\\Environement\\git-repo\\hummingbot_custo\\hbot\\scripts\\release\\check_strategy_catalog_consistency.py",
+        "F:\\Environement\\git-repo\\hummingbot_custo\\hbot\\scripts\\release\\check_coordination_policy.py",
+        "F:\\Environement\\git-repo\\hummingbot_custo\\hbot\\scripts\\release\\run_tests.py",
+        "F:\\Environement\\git-repo\\hummingbot_custo\\hbot\\scripts\\release\\run_secrets_hygiene_check.py",
+        "F:\\Environement\\git-repo\\hummingbot_custo\\hbot\\scripts\\utils\\refresh_event_store_integrity_local.py",
+        "F:\\Environement\\git-repo\\hummingbot_custo\\hbot\\config\\coordination_policy_v1.json",
+        "F:\\Environement\\git-repo\\hummingbot_custo\\hbot\\docs\\validation\\backtest_regression_spec.md"
+      ]
+    },
+    {
+      "name": "multi_bot_policy_scope",
+      "severity": "critical",
+      "pass": true,
+      "reason": "multi-bot policy scope is consistent across risk/reconciliation/account-map",
+      "evidence_paths": [
+        "F:\\Environement\\git-repo\\hummingbot_custo\\hbot\\reports\\policy\\latest.json",
+        "F:\\Environement\\git-repo\\hummingbot_custo\\hbot\\config\\multi_bot_policy_v1.json"
+      ]
+    },
+    {
+      "name": "strategy_catalog_consistency",
+      "severity": "critical",
+      "pass": true,
+      "reason": "strategy catalog configs resolve to shared code and declared bundles",
+      "evidence_paths": [
+        "F:\\Environement\\git-repo\\hummingbot_custo\\hbot\\reports\\strategy_catalog\\latest.json",
+        "F:\\Environement\\git-repo\\hummingbot_custo\\hbot\\config\\strategy_catalog\\catalog_v1.json"
+      ]
+    },
+    {
+      "name": "coordination_policy_scope",
+      "severity": "critical",
+      "pass": true,
+      "reason": "coordination service runs only in policy-permitted scope/mode",
+      "evidence_paths": [
+        "F:\\Environement\\git-repo\\hummingbot_custo\\hbot\\reports\\policy\\coordination_policy_latest.json",
+        "F:\\Environement\\git-repo\\hummingbot_custo\\hbot\\config\\coordination_policy_v1.json"
+      ]
+    },
+    {
+      "name": "unit_service_integration_tests",
+      "severity": "critical",
+      "pass": false,
+      "reason": "deterministic tests failed (rc=2)",
+      "evidence_paths": [
+        "F:\\Environement\\git-repo\\hummingbot_custo\\hbot\\reports\\tests\\latest.json",
+        "F:\\Environement\\git-repo\\hummingbot_custo\\hbot\\reports\\tests\\latest.md"
+      ]
+    },
+    {
+      "name": "secrets_hygiene",
+      "severity": "critical",
+      "pass": true,
+      "reason": "no secret leakage markers in docs/reports/log artifacts",
+      "evidence_paths": [
+        "F:\\Environement\\git-repo\\hummingbot_custo\\hbot\\reports\\security\\latest.json",
+        "F:\\Environement\\git-repo\\hummingbot_custo\\hbot\\scripts\\release\\run_secrets_hygiene_check.py"
+      ]
+    },
+    {
+      "name": "smoke_checks",
+      "severity": "critical",
+      "pass": true,
+      "reason": "bot4 smoke activity artifacts found",
+      "evidence_paths": [
+        "F:\\Environement\\git-repo\\hummingbot_custo\\hbot\\data\\bot4\\logs\\epp_v24\\bot4_a\\minute.csv",
+        "F:\\Environement\\git-repo\\hummingbot_custo\\hbot\\data\\bot4\\logs\\epp_v24\\bot4_d\\minute.csv"
+      ]
+    },
+    {
+      "name": "paper_smoke_matrix",
+      "severity": "critical",
+      "pass": true,
+      "reason": "bot3 paper-mode intent verified",
+      "evidence_paths": [
+        "F:\\Environement\\git-repo\\hummingbot_custo\\hbot\\reports\\exchange_snapshots\\latest.json"
+      ]
+    },
+    {
+      "name": "replay_regression_cycle",
+      "severity": "critical",
+      "pass": true,
+      "reason": "replay regression cycle PASS",
+      "evidence_paths": [
+        "F:\\Environement\\git-repo\\hummingbot_custo\\hbot\\reports\\replay_regression\\latest.json",
+        "F:\\Environement\\git-repo\\hummingbot_custo\\hbot\\scripts\\release\\run_replay_regression_cycle.py"
+      ]
+    },
+    {
+      "name": "regression_backtest_harness",
+      "severity": "critical",
+      "pass": true,
+      "reason": "regression harness PASS",
+      "evidence_paths": [
+        "F:\\Environement\\git-repo\\hummingbot_custo\\hbot\\reports\\backtest_regression\\latest.json",
+        "F:\\Environement\\git-repo\\hummingbot_custo\\hbot\\scripts\\release\\run_backtest_regression.py"
+      ]
+    },
+    {
+      "name": "reconciliation_status",
+      "severity": "critical",
+      "pass": true,
+      "reason": "reconciliation healthy and fresh",
+      "evidence_paths": [
+        "F:\\Environement\\git-repo\\hummingbot_custo\\hbot\\reports\\reconciliation\\latest.json"
+      ]
+    },
+    {
+      "name": "parity_thresholds",
+      "severity": "critical",
+      "pass": true,
+      "reason": "parity pass and fresh",
+      "evidence_paths": [
+        "F:\\Environement\\git-repo\\hummingbot_custo\\hbot\\reports\\parity\\latest.json"
+      ]
+    },
+    {
+      "name": "portfolio_risk_status",
+      "severity": "critical",
+      "pass": true,
+      "reason": "portfolio risk healthy and fresh",
+      "evidence_paths": [
+        "F:\\Environement\\git-repo\\hummingbot_custo\\hbot\\reports\\portfolio_risk\\latest.json"
+      ]
+    },
+    {
+      "name": "alerting_health",
+      "severity": "critical",
+      "pass": true,
+      "reason": "alert webhook evidence is present/recent",
+      "evidence_paths": [
+        "F:\\Environement\\git-repo\\hummingbot_custo\\hbot\\reports\\reconciliation\\last_webhook_sent.json"
+      ]
+    },
+    {
+      "name": "event_store_integrity_freshness",
+      "severity": "critical",
+      "pass": true,
+      "reason": "event store integrity fresh with zero missing correlations",
+      "evidence_paths": [
+        "F:\\Environement\\git-repo\\hummingbot_custo\\hbot\\reports\\event_store\\integrity_20260222.json"
+      ]
+    },
+    {
+      "name": "day2_event_store_gate",
+      "severity": "critical",
+      "pass": false,
+      "reason": "day2 gate not yet GO",
+      "evidence_paths": [
+        "F:\\Environement\\git-repo\\hummingbot_custo\\hbot\\reports\\event_store\\day2_gate_eval_latest.json"
+      ]
+    }
+  ],
+  "release_manifest_ref": {
+    "path": "F:\\Environement\\git-repo\\hummingbot_custo\\hbot\\docs\\ops\\release_manifest_20260221.md",
+    "exists": true,
+    "sha256": "da3131b9342c7d55630a88c306060a30fb88047b1a1c683c3d20a48d03d1e7e8",
+    "size_bytes": 2864
+  },
+  "evidence_bundle": {
+    "evidence_bundle_id": "f9486f7404cddd1150c85733219b7f837f83ed041936463a329075d38e4fb310",
+    "artifact_count": 32,
+    "artifacts": [
+      {
+        "path": "F:\\Environement\\git-repo\\hummingbot_custo\\hbot\\config\\coordination_policy_v1.json",
+        "exists": true,
+        "sha256": "2ebb09ec616e921ce0d7f9ae1e978f7216984939c0244488f15b63089caf2815",
+        "size_bytes": 625
+      },
+      {
+        "path": "F:\\Environement\\git-repo\\hummingbot_custo\\hbot\\config\\multi_bot_policy_v1.json",
+        "exists": true,
+        "sha256": "eddded58c3923cbf14686e297084686d49b74ab0766565adbaeaf1270add35dd",
+        "size_bytes": 2054
+      },
+      {
+        "path": "F:\\Environement\\git-repo\\hummingbot_custo\\hbot\\config\\parity_thresholds.json",
+        "exists": true,
+        "sha256": "71cb2b0dbf461ba1b88191308b4daaadf2433740aaace9cf8197c9185d7c8224",
+        "size_bytes": 1091
+      },
+      {
+        "path": "F:\\Environement\\git-repo\\hummingbot_custo\\hbot\\config\\portfolio_limits_v1.json",
+        "exists": true,
+        "sha256": "e03aacc170d2a0dec6236846a3614d55316f3a1ee107f660e102f76f546dad03",
+        "size_bytes": 373
+      },
+      {
+        "path": "F:\\Environement\\git-repo\\hummingbot_custo\\hbot\\config\\reconciliation_thresholds.json",
+        "exists": true,
+        "sha256": "5ea94828eb8c5736c66a50d5c3331a87d9a4c14363d680813638dfa1be9519cc",
+        "size_bytes": 784
+      },
+      {
+        "path": "F:\\Environement\\git-repo\\hummingbot_custo\\hbot\\config\\strategy_catalog\\catalog_v1.json",
+        "exists": true,
+        "sha256": "2fbce9b3ede5a35e442824f982098e834d34950606521959e007e7f038ef5380",
+        "size_bytes": 2833
+      },
+      {
+        "path": "F:\\Environement\\git-repo\\hummingbot_custo\\hbot\\data\\bot4\\logs\\epp_v24\\bot4_a\\minute.csv",
+        "exists": true,
+        "sha256": "bd3e782ec0234a416337966ae43daab4536ddf08ac7b03aa8ce3234d2b77dda9",
+        "size_bytes": 240244
+      },
+      {
+        "path": "F:\\Environement\\git-repo\\hummingbot_custo\\hbot\\data\\bot4\\logs\\epp_v24\\bot4_d\\minute.csv",
+        "exists": true,
+        "sha256": "a9be7cdb628f2647c364dfcabb9f0fdff4780721d9dbeced6f5a4b4e793d0dbc",
+        "size_bytes": 1944
+      },
+      {
+        "path": "F:\\Environement\\git-repo\\hummingbot_custo\\hbot\\docs\\validation\\backtest_regression_spec.md",
+        "exists": true,
+        "sha256": "7fa32faa3844b80a566d3243a69b26ada9be74f8d66776a4fbd045e1b881acd9",
+        "size_bytes": 5518
+      },
+      {
+        "path": "F:\\Environement\\git-repo\\hummingbot_custo\\hbot\\reports\\backtest_regression\\latest.json",
+        "exists": true,
+        "sha256": "5d4dc1852f3bf3ececec21d9cfca4a6d6f42c9fccceaec5e4e0030ed66b0183c",
+        "size_bytes": 2142
+      },
+      {
+        "path": "F:\\Environement\\git-repo\\hummingbot_custo\\hbot\\reports\\event_store\\day2_gate_eval_latest.json",
+        "exists": true,
+        "sha256": "bcf931915d23f498cc2052ffe0bb9c2b68c8ff1aa8da941a71131f6092a2c57d",
+        "size_bytes": 753
+      },
+      {
+        "path": "F:\\Environement\\git-repo\\hummingbot_custo\\hbot\\reports\\event_store\\integrity_20260222.json",
+        "exists": true,
+        "sha256": "f543b6df85bb1a3ef15749a60b036bb1ea60144730f99afe5960fdb50c5e4f99",
+        "size_bytes": 234
+      },
+      {
+        "path": "F:\\Environement\\git-repo\\hummingbot_custo\\hbot\\reports\\exchange_snapshots\\latest.json",
+        "exists": true,
+        "sha256": "414cab6d8d4c2f0dfdbff9be780ee7461678d81588e2bd081162dca54db8b50b",
+        "size_bytes": 1283
+      },
+      {
+        "path": "F:\\Environement\\git-repo\\hummingbot_custo\\hbot\\reports\\parity\\latest.json",
+        "exists": true,
+        "sha256": "bb6bb60f3ef9e9eb3226e1900dd3b00140967c719165d7ed27b591cdb3b23acd",
+        "size_bytes": 2973
+      },
+      {
+        "path": "F:\\Environement\\git-repo\\hummingbot_custo\\hbot\\reports\\policy\\coordination_policy_latest.json",
+        "exists": true,
+        "sha256": "d34d75938b62259afc1fdcf19e722086e7cb1e04010c0f099e08173d0e93d3e9",
+        "size_bytes": 494
+      },
+      {
+        "path": "F:\\Environement\\git-repo\\hummingbot_custo\\hbot\\reports\\policy\\latest.json",
+        "exists": true,
+        "sha256": "aaa3e9e336481e5e6aaf06d2ebb60a5c66e654583fa5cd0838167523ba64308d",
+        "size_bytes": 897
+      },
+      {
+        "path": "F:\\Environement\\git-repo\\hummingbot_custo\\hbot\\reports\\portfolio_risk\\latest.json",
+        "exists": true,
+        "sha256": "e9e547ec62d0f363b4dca93a530ca073c0f978b9f83f39839868ad6d8135050f",
+        "size_bytes": 1725
+      },
+      {
+        "path": "F:\\Environement\\git-repo\\hummingbot_custo\\hbot\\reports\\reconciliation\\last_webhook_sent.json",
+        "exists": true,
+        "sha256": "6071d8307c61a3e11d8838f6e633a0ca55a7aa2d6771205108da93487ca7c88d",
+        "size_bytes": 125
+      },
+      {
+        "path": "F:\\Environement\\git-repo\\hummingbot_custo\\hbot\\reports\\reconciliation\\latest.json",
+        "exists": true,
+        "sha256": "d0899f8f3f93362843e873f849c67ea5a20e262d1c0a9d6e48422c72260c1a41",
+        "size_bytes": 2420
+      },
+      {
+        "path": "F:\\Environement\\git-repo\\hummingbot_custo\\hbot\\reports\\replay_regression\\latest.json",
+        "exists": true,
+        "sha256": "e976d3c1fbe6197859fcae63c37f8a4cf5b393872e03faa6b50ddae3e054a510",
+        "size_bytes": 6587
+      },
+      {
+        "path": "F:\\Environement\\git-repo\\hummingbot_custo\\hbot\\reports\\security\\latest.json",
+        "exists": true,
+        "sha256": "0e6ac6ffd14e5b433b9e31f59fe4ebcdb06abf3df72a2badfcde015ea911f404",
+        "size_bytes": 166
+      },
+      {
+        "path": "F:\\Environement\\git-repo\\hummingbot_custo\\hbot\\reports\\strategy_catalog\\latest.json",
+        "exists": true,
+        "sha256": "1f57962f73645334c24ee0a908bce491842b0ad1668d30bf2338487876c9d95b",
+        "size_bytes": 801
+      },
+      {
+        "path": "F:\\Environement\\git-repo\\hummingbot_custo\\hbot\\reports\\tests\\latest.json",
+        "exists": true,
+        "sha256": "979799b39602e3e9b3ca9a5aeaf1c3e9a165a016bc1b87cd73962f6726d52b94",
+        "size_bytes": 924
+      },
+      {
+        "path": "F:\\Environement\\git-repo\\hummingbot_custo\\hbot\\reports\\tests\\latest.md",
+        "exists": true,
+        "sha256": "bf815ebbe21daadac89284b1f12b68fd02f67867fecaf34dc24e0cf29f487c50",
+        "size_bytes": 555
+      },
+      {
+        "path": "F:\\Environement\\git-repo\\hummingbot_custo\\hbot\\scripts\\release\\check_coordination_policy.py",
+        "exists": true,
+        "sha256": "3c11873a867b47073a4d2cba8b6b41db2b85271389d50418f31be1131aae4f3e",
+        "size_bytes": 5068
+      },
+      {
+        "path": "F:\\Environement\\git-repo\\hummingbot_custo\\hbot\\scripts\\release\\check_multi_bot_policy.py",
+        "exists": true,
+        "sha256": "9c7b50f6ae693884964a9cc6234e38b670561e7a10399c04b459e8d651243ddc",
+        "size_bytes": 6442
+      },
+      {
+        "path": "F:\\Environement\\git-repo\\hummingbot_custo\\hbot\\scripts\\release\\check_strategy_catalog_consistency.py",
+        "exists": true,
+        "sha256": "b3efe7873369592ff0b5747406683765e547f9ce1bb888e66b226c998f1c0d2e",
+        "size_bytes": 6163
+      },
+      {
+        "path": "F:\\Environement\\git-repo\\hummingbot_custo\\hbot\\scripts\\release\\run_backtest_regression.py",
+        "exists": true,
+        "sha256": "b81418c240c277eebd1a685c103a77936d890ec8d763bc0d7412b0c86ca5ea64",
+        "size_bytes": 8740
+      },
+      {
+        "path": "F:\\Environement\\git-repo\\hummingbot_custo\\hbot\\scripts\\release\\run_replay_regression_cycle.py",
+        "exists": true,
+        "sha256": "c20f4bceef356a572433a936500007247e8a5d74fab6a18727ada4c28244d1cd",
+        "size_bytes": 15053
+      },
+      {
+        "path": "F:\\Environement\\git-repo\\hummingbot_custo\\hbot\\scripts\\release\\run_secrets_hygiene_check.py",
+        "exists": true,
+        "sha256": "ee612b9c38833b576330d88597dacc8b6bbeb02e8d357ff97d8e384a207e2e9c",
+        "size_bytes": 5158
+      },
+      {
+        "path": "F:\\Environement\\git-repo\\hummingbot_custo\\hbot\\scripts\\release\\run_tests.py",
+        "exists": true,
+        "sha256": "5156a5f50997aba7332de8c4349669fee9ad5c59fc5c45395c02790f258a8961",
+        "size_bytes": 7594
+      },
+      {
+        "path": "F:\\Environement\\git-repo\\hummingbot_custo\\hbot\\scripts\\utils\\refresh_event_store_integrity_local.py",
+        "exists": true,
+        "sha256": "158cf50897bea64eb3e48b29ec1ecaf205704a1a6ad06d70dde9640de33a4c36",
+        "size_bytes": 3620
+      }
+    ]
+  },
+  "notes": {
+    "regression_runner_output": "",
+    "replay_cycle_runner_output": "[replay-regression] status=pass\n[replay-regression] evidence=F:\\Environement\\git-repo\\hummingbot_custo\\hbot\\reports\\replay_regression\\replay_regression_20260222T132150Z.json",
+    "multi_bot_policy_runner_output": "[multi-bot-policy] status=pass\n[multi-bot-policy] evidence=F:\\Environement\\git-repo\\hummingbot_custo\\hbot\\reports\\policy\\multi_bot_policy_check_20260222T132146Z.json",
+    "strategy_catalog_runner_output": "[strategy-catalog] status=pass\n[strategy-catalog] evidence=F:\\Environement\\git-repo\\hummingbot_custo\\hbot\\reports\\strategy_catalog\\strategy_catalog_check_20260222T132146Z.json",
+    "coordination_policy_runner_output": "[coord-policy] status=pass\n[coord-policy] evidence=F:\\Environement\\git-repo\\hummingbot_custo\\hbot\\reports\\policy\\coordination_policy_check_20260222T132146Z.json",
+    "tests_runner_output": "[run-tests] status=fail\n[run-tests] rc=1\n[run-tests] evidence=F:\\Environement\\git-repo\\hummingbot_custo\\hbot\\reports\\tests\\test_run_20260222T132147Z.json",
+    "secrets_hygiene_runner_output": "[secrets-hygiene] status=pass\n[secrets-hygiene] scanned_files=2265\n[secrets-hygiene] finding_count=0\n[secrets-hygiene] evidence=F:\\Environement\\git-repo\\hummingbot_custo\\hbot\\reports\\security\\secrets_hygiene_20260222T132149Z.json",
+    "require_day2_go": true,
+    "refresh_parity_once": true,
+    "refresh_event_integrity_once": true,
+    "skip_replay_cycle": false,
+    "ci_mode": true,
+    "max_report_age_min": 15.0,
+    "parity_refresh_rc": 0,
+    "parity_refresh_output": "",
+    "integrity_refresh_rc": 0,
+    "integrity_refresh_output": "[integrity-local] recomputed from events_20260222.jsonl\n[integrity-local] total_events=1014\n[integrity-local] missing_correlation_count=0\n[integrity-local] evidence=F:\\Environement\\git-repo\\hummingbot_custo\\hbot\\reports\\event_store\\integrity_20260222.json"
+  }
+}

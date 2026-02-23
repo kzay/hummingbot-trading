@@ -1,0 +1,11 @@
+{
+  "ts_utc": "2026-02-21T22:05:22.090468+00:00",
+  "redis_host": "redis",
+  "scan_count": 800,
+  "intent_stream_len": 13162,
+  "audit_stream_len": 1,
+  "portfolio_risk_intent_count": 0,
+  "portfolio_risk_audit_count": 0,
+  "portfolio_risk_intents": [],
+  "portfolio_risk_audits": []
+}

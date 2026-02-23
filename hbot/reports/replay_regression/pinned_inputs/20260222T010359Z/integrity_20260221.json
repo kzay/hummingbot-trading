@@ -1,0 +1,12 @@
+{
+  "total_events": 87723,
+  "events_by_stream": {
+    "hb.audit.v1": 3,
+    "hb.market_data.v1": 22317,
+    "hb.risk_decision.v1": 21778,
+    "hb.signal.v1": 21711,
+    "hb.execution_intent.v1": 21914
+  },
+  "missing_correlation_count": 0,
+  "last_update_utc": "2026-02-22T01:03:57.748151+00:00"
+}

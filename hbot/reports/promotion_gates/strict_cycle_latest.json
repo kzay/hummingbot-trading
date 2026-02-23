@@ -1,0 +1,10 @@
+{
+  "ts_utc": "2026-02-22T17:32:31.718093+00:00",
+  "strict_gate_rc": 2,
+  "strict_gate_status": "FAIL",
+  "critical_failures": [
+    "day2_event_store_gate"
+  ],
+  "gate_latest_path": "F:\\Environement\\git-repo\\hummingbot_custo\\hbot\\reports\\promotion_gates\\latest.json",
+  "stdout": "[promotion-gates] status=FAIL\n[promotion-gates] critical_failures=day2_event_store_gate\n[promotion-gates] evidence=F:\\Environement\\git-repo\\hummingbot_custo\\hbot\\reports\\promotion_gates\\promotion_gates_20260222T173231Z.json\n"
+}

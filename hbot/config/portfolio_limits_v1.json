@@ -1,0 +1,21 @@
+{
+  "version": 2,
+  "global_daily_loss_cap_pct": 0.03,
+  "cross_bot_net_exposure_cap_quote": 25000.0,
+  "concentration_cap_pct": 0.70,
+  "concentration_min_equity_quote": 100.0,
+  "warn_buffer_ratio": 0.80,
+  "portfolio_kill_switch_on_global_breach": true,
+  "bot_action_scope": [
+    "bot1",
+    "bot4"
+  ],
+  "bot_overrides": {
+    "bot2": {
+      "enabled": false
+    },
+    "bot3": {
+      "enabled": false
+    }
+  }
+}

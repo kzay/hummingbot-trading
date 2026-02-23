@@ -1,0 +1,49 @@
+name: Day37 Formal CI Pipeline
+
+on:
+  workflow_dispatch:
+  push:
+    paths:
+      - "hbot/**"
+      - ".github/workflows/day37_formal_ci_pipeline.yml"
+  pull_request:
+    paths:
+      - "hbot/**"
+      - ".github/workflows/day37_formal_ci_pipeline.yml"
+
+jobs:
+  desk-ci:
+    runs-on: [self-hosted]
+    defaults:
+      run:
+        shell: pwsh
+        working-directory: hbot
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install CI dependencies
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install -r compose/images/control_plane/requirements-control-plane.txt
+
+      - name: Run formal CI pipeline
+        run: |
+          python scripts/release/run_ci_pipeline.py --tests-runtime host --cov-fail-under 5 --min-events 1000
+
+      - name: Upload CI evidence artifacts
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: day37-ci-evidence
+          path: |
+            hbot/reports/ci_pipeline/
+            hbot/reports/tests/
+            hbot/reports/replay_regression/
+            hbot/reports/promotion_gates/
+          if-no-files-found: warn

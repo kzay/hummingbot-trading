@@ -1,0 +1,27 @@
+{
+  "ts_utc": "2026-02-21T17:16:00.891838+00:00",
+  "stored_total_events": 136,
+  "stored_events_by_stream": {
+    "hb.audit.v1": 1,
+    "hb.market_data.v1": 22,
+    "hb.risk_decision.v1": 34,
+    "hb.signal.v1": 15,
+    "hb.execution_intent.v1": 64
+  },
+  "source_events_by_stream": {
+    "hb.market_data.v1": 469,
+    "hb.signal.v1": 446,
+    "hb.ml_signal.v1": 0,
+    "hb.risk_decision.v1": 431,
+    "hb.execution_intent.v1": 397,
+    "hb.audit.v1": 1
+  },
+  "delta_source_minus_stored_by_stream": {
+    "hb.market_data.v1": 447,
+    "hb.signal.v1": 431,
+    "hb.ml_signal.v1": 0,
+    "hb.risk_decision.v1": 397,
+    "hb.execution_intent.v1": 333,
+    "hb.audit.v1": 0
+  }
+}

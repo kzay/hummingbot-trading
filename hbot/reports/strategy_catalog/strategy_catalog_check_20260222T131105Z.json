@@ -1,0 +1,19 @@
+{
+  "ts_utc": "2026-02-22T13:11:05.055792+00:00",
+  "status": "pass",
+  "errors": [],
+  "details": {
+    "catalog_path": "F:\\Environement\\git-repo\\hummingbot_custo\\hbot\\config\\strategy_catalog\\catalog_v1.json",
+    "templates": [
+      "F:\\Environement\\git-repo\\hummingbot_custo\\hbot\\config\\strategy_catalog\\templates\\controller_template.yml",
+      "F:\\Environement\\git-repo\\hummingbot_custo\\hbot\\config\\strategy_catalog\\templates\\script_template.yml"
+    ],
+    "controllers_root": "F:\\Environement\\git-repo\\hummingbot_custo\\hbot\\controllers",
+    "checked_bundles": [
+      "epp_v2_4_bitget_live_microcap_bot1",
+      "epp_v2_4_bitget_live_notrade_bot1",
+      "epp_v2_4_bitget_paper_smoke_bot3",
+      "epp_v2_4_binance_testnet_smoke_bot4"
+    ]
+  }
+}

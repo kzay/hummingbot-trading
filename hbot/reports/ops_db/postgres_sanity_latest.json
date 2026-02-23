@@ -1,0 +1,7 @@
+{
+  "ts_utc": "2026-02-22T03:03:43.207151+00:00",
+  "status": "pass",
+  "check": "postgres_sanity_query",
+  "query": "select now() as ts_utc;",
+  "notes": "Executed via docker compose exec on hbot-postgres."
+}

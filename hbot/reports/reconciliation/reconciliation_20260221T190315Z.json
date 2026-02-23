@@ -1,0 +1,67 @@
+{
+  "ts_utc": "2026-02-21T19:03:15.211901+00:00",
+  "checked_bots": 5,
+  "status": "warning",
+  "critical_count": 0,
+  "warning_count": 5,
+  "exchange_source_enabled": true,
+  "exchange_snapshot_path": "/workspace/hbot/reports/exchange_snapshots/latest.json",
+  "thresholds_path": "/workspace/hbot/config/reconciliation_thresholds.json",
+  "findings": [
+    {
+      "severity": "warning",
+      "check": "inventory",
+      "message": "inventory_drift_warning",
+      "bot": "bot1",
+      "details": {
+        "drift": 0.380451425054654,
+        "warn_threshold": 0.3,
+        "critical_threshold": 0.5
+      }
+    },
+    {
+      "severity": "warning",
+      "check": "inventory",
+      "message": "inventory_drift_warning",
+      "bot": "bot2",
+      "details": {
+        "drift": 0.3705203186313687,
+        "warn_threshold": 0.3,
+        "critical_threshold": 0.5
+      }
+    },
+    {
+      "severity": "warning",
+      "check": "inventory",
+      "message": "inventory_drift_warning",
+      "bot": "bot3",
+      "details": {
+        "drift": 0.37190139891998786,
+        "warn_threshold": 0.3,
+        "critical_threshold": 0.5
+      }
+    },
+    {
+      "severity": "warning",
+      "check": "inventory",
+      "message": "inventory_drift_warning",
+      "bot": "bot4",
+      "details": {
+        "drift": 0.37986026023673924,
+        "warn_threshold": 0.3,
+        "critical_threshold": 0.5
+      }
+    },
+    {
+      "severity": "warning",
+      "check": "inventory",
+      "message": "inventory_drift_warning",
+      "bot": "bot4",
+      "details": {
+        "drift": 0.38032880633047966,
+        "warn_threshold": 0.3,
+        "critical_threshold": 0.5
+      }
+    }
+  ]
+}

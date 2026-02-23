@@ -20,17 +20,20 @@ route:
 
 receivers:
   - name: "default"
-    webhook_configs: []
+    webhook_configs:
+      - url: "http://alert-webhook-sink:19093/alert"
+        send_resolved: true
 
   - name: "critical"
-    webhook_configs: []
-    # Uncomment and configure for Slack:
-    # slack_configs:
-    #   - api_url: "https://hooks.slack.com/services/YOUR/WEBHOOK/URL"
-    #     channel: "#trading-alerts"
-    #     title: "{{ .GroupLabels.alertname }}"
-    #     text: "{{ range .Alerts }}{{ .Annotations.description }}\n{{ end }}"
-    #     send_resolved: true
+    webhook_configs:
+      - url: "http://alert-webhook-sink:19093/alert"
+        send_resolved: true
+    slack_configs:
+      - api_url: "${SLACK_WEBHOOK_URL}"
+        channel: "${SLACK_ALERT_CHANNEL:-#trading-alerts}"
+        title: "{{ .GroupLabels.alertname }} [{{ .GroupLabels.severity }}]"
+        text: "{{ range .Alerts }}{{ .Annotations.description }}\n{{ end }}"
+        send_resolved: true
 
 inhibit_rules:
   - source_match:

@@ -1,0 +1,79 @@
+{
+  "ts_utc": "2026-02-22T16:18:22.538435+00:00",
+  "status": "pass",
+  "repeat": 2,
+  "windows_requested": [
+    500,
+    1000,
+    2000
+  ],
+  "failed_windows": [],
+  "windows": [
+    {
+      "min_events": 500,
+      "rc": 0,
+      "status": "pass",
+      "deterministic_repeat_pass": true,
+      "blockers": [],
+      "signature_baseline": {
+        "regression_status": "pass",
+        "regression_fingerprint": "3fd269d368d691b4a1a651950016c05a13adbccce5ad11d8560cef6547352b6f",
+        "regression_event_count": 1014,
+        "reconciliation_status": "warning",
+        "reconciliation_critical_count": 0,
+        "reconciliation_warning_count": 2,
+        "parity_status": "pass",
+        "parity_failed_bots": 0,
+        "portfolio_status": "ok",
+        "portfolio_critical_count": 0,
+        "portfolio_action": "allow"
+      },
+      "report_path": "F:\\Environement\\git-repo\\hummingbot_custo\\hbot\\reports\\replay_regression\\latest.json",
+      "runner_output_tail": "[replay-regression] status=pass\n[replay-regression] evidence=F:\\Environement\\git-repo\\hummingbot_custo\\hbot\\reports\\replay_regression\\replay_regression_20260222T161818Z.json\n"
+    },
+    {
+      "min_events": 1000,
+      "rc": 0,
+      "status": "pass",
+      "deterministic_repeat_pass": true,
+      "blockers": [],
+      "signature_baseline": {
+        "regression_status": "pass",
+        "regression_fingerprint": "3fd269d368d691b4a1a651950016c05a13adbccce5ad11d8560cef6547352b6f",
+        "regression_event_count": 1014,
+        "reconciliation_status": "warning",
+        "reconciliation_critical_count": 0,
+        "reconciliation_warning_count": 2,
+        "parity_status": "pass",
+        "parity_failed_bots": 0,
+        "portfolio_status": "ok",
+        "portfolio_critical_count": 0,
+        "portfolio_action": "allow"
+      },
+      "report_path": "F:\\Environement\\git-repo\\hummingbot_custo\\hbot\\reports\\replay_regression\\latest.json",
+      "runner_output_tail": "[replay-regression] status=pass\n[replay-regression] evidence=F:\\Environement\\git-repo\\hummingbot_custo\\hbot\\reports\\replay_regression\\replay_regression_20260222T161819Z.json\n"
+    },
+    {
+      "min_events": 2000,
+      "rc": 0,
+      "status": "pass",
+      "deterministic_repeat_pass": true,
+      "blockers": [],
+      "signature_baseline": {
+        "regression_status": "pass",
+        "regression_fingerprint": "f1c9fe78d84f8e8e22bcaccff936a1dcf0fc441fafdab52c3f708ddb53186285",
+        "regression_event_count": 87885,
+        "reconciliation_status": "warning",
+        "reconciliation_critical_count": 0,
+        "reconciliation_warning_count": 2,
+        "parity_status": "pass",
+        "parity_failed_bots": 0,
+        "portfolio_status": "ok",
+        "portfolio_critical_count": 0,
+        "portfolio_action": "allow"
+      },
+      "report_path": "F:\\Environement\\git-repo\\hummingbot_custo\\hbot\\reports\\replay_regression\\latest.json",
+      "runner_output_tail": "[replay-regression] status=pass\n[replay-regression] evidence=F:\\Environement\\git-repo\\hummingbot_custo\\hbot\\reports\\replay_regression\\replay_regression_20260222T161822Z.json\n"
+    }
+  ]
+}

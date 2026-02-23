@@ -1,0 +1,19 @@
+{
+  "ts_utc": "2026-02-22T01:41:47.109488+00:00",
+  "status": "pass",
+  "minute_csv": "data\\bot1\\logs\\epp_v24\\bot1_a\\minute.csv",
+  "total_rows_read": 128,
+  "rows_filtered_out": 127,
+  "sample_count": 1,
+  "expected_exchange": "bitget_perpetual",
+  "exchange_filter": "bitget_perpetual",
+  "since_minutes": 180,
+  "fills_increase": 0.0,
+  "max_orders_active": 0.0,
+  "checks": {
+    "min_samples": true,
+    "exchange_match": true,
+    "fills_not_increasing": true,
+    "orders_active_zero": true
+  }
+}

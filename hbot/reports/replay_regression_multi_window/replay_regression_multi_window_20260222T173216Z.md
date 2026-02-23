@@ -1,0 +1,14 @@
+# Replay Regression Multi-Window Summary
+
+- ts_utc: 2026-02-22T17:32:16.702563+00:00
+- status: pass
+- repeat: 2
+- windows_total: 3
+
+## Windows
+- min_events=500 status=pass rc=0 deterministic_repeat_pass=True
+- min_events=1000 status=pass rc=0 deterministic_repeat_pass=True
+- min_events=2000 status=pass rc=0 deterministic_repeat_pass=True
+
+## Artifacts
+- reports/replay_regression_multi_window/latest.json

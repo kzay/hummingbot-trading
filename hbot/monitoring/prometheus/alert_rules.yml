@@ -1,4 +1,4 @@
-﻿# ============================================
+# ============================================
 # Prometheus Alert Rules
 # ============================================
 
@@ -189,3 +189,181 @@ groups:
         annotations:
           summary: "Bot {{ $labels.bot }} shows high error density"
           description: "Recent log tail has more than 20 ERROR lines for {{ $labels.bot }}."
+
+  # ---- Control Plane Alerts ----
+  - name: control_plane
+    rules:
+
+      - alert: ControlPlaneReportMissing
+        expr: |
+          hbot_control_plane_report_present{report=~"reconciliation|parity|portfolio_risk|coordination|coordination_policy|promotion_gate|day2_gate|event_store_integrity|soak"} == 0
+        for: 2m
+        labels:
+          severity: critical
+        annotations:
+          summary: "Control-plane report missing: {{ $labels.report }}"
+          description: "Required control-plane report {{ $labels.report }} is missing."
+
+      - alert: ControlPlaneReportStale
+        expr: |
+          hbot_control_plane_report_fresh{report=~"reconciliation|parity|portfolio_risk|coordination|coordination_policy|promotion_gate|day2_gate|event_store_integrity|soak"} == 0
+        for: 5m
+        labels:
+          severity: critical
+        annotations:
+          summary: "Control-plane report stale: {{ $labels.report }}"
+          description: "Control-plane report {{ $labels.report }} is outside freshness budget."
+
+      - alert: CoordinationPolicyGateFailed
+        expr: |
+          hbot_control_plane_gate_status{gate="coordination_policy_scope",source="promotion_latest"} == 0
+        for: 5m
+        labels:
+          severity: critical
+        annotations:
+          summary: "Coordination policy gate is failing"
+          description: "Promotion check coordination_policy_scope is FAIL."
+
+      - alert: CoordinationRuntimeNotHealthy
+        expr: |
+          hbot_control_plane_gate_status{gate="coordination_runtime_ok"} == 0
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Coordination runtime health is not OK"
+          description: "Coordination latest report is unhealthy or missing expected status."
+
+      - alert: PromotionGateFailed
+        expr: |
+          hbot_control_plane_gate_status{gate="promotion_latest"} == 0
+        for: 3m
+        labels:
+          severity: critical
+        annotations:
+          summary: "Promotion gate is failing"
+          description: "Latest promotion gate status is FAIL."
+
+      - alert: StrictCycleFailed
+        expr: |
+          hbot_control_plane_gate_status{gate="strict_cycle"} == 0
+        for: 10m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Strict cycle not passing"
+          description: "Strict cycle remains FAIL; verify day2 gate and soak blockers."
+
+      - alert: Day2GateNotGo
+        expr: |
+          hbot_control_plane_gate_status{gate="day2_go"} == 0
+        for: 30m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Day2 event-store gate not GO"
+          description: "Day2 gate remains not GO, blocking strict readiness progression."
+
+  # ---- Execution & Risk Alerts (Day 78) ----
+  - name: execution_risk
+    rules:
+
+      - alert: TickDurationHigh
+        expr: |
+          hbot_bot_tick_duration_seconds > 0.1
+        for: 5m
+        labels:
+          severity: critical
+        annotations:
+          summary: "Tick duration high on {{ $labels.bot }}"
+          description: "Bot {{ $labels.bot }} tick duration exceeds 100ms for 5 minutes. Current: {{ $value }}s"
+
+      - alert: PositionDriftHigh
+        expr: |
+          hbot_bot_position_drift_pct > 0.05
+        for: 5m
+        labels:
+          severity: critical
+        annotations:
+          summary: "Position drift high on {{ $labels.bot }}"
+          description: "Local vs exchange position divergence >5% on {{ $labels.bot }}. Drift: {{ $value }}"
+
+      - alert: MarginRatioLow
+        expr: |
+          hbot_bot_margin_ratio < 0.15 and hbot_bot_margin_ratio > 0
+        for: 2m
+        labels:
+          severity: critical
+        annotations:
+          summary: "Margin ratio low on {{ $labels.bot }}"
+          description: "Margin ratio {{ $value }} approaching liquidation on {{ $labels.bot }}."
+
+      - alert: OrderBookStale
+        expr: |
+          hbot_bot_order_book_stale == 1
+        for: 2m
+        labels:
+          severity: critical
+        annotations:
+          summary: "Order book stale on {{ $labels.bot }}"
+          description: "Order book unchanged for >30s — WS feed may be disconnected."
+
+      - alert: WsReconnectSpike
+        expr: |
+          increase(hbot_bot_ws_reconnect_total[30m]) > 5
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "WS reconnect spike on {{ $labels.bot }}"
+          description: "Bot {{ $labels.bot }} reconnected {{ $value }} times in 30 minutes."
+
+      - alert: FundingRateHigh
+        expr: |
+          abs(hbot_bot_funding_rate) > 0.0003
+        for: 1h
+        labels:
+          severity: warning
+        annotations:
+          summary: "Funding rate high on {{ $labels.bot }}"
+          description: "Funding rate {{ $value }} may exceed spread edge on {{ $labels.bot }}."
+
+      - alert: RealizedPnlNegative
+        expr: |
+          hbot_bot_realized_pnl_today_quote < -20
+        for: 10m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Realized PnL negative on {{ $labels.bot }}"
+          description: "Bot {{ $labels.bot }} realized PnL is {{ $value }} quote today."
+
+      - alert: IndicatorComputeSlow
+        expr: |
+          hbot_bot_tick_indicator_seconds > 0.05
+        for: 10m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Indicator compute slow on {{ $labels.bot }}"
+          description: "Indicator computation taking {{ $value }}s per tick on {{ $labels.bot }}."
+
+      - alert: ConnectorIOSlow
+        expr: |
+          hbot_bot_tick_connector_io_seconds > 0.05
+        for: 10m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Connector I/O slow on {{ $labels.bot }}"
+          description: "Connector I/O taking {{ $value }}s per tick on {{ $labels.bot }}."
+
+      - alert: DailyStateStale
+        expr: |
+          hbot_bot_snapshot_age_seconds > 300
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Bot snapshot stale on {{ $labels.bot }}"
+          description: "No minute.csv update for >5 minutes on {{ $labels.bot }}."

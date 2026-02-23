@@ -3,8 +3,8 @@ id: epp_v2_4_bot_a
 controller_name: epp_v2_4
 controller_type: market_making
 
-# Paper: use bitget_paper_trade.  Live: change to bitget.
-connector_name: bitget_paper_trade
+# Testnet: binance_perpetual_testnet.  Live: binance_perpetual.
+connector_name: binance_perpetual_testnet
 trading_pair: BTC-USDT
 
 total_amount_quote: 50

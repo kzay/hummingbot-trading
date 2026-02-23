@@ -1,0 +1,89 @@
+{
+  "version": 1,
+  "catalog_id": "strategy_catalog_v1",
+  "naming_contract": {
+    "controller_pattern": "<strategy>_<version>_<bot>_<venue>_<mode>.yml",
+    "script_pattern": "v2_<strategy>_<version>_<bot>_<venue>_<mode>.yml",
+    "allowed_modes": [
+      "live_microcap",
+      "live_notrade",
+      "paper_smoke",
+      "paper_notrade",
+      "testnet_smoke",
+      "testnet_notrade"
+    ]
+  },
+  "defaults": {
+    "entry_script": "v2_with_controllers.py",
+    "controller_code_root": "controllers",
+    "config_templates_root": "config/strategy_catalog/templates"
+  },
+  "risk_envelopes": {
+    "live_microcap": {
+      "max_notional_quote": 100.0,
+      "allow_order_placement": true
+    },
+    "live_notrade": {
+      "max_notional_quote": 0.0,
+      "allow_order_placement": false
+    },
+    "paper_smoke": {
+      "max_notional_quote": 0.0,
+      "allow_order_placement": true
+    },
+    "paper_notrade": {
+      "max_notional_quote": 0.0,
+      "allow_order_placement": false
+    },
+    "testnet_smoke": {
+      "max_notional_quote": 0.0,
+      "allow_order_placement": true
+    },
+    "testnet_notrade": {
+      "max_notional_quote": 0.0,
+      "allow_order_placement": false
+    }
+  },
+  "approved_bundles": [
+    {
+      "bundle_id": "epp_v2_4_bitget_live_microcap_bot1",
+      "strategy": "epp",
+      "version": "v2_4",
+      "bot": "bot1",
+      "venue": "bitget",
+      "mode": "live_microcap",
+      "controller_config": "data/bot1/conf/controllers/epp_v2_4_bot1_bitget_live_microcap.yml",
+      "script_config": "data/bot1/conf/scripts/v2_epp_v2_4_bot1_bitget_live_microcap.yml"
+    },
+    {
+      "bundle_id": "epp_v2_4_bitget_live_notrade_bot1",
+      "strategy": "epp",
+      "version": "v2_4",
+      "bot": "bot1",
+      "venue": "bitget",
+      "mode": "live_notrade",
+      "controller_config": "data/bot1/conf/controllers/epp_v2_4_bot1_bitget_live_notrade.yml",
+      "script_config": "data/bot1/conf/scripts/v2_epp_v2_4_bot1_bitget_live_notrade.yml"
+    },
+    {
+      "bundle_id": "epp_v2_4_bitget_paper_smoke_bot3",
+      "strategy": "epp",
+      "version": "v2_4",
+      "bot": "bot3",
+      "venue": "bitget",
+      "mode": "paper_smoke",
+      "controller_config": "data/bot3/conf/controllers/epp_v2_4_bot3_paper_smoke.yml",
+      "script_config": "data/bot3/conf/scripts/v2_epp_v2_4_bot3_paper_smoke.yml"
+    },
+    {
+      "bundle_id": "epp_v2_4_binance_testnet_smoke_bot4",
+      "strategy": "epp",
+      "version": "v2_4",
+      "bot": "bot4",
+      "venue": "binance_testnet",
+      "mode": "testnet_smoke",
+      "controller_config": "data/bot4/conf/controllers/epp_v2_4_bot4_binance_smoke.yml",
+      "script_config": "data/bot4/conf/scripts/v2_epp_v2_4_bot4_binance_smoke.yml"
+    }
+  ]
+}

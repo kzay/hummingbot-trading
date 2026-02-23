@@ -1,0 +1,24 @@
+{
+  "version": 1,
+  "policy_id": "coordination_policy_v1",
+  "enabled_default": false,
+  "require_ml_enabled": true,
+  "allowed_instances": [
+    "bot1"
+  ],
+  "target_base_pct": {
+    "neutral": 0.5,
+    "confidence_step": 0.2,
+    "min": 0.25,
+    "max": 0.75
+  },
+  "actions": {
+    "approved_no_model_version": "resume",
+    "approved_with_model_version": "set_target_base_pct",
+    "rejected": "soft_pause"
+  },
+  "conflict_contract": {
+    "ops_guard_precedence": "ops_guard and portfolio_risk actions override coordination intents at consumer/controller side",
+    "intent_ttl_ms": 60000
+  }
+}

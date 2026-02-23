@@ -1,0 +1,26 @@
+{
+  "version": 1,
+  "policy_id": "ml_governance_policy_v1",
+  "enabled_default": false,
+  "require_report_when_enabled": true,
+  "report_max_age_min": 60,
+  "baseline": {
+    "strategy_id": "inventory_rebalance_rules_v1",
+    "model_id": "rules_only",
+    "model_version": "v1",
+    "min_observations": 200
+  },
+  "promotion_thresholds": {
+    "min_sharpe_delta": 0.05,
+    "min_pnl_bps_delta": 5.0
+  },
+  "drift_limits": {
+    "max_feature_psi": 0.2,
+    "max_confidence_drop": 0.15
+  },
+  "retirement_criteria": {
+    "max_consecutive_underperformance_days": 5,
+    "max_critical_incidents_7d": 1,
+    "fail_action": "disable_ml"
+  }
+}

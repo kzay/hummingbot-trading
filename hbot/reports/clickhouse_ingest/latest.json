@@ -1,0 +1,15 @@
+{
+  "ts_utc": "2026-02-22T14:09:24.976762+00:00",
+  "status": "pass",
+  "dry_run": true,
+  "clickhouse": {
+    "host": "clickhouse",
+    "port": 8123,
+    "database": "hbot_events",
+    "table": "event_store_raw_v1"
+  },
+  "files_seen": 2,
+  "files_with_new_rows": 2,
+  "rows_inserted": 88899,
+  "errors": []
+}

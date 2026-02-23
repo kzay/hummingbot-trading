@@ -1,0 +1,56 @@
+{
+  "ts_utc": "2026-02-22T00:46:05.365342+00:00",
+  "status": "ok",
+  "critical_count": 0,
+  "warning_count": 0,
+  "portfolio_action": "allow",
+  "limits_path": "/workspace/hbot/config/portfolio_limits_v1.json",
+  "publish_actions_enabled": true,
+  "synthetic_breach": false,
+  "metrics": {
+    "portfolio_daily_loss_pct": 4.384032642545899e-05,
+    "abs_net_exposure_quote": 8641.399,
+    "max_equity_share_pct": 0.5000348194289068,
+    "total_equity_quote": 11358.600999999999
+  },
+  "risk_scope_bots": [
+    "bot1",
+    "bot4"
+  ],
+  "bots": {
+    "bot1": {
+      "equity_quote": 5678.905,
+      "base_pct": 0.11954857494534597,
+      "daily_loss_pct": 7.817797427134694e-05,
+      "drawdown_pct": 0.00011206890556218314,
+      "directional_exposure_quote": -4321.094999999999,
+      "base_exposure_abs_quote": 678.905
+    },
+    "bot2": {
+      "equity_quote": 77232.195,
+      "base_pct": 0.8705203186313687,
+      "daily_loss_pct": 0.0,
+      "drawdown_pct": 0.0,
+      "directional_exposure_quote": 57232.19500000001,
+      "base_exposure_abs_quote": 67232.195
+    },
+    "bot3": {
+      "equity_quote": 78064.865,
+      "base_pct": 0.8719013989199879,
+      "daily_loss_pct": 0.0,
+      "drawdown_pct": 2.9077536917423702e-05,
+      "directional_exposure_quote": 58064.865,
+      "base_exposure_abs_quote": 68064.865
+    },
+    "bot4": {
+      "equity_quote": 5679.696,
+      "base_pct": 0.11967119366952034,
+      "daily_loss_pct": 9.507460715700515e-06,
+      "drawdown_pct": 1.100398899002484e-05,
+      "directional_exposure_quote": -4320.304,
+      "base_exposure_abs_quote": 679.696
+    }
+  },
+  "findings": [],
+  "actions": []
+}

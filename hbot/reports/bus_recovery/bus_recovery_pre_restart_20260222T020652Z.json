@@ -1,0 +1,27 @@
+{
+  "ts_utc": "2026-02-22T02:06:52.916014+00:00",
+  "label": "pre_restart",
+  "status": "fail",
+  "checks": {
+    "count_check_exit_ok": true,
+    "day2_eval_exit_ok": true,
+    "missing_correlation_zero": true,
+    "delta_since_baseline_within_tolerance": false
+  },
+  "max_delta_observed": 22478,
+  "paths": {
+    "integrity": "F:\\Environement\\git-repo\\hummingbot_custo\\hbot\\reports\\event_store\\integrity_20260222.json",
+    "source_compare": "F:\\Environement\\git-repo\\hummingbot_custo\\hbot\\reports\\event_store\\source_compare_20260222T020652Z.json",
+    "day2_latest": "F:\\Environement\\git-repo\\hummingbot_custo\\hbot\\reports\\event_store\\day2_gate_eval_latest.json"
+  },
+  "commands": {
+    "event_store_count_check": {
+      "rc": 0,
+      "output": "F:\\Environement\\git-repo\\hummingbot_custo\\hbot\\reports\\event_store\\source_compare_20260222T020652Z.json"
+    },
+    "day2_gate_evaluator": {
+      "rc": 0,
+      "output": "F:\\Environement\\git-repo\\hummingbot_custo\\hbot\\reports\\event_store\\day2_gate_eval_latest.json"
+    }
+  }
+}

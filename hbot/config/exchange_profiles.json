@@ -1,0 +1,40 @@
+{
+  "version": 1,
+  "profiles": {
+    "binance_demo_perp": {
+      "connector_name": "binance_perpetual_testnet",
+      "market_type": "perpetual",
+      "is_demo": true,
+      "requires_paper_trade_exchange": null,
+      "notes": "Binance demo futures profile."
+    },
+    "bitget_perp_live": {
+      "connector_name": "bitget_perpetual",
+      "market_type": "perpetual",
+      "is_demo": false,
+      "requires_paper_trade_exchange": null,
+      "notes": "Bitget live perpetual profile."
+    },
+    "bitget_perp_paper": {
+      "connector_name": "bitget_paper_trade",
+      "market_type": "perpetual",
+      "is_demo": true,
+      "requires_paper_trade_exchange": "bitget_perpetual",
+      "notes": "Bitget perpetual paper profile."
+    },
+    "bitget_spot_live": {
+      "connector_name": "bitget",
+      "market_type": "spot",
+      "is_demo": false,
+      "requires_paper_trade_exchange": null,
+      "notes": "Bitget live spot profile."
+    },
+    "bitget_spot_paper": {
+      "connector_name": "bitget_paper_trade",
+      "market_type": "spot",
+      "is_demo": true,
+      "requires_paper_trade_exchange": "bitget",
+      "notes": "Bitget paper profile."
+    }
+  }
+}

@@ -14,8 +14,7 @@ from urllib.parse import urlencode
 from urllib.request import Request, urlopen
 
 
-def _d(value: Any) -> Decimal:
-    return Decimal(str(value))
+from services.common.utils import to_decimal
 
 
 @dataclass
@@ -110,8 +109,8 @@ class FeeResolver:
             if str(payload.get("code")) != "00000":
                 return None
             data = payload.get("data") or {}
-            maker = _d(data.get("makerRate"))
-            taker = _d(data.get("takerRate"))
+            maker = to_decimal(data.get("makerRate"))
+            taker = to_decimal(data.get("takerRate"))
             if maker <= 0 or taker <= 0:
                 return None
             return FeeRates(maker=maker, taker=taker, source="api:bitget:user_fee_query")
@@ -141,8 +140,8 @@ class FeeResolver:
                 row = table.get(canonical)
                 if not row:
                     continue
-                maker = _d(row.get("maker"))
-                taker = _d(row.get("taker"))
+                maker = to_decimal(row.get("maker"))
+                taker = to_decimal(row.get("taker"))
                 if maker <= 0 or taker <= 0:
                     continue
                 return FeeRates(maker=maker, taker=taker, source=f"project:{path}")
@@ -162,8 +161,8 @@ class FeeResolver:
                     maker = getattr(row, "maker_fee", None) or getattr(row, "maker_fee_rate", None)
                     taker = getattr(row, "taker_fee", None) or getattr(row, "taker_fee_rate", None)
                     if maker is not None and taker is not None:
-                        maker_d = _d(maker)
-                        taker_d = _d(taker)
+                        maker_d = to_decimal(maker)
+                        taker_d = to_decimal(taker)
                         if maker_d > 0 and taker_d > 0:
                             return FeeRates(maker=maker_d, taker=taker_d, source="connector:trading_fees")
         except Exception:
@@ -179,8 +178,8 @@ class FeeResolver:
                 taker = getattr(connector, taker_attr, None)
                 if maker is None or taker is None:
                     continue
-                maker_d = _d(maker)
-                taker_d = _d(taker)
+                maker_d = to_decimal(maker)
+                taker_d = to_decimal(taker)
                 if maker_d > 0 and taker_d > 0:
                     return FeeRates(maker=maker_d, taker=taker_d, source=f"connector:{maker_attr}")
             except Exception:

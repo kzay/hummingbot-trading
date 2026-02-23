@@ -1,0 +1,30 @@
+{
+  "ts_utc": "2026-02-22T17:28:08.156289+00:00",
+  "status": "pass",
+  "rc": 0,
+  "groups": {
+    "unit": {
+      "selected": 3
+    },
+    "service": {
+      "selected": 3
+    },
+    "integration": {
+      "selected": 2
+    }
+  },
+  "selected_tests": [
+    "tests/controllers/test_paper_engine.py",
+    "tests/services/test_event_schemas.py",
+    "tests/services/test_intent_idempotency.py",
+    "tests/services/test_ml_risk_gates.py",
+    "tests/services/test_ml_feature_builder.py",
+    "tests/services/test_ml_model_loader.py",
+    "tests/integration/test_signal_risk_flow.py",
+    "tests/integration/test_ml_signal_to_intent_flow.py"
+  ],
+  "cov_fail_under": 5.0,
+  "runtime_used": "host",
+  "fallback_reason": "",
+  "output_tail": "...................                                                      [100%]\n=============================== tests coverage ================================\n_______________ coverage: platform win32, python 3.9.13-final-0 _______________\n\nName                                          Stmts   Miss  Cover   Missing\n---------------------------------------------------------------------------\ncontrollers\\connector_runtime_adapter.py         97     97     0%   1-123\ncontrollers\\directional_trading\\__init__.py       0      0   100%\ncontrollers\\epp_logging.py                       46     46     0%   1-122\ncontrollers\\epp_v2_4.py                         715    715     0%   1-1127\ncontrollers\\fee_resolver.py                       2      2     0%   1-3\ncontrollers\\ops_guard.py                         70     70     0%   1-85\ncontrollers\\paper_engine.py                     503    197    61%   12-23, 95, 103, 107, 111-113, 117, 121-123, 126, 146, 190, 206-207, 213, 228, 236, 263, 265, 282, 291, 297, 304-305, 314-315, 323-332, 343, 348, 351-352, 358-359, 362, 364, 370, 374, 379-381, 386, 390, 403-404, 407, 413-414, 422, 425-428, 476, 484, 497-500, 515-519, 524-547, 563-577, 590-592, 595-599, 604, 607-608, 617, 621-656, 666-778\ncontrollers\\price_buffer.py                      93     93     0%   1-121\nservices\\__init__.py                              0      0   100%\nservices\\bot_metrics_exporter.py                188    188     0%   1-304\nservices\\common\\__init__.py                       0      0   100%\nservices\\common\\exchange_profiles.py             25     25     0%   1-54\nservices\\common\\fee_provider.py                 159    159     0%   1-188\nservices\\common\\models.py                        21      1    95%   11\nservices\\common\\preflight.py                     69     69     0%   1-91\nservices\\contracts\\__init__.py                    0      0   100%\nservices\\contracts\\event_schemas.py              76      0   100%\nservices\\contracts\\stream_names.py               10      0   100%\nservices\\control_plane_metrics_exporter.py      233    233     0%   1-392\nservices\\coordination_service\\__init__.py         0      0   100%\nservices\\coordination_service\\main.py           110    110     0%   1-217\nservices\\hb_bridge\\__init__.py                    0      0   100%\nservices\\hb_bridge\\intent_consumer.py            51      6    88%   55-62, 85-90\nservices\\hb_bridge\\publisher.py                  18     18     0%   1-29\nservices\\hb_bridge\\redis_client.py               67     52    22%   22-28, 32, 35-40, 43-52, 55-61, 71-93, 96-101\nservices\\risk_service\\__init__.py                 0      0   100%\nservices\\risk_service\\main.py                    54     35    35%   30, 37-118, 122\nservices\\signal_service\\__init__.py               0      0   100%\nservices\\signal_service\\feature_builder.py       13      1    92%   12\nservices\\signal_service\\inference_engine.py      33     33     0%   1-43\nservices\\signal_service\\main.py                  59     59     0%   1-126\nservices\\signal_service\\model_loader.py          70     24    66%   32-39, 44-56, 61, 63, 69, 88, 114\n---------------------------------------------------------------------------\nTOTAL                                          2782   2233    20%\nCoverage XML written to file reports/tests/coverage.xml\nCoverage JSON written to file reports/tests/coverage.json\nRequired test coverage of 5.0% reached. Total coverage: 19.73%\n19 passed in 1.98s\n"
+}

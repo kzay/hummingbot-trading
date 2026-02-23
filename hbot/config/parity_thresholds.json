@@ -1,0 +1,38 @@
+{
+  "version": 1,
+  "defaults": {
+    "enabled": false,
+    "expected_fill_ratio": 0.0,
+    "max_fill_ratio_delta": 0.25,
+    "expected_slippage_bps": 2.0,
+    "max_slippage_delta_bps": 5.0,
+    "expected_reject_rate": 0.0,
+    "max_reject_rate_delta": 0.20,
+    "expected_realized_pnl_quote": 0.0,
+    "max_realized_pnl_delta_quote": 500.0
+  },
+  "bots": {
+    "bot1": {
+      "enabled": true,
+      "expected_fill_ratio": 0.0,
+      "max_fill_ratio_delta": 0.25,
+      "expected_slippage_bps": 2.0,
+      "max_slippage_delta_bps": 5.0,
+      "expected_reject_rate": 0.0,
+      "max_reject_rate_delta": 0.20,
+      "expected_realized_pnl_quote": 0.0,
+      "max_realized_pnl_delta_quote": 600.0
+    },
+    "bot4": {
+      "enabled": true,
+      "expected_fill_ratio": 0.0,
+      "max_fill_ratio_delta": 0.25,
+      "expected_slippage_bps": 2.0,
+      "max_slippage_delta_bps": 5.0,
+      "expected_reject_rate": 0.0,
+      "max_reject_rate_delta": 0.20,
+      "expected_realized_pnl_quote": 0.0,
+      "max_realized_pnl_delta_quote": 600.0
+    }
+  }
+}

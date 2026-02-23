@@ -1,0 +1,42 @@
+{
+  "ts_utc": "2026-02-22T13:21:51.013148+00:00",
+  "status": "fail",
+  "compose_up": {
+    "cmd": [
+      "docker",
+      "compose",
+      "--env-file",
+      "env/.env",
+      "-f",
+      "compose/docker-compose.yml",
+      "--profile",
+      "external",
+      "up",
+      "-d",
+      "redis",
+      "event-store-service",
+      "event-store-monitor",
+      "day2-gate-monitor"
+    ],
+    "rc": 0,
+    "stdout": "",
+    "stderr": " Container hbot-redis Running \n Container hbot-event-store-service Running \n Container hbot-event-store-monitor Running \n Container hbot-day2-gate-monitor Running \n Container hbot-redis Waiting \n Container hbot-redis Healthy \n Container hbot-redis Waiting \n Container hbot-redis Healthy \n Container hbot-redis Waiting \n Container hbot-redis Healthy \n"
+  },
+  "service_states": {
+    "redis": "healthy",
+    "event_store_service": "unhealthy",
+    "event_store_monitor": "healthy",
+    "day2_gate_monitor": "healthy"
+  },
+  "strict_cycle": {
+    "cmd": [
+      "C:\\Users\\kzaY\\.pyenv\\pyenv-win\\versions\\3.9.13\\python.exe",
+      "scripts/release/run_strict_promotion_cycle.py",
+      "--max-report-age-min",
+      "20"
+    ],
+    "rc": 2,
+    "stdout": "[strict-cycle] rc=2\n[strict-cycle] status=FAIL\n[strict-cycle] evidence=F:\\Environement\\git-repo\\hummingbot_custo\\hbot\\reports\\promotion_gates\\strict_cycle_latest.json\n",
+    "stderr": ""
+  }
+}

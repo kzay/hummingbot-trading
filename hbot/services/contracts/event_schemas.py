@@ -95,3 +95,46 @@ class AuditEvent(EventEnvelope):
     message: str
     metadata: Dict[str, str] = Field(default_factory=dict)
 
+
+class BotMinuteSnapshotEvent(EventEnvelope):
+    """Per-minute controller telemetry snapshot, published to Redis alongside CSV."""
+    event_type: Literal["bot_minute_snapshot"] = "bot_minute_snapshot"
+    instance_name: str
+    controller_id: str
+    connector_name: str
+    trading_pair: str
+    state: str
+    regime: str
+    mid_price: float
+    equity_quote: float
+    base_pct: float
+    target_base_pct: float
+    spread_pct: float
+    net_edge_pct: float
+    turnover_x: float
+    daily_loss_pct: float
+    drawdown_pct: float
+    fills_count_today: int
+    fees_paid_today_quote: float
+    fee_source: str
+    maker_fee_pct: float
+    taker_fee_pct: float
+    risk_reasons: str
+    metadata: Dict[str, str] = Field(default_factory=dict)
+
+
+class BotFillEvent(EventEnvelope):
+    """Individual fill event for bot telemetry stream."""
+    event_type: Literal["bot_fill"] = "bot_fill"
+    instance_name: str
+    controller_id: str
+    connector_name: str
+    trading_pair: str
+    side: str
+    price: float
+    amount_base: float
+    notional_quote: float
+    fee_quote: float
+    order_id: str
+    metadata: Dict[str, str] = Field(default_factory=dict)
+

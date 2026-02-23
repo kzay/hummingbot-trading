@@ -1,0 +1,15 @@
+{
+  "ts_utc": "2026-02-22T03:25:00.158850+00:00",
+  "status": "pass",
+  "counts": {
+    "bot_snapshot_minute": 794,
+    "bot_daily": 3,
+    "fills": 0,
+    "exchange_snapshot": 4,
+    "reconciliation_report": 1,
+    "parity_report": 1,
+    "portfolio_risk_report": 1,
+    "promotion_gate_run": 45
+  },
+  "errors": []
+}

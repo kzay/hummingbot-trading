@@ -1,0 +1,23 @@
+# Template: <strategy>_<version>_<bot>_<venue>_<mode>.yml
+controller_name: epp_v2_4
+controller_type: market_making
+connector_name: bitget_paper_trade
+trading_pair: BTC-USDT
+instance_name: botX
+
+# Mode envelope (align with config/strategy_catalog/catalog_v1.json)
+internal_paper_enabled: true
+manual_kill_switch: false
+
+# Strategy defaults (override per variant)
+leverage: 1
+position_mode: ONEWAY
+cooldown_seconds: 5
+max_orders_per_side: 1
+base_order_amount: 0.001
+price_spread: 0.001
+
+# Safety controls
+soft_pause_enabled: true
+max_daily_loss_pct: 0.02
+max_drawdown_pct: 0.03

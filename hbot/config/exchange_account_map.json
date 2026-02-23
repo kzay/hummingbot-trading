@@ -1,0 +1,30 @@
+{
+  "version": 1,
+  "defaults": {
+    "exchange": "bitget",
+    "credential_prefix": "BOT1",
+    "account_mode": "probe"
+  },
+  "bots": {
+    "bot1": {
+      "exchange": "bitget",
+      "credential_prefix": "BOT1",
+      "account_mode": "probe"
+    },
+    "bot2": {
+      "exchange": "none",
+      "credential_prefix": "BOT2",
+      "account_mode": "disabled"
+    },
+    "bot3": {
+      "exchange": "bitget",
+      "credential_prefix": "BOT3",
+      "account_mode": "paper_only"
+    },
+    "bot4": {
+      "exchange": "binance_perpetual_testnet",
+      "credential_prefix": "BOT4",
+      "account_mode": "probe"
+    }
+  }
+}

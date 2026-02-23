@@ -26,6 +26,10 @@ volumes:
     driver: local
   loki-data:
     driver: local
+  postgres-data:
+    driver: local
+  clickhouse-data:
+    driver: local
 
 # ---- Logging anchor ----
 x-logging: &default-logging
@@ -34,6 +38,25 @@ x-logging: &default-logging
     max-size: "${LOG_MAX_SIZE:-50m}"
     max-file: "${LOG_MAX_FILE:-5}"
 
+# ---- External control-plane image (reproducible) ----
+x-control-plane-image: &control-plane-image
+  image: ${HBOT_CONTROL_PLANE_IMAGE:-hbot-control-plane:20260222}
+  build:
+    context: ..
+    dockerfile: compose/images/control_plane/Dockerfile
+
+# ---- Shared Hummingbot env ----
+x-hbot-env: &hbot-env
+  TZ: ${TZ:-UTC}
+  EXT_SIGNAL_RISK_ENABLED: ${EXT_SIGNAL_RISK_ENABLED:-false}
+  BUS_SOFT_PAUSE_ON_OUTAGE: ${BUS_SOFT_PAUSE_ON_OUTAGE:-true}
+  REDIS_HOST: ${REDIS_HOST:-redis}
+  REDIS_PORT: ${REDIS_PORT:-6379}
+  REDIS_DB: ${REDIS_DB:-0}
+  REDIS_PASSWORD: ${REDIS_PASSWORD:-}
+  REDIS_CONSUMER_GROUP: ${REDIS_CONSUMER_GROUP:-hb_group_v1}
+  EVENT_POLL_MS: ${EVENT_POLL_MS:-1000}
+
 # ---- Hummingbot base anchor ----
 x-hbot-base: &hbot-base
   image: ${HUMMINGBOT_IMAGE:-hummingbot/hummingbot:version-2.12.0}
@@ -41,8 +64,7 @@ x-hbot-base: &hbot-base
   logging: *default-logging
   networks:
     - trading
-  environment:
-    - TZ=${TZ:-UTC}
+  environment: *hbot-env
   stdin_open: true
   tty: true
 
@@ -63,19 +85,19 @@ services:
       - ../data/bot1/logs:/home/hummingbot/logs
       - ../data/bot1/data:/home/hummingbot/data
       - ../data/bot1/scripts:/home/hummingbot/custom_scripts
+      - ../scripts/shared/v2_with_controllers.py:/home/hummingbot/scripts/v2_with_controllers.py:ro
       - ../data/bot1/pmm_scripts:/home/hummingbot/pmm_scripts
-      # ---- EPP v2.4 custom controller + helpers ----
-      - ../controllers/epp_v2_4.py:/home/hummingbot/controllers/market_making/epp_v2_4.py:ro
-      - ../controllers/price_buffer.py:/home/hummingbot/controllers/price_buffer.py:ro
-      - ../controllers/ops_guard.py:/home/hummingbot/controllers/ops_guard.py:ro
-      - ../controllers/epp_logging.py:/home/hummingbot/controllers/epp_logging.py:ro
-      - ../controllers/paper_engine.py:/home/hummingbot/controllers/paper_engine.py:ro
-      - ../controllers/fee_resolver.py:/home/hummingbot/controllers/fee_resolver.py:ro
+      # ---- Shared controllers mount (Day 30) ----
+      - ../controllers:/home/hummingbot/controllers:ro
+      - ../controllers:/home/hummingbot/controllers/market_making:ro
       - ../config:/home/hummingbot/project_config:ro
       - ../services:/home/hummingbot/services:ro
     environment:
-      - TZ=${TZ:-UTC}
-      - CONFIG_PASSWORD=${BOT1_PASSWORD:-}
+      <<: *hbot-env
+      CONFIG_PASSWORD: ${BOT1_PASSWORD:-}
+      BOT_POLICY_ROLE: live_microcap_primary
+      BOT_POLICY_MODE: live
+      BOT_POLICY_VERSION: multi_bot_policy_v1
     deploy:
       resources:
         limits:
@@ -99,19 +121,20 @@ services:
       - ../data/bot2/logs:/home/hummingbot/logs
       - ../data/bot2/data:/home/hummingbot/data
       - ../data/bot2/scripts:/home/hummingbot/custom_scripts
+      - ../scripts/shared/v2_with_controllers.py:/home/hummingbot/custom_scripts/v2_with_controllers.py:ro
+      - ../scripts/shared/v2_with_controllers.py:/home/hummingbot/scripts/v2_with_controllers.py:ro
       - ../data/bot2/pmm_scripts:/home/hummingbot/pmm_scripts
-      # ---- EPP v2.4 custom controller + helpers ----
-      - ../controllers/epp_v2_4.py:/home/hummingbot/controllers/market_making/epp_v2_4.py:ro
-      - ../controllers/price_buffer.py:/home/hummingbot/controllers/price_buffer.py:ro
-      - ../controllers/ops_guard.py:/home/hummingbot/controllers/ops_guard.py:ro
-      - ../controllers/epp_logging.py:/home/hummingbot/controllers/epp_logging.py:ro
-      - ../controllers/paper_engine.py:/home/hummingbot/controllers/paper_engine.py:ro
-      - ../controllers/fee_resolver.py:/home/hummingbot/controllers/fee_resolver.py:ro
+      # ---- Shared controllers mount (Day 30) ----
+      - ../controllers:/home/hummingbot/controllers:ro
+      - ../controllers:/home/hummingbot/controllers/market_making:ro
       - ../config:/home/hummingbot/project_config:ro
       - ../services:/home/hummingbot/services:ro
     environment:
-      - TZ=${TZ:-UTC}
-      - CONFIG_PASSWORD=${BOT2_PASSWORD:-admin}
+      <<: *hbot-env
+      CONFIG_PASSWORD: ${BOT2_PASSWORD:-admin}
+      BOT_POLICY_ROLE: reserved_scale_slot
+      BOT_POLICY_MODE: disabled
+      BOT_POLICY_VERSION: multi_bot_policy_v1
     deploy:
       resources:
         limits:
@@ -134,12 +157,59 @@ services:
       - ../data/bot3/logs:/home/hummingbot/logs
       - ../data/bot3/data:/home/hummingbot/data
       - ../data/bot3/scripts:/home/hummingbot/custom_scripts
+      - ../scripts/shared/v2_with_controllers.py:/home/hummingbot/custom_scripts/v2_with_controllers.py:ro
+      - ../scripts/shared/v2_with_controllers.py:/home/hummingbot/scripts/v2_with_controllers.py:ro
       - ../data/bot3/pmm_scripts:/home/hummingbot/pmm_scripts
+      # ---- Shared controllers mount (Day 30) ----
+      - ../controllers:/home/hummingbot/controllers:ro
+      - ../controllers:/home/hummingbot/controllers/market_making:ro
+      - ../config:/home/hummingbot/project_config:ro
+      - ../services:/home/hummingbot/services:ro
       # Mount test script into the scripts dir so `start --script` finds it
       - ../data/bot3/scripts/paper_test.py:/home/hummingbot/scripts/paper_test.py:ro
     environment:
-      - TZ=${TZ:-UTC}
-      - CONFIG_PASSWORD=${BOT3_PASSWORD:-${BOT1_PASSWORD:-}}
+      <<: *hbot-env
+      CONFIG_PASSWORD: ${BOT3_PASSWORD:-${BOT1_PASSWORD:-}}
+      BOT_POLICY_ROLE: paper_validation
+      BOT_POLICY_MODE: paper_only
+      BOT_POLICY_VERSION: multi_bot_policy_v1
+    deploy:
+      resources:
+        limits:
+          memory: 512M
+          cpus: "0.5"
+        reservations:
+          memory: 128M
+          cpus: "0.25"
+
+  # ==========================================
+  # BOT 4 (binance testnet v2 matrix)
+  # ==========================================
+  bot4:
+    <<: *hbot-base
+    container_name: hbot-bot4
+    profiles:
+      - test
+    volumes:
+      - ../data/bot4/conf:/home/hummingbot/conf
+      - ../data/bot4/logs:/home/hummingbot/logs
+      - ../data/bot4/data:/home/hummingbot/data
+      - ../data/bot4/scripts:/home/hummingbot/custom_scripts
+      - ../scripts/shared/v2_with_controllers.py:/home/hummingbot/scripts/v2_with_controllers.py:ro
+      - ../data/bot4/conf/bot4_matrix_results.md:/home/hummingbot/conf/bot4_matrix_results.md
+      - ../data/bot4/pmm_scripts:/home/hummingbot/pmm_scripts
+      - ../scripts/shared/v2_with_controllers.py:/home/hummingbot/custom_scripts/v2_with_controllers.py:ro
+      # ---- Shared controllers mount (Day 30) ----
+      - ../controllers:/home/hummingbot/controllers:ro
+      - ../controllers:/home/hummingbot/controllers/market_making:ro
+      - ../config:/home/hummingbot/project_config:ro
+      - ../services:/home/hummingbot/services:ro
+    environment:
+      <<: *hbot-env
+      CONFIG_PASSWORD: ${BOT4_PASSWORD:-${BOT1_PASSWORD:-}}
+      BOT_POLICY_ROLE: connector_validation
+      BOT_POLICY_MODE: testnet_probe
+      BOT_POLICY_VERSION: multi_bot_policy_v1
     deploy:
       resources:
         limits:
@@ -171,15 +241,14 @@ services:
       retries: 5
 
   signal-service:
-    image: python:3.11-slim
+    <<: *control-plane-image
     container_name: hbot-signal-service
     profiles:
       - external
     restart: unless-stopped
     logging: *default-logging
     command: >
-      /bin/sh -lc "pip install --no-cache-dir redis pydantic joblib scikit-learn requests boto3 &&
-      PYTHONPATH=/workspace/hbot python /workspace/hbot/services/signal_service/main.py"
+      /bin/sh -lc "python /workspace/hbot/services/signal_service/main.py"
     environment:
       - EXT_SIGNAL_RISK_ENABLED=${EXT_SIGNAL_RISK_ENABLED:-false}
       - REDIS_HOST=${REDIS_HOST:-redis}
@@ -210,17 +279,22 @@ services:
         condition: service_healthy
     networks:
       - trading
+    healthcheck:
+      test: ["CMD-SHELL", "python -c \"import os,redis,sys; c=redis.Redis(host=os.getenv('REDIS_HOST','redis'),port=int(os.getenv('REDIS_PORT','6379')),db=int(os.getenv('REDIS_DB','0')),password=os.getenv('REDIS_PASSWORD') or None,socket_timeout=2); sys.exit(0 if c.ping() else 1)\""]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 20s
 
   risk-service:
-    image: python:3.11-slim
+    <<: *control-plane-image
     container_name: hbot-risk-service
     profiles:
       - external
     restart: unless-stopped
     logging: *default-logging
     command: >
-      /bin/sh -lc "pip install --no-cache-dir redis pydantic &&
-      PYTHONPATH=/workspace/hbot python /workspace/hbot/services/risk_service/main.py"
+      /bin/sh -lc "python /workspace/hbot/services/risk_service/main.py"
     environment:
       - EXT_SIGNAL_RISK_ENABLED=${EXT_SIGNAL_RISK_ENABLED:-false}
       - REDIS_HOST=${REDIS_HOST:-redis}
@@ -243,25 +317,37 @@ services:
         condition: service_healthy
     networks:
       - trading
+    healthcheck:
+      test: ["CMD-SHELL", "python -c \"import os,redis,sys; c=redis.Redis(host=os.getenv('REDIS_HOST','redis'),port=int(os.getenv('REDIS_PORT','6379')),db=int(os.getenv('REDIS_DB','0')),password=os.getenv('REDIS_PASSWORD') or None,socket_timeout=2); sys.exit(0 if c.ping() else 1)\""]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 20s
 
   coordination-service:
-    image: python:3.11-slim
+    <<: *control-plane-image
     container_name: hbot-coordination-service
     profiles:
       - external
     restart: unless-stopped
     logging: *default-logging
     command: >
-      /bin/sh -lc "pip install --no-cache-dir redis pydantic &&
-      PYTHONPATH=/workspace/hbot python /workspace/hbot/services/coordination_service/main.py"
+      /bin/sh -lc "python /workspace/hbot/services/coordination_service/main.py"
     environment:
       - EXT_SIGNAL_RISK_ENABLED=${EXT_SIGNAL_RISK_ENABLED:-false}
+      - ML_ENABLED=${ML_ENABLED:-false}
       - REDIS_HOST=${REDIS_HOST:-redis}
       - REDIS_PORT=${REDIS_PORT:-6379}
       - REDIS_DB=${REDIS_DB:-0}
       - REDIS_PASSWORD=${REDIS_PASSWORD:-}
       - REDIS_CONSUMER_GROUP=${REDIS_CONSUMER_GROUP:-hb_group_v1}
       - EVENT_POLL_MS=${EVENT_POLL_MS:-1000}
+      - COORD_POLICY_PATH=/workspace/hbot/config/coordination_policy_v1.json
+      - COORD_ENABLED=${COORD_ENABLED:-false}
+      - COORD_REQUIRE_ML_ENABLED=${COORD_REQUIRE_ML_ENABLED:-true}
+      - COORD_HEALTH_PATH=/workspace/hbot/reports/coordination/latest.json
+      - COORD_HEALTH_WRITE_SEC=${COORD_HEALTH_WRITE_SEC:-5}
+      - COORD_HEALTH_MAX_SEC=${COORD_HEALTH_MAX_SEC:-600}
       - HB_INSTANCE_NAME=bot1
       - EVENT_PRODUCER_NAME=coordination_service
     volumes:
@@ -271,6 +357,353 @@ services:
         condition: service_healthy
     networks:
       - trading
+    healthcheck:
+      test: ["CMD-SHELL", "python -c \"import os,time,sys; from pathlib import Path; p=Path(os.getenv('COORD_HEALTH_PATH','/workspace/hbot/reports/coordination/latest.json')); sys.exit(0 if p.exists() and (time.time()-p.stat().st_mtime)<=float(os.getenv('COORD_HEALTH_MAX_SEC','600')) else 1)\""]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 20s
+
+  event-store-service:
+    <<: *control-plane-image
+    container_name: hbot-event-store-service
+    profiles:
+      - external
+    restart: unless-stopped
+    logging: *default-logging
+    command: >
+      /bin/sh -lc "python /workspace/hbot/services/event_store/main.py"
+    environment:
+      - EXT_SIGNAL_RISK_ENABLED=true
+      - REDIS_HOST=redis
+      - REDIS_PORT=${REDIS_PORT:-6379}
+      - REDIS_DB=${REDIS_DB:-0}
+      - REDIS_PASSWORD=${REDIS_PASSWORD:-}
+      - REDIS_CONSUMER_GROUP=${REDIS_CONSUMER_GROUP:-hb_group_v1}
+      - EVENT_STORE_CONSUMER_GROUP=${EVENT_STORE_CONSUMER_GROUP:-hb_event_store_v1}
+      - EVENT_POLL_MS=${EVENT_POLL_MS:-1000}
+      - EVENT_STORE_HEALTH_MAX_SEC=${EVENT_STORE_HEALTH_MAX_SEC:-900}
+      - HB_INSTANCE_NAME=bot1
+      - EVENT_PRODUCER_NAME=event_store_service
+    volumes:
+      - ..:/workspace/hbot
+    depends_on:
+      redis:
+        condition: service_healthy
+    networks:
+      - trading
+    healthcheck:
+      test: ["CMD-SHELL", "python -c \"import os,time,sys; from pathlib import Path; p=Path('/workspace/hbot/reports/event_store'); fs=sorted(p.glob('events_*.jsonl')); sys.exit(0 if fs and (time.time()-fs[-1].stat().st_mtime)<=float(os.getenv('EVENT_STORE_HEALTH_MAX_SEC','900')) else 1)\""]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 30s
+
+  event-store-monitor:
+    <<: *control-plane-image
+    container_name: hbot-event-store-monitor
+    profiles:
+      - external
+    restart: unless-stopped
+    logging: *default-logging
+    command: >
+      /bin/sh -lc "python /workspace/hbot/scripts/utils/event_store_periodic_snapshot.py --interval-sec ${EVENT_STORE_MONITOR_INTERVAL_SEC:-900}"
+    environment:
+      - REDIS_HOST=redis
+      - REDIS_PORT=${REDIS_PORT:-6379}
+      - REDIS_DB=${REDIS_DB:-0}
+      - REDIS_PASSWORD=${REDIS_PASSWORD:-}
+      - EVENT_STORE_MONITOR_INTERVAL_SEC=${EVENT_STORE_MONITOR_INTERVAL_SEC:-900}
+      - EVENT_STORE_MONITOR_HEALTH_MAX_SEC=${EVENT_STORE_MONITOR_HEALTH_MAX_SEC:-1800}
+    volumes:
+      - ..:/workspace/hbot
+    depends_on:
+      redis:
+        condition: service_healthy
+      event-store-service:
+        condition: service_started
+    networks:
+      - trading
+    healthcheck:
+      test: ["CMD-SHELL", "python -c \"import os,time,sys; from pathlib import Path; p=Path('/workspace/hbot/reports/event_store'); fs=sorted(p.glob('integrity_*.json')); sys.exit(0 if fs and (time.time()-fs[-1].stat().st_mtime)<=float(os.getenv('EVENT_STORE_MONITOR_HEALTH_MAX_SEC','1800')) else 1)\""]
+      interval: 60s
+      timeout: 10s
+      retries: 3
+      start_period: 30s
+
+  day2-gate-monitor:
+    <<: *control-plane-image
+    container_name: hbot-day2-gate-monitor
+    profiles:
+      - external
+    restart: unless-stopped
+    logging: *default-logging
+    command: >
+      /bin/sh -lc "python /workspace/hbot/scripts/utils/day2_gate_monitor.py --interval-sec ${DAY2_GATE_INTERVAL_SEC:-300}"
+    environment:
+      - REDIS_HOST=redis
+      - REDIS_PORT=${REDIS_PORT:-6379}
+      - REDIS_DB=${REDIS_DB:-0}
+      - REDIS_PASSWORD=${REDIS_PASSWORD:-}
+      - DAY2_GATE_INTERVAL_SEC=${DAY2_GATE_INTERVAL_SEC:-300}
+      - DAY2_GATE_MIN_HOURS=${DAY2_GATE_MIN_HOURS:-24}
+      - DAY2_GATE_MAX_DELTA=${DAY2_GATE_MAX_DELTA:-5}
+      - DAY2_GATE_HEALTH_MAX_SEC=${DAY2_GATE_HEALTH_MAX_SEC:-900}
+    volumes:
+      - ..:/workspace/hbot
+    depends_on:
+      redis:
+        condition: service_healthy
+      event-store-service:
+        condition: service_started
+      event-store-monitor:
+        condition: service_started
+    networks:
+      - trading
+    healthcheck:
+      test: ["CMD-SHELL", "python -c \"import os,time,sys; from pathlib import Path; p=Path('/workspace/hbot/reports/event_store/day2_gate_eval_latest.json'); sys.exit(0 if p.exists() and (time.time()-p.stat().st_mtime)<=float(os.getenv('DAY2_GATE_HEALTH_MAX_SEC','900')) else 1)\""]
+      interval: 60s
+      timeout: 10s
+      retries: 3
+      start_period: 30s
+
+  reconciliation-service:
+    <<: *control-plane-image
+    container_name: hbot-reconciliation-service
+    profiles:
+      - external
+    restart: unless-stopped
+    logging: *default-logging
+    command: >
+      /bin/sh -lc "python /workspace/hbot/services/reconciliation_service/main.py"
+    environment:
+      - HB_DATA_ROOT=/workspace/hbot/data
+      - RECON_INTERVAL_SEC=${RECON_INTERVAL_SEC:-300}
+      - RECON_INVENTORY_DRIFT_WARN=${RECON_INVENTORY_DRIFT_WARN:-0.25}
+      - RECON_INVENTORY_DRIFT_CRITICAL=${RECON_INVENTORY_DRIFT_CRITICAL:-0.45}
+      - RECON_ALERT_WEBHOOK_URL=${RECON_ALERT_WEBHOOK_URL:-http://alert-webhook-sink:19093/alert}
+      - RECON_ALERT_MIN_SEVERITY=${RECON_ALERT_MIN_SEVERITY:-critical}
+      - RECON_EXCHANGE_SOURCE_ENABLED=${RECON_EXCHANGE_SOURCE_ENABLED:-false}
+      - RECON_EXCHANGE_SNAPSHOT_PATH=${RECON_EXCHANGE_SNAPSHOT_PATH:-/workspace/hbot/reports/exchange_snapshots/latest.json}
+      - RECON_THRESHOLDS_PATH=${RECON_THRESHOLDS_PATH:-/workspace/hbot/config/reconciliation_thresholds.json}
+      - RECON_HEALTH_MAX_SEC=${RECON_HEALTH_MAX_SEC:-900}
+    volumes:
+      - ..:/workspace/hbot
+    depends_on:
+      event-store-service:
+        condition: service_started
+      exchange-snapshot-service:
+        condition: service_started
+    networks:
+      - trading
+    healthcheck:
+      test: ["CMD-SHELL", "python -c \"import os,time,sys; from pathlib import Path; p=Path('/workspace/hbot/reports/reconciliation/latest.json'); sys.exit(0 if p.exists() and (time.time()-p.stat().st_mtime)<=float(os.getenv('RECON_HEALTH_MAX_SEC','900')) else 1)\""]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 30s
+
+  exchange-snapshot-service:
+    <<: *control-plane-image
+    container_name: hbot-exchange-snapshot-service
+    profiles:
+      - external
+    restart: unless-stopped
+    logging: *default-logging
+    command: >
+      /bin/sh -lc "python /workspace/hbot/services/exchange_snapshot_service/main.py"
+    environment:
+      - HB_DATA_ROOT=/workspace/hbot/data
+      - EXCHANGE_SNAPSHOT_OUT_PATH=/workspace/hbot/reports/exchange_snapshots/latest.json
+      - EXCHANGE_SNAPSHOT_INTERVAL_SEC=${EXCHANGE_SNAPSHOT_INTERVAL_SEC:-120}
+      - EXCHANGE_SNAPSHOT_MODE=${EXCHANGE_SNAPSHOT_MODE:-proxy_local}
+      - EXCHANGE_SNAPSHOT_ASSETS=${EXCHANGE_SNAPSHOT_ASSETS:-BTC,USDT}
+      - EXCHANGE_ACCOUNT_MAP_PATH=${EXCHANGE_ACCOUNT_MAP_PATH:-/workspace/hbot/config/exchange_account_map.json}
+      - BITGET_API_KEY=${BOT1_BITGET_API_KEY:-}
+      - BITGET_SECRET=${BOT1_BITGET_API_SECRET:-}
+      - BITGET_PASSPHRASE=${BOT1_BITGET_PASSPHRASE:-}
+      - BOT2_BITGET_API_KEY=${BOT2_BITGET_API_KEY:-}
+      - BOT2_BITGET_SECRET=${BOT2_BITGET_API_SECRET:-}
+      - BOT2_BITGET_PASSPHRASE=${BOT2_BITGET_PASSPHRASE:-}
+      - BOT3_BITGET_API_KEY=${BOT3_BITGET_API_KEY:-}
+      - BOT3_BITGET_SECRET=${BOT3_BITGET_API_SECRET:-}
+      - BOT3_BITGET_PASSPHRASE=${BOT3_BITGET_PASSPHRASE:-}
+      - EXCHANGE_SNAPSHOT_HEALTH_MAX_SEC=${EXCHANGE_SNAPSHOT_HEALTH_MAX_SEC:-600}
+    volumes:
+      - ..:/workspace/hbot
+    networks:
+      - trading
+    healthcheck:
+      test: ["CMD-SHELL", "python -c \"import os,time,sys; from pathlib import Path; p=Path('/workspace/hbot/reports/exchange_snapshots/latest.json'); sys.exit(0 if p.exists() and (time.time()-p.stat().st_mtime)<=float(os.getenv('EXCHANGE_SNAPSHOT_HEALTH_MAX_SEC','600')) else 1)\""]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 30s
+
+  shadow-parity-service:
+    <<: *control-plane-image
+    container_name: hbot-shadow-parity-service
+    profiles:
+      - external
+    restart: unless-stopped
+    logging: *default-logging
+    command: >
+      /bin/sh -lc "python /workspace/hbot/services/shadow_execution/main.py"
+    environment:
+      - HB_DATA_ROOT=/workspace/hbot/data
+      - PARITY_INTERVAL_SEC=${PARITY_INTERVAL_SEC:-300}
+      - PARITY_THRESHOLDS_PATH=${PARITY_THRESHOLDS_PATH:-/workspace/hbot/config/parity_thresholds.json}
+      - PARITY_RECONCILIATION_PATH=${PARITY_RECONCILIATION_PATH:-/workspace/hbot/reports/reconciliation/latest.json}
+      - PARITY_HEALTH_MAX_SEC=${PARITY_HEALTH_MAX_SEC:-900}
+    volumes:
+      - ..:/workspace/hbot
+    depends_on:
+      event-store-service:
+        condition: service_started
+      reconciliation-service:
+        condition: service_started
+    networks:
+      - trading
+    healthcheck:
+      test: ["CMD-SHELL", "python -c \"import os,time,sys; from pathlib import Path; p=Path('/workspace/hbot/reports/parity/latest.json'); sys.exit(0 if p.exists() and (time.time()-p.stat().st_mtime)<=float(os.getenv('PARITY_HEALTH_MAX_SEC','900')) else 1)\""]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 30s
+
+  portfolio-risk-service:
+    <<: *control-plane-image
+    container_name: hbot-portfolio-risk-service
+    profiles:
+      - external
+    restart: unless-stopped
+    logging: *default-logging
+    command: >
+      /bin/sh -lc "python /workspace/hbot/services/portfolio_risk_service/main.py"
+    environment:
+      - HB_DATA_ROOT=/workspace/hbot/data
+      - PORTFOLIO_RISK_INTERVAL_SEC=${PORTFOLIO_RISK_INTERVAL_SEC:-300}
+      - PORTFOLIO_RISK_LIMITS_PATH=${PORTFOLIO_RISK_LIMITS_PATH:-/workspace/hbot/config/portfolio_limits_v1.json}
+      - PORTFOLIO_RISK_PUBLISH_ACTIONS=${PORTFOLIO_RISK_PUBLISH_ACTIONS:-true}
+      - REDIS_HOST=${REDIS_HOST:-redis}
+      - REDIS_PORT=${REDIS_PORT:-6379}
+      - REDIS_DB=${REDIS_DB:-0}
+      - REDIS_PASSWORD=${REDIS_PASSWORD:-}
+      - PORTFOLIO_RISK_HEALTH_MAX_SEC=${PORTFOLIO_RISK_HEALTH_MAX_SEC:-900}
+    volumes:
+      - ..:/workspace/hbot
+    depends_on:
+      redis:
+        condition: service_healthy
+      event-store-service:
+        condition: service_started
+      reconciliation-service:
+        condition: service_started
+      shadow-parity-service:
+        condition: service_started
+    networks:
+      - trading
+    healthcheck:
+      test: ["CMD-SHELL", "python -c \"import os,time,sys; from pathlib import Path; p=Path('/workspace/hbot/reports/portfolio_risk/latest.json'); sys.exit(0 if p.exists() and (time.time()-p.stat().st_mtime)<=float(os.getenv('PORTFOLIO_RISK_HEALTH_MAX_SEC','900')) else 1)\""]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 30s
+
+  soak-monitor:
+    <<: *control-plane-image
+    container_name: hbot-soak-monitor
+    profiles:
+      - external
+    restart: unless-stopped
+    logging: *default-logging
+    command: >
+      /bin/sh -lc "python /workspace/hbot/scripts/release/soak_monitor.py --interval-sec ${SOAK_MONITOR_INTERVAL_SEC:-300} --freshness-max-min ${SOAK_MONITOR_FRESHNESS_MAX_MIN:-30}"
+    environment:
+      - SOAK_MONITOR_INTERVAL_SEC=${SOAK_MONITOR_INTERVAL_SEC:-300}
+      - SOAK_MONITOR_FRESHNESS_MAX_MIN=${SOAK_MONITOR_FRESHNESS_MAX_MIN:-30}
+      - SOAK_MONITOR_HEALTH_MAX_SEC=${SOAK_MONITOR_HEALTH_MAX_SEC:-1200}
+    volumes:
+      - ..:/workspace/hbot
+    depends_on:
+      day2-gate-monitor:
+        condition: service_started
+      reconciliation-service:
+        condition: service_started
+      shadow-parity-service:
+        condition: service_started
+      portfolio-risk-service:
+        condition: service_started
+    networks:
+      - trading
+    healthcheck:
+      test: ["CMD-SHELL", "python -c \"import os,time,sys; from pathlib import Path; p=Path('/workspace/hbot/reports/soak/latest.json'); sys.exit(0 if p.exists() and (time.time()-p.stat().st_mtime)<=float(os.getenv('SOAK_MONITOR_HEALTH_MAX_SEC','1200')) else 1)\""]
+      interval: 60s
+      timeout: 10s
+      retries: 3
+      start_period: 30s
+
+  daily-ops-reporter:
+    <<: *control-plane-image
+    container_name: hbot-daily-ops-reporter
+    profiles:
+      - external
+    restart: unless-stopped
+    logging: *default-logging
+    command: >
+      /bin/sh -lc "python /workspace/hbot/scripts/release/watch_daily_ops_report.py --interval-sec ${DAILY_OPS_REPORT_INTERVAL_SEC:-900}"
+    environment:
+      - DAILY_OPS_REPORT_INTERVAL_SEC=${DAILY_OPS_REPORT_INTERVAL_SEC:-900}
+      - DAILY_OPS_REPORT_HEALTH_MAX_SEC=${DAILY_OPS_REPORT_HEALTH_MAX_SEC:-3600}
+    volumes:
+      - ..:/workspace/hbot
+    depends_on:
+      soak-monitor:
+        condition: service_started
+      day2-gate-monitor:
+        condition: service_started
+    networks:
+      - trading
+    healthcheck:
+      test: ["CMD-SHELL", "python -c \"import os,time,sys; from pathlib import Path; p=Path('/workspace/hbot/docs/ops'); fs=sorted(p.glob('daily_ops_report_*.md')); sys.exit(0 if fs and (time.time()-fs[-1].stat().st_mtime)<=float(os.getenv('DAILY_OPS_REPORT_HEALTH_MAX_SEC','3600')) else 1)\""]
+      interval: 60s
+      timeout: 10s
+      retries: 3
+      start_period: 30s
+
+  ops-db-writer:
+    <<: *control-plane-image
+    container_name: hbot-ops-db-writer
+    profiles:
+      - ops
+    restart: unless-stopped
+    logging: *default-logging
+    command: >
+      /bin/sh -lc "python /workspace/hbot/services/ops_db_writer/main.py"
+    environment:
+      - HB_DATA_ROOT=/workspace/hbot/data
+      - HB_REPORTS_ROOT=/workspace/hbot/reports
+      - OPS_DB_HOST=${OPS_DB_HOST:-postgres}
+      - OPS_DB_PORT=${OPS_DB_PORT:-5432}
+      - OPS_DB_NAME=${OPS_DB_NAME:-hbot_ops}
+      - OPS_DB_USER=${OPS_DB_USER:-hbot}
+      - OPS_DB_PASSWORD=${OPS_DB_PASSWORD:-hbot_dev_password}
+      - OPS_DB_WRITER_INTERVAL_SEC=${OPS_DB_WRITER_INTERVAL_SEC:-300}
+      - OPS_DB_WRITER_HEALTH_MAX_SEC=${OPS_DB_WRITER_HEALTH_MAX_SEC:-900}
+    volumes:
+      - ..:/workspace/hbot
+    depends_on:
+      postgres:
+        condition: service_healthy
+    networks:
+      - trading
+      - monitoring
+    healthcheck:
+      test: ["CMD-SHELL", "python -c \"import os,time,sys; from pathlib import Path; p=Path('/workspace/hbot/reports/ops_db_writer/latest.json'); sys.exit(0 if p.exists() and (time.time()-p.stat().st_mtime)<=float(os.getenv('OPS_DB_WRITER_HEALTH_MAX_SEC','900')) else 1)\""]
+      interval: 60s
+      timeout: 10s
+      retries: 3
+      start_period: 30s
 
   # ==========================================
   # Monitoring Stack
@@ -305,6 +738,149 @@ services:
         limits:
           memory: 128M
           cpus: "0.25"
+
+  # ---- Control-plane KPI Exporter ----
+  control-plane-metrics-exporter:
+    <<: *control-plane-image
+    container_name: hbot-control-plane-metrics-exporter
+    restart: unless-stopped
+    logging: *default-logging
+    command: >
+      /bin/sh -lc "python /workspace/hbot/services/control_plane_metrics_exporter.py"
+    environment:
+      - HB_REPORTS_ROOT=/workspace/hbot/reports
+      - HB_DATA_ROOT=/workspace/hbot/data
+      - CONTROL_PLANE_METRICS_PORT=9401
+      - CONTROL_PLANE_METRICS_PATH=/metrics
+      - CONTROL_PLANE_FRESHNESS_MAX_SEC=${CONTROL_PLANE_FRESHNESS_MAX_SEC:-1800}
+    volumes:
+      - ..:/workspace/hbot:ro
+    networks:
+      - monitoring
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:9401/metrics')"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 10s
+    deploy:
+      resources:
+        limits:
+          memory: 128M
+          cpus: "0.25"
+
+  # ---- PostgreSQL Operational Store (Day 25) ----
+  clickhouse:
+    image: clickhouse/clickhouse-server:24.8
+    container_name: hbot-clickhouse
+    profiles:
+      - ops
+    restart: unless-stopped
+    logging: *default-logging
+    environment:
+      - CLICKHOUSE_DB=${CH_DB:-hbot_events}
+      - CLICKHOUSE_USER=${CH_USER:-default}
+      - CLICKHOUSE_PASSWORD=${CH_PASSWORD:-}
+      - CLICKHOUSE_DEFAULT_ACCESS_MANAGEMENT=1
+    ports:
+      - "${CH_BIND_IP:-127.0.0.1}:${CH_HTTP_PORT:-8123}:8123"
+      - "${CH_BIND_IP:-127.0.0.1}:${CH_NATIVE_PORT:-9000}:9000"
+    volumes:
+      - clickhouse-data:/var/lib/clickhouse
+    networks:
+      - monitoring
+      - trading
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://localhost:8123/ping | grep -q Ok."]
+      interval: 15s
+      timeout: 5s
+      retries: 10
+
+  clickhouse-ingest:
+    <<: *control-plane-image
+    container_name: hbot-clickhouse-ingest
+    profiles:
+      - ops
+    restart: unless-stopped
+    logging: *default-logging
+    command: >
+      /bin/sh -lc "python /workspace/hbot/services/clickhouse_ingest/main.py"
+    environment:
+      - HB_REPORTS_ROOT=/workspace/hbot/reports
+      - CH_HOST=${CH_HOST:-clickhouse}
+      - CH_HTTP_PORT=${CH_HTTP_PORT:-8123}
+      - CH_DB=${CH_DB:-hbot_events}
+      - CH_TABLE=${CH_TABLE:-event_store_raw_v1}
+      - CH_USER=${CH_USER:-default}
+      - CH_PASSWORD=${CH_PASSWORD:-}
+      - CH_INGEST_BATCH_SIZE=${CH_INGEST_BATCH_SIZE:-2000}
+      - CH_INGEST_INTERVAL_SEC=${CH_INGEST_INTERVAL_SEC:-120}
+      - CH_INGEST_HEALTH_MAX_SEC=${CH_INGEST_HEALTH_MAX_SEC:-900}
+    volumes:
+      - ..:/workspace/hbot
+    depends_on:
+      clickhouse:
+        condition: service_healthy
+    networks:
+      - monitoring
+      - trading
+    healthcheck:
+      test: ["CMD-SHELL", "python -c \"import os,time,sys; from pathlib import Path; p=Path('/workspace/hbot/reports/clickhouse_ingest/latest.json'); sys.exit(0 if p.exists() and (time.time()-p.stat().st_mtime)<=float(os.getenv('CH_INGEST_HEALTH_MAX_SEC','900')) else 1)\""]
+      interval: 60s
+      timeout: 10s
+      retries: 3
+      start_period: 30s
+
+  # ---- PostgreSQL Operational Store (Day 25) ----
+  postgres:
+    image: postgres:16-alpine
+    container_name: hbot-postgres
+    profiles:
+      - ops
+    restart: unless-stopped
+    logging: *default-logging
+    environment:
+      - POSTGRES_DB=${OPS_DB_NAME:-hbot_ops}
+      - POSTGRES_USER=${OPS_DB_USER:-hbot}
+      - POSTGRES_PASSWORD=${OPS_DB_PASSWORD:-hbot_dev_password}
+      - PGDATA=/var/lib/postgresql/data/pgdata
+    ports:
+      - "${OPS_DB_BIND_IP:-127.0.0.1}:${OPS_DB_PORT:-5432}:5432"
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+    networks:
+      - monitoring
+      - trading
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${OPS_DB_USER:-hbot} -d ${OPS_DB_NAME:-hbot_ops}"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+    deploy:
+      resources:
+        limits:
+          memory: 512M
+          cpus: "0.5"
+
+  # ---- Optional pgAdmin for local ops DB management ----
+  pgadmin:
+    image: dpage/pgadmin4:8.14
+    container_name: hbot-pgadmin
+    profiles:
+      - ops-tools
+    restart: unless-stopped
+    logging: *default-logging
+    environment:
+      - PGADMIN_DEFAULT_EMAIL=${PGADMIN_DEFAULT_EMAIL:-ops@example.local}
+      - PGADMIN_DEFAULT_PASSWORD=${PGADMIN_DEFAULT_PASSWORD:-admin}
+      - PGADMIN_CONFIG_SERVER_MODE=False
+    ports:
+      - "${OPS_PGADMIN_BIND_IP:-127.0.0.1}:${OPS_PGADMIN_PORT:-5050}:80"
+    networks:
+      - monitoring
+    depends_on:
+      postgres:
+        condition: service_healthy
 
   # ---- Prometheus ----
   prometheus:
@@ -354,7 +930,17 @@ services:
       - GF_USERS_ALLOW_ORG_CREATE=false
       - GF_AUTH_ANONYMOUS_ENABLED=false
       - GF_LOG_LEVEL=warn
-      - GF_INSTALL_PLUGINS=grafana-clock-panel
+      - GF_INSTALL_PLUGINS=${GF_INSTALL_PLUGINS:-grafana-clock-panel,grafana-clickhouse-datasource}
+      - OPS_DB_HOST=${OPS_DB_HOST:-postgres}
+      - OPS_DB_PORT=${OPS_DB_PORT:-5432}
+      - OPS_DB_NAME=${OPS_DB_NAME:-hbot_ops}
+      - OPS_DB_USER=${OPS_DB_USER:-hbot}
+      - OPS_DB_PASSWORD=${OPS_DB_PASSWORD:-hbot_dev_password}
+      - CH_HOST=${CH_HOST:-clickhouse}
+      - CH_HTTP_PORT=${CH_HTTP_PORT:-8123}
+      - CH_DB=${CH_DB:-hbot_events}
+      - CH_USER=${CH_USER:-default}
+      - CH_PASSWORD=${CH_PASSWORD:-}
     volumes:
       - grafana-data:/var/lib/grafana
       - ../monitoring/grafana/provisioning:/etc/grafana/provisioning:ro
@@ -505,6 +1091,33 @@ services:
       - "${MONITORING_BIND_IP:-127.0.0.1}:9093:9093"
     networks:
       - monitoring
+    deploy:
+      resources:
+        limits:
+          memory: 64M
+          cpus: "0.1"
+
+  # ---- Local webhook sink for alert delivery tests ----
+  alert-webhook-sink:
+    image: python:3.11-slim
+    container_name: hbot-alert-webhook-sink
+    restart: unless-stopped
+    logging: *default-logging
+    profiles:
+      - alerts
+    command: ["python", "/opt/webhook_sink.py"]
+    volumes:
+      - ../monitoring/alertmanager/webhook_sink.py:/opt/webhook_sink.py:ro
+    ports:
+      - "${MONITORING_BIND_IP:-127.0.0.1}:19093:19093"
+    networks:
+      - monitoring
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:19093/healthz')"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 10s
     deploy:
       resources:
         limits:

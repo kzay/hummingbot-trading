@@ -32,13 +32,13 @@ class HBIntentConsumer:
         self._seen = {k: ts for k, ts in self._seen.items() if ts >= cutoff}
 
     def _is_seen(self, event_id: str) -> bool:
-        self._cleanup_seen()
         return event_id in self._seen
 
     def _mark_seen(self, event_id: str) -> None:
         self._seen[event_id] = time.time()
 
     def poll(self, count: int = 20, block_ms: int = 1000) -> List[Tuple[str, ExecutionIntentEvent]]:
+        self._cleanup_seen()
         entries = self._redis.read_group(
             stream=EXECUTION_INTENT_STREAM,
             group=self._group,
@@ -47,6 +47,7 @@ class HBIntentConsumer:
             block_ms=block_ms,
         )
         out: List[Tuple[str, ExecutionIntentEvent]] = []
+        seen_in_batch: Set[str] = set()
         now_ms = int(time.time() * 1000)
         for entry_id, payload in entries:
             try:
@@ -59,7 +60,8 @@ class HBIntentConsumer:
                 )
                 self._redis.ack(EXECUTION_INTENT_STREAM, self._group, entry_id)
                 continue
-            if self._is_seen(event.event_id):
+            # Drop duplicate intents both across prior acked/rejected events and within the same poll batch.
+            if self._is_seen(event.event_id) or event.event_id in seen_in_batch:
                 self._redis.ack(EXECUTION_INTENT_STREAM, self._group, entry_id)
                 continue
             if event.expires_at_ms is not None and now_ms > event.expires_at_ms:
@@ -71,6 +73,7 @@ class HBIntentConsumer:
                 self._mark_seen(event.event_id)
                 self._redis.ack(EXECUTION_INTENT_STREAM, self._group, entry_id)
                 continue
+            seen_in_batch.add(event.event_id)
             out.append((entry_id, event))
         return out
 

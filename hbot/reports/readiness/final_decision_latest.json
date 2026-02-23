@@ -1,0 +1,28 @@
+{
+  "ts_utc": "2026-02-22T16:37:46.247133+00:00",
+  "status": "HOLD",
+  "blockers": [
+    "day2_event_store_gate",
+    "strict_cycle_not_pass",
+    "soak_not_ready"
+  ],
+  "evidence": {
+    "strict_cycle": "F:\\Environement\\git-repo\\hummingbot_custo\\hbot\\reports\\promotion_gates\\strict_cycle_latest.json",
+    "soak_latest": "F:\\Environement\\git-repo\\hummingbot_custo\\hbot\\reports\\soak\\latest.json",
+    "day2_gate": "F:\\Environement\\git-repo\\hummingbot_custo\\hbot\\reports\\event_store\\day2_gate_eval_latest.json",
+    "reconciliation": "F:\\Environement\\git-repo\\hummingbot_custo\\hbot\\reports\\reconciliation\\latest.json",
+    "parity": "F:\\Environement\\git-repo\\hummingbot_custo\\hbot\\reports\\parity\\latest.json",
+    "portfolio_risk": "F:\\Environement\\git-repo\\hummingbot_custo\\hbot\\reports\\portfolio_risk\\latest.json"
+  },
+  "summary": {
+    "strict_gate_status": "FAIL",
+    "strict_critical_failures": [
+      "day2_event_store_gate"
+    ],
+    "day2_go": false,
+    "soak_status": "hold",
+    "reconciliation_status": "warning",
+    "parity_status": "pass",
+    "portfolio_risk_status": "ok"
+  }
+}

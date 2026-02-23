@@ -1,0 +1,25 @@
+{
+  "ts_utc": "2026-02-22T16:19:41.523500+00:00",
+  "status": "pass",
+  "target_image": "hummingbot/hummingbot:version-2.12.1",
+  "current_default_image": "hummingbot/hummingbot:version-2.12.0",
+  "checks": {
+    "compose_render_with_target": true,
+    "target_differs_from_current_default": true
+  },
+  "compose_check": {
+    "cmd": [
+      "docker",
+      "compose",
+      "--env-file",
+      "F:\\Environement\\git-repo\\hummingbot_custo\\hbot\\env\\.env",
+      "-f",
+      "F:\\Environement\\git-repo\\hummingbot_custo\\hbot\\compose\\docker-compose.yml",
+      "config"
+    ],
+    "rc": 0,
+    "stdout": "name: hbot\nservices:\n  bot-metrics-exporter:\n    command:\n      - /bin/sh\n      - -lc\n      - python /workspace/hbot/services/monitoring/bot_metrics_exporter.py\n    container_name: hbot-bot-metrics-exporter\n    deploy:\n      resources:\n        limits:\n          cpus: 0.25\n          memory: \"134217728\"\n    environment:\n      EXPORTER_LOG_TAIL_LINES: \"200\"\n      HB_DATA_ROOT: /workspace/hbot/data\n      METRICS_PATH: /metrics\n      METRICS_PORT: \"9400\"\n      PYTHONPATH: /workspace/hbot\n    healthcheck:\n      test:\n        - CMD\n        - python\n        - -c\n        - import urllib.request; urllib.request.urlopen('http://localhost:9400/metrics')\n      timeout: 10s\n      interval: 30s\n      retries: 3\n      start_period: 10s\n    image: python:3.11-slim\n    logging:\n      driver: json-file\n      options:\n        max-file: \"5\"\n        max-size: 50m\n    networks:\n      monitoring: null\n    restart: unless-stopped\n    volumes:\n      - type: bind\n        source: F:\\Environement\\git-repo\\hummingbot_custo\\hbot\n        target: /workspace/hbot\n        read_only: true\n        bind: {}\n  bot1:\n    container_name: hbot-bot1\n    deploy:\n      resources:\n        limits:\n          cpus: 1\n          memory: \"1073741824\"\n        reservations:\n          cpus: 0.25\n          memory: \"268435456\"\n    environment:\n      BOT_POLICY_MODE: live\n      BOT_POLICY_ROLE: live_microcap_primary\n      BOT_POLICY_VERSION: multi_bot_policy_v1\n      BUS_SOFT_PAUSE_ON_OUTAGE: \"true\"\n      CONFIG_PASSWORD: ***redacted-secret***\n      EVENT_POLL_MS: \"1000\"\n      EXT_SIGNAL_RISK_ENABLED: \"false\"\n      REDIS_CONSUMER_GROUP: hb_group_v1\n      REDIS_DB: \"0\"\n      REDIS_HOST: redis\n      REDIS_PASSWORD: \"\"\n      REDIS_PORT: \"6379\"\n      TZ: UTC\n    image: hummingbot/hummingbot:version-2.12.1\n    logging:\n      driver: json-file\n      options:\n        max-file: \"5\"\n        max-size: 50m\n    networks:\n      trading: null\n    restart: unless-stopped\n    stdin_open: true\n    tty: true\n    volumes:\n      - type: bind\n        source: F:\\Environement\\git-repo\\hummingbot_custo\\hbot\\data\\bot1\\conf\n        target: /home/hummingbot/conf\n        bind: {}\n      - type: bind\n        source: F:\\Environement\\git-repo\\hummingbot_custo\\hbot\\data\\bot1\\logs\n        target: /home/hummingbot/logs\n        bind: {}\n      - type: bind\n        source: F:\\Environement\\git-repo\\hummingbot_custo\\hbot\\data\\bot1\\data\n        target: /home/hummingbot/data\n        bind: {}\n      - type: bind\n        source: F:\\Environement\\git-repo\\hummingbot_custo\\hbot\\data\\bot1\\scripts\n        target: /home/hummingbot/custom_scripts\n        bind: {}\n      - type: bind\n        source: F:\\Environement\\git-repo\\hummingbot_custo\\hbot\\scripts\\shared\\v2_with_controllers.py\n        target: /home/hummingbot/scripts/v2_with_controllers.py\n        read_only: true\n        bind: {}\n      - type: bind\n        source: F:\\Environement\\git-repo\\hummingbot_custo\\hbot\\data\\bot1\\pmm_scripts\n        target: /home/hummingbot/pmm_scripts\n        bind: {}\n      -",
+    "stderr": ""
+  },
+  "notes": []
+}
