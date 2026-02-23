@@ -1,15 +1,15 @@
 {
-  "ts_utc": "2026-02-23T23:50:23.270490+00:00",
+  "ts_utc": "2026-02-23T23:55:23.929492+00:00",
   "go": true,
   "gate": "day2_event_store",
   "baseline_file": "/workspace/hbot/reports/event_store/baseline_counts.json",
   "integrity_file": "/workspace/hbot/reports/event_store/integrity_20260222.json",
-  "source_compare_file": "/workspace/hbot/reports/event_store/source_compare_20260223T235022Z.json",
+  "source_compare_file": "/workspace/hbot/reports/event_store/source_compare_20260223T235523Z.json",
   "checks": [
     {
       "name": "elapsed_window",
       "pass": true,
-      "value_hours": 34.42,
+      "value_hours": 34.5,
       "required_hours": 24.0
     },
     {
