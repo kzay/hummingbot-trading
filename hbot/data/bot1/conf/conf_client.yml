@@ -135,11 +135,11 @@ tables_format: psql
 
 paper_trade:
   paper_trade_exchanges:
-  - bitget
+  - bitget_perpetual
   paper_trade_account_balance:
-    BTC: 1.0
+    BTC: 0.02
     SOL: 100.0
-    USDT: 10000.0
+    USDT: 6600.0
     USDC: 10000.0
     ETH: 20.0
     WETH: 20.0

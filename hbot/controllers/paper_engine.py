@@ -4,6 +4,7 @@ import logging
 import time
 from dataclasses import dataclass, field
 from decimal import Decimal
+from types import MethodType
 from types import SimpleNamespace
 from typing import Any, Callable, Dict, Iterable, List, Optional, Tuple
 from uuid import uuid4
@@ -12,6 +13,7 @@ logger = logging.getLogger(__name__)
 
 try:
     from hummingbot.core.data_type.common import OrderType, PriceType, TradeType
+    from hummingbot.connector.connector_base import ConnectorBase
     from hummingbot.core.event.events import (
         BuyOrderCompletedEvent,
         BuyOrderCreatedEvent,
@@ -53,6 +55,8 @@ except Exception:  # pragma: no cover - local fallback for unit tests
         BuyOrderCompleted = _EnumValue(202, "BuyOrderCompleted")
         SellOrderCompleted = _EnumValue(203, "SellOrderCompleted")
         OrderFailure = _EnumValue(198, "OrderFailure")
+    class ConnectorBase:
+        pass
 
 
 try:
@@ -60,6 +64,26 @@ try:
 except Exception:  # pragma: no cover - standalone test fallback
     def to_decimal(value: Any) -> Decimal:
         return Decimal(str(value))
+
+try:
+    from services.common.exchange_profiles import resolve_profile
+except Exception:  # pragma: no cover - standalone test fallback
+    resolve_profile = None
+
+
+def _canonical_connector_name(connector_name: str) -> str:
+    if not str(connector_name).endswith("_paper_trade"):
+        return connector_name
+    if resolve_profile is not None:
+        try:
+            profile = resolve_profile(connector_name)
+            if isinstance(profile, dict):
+                required = profile.get("requires_paper_trade_exchange")
+                if isinstance(required, str) and required:
+                    return required
+        except Exception:
+            pass
+    return connector_name[:-12]
 
 
 @dataclass
@@ -72,6 +96,7 @@ class PaperEngineConfig:
     adverse_selection_bps: Decimal = Decimal("1.5")
     min_partial_fill_ratio: Decimal = Decimal("0.15")
     max_partial_fill_ratio: Decimal = Decimal("0.85")
+    max_fills_per_order: int = 8
     maker_fee_bps: Decimal = Decimal("10.0")
     taker_fee_bps: Decimal = Decimal("10.0")
 
@@ -95,6 +120,8 @@ class PaperOrder:
     fee_asset: str = ""
     current_state: str = "OPEN"
     last_update_timestamp: float = 0.0
+    fill_count: int = 0
+    max_fills: int = 8
 
     @property
     def client_order_id(self) -> str:
@@ -222,9 +249,11 @@ class DepthFillModel:
     def _top(self, book: Any, side: Any) -> Tuple[Decimal, Decimal]:
         try:
             if side == TradeType.BUY:
-                entry = book.ask_entries()[0]
+                entry = next(iter(book.ask_entries()), None)
             else:
-                entry = book.bid_entries()[0]
+                entry = next(iter(book.bid_entries()), None)
+            if entry is None:
+                return Decimal("0"), Decimal("0")
             return to_decimal(getattr(entry, "price", 0)), to_decimal(getattr(entry, "amount", 0))
         except Exception:
             return Decimal("0"), Decimal("0")
@@ -235,14 +264,38 @@ class DepthFillModel:
         if top_price <= 0 or remaining <= 0:
             return FillDecision(fill_qty=Decimal("0"), fill_price=order.price, is_taker=False, queue_delay_ms=0)
 
+        queue_factor = max(Decimal("0.05"), min(Decimal("1"), self._cfg.queue_participation))
         is_cross = (order.trade_type == TradeType.BUY and order.price >= top_price) or (
             order.trade_type == TradeType.SELL and order.price <= top_price
         )
         if not is_cross and order.order_type == OrderType.LIMIT_MAKER:
             queue_delay_ms = int(max(0, self._cfg.latency_ms) * 1.5)
-            return FillDecision(fill_qty=Decimal("0"), fill_price=top_price, is_taker=False, queue_delay_ms=queue_delay_ms)
+            # Passive maker simulation: allow queue-based partial fills without crossing.
+            queue_factor = max(Decimal("0.05"), min(Decimal("1"), self._cfg.queue_participation))
+            max_partial = top_size * queue_factor if top_size > 0 else remaining * self._cfg.max_partial_fill_ratio
+            partial_cap = remaining * self._cfg.max_partial_fill_ratio
+            partial_floor = remaining * self._cfg.min_partial_fill_ratio
+            fill_qty = min(remaining, max_partial, partial_cap)
+            if fill_qty <= 0:
+                return FillDecision(fill_qty=Decimal("0"), fill_price=order.price, is_taker=False, queue_delay_ms=queue_delay_ms)
+            fill_qty = max(fill_qty, min(remaining, partial_floor))
+            return FillDecision(fill_qty=fill_qty, fill_price=order.price, is_taker=False, queue_delay_ms=queue_delay_ms)
 
-        queue_factor = max(Decimal("0.05"), min(Decimal("1"), self._cfg.queue_participation))
+        # Crossing orders represent taker executions and should not be artificially
+        # fragmented by ratio caps when enough top-of-book size is available.
+        if is_cross:
+            max_fill = top_size * queue_factor if top_size > 0 else remaining
+            fill_qty = min(remaining, max_fill)
+            if fill_qty <= 0:
+                return FillDecision(fill_qty=Decimal("0"), fill_price=top_price, is_taker=True, queue_delay_ms=0)
+            bps = self._cfg.slippage_bps + self._cfg.adverse_selection_bps
+            slippage_mult = bps / Decimal("10000")
+            if order.trade_type == TradeType.BUY:
+                fill_price = top_price * (Decimal("1") + slippage_mult)
+            else:
+                fill_price = top_price * (Decimal("1") - slippage_mult)
+            return FillDecision(fill_qty=fill_qty, fill_price=fill_price, is_taker=True, queue_delay_ms=max(0, self._cfg.latency_ms))
+
         max_partial = top_size * queue_factor if top_size > 0 else remaining * self._cfg.max_partial_fill_ratio
         partial_cap = remaining * self._cfg.max_partial_fill_ratio
         partial_floor = remaining * self._cfg.min_partial_fill_ratio
@@ -260,7 +313,10 @@ class DepthFillModel:
         return FillDecision(fill_qty=fill_qty, fill_price=fill_price, is_taker=is_cross, queue_delay_ms=max(0, self._cfg.latency_ms))
 
 
-class PaperExecutionAdapter:
+class PaperExecutionAdapter(ConnectorBase):
+    _FINAL_SWEEP_REMAINING_PCT = Decimal("0.02")
+    _MIN_REFRESH_INTERVAL_S = 1.0
+
     def __init__(
         self,
         connector_name: str,
@@ -269,6 +325,7 @@ class PaperExecutionAdapter:
         market_connector: Any,
         config: PaperEngineConfig,
         time_fn: Optional[Callable[[], float]] = None,
+        on_fill: Optional[Callable[[Any], None]] = None,
     ):
         self.connector_name = connector_name
         self.trading_pair = trading_pair
@@ -276,6 +333,7 @@ class PaperExecutionAdapter:
         self._market_connector = market_connector
         self._config = config
         self._time = time_fn or time.time
+        self._on_fill = on_fill
         self._listeners: Dict[Any, List[Callable[..., Any]]] = {}
         base_asset, quote_asset = trading_pair.split("-")
         self._base_asset = base_asset
@@ -298,6 +356,7 @@ class PaperExecutionAdapter:
         self._paper_fill_count = 0
         self._paper_total_queue_delay_ms = 0
         self._dropped_relay_count = 0
+        self._last_refresh_open_orders_ts: float = 0.0
 
     @property
     def paper_stats(self) -> Dict[str, Decimal]:
@@ -318,8 +377,25 @@ class PaperExecutionAdapter:
     @property
     def trading_rules(self):
         rules = getattr(self._market_connector, "trading_rules", None) or getattr(self._paper_connector, "trading_rules", None)
-        if not isinstance(rules, dict) or self.trading_pair not in rules:
-            raise RuntimeError(f"paper adapter missing trading rules for {self.trading_pair}")
+        if not isinstance(rules, dict):
+            rules = {}
+        if self.trading_pair not in rules:
+            rules[self.trading_pair] = SimpleNamespace(
+                trading_pair=self.trading_pair,
+                min_order_size=Decimal("0"),
+                min_base_amount=Decimal("0"),
+                min_amount=Decimal("0"),
+                min_notional_size=Decimal("0"),
+                min_notional=Decimal("0"),
+                min_order_value=Decimal("0"),
+                min_base_amount_increment=Decimal("0"),
+                min_order_size_increment=Decimal("0"),
+                amount_step=Decimal("0"),
+                min_price_increment=Decimal("0"),
+                min_price_tick_size=Decimal("0"),
+                price_step=Decimal("0"),
+                min_price_step=Decimal("0"),
+            )
         return rules
 
     def add_listener(self, event_tag: Any, listener: Callable[..., Any]) -> None:
@@ -333,6 +409,8 @@ class PaperExecutionAdapter:
         tag_value = getattr(event_tag, "value", event_tag)
         # Fire to local listeners (V2 executors register here).
         listeners = list(self._listeners.get(event_tag, []))
+        if tag_value != event_tag:
+            listeners.extend(self._listeners.get(tag_value, []))
         for listener in listeners:
             try:
                 listener(tag_value, self, event)
@@ -340,9 +418,9 @@ class PaperExecutionAdapter:
                 listener(event)
         # Also fire through the paper_connector so the strategy's
         # EventForwarder receives it → controller.did_fill_order().
-        self._relay_to_paper_connector(tag_value, event)
+        self._relay_to_paper_connector(event_tag, tag_value, event)
 
-    def _relay_to_paper_connector(self, tag_value: Any, event: Any) -> None:
+    def _relay_to_paper_connector(self, event_tag: Any, tag_value: Any, event: Any) -> None:
         if not _HAS_FRAMEWORK_EVENTS:
             return
         pc = self._paper_connector
@@ -351,6 +429,12 @@ class PaperExecutionAdapter:
         trigger = getattr(pc, "trigger_event", None) or getattr(pc, "c_trigger_event", None)
         if trigger is None:
             return
+        # Different HB builds accept either enum tags or integer tags.
+        try:
+            trigger(event_tag, event)
+            return
+        except Exception:
+            pass
         try:
             trigger(tag_value, event)
         except Exception:
@@ -373,6 +457,50 @@ class PaperExecutionAdapter:
         if hasattr(self._market_connector, "quantize_order_price"):
             return to_decimal(self._market_connector.quantize_order_price(trading_pair, price))
         return price
+
+    def _rule_decimal(self, trading_pair: str, candidates: List[str], default: Decimal = Decimal("0")) -> Decimal:
+        try:
+            rule = self.trading_rules.get(trading_pair)
+        except Exception:
+            rule = None
+        if rule is None:
+            return default
+        values: List[Decimal] = []
+        for name in candidates:
+            raw = getattr(rule, name, None)
+            if raw is None:
+                continue
+            val = to_decimal(raw)
+            if val > 0:
+                values.append(val)
+        if not values:
+            return default
+        return max(values)
+
+    def _min_fill_amount(self, trading_pair: str) -> Decimal:
+        return self._rule_decimal(
+            trading_pair,
+            [
+                "min_base_amount_increment",
+                "min_order_size_increment",
+                "amount_step",
+                "min_order_size",
+                "min_base_amount",
+                "min_amount",
+            ],
+            default=Decimal("0"),
+        )
+
+    def _min_fill_notional(self, trading_pair: str) -> Decimal:
+        return self._rule_decimal(
+            trading_pair,
+            [
+                "min_notional_size",
+                "min_notional",
+                "min_order_value",
+            ],
+            default=Decimal("0"),
+        )
 
     def get_price_by_type(self, trading_pair: str, price_type: Any = PriceType.MidPrice):
         self.refresh_open_orders()
@@ -399,9 +527,9 @@ class PaperExecutionAdapter:
             book = connector.get_order_book(trading_pair)
             if book is None:
                 return None
-            asks = book.ask_entries()
-            bids = book.bid_entries()
-            if (asks and len(asks) > 0) or (bids and len(bids) > 0):
+            best_ask = next(iter(book.ask_entries()), None)
+            best_bid = next(iter(book.bid_entries()), None)
+            if best_ask is not None or best_bid is not None:
                 return book
         except Exception:
             pass
@@ -417,7 +545,14 @@ class PaperExecutionAdapter:
             self._ledger.release(order.quote_asset, order.reserved_quote)
         else:
             self._ledger.release(order.base_asset, order.reserved_base)
-        self.trigger_event(MarketEvent.OrderCancelled, SimpleNamespace(order_id=order.order_id, timestamp=order.last_update_timestamp))
+        if _HAS_FRAMEWORK_EVENTS:
+            cancel_event = OrderCancelledEvent(
+                timestamp=order.last_update_timestamp,
+                order_id=order.order_id,
+            )
+        else:
+            cancel_event = SimpleNamespace(order_id=order.order_id, timestamp=order.last_update_timestamp)
+        self.trigger_event(MarketEvent.OrderCancelled, cancel_event)
         return True
 
     def buy(self, trading_pair: str, amount: Decimal, order_type: Any, price: Decimal, *args, **kwargs) -> str:
@@ -427,14 +562,18 @@ class PaperExecutionAdapter:
         return self._submit_order(trading_pair, amount, order_type, TradeType.SELL, price)
 
     async def _update_orders_with_error_handler(self, orders: List[PaperOrder], error_handler: Optional[Callable[..., Any]] = None):
-        self.refresh_open_orders()
+        self.refresh_open_orders(force=True)
         return None
 
     async def _handle_update_error_for_lost_order(self, *args, **kwargs):
         return None
 
-    def refresh_open_orders(self) -> None:
+    def refresh_open_orders(self, force: bool = False) -> None:
         now_ts = self._time()
+        if not force and self._last_refresh_open_orders_ts > 0:
+            if (now_ts - self._last_refresh_open_orders_ts) < self._MIN_REFRESH_INTERVAL_S:
+                return
+        self._last_refresh_open_orders_ts = now_ts
         self._order_tracker.prune_done(now_ts)
         try:
             book = self.get_order_book(self.trading_pair)
@@ -467,6 +606,7 @@ class PaperExecutionAdapter:
             quote_asset=self._quote_asset,
             fee_asset=self._quote_asset,
             last_update_timestamp=now_ts,
+            max_fills=max(1, int(self._config.max_fills_per_order)),
         )
 
         if not self._reserve_for_order(order):
@@ -477,18 +617,46 @@ class PaperExecutionAdapter:
             return order.order_id
 
         self._order_tracker.track(order)
-        created_event = SimpleNamespace(
-            order_id=order.order_id,
-            trading_pair=trading_pair,
-            amount=order.amount,
-            price=order.price,
-            timestamp=now_ts,
-        )
+        if _HAS_FRAMEWORK_EVENTS:
+            evt_cls = BuyOrderCreatedEvent if side == TradeType.BUY else SellOrderCreatedEvent
+            created_event = evt_cls(
+                timestamp=now_ts,
+                type=order.order_type,
+                trading_pair=trading_pair,
+                amount=order.amount,
+                price=order.price,
+                order_id=order.order_id,
+                creation_timestamp=order.creation_timestamp,
+                exchange_order_id=None,
+                leverage=1,
+                position="NIL",
+            )
+        else:
+            created_event = SimpleNamespace(
+                order_id=order.order_id,
+                trading_pair=trading_pair,
+                amount=order.amount,
+                price=order.price,
+                timestamp=now_ts,
+                creation_timestamp=now_ts,
+                type=order.order_type,
+                leverage=1,
+                position="NIL",
+                exchange_order_id=None,
+                _asdict=lambda: {
+                    "order_id": str(order.order_id),
+                    "trading_pair": str(trading_pair),
+                    "amount": str(order.amount),
+                    "price": str(order.price),
+                    "timestamp": float(now_ts),
+                    "creation_timestamp": float(now_ts),
+                },
+            )
         if side == TradeType.BUY:
             self.trigger_event(MarketEvent.BuyOrderCreated, created_event)
         else:
             self.trigger_event(MarketEvent.SellOrderCreated, created_event)
-        self.refresh_open_orders()
+        self.refresh_open_orders(force=True)
         return order.order_id
 
     def _reserve_for_order(self, order: PaperOrder) -> bool:
@@ -507,7 +675,33 @@ class PaperExecutionAdapter:
         decision = self._fill_model.evaluate(order, book, now_ts)
         if decision.fill_qty <= 0:
             return
-        fill_qty = min(decision.fill_qty, order.amount - order.executed_amount_base)
+        remaining = max(Decimal("0"), order.amount - order.executed_amount_base)
+        if remaining <= 0:
+            return
+        fill_qty = min(decision.fill_qty, remaining)
+        if order.fill_count >= max(1, int(order.max_fills)) - 1:
+            # Final fill on capped fill count: sweep remaining quantity.
+            fill_qty = remaining
+        fill_qty = self.quantize_order_amount(order.trading_pair, fill_qty)
+        # If quantization produces dust, close the order in a single final sweep.
+        if fill_qty <= 0:
+            fill_qty = remaining
+        min_fill_amount = self._min_fill_amount(order.trading_pair)
+        min_fill_notional = self._min_fill_notional(order.trading_pair)
+        min_fill_qty = max(min_fill_amount, Decimal("1e-10"))
+        if fill_qty < remaining and fill_qty < min_fill_qty:
+            return
+        remaining_after_fill = max(Decimal("0"), remaining - fill_qty)
+        if remaining_after_fill > 0:
+            remaining_notional = remaining_after_fill * max(Decimal("0"), order.price)
+            remaining_ratio = remaining_after_fill / order.amount if order.amount > 0 else Decimal("0")
+            if (
+                (min_fill_amount > 0 and remaining_after_fill <= min_fill_amount)
+                or (min_fill_notional > 0 and remaining_notional <= min_fill_notional)
+                or (remaining_ratio <= self._FINAL_SWEEP_REMAINING_PCT)
+                or (remaining_after_fill <= Decimal("1e-12"))
+            ):
+                fill_qty = remaining
         if fill_qty <= 0:
             return
         fill_price = self.quantize_order_price(order.trading_pair, decision.fill_price)
@@ -531,6 +725,7 @@ class PaperExecutionAdapter:
         order.executed_amount_quote += fill_quote
         order.cumulative_fee_paid_quote += fee_quote
         order.last_update_timestamp = now_ts
+        order.fill_count += 1
         order.current_state = "FILLED" if order.executed_amount_base >= order.amount else "PARTIALLY_FILLED"
 
         self._paper_fill_count += 1
@@ -538,6 +733,11 @@ class PaperExecutionAdapter:
 
         fill_event = self._build_fill_event(order, fill_price, fill_qty, fee_quote, now_ts, decision.is_taker)
         self.trigger_event(MarketEvent.OrderFilled, fill_event)
+        if callable(self._on_fill):
+            try:
+                self._on_fill(fill_event)
+            except Exception:
+                logger.error("paper on_fill callback failed for order %s", order.order_id, exc_info=True)
 
         if order.current_state == "FILLED":
             completed_event = self._build_completed_event(order, now_ts)
@@ -551,7 +751,7 @@ class PaperExecutionAdapter:
         if _HAS_FRAMEWORK_EVENTS:
             try:
                 trade_fee = build_trade_fee(
-                    exchange=self.connector_name,
+                    exchange=_canonical_connector_name(self.connector_name),
                     is_maker=not is_taker,
                     base_currency=order.base_asset,
                     quote_currency=order.quote_asset,
@@ -574,17 +774,26 @@ class PaperExecutionAdapter:
             except Exception:
                 logger.warning("Framework fill event construction failed for %s, using fallback", order.order_id, exc_info=True)
         fee_obj = SimpleNamespace(
-            fee_amount_in_token=lambda token, _price, _amount: fee_quote,
+            fee_amount_in_token=lambda *args, **kwargs: fee_quote,
         )
-        return SimpleNamespace(
+        fallback = SimpleNamespace(
             order_id=order.order_id,
             timestamp=now_ts,
             price=fill_price,
             amount=fill_qty,
             trade_type=order.trade_type,
+            order_type=order.order_type,
             trading_pair=order.trading_pair,
             trade_fee=fee_obj,
+            _asdict=lambda: {
+                "order_id": str(order.order_id),
+                "timestamp": float(now_ts),
+                "price": str(fill_price),
+                "amount": str(fill_qty),
+                "trading_pair": str(order.trading_pair),
+            },
         )
+        return fallback
 
     @staticmethod
     def _build_completed_event(order: PaperOrder, now_ts: float) -> Any:
@@ -649,14 +858,22 @@ def install_paper_adapter(controller: Any, connector_name: str, trading_pair: st
     strategy = getattr(controller, "strategy", None) or getattr(controller, "_strategy", None)
     provider = getattr(controller, "market_data_provider", None)
     if strategy is None or provider is None:
+        logger.info(
+            "paper adapter skip for %s/%s: strategy_or_provider_missing strategy=%s provider=%s",
+            connector_name,
+            trading_pair,
+            strategy is not None,
+            provider is not None,
+        )
         return None
 
     connectors = getattr(strategy, "connectors", None)
     if not isinstance(connectors, dict):
+        logger.info("paper adapter skip for %s/%s: strategy.connectors missing", connector_name, trading_pair)
         return None
 
     paper_connector = connectors.get(connector_name)
-    canonical_name = connector_name[:-12] if connector_name.endswith("_paper_trade") else connector_name
+    canonical_name = _canonical_connector_name(connector_name)
     market_connector = connectors.get(canonical_name)
     if market_connector is None:
         try:
@@ -669,7 +886,18 @@ def install_paper_adapter(controller: Any, connector_name: str, trading_pair: st
             paper_connector = provider.get_connector(connector_name)
         except Exception:
             paper_connector = market_connector
+    if market_connector is None and paper_connector is not None:
+        market_connector = paper_connector
     if paper_connector is None or market_connector is None:
+        logger.info(
+            "paper adapter skip for %s/%s: paper_connector=%s market_connector=%s available=%s canonical=%s",
+            connector_name,
+            trading_pair,
+            paper_connector is not None,
+            market_connector is not None,
+            ",".join(sorted(connectors.keys())),
+            canonical_name,
+        )
         return None
 
     adapter = PaperExecutionAdapter(
@@ -679,9 +907,165 @@ def install_paper_adapter(controller: Any, connector_name: str, trading_pair: st
         market_connector=market_connector,
         config=cfg,
         time_fn=lambda: float(provider.time()),
+        on_fill=getattr(controller, "did_fill_order", None),
     )
-    connectors[connector_name] = adapter
+    if not _install_native_connector_delegation(paper_connector=paper_connector, adapter=adapter):
+        if not _install_strategy_order_delegation(
+            strategy=strategy,
+            connector_name=connector_name,
+            adapter=adapter,
+        ):
+            logger.warning(
+                "paper adapter delegation patch failed for %s/%s; keeping legacy replacement mode",
+                connector_name,
+                trading_pair,
+            )
+            connectors[connector_name] = adapter
     return adapter
+
+
+def _install_native_connector_delegation(paper_connector: Any, adapter: PaperExecutionAdapter) -> bool:
+    """
+    Keep the native PaperTradeExchange instance in place and monkey-patch selected execution
+    methods to delegate to PaperExecutionAdapter. This preserves Hummingbot-native event wiring
+    and fill accounting paths while using internal fill simulation.
+    """
+    if paper_connector is None:
+        return False
+    if getattr(paper_connector, "_epp_internal_paper_delegate_installed", False):
+        return True
+
+    originals = {}
+
+    def _capture(name: str):
+        originals[name] = getattr(paper_connector, name, None)
+
+    for method_name in (
+        "buy",
+        "sell",
+        "cancel",
+        "get_order_book",
+        "get_price_by_type",
+        "get_balance",
+        "get_available_balance",
+        "quantize_order_amount",
+        "quantize_order_price",
+    ):
+        _capture(method_name)
+
+    def _delegate_buy(self, trading_pair, amount, order_type, price, *args, **kwargs):
+        return adapter.buy(trading_pair, amount, order_type, price, *args, **kwargs)
+
+    def _delegate_sell(self, trading_pair, amount, order_type, price, *args, **kwargs):
+        return adapter.sell(trading_pair, amount, order_type, price, *args, **kwargs)
+
+    def _delegate_cancel(self, trading_pair, client_order_id, *args, **kwargs):
+        return adapter.cancel(trading_pair, client_order_id)
+
+    def _delegate_get_order_book(self, trading_pair, *args, **kwargs):
+        return adapter.get_order_book(trading_pair)
+
+    def _delegate_get_price_by_type(self, trading_pair, price_type=PriceType.MidPrice, *args, **kwargs):
+        return adapter.get_price_by_type(trading_pair, price_type)
+
+    def _delegate_get_balance(self, asset, *args, **kwargs):
+        return adapter.get_balance(asset)
+
+    def _delegate_get_available_balance(self, asset, *args, **kwargs):
+        return adapter.get_available_balance(asset)
+
+    def _delegate_quantize_amount(self, trading_pair, amount, *args, **kwargs):
+        return adapter.quantize_order_amount(trading_pair, amount)
+
+    def _delegate_quantize_price(self, trading_pair, price, *args, **kwargs):
+        return adapter.quantize_order_price(trading_pair, price)
+
+    try:
+        paper_connector.buy = MethodType(_delegate_buy, paper_connector)
+        paper_connector.sell = MethodType(_delegate_sell, paper_connector)
+        paper_connector.cancel = MethodType(_delegate_cancel, paper_connector)
+        paper_connector.get_order_book = MethodType(_delegate_get_order_book, paper_connector)
+        paper_connector.get_price_by_type = MethodType(_delegate_get_price_by_type, paper_connector)
+        paper_connector.get_balance = MethodType(_delegate_get_balance, paper_connector)
+        paper_connector.get_available_balance = MethodType(_delegate_get_available_balance, paper_connector)
+        paper_connector.quantize_order_amount = MethodType(_delegate_quantize_amount, paper_connector)
+        paper_connector.quantize_order_price = MethodType(_delegate_quantize_price, paper_connector)
+
+        # V2 executor compatibility: keep native connector instance, provide adapter internals.
+        paper_connector._order_tracker = adapter._order_tracker
+        paper_connector._epp_internal_paper_adapter = adapter
+        paper_connector._epp_internal_paper_delegate_originals = originals
+        paper_connector._epp_internal_paper_delegate_installed = True
+        return True
+    except Exception:
+        logger.error("failed to install native paper connector delegation", exc_info=True)
+        try:
+            for name, original in originals.items():
+                if original is not None:
+                    setattr(paper_connector, name, original)
+        except Exception:
+            pass
+        return False
+
+
+def install_paper_adapter_on_connector(paper_connector: Any, adapter: PaperExecutionAdapter) -> bool:
+    return _install_native_connector_delegation(paper_connector=paper_connector, adapter=adapter)
+
+
+def install_paper_adapter_on_strategy(strategy: Any, connector_name: str, adapter: PaperExecutionAdapter) -> bool:
+    return _install_strategy_order_delegation(strategy=strategy, connector_name=connector_name, adapter=adapter)
+
+
+def _install_strategy_order_delegation(strategy: Any, connector_name: str, adapter: PaperExecutionAdapter) -> bool:
+    """
+    Fallback for Cython connectors with read-only methods: keep native connector in place and
+    patch strategy buy/sell/cancel dispatch to route this connector through PaperExecutionAdapter.
+    """
+    if strategy is None:
+        return False
+    if getattr(strategy, "_epp_internal_paper_order_delegate_installed", False) is False:
+        original_buy = getattr(strategy, "buy", None)
+        original_sell = getattr(strategy, "sell", None)
+        original_cancel = getattr(strategy, "cancel", None)
+        if not callable(original_buy) or not callable(original_sell) or not callable(original_cancel):
+            return False
+
+        def _patched_buy(self, conn_name, trading_pair, amount, order_type, price=Decimal("NaN"), position_action=None):
+            adapters = getattr(self, "_epp_internal_paper_adapters", {})
+            delegate = adapters.get(conn_name)
+            if delegate is not None:
+                return delegate.buy(trading_pair, amount, order_type, price, position_action=position_action)
+            return original_buy(conn_name, trading_pair, amount, order_type, price, position_action=position_action)
+
+        def _patched_sell(self, conn_name, trading_pair, amount, order_type, price=Decimal("NaN"), position_action=None):
+            adapters = getattr(self, "_epp_internal_paper_adapters", {})
+            delegate = adapters.get(conn_name)
+            if delegate is not None:
+                return delegate.sell(trading_pair, amount, order_type, price, position_action=position_action)
+            return original_sell(conn_name, trading_pair, amount, order_type, price, position_action=position_action)
+
+        def _patched_cancel(self, conn_name, trading_pair, order_id):
+            adapters = getattr(self, "_epp_internal_paper_adapters", {})
+            delegate = adapters.get(conn_name)
+            if delegate is not None:
+                return delegate.cancel(trading_pair, order_id)
+            return original_cancel(conn_name, trading_pair, order_id)
+
+        try:
+            strategy.buy = MethodType(_patched_buy, strategy)
+            strategy.sell = MethodType(_patched_sell, strategy)
+            strategy.cancel = MethodType(_patched_cancel, strategy)
+            strategy._epp_internal_paper_order_delegate_installed = True
+        except Exception:
+            logger.error("failed to install strategy-level order delegation", exc_info=True)
+            return False
+
+    adapters = getattr(strategy, "_epp_internal_paper_adapters", None)
+    if not isinstance(adapters, dict):
+        adapters = {}
+        strategy._epp_internal_paper_adapters = adapters
+    adapters[connector_name] = adapter
+    return True
 
 
 def enable_framework_paper_compat_fallbacks() -> None:
@@ -700,11 +1084,7 @@ def enable_framework_paper_compat_fallbacks() -> None:
             _orig_create_non_trading = _MDP._create_non_trading_connector
 
             def _safe_create_non_trading(self, connector_name: str):
-                canonical_name = (
-                    connector_name[:-12]
-                    if str(connector_name).endswith("_paper_trade")
-                    else connector_name
-                )
+                canonical_name = _canonical_connector_name(connector_name)
                 return _orig_create_non_trading(self, canonical_name)
 
             _MDP._create_non_trading_connector = _safe_create_non_trading
@@ -739,11 +1119,7 @@ def enable_framework_paper_compat_fallbacks() -> None:
             if direct is not None:
                 return direct
 
-            canonical_name = (
-                connector_name[:-12]
-                if str(connector_name).endswith("_paper_trade")
-                else connector_name
-            )
+            canonical_name = _canonical_connector_name(connector_name)
             canonical_connector = self.connectors.get(canonical_name)
             canonical = _extract_rule(canonical_connector, trading_pair)
             if canonical is not None:

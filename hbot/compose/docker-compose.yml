@@ -86,15 +86,20 @@ services:
       - ../data/bot1/data:/home/hummingbot/data
       - ../data/bot1/scripts:/home/hummingbot/custom_scripts
       - ../scripts/shared/v2_with_controllers.py:/home/hummingbot/scripts/v2_with_controllers.py:ro
+      - ../scripts/shared/headless_start.py:/home/hummingbot/bin/headless_start.py:ro
       - ../data/bot1/pmm_scripts:/home/hummingbot/pmm_scripts
       # ---- Shared controllers mount (Day 30) ----
       - ../controllers:/home/hummingbot/controllers:ro
       - ../controllers:/home/hummingbot/controllers/market_making:ro
       - ../config:/home/hummingbot/project_config:ro
       - ../services:/home/hummingbot/services:ro
+    command: /bin/bash -lc "conda activate hummingbot && python ./bin/headless_start.py 2>> ./logs/errors.log"
     environment:
       <<: *hbot-env
       CONFIG_PASSWORD: ${BOT1_PASSWORD:-}
+      CONFIG_FILE_NAME: v2_with_controllers.py
+      SCRIPT_CONFIG: v2_epp_v2_4_bitget_paper_smoke.yml
+      HEADLESS_MODE: "true"
       BOT_POLICY_ROLE: live_microcap_primary
       BOT_POLICY_MODE: live
       BOT_POLICY_VERSION: multi_bot_policy_v1
@@ -161,7 +166,7 @@ services:
       - ../scripts/shared/v2_with_controllers.py:/home/hummingbot/scripts/v2_with_controllers.py:ro
       - ../data/bot3/pmm_scripts:/home/hummingbot/pmm_scripts
       # ---- Shared controllers mount (Day 30) ----
-      - ../controllers:/home/hummingbot/controllers:ro
+      - ../controllers:/home/hummingbot/controllers
       - ../controllers:/home/hummingbot/controllers/market_making:ro
       - ../config:/home/hummingbot/project_config:ro
       - ../services:/home/hummingbot/services:ro

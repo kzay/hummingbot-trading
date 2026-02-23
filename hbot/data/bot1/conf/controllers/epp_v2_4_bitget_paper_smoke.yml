@@ -12,7 +12,7 @@ sell_spreads: "0.0030"
 buy_amounts_pct: "100"
 sell_amounts_pct: "100"
 executor_refresh_time: 90
-cooldown_time: 10
+cooldown_time: 20
 leverage: 1
 position_mode: ONEWAY
 stop_loss: 0.004
@@ -35,7 +35,15 @@ slippage_est_pct: 0.0005
 turnover_cap_x: 2.0
 turnover_penalty_step: 0.0005
 min_net_edge_bps: 2
+internal_paper_enabled: true
+paper_latency_ms: 100
+paper_queue_participation: 1.0
+paper_slippage_bps: 1.0
+paper_adverse_selection_bps: 1.5
+paper_partial_fill_min_ratio: 1.0
+paper_partial_fill_max_ratio: 1.0
 
-sample_interval_s: 10
+sample_interval_s: 30
 spread_floor_recalc_s: 120
 cancel_budget_per_min: 30
+position_drift_soft_pause_pct: 2.0
