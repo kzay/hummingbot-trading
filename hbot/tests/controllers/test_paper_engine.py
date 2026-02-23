@@ -146,3 +146,85 @@ def test_insufficient_balance_emits_failure():
     )
     assert failures
     assert adapter.paper_stats["paper_reject_count"] > 0
+
+
+def test_partial_fills_capped_at_max():
+    now_ts = [1_700_000_350.0]
+    paper = _ConnectorStub()
+    live = _ConnectorStub()
+    adapter = PaperExecutionAdapter(
+        connector_name="bitget_paper_trade",
+        trading_pair="BTC-USDT",
+        paper_connector=paper,
+        market_connector=live,
+        config=PaperEngineConfig(max_fills_per_order=3),
+        time_fn=lambda: now_ts[0],
+    )
+    order_id = adapter.sell(
+        trading_pair="BTC-USDT",
+        amount=Decimal("0.05"),
+        order_type=OrderType.LIMIT_MAKER,
+        price=Decimal("10050"),
+    )
+    tracked = adapter._order_tracker.fetch_order(order_id)
+    assert tracked is not None
+    for _ in range(20):
+        now_ts[0] += 0.1
+        adapter.refresh_open_orders(force=True)
+    tracked = adapter._order_tracker.fetch_order(order_id)
+    assert tracked is not None
+    assert tracked.fill_count <= tracked.max_fills
+    assert tracked.current_state == "FILLED"
+
+
+def test_refresh_rate_limited():
+    now_ts = [1_700_000_400.0]
+    paper = _ConnectorStub()
+    live = _ConnectorStub()
+    adapter = PaperExecutionAdapter(
+        connector_name="bitget_paper_trade",
+        trading_pair="BTC-USDT",
+        paper_connector=paper,
+        market_connector=live,
+        config=PaperEngineConfig(),
+        time_fn=lambda: now_ts[0],
+    )
+    calls = {"count": 0}
+    original_get_order_book = adapter.get_order_book
+
+    def counted_get_order_book(*args, **kwargs):
+        calls["count"] += 1
+        return original_get_order_book(*args, **kwargs)
+
+    adapter.get_order_book = counted_get_order_book
+    for _ in range(10):
+        adapter.get_price_by_type("BTC-USDT")
+    assert calls["count"] == 1
+    now_ts[0] += 1.1
+    adapter.get_price_by_type("BTC-USDT")
+    assert calls["count"] == 2
+
+
+def test_dust_fill_rejected():
+    now_ts = [1_700_000_450.0]
+    paper = _ConnectorStub()
+    live = _ConnectorStub()
+    adapter = PaperExecutionAdapter(
+        connector_name="bitget_paper_trade",
+        trading_pair="BTC-USDT",
+        paper_connector=paper,
+        market_connector=live,
+        config=PaperEngineConfig(),
+        time_fn=lambda: now_ts[0],
+    )
+    order_id = adapter.sell(
+        trading_pair="BTC-USDT",
+        amount=Decimal("1e-8"),
+        order_type=OrderType.LIMIT_MAKER,
+        price=Decimal("10050"),
+    )
+    tracked = adapter._order_tracker.fetch_order(order_id)
+    assert tracked is not None
+    assert tracked.fill_count == 0
+    assert tracked.executed_amount_base == Decimal("0")
+    assert tracked.current_state == "OPEN"

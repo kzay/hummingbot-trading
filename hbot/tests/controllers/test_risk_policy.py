@@ -95,6 +95,7 @@ def test_loss_metrics_computation():
 
 def test_edge_gate_blocks_on_low_edge():
     rp = _policy(edge_state_hold_s=0)
+    rp._edge_gate_changed_ts = 90.0
     rp.edge_gate_update(100.0, Decimal("-0.001"), Decimal("0.0002"), Decimal("0.0003"))
     assert rp.edge_gate_blocked is True
 
@@ -102,7 +103,7 @@ def test_edge_gate_blocks_on_low_edge():
 def test_edge_gate_unblocks_on_high_edge():
     rp = _policy(edge_state_hold_s=0)
     rp._edge_gate_blocked = True
-    rp._edge_gate_changed_ts = 0.0
+    rp._edge_gate_changed_ts = 90.0
     rp.edge_gate_update(100.0, Decimal("0.001"), Decimal("0.0002"), Decimal("0.0003"))
     assert rp.edge_gate_blocked is False
 

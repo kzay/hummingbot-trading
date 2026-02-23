@@ -20,7 +20,7 @@ def _make_detector(**overrides) -> RegimeDetector:
     return RegimeDetector(**defaults)
 
 
-def _buffer_with_price(price: Decimal, n: int = 60) -> MidPriceBuffer:
+def _buffer_with_price(price: Decimal, n: int = 360) -> MidPriceBuffer:
     buf = MidPriceBuffer(sample_interval_sec=10)
     for i in range(n):
         buf.add_sample(float(i * 10), price)
@@ -38,9 +38,9 @@ def test_neutral_regime_with_flat_prices():
 def test_up_regime_when_mid_above_ema():
     det = _make_detector()
     buf = MidPriceBuffer(sample_interval_sec=10)
-    for i in range(60):
+    for i in range(360):
         buf.add_sample(float(i * 10), Decimal("90"))
-    name, spec = det.detect(Decimal("100"), buf, 600.0)
+    name, spec = det.detect(Decimal("100"), buf, 3600.0)
     assert name == "up"
     assert spec.one_sided == "buy_only"
 
@@ -48,9 +48,9 @@ def test_up_regime_when_mid_above_ema():
 def test_down_regime_when_mid_below_ema():
     det = _make_detector()
     buf = MidPriceBuffer(sample_interval_sec=10)
-    for i in range(60):
+    for i in range(360):
         buf.add_sample(float(i * 10), Decimal("110"))
-    name, spec = det.detect(Decimal("100"), buf, 600.0)
+    name, spec = det.detect(Decimal("100"), buf, 3600.0)
     assert name == "down"
     assert spec.one_sided == "sell_only"
 

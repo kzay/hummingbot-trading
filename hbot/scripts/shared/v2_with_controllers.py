@@ -13,6 +13,15 @@ from hummingbot.data_feed.candles_feed.data_types import CandlesConfig
 from hummingbot.strategy.strategy_v2_base import StrategyV2Base, StrategyV2ConfigBase
 from hummingbot.strategy_v2.models.base import RunnableStatus
 from hummingbot.strategy_v2.models.executor_actions import CreateExecutorAction, StopExecutorAction
+from controllers.paper_engine import (
+    PaperExecutionAdapter,
+    PaperEngineConfig,
+    enable_framework_paper_compat_fallbacks,
+    install_paper_adapter,
+    install_paper_adapter_on_connector,
+    install_paper_adapter_on_strategy,
+)
+from services.common.exchange_profiles import resolve_profile
 from services.common.preflight import run_controller_preflight
 
 try:
@@ -73,6 +82,7 @@ def _install_connector_alias_guard():
 
 _install_trade_monitor_guard()
 _install_connector_alias_guard()
+enable_framework_paper_compat_fallbacks()
 
 
 class V2WithControllersConfig(StrategyV2ConfigBase):
@@ -119,9 +129,13 @@ class V2WithControllers(StrategyV2Base):
         self._last_bus_ok_ts = 0.0
         self._preflight_checked = False
         self._preflight_failed = False
+        self._paper_adapter_installed: Set[str] = set()
+        self._paper_adapter_pending_logged: Set[str] = set()
         self._init_external_bus()
+        self._install_internal_paper_adapters()
 
     def on_tick(self):
+        self._install_internal_paper_adapters()
         if not self._preflight_checked:
             self._run_preflight_once()
             if self._preflight_failed:
@@ -245,6 +259,89 @@ class V2WithControllers(StrategyV2Base):
                             trading_pair=config_dict["trading_pair"])
         for connector_name, position_mode in connectors_position_mode.items():
             self.connectors[connector_name].set_position_mode(position_mode)
+
+    def _install_internal_paper_adapters(self):
+        for controller_id, controller in self.controllers.items():
+            if controller_id in self._paper_adapter_installed:
+                continue
+            cfg = getattr(controller, "config", None)
+            if cfg is None:
+                continue
+            connector_name = str(getattr(cfg, "connector_name", ""))
+            trading_pair = str(getattr(cfg, "trading_pair", ""))
+            internal_paper_enabled = bool(getattr(cfg, "internal_paper_enabled", False))
+            if not connector_name.endswith("_paper_trade") or not internal_paper_enabled or not trading_pair:
+                continue
+            paper_cfg = PaperEngineConfig(
+                enabled=True,
+                seed=int(getattr(cfg, "paper_seed", 7)),
+                latency_ms=int(getattr(cfg, "paper_latency_ms", 150)),
+                queue_participation=Decimal(str(getattr(cfg, "paper_queue_participation", "0.35"))),
+                slippage_bps=Decimal(str(getattr(cfg, "paper_slippage_bps", "1.0"))),
+                adverse_selection_bps=Decimal(str(getattr(cfg, "paper_adverse_selection_bps", "1.5"))),
+                min_partial_fill_ratio=Decimal(str(getattr(cfg, "paper_partial_fill_min_ratio", "0.15"))),
+                max_partial_fill_ratio=Decimal(str(getattr(cfg, "paper_partial_fill_max_ratio", "0.85"))),
+                max_fills_per_order=int(getattr(cfg, "paper_max_fills_per_order", 8)),
+                maker_fee_bps=Decimal(str(getattr(cfg, "spot_fee_pct", "0.0010"))) * Decimal("10000"),
+                taker_fee_bps=Decimal(str(getattr(cfg, "spot_fee_pct", "0.0010"))) * Decimal("10000"),
+            )
+            adapter = install_paper_adapter(
+                controller=controller,
+                connector_name=connector_name,
+                trading_pair=trading_pair,
+                cfg=paper_cfg,
+            )
+            if adapter is None:
+                # Fallback install path for HB builds where controller.strategy is not bound
+                # during early ticks; we can still install using this strategy's connectors map.
+                paper_connector = self.connectors.get(connector_name)
+                if paper_connector is not None:
+                    canonical_name = connector_name
+                    if connector_name.endswith("_paper_trade"):
+                        profile = resolve_profile(connector_name)
+                        if isinstance(profile, dict):
+                            canonical_name = str(profile.get("requires_paper_trade_exchange") or connector_name[:-12])
+                        else:
+                            canonical_name = connector_name[:-12]
+                    market_connector = self.connectors.get(canonical_name) or paper_connector
+                    adapter = PaperExecutionAdapter(
+                        connector_name=connector_name,
+                        trading_pair=trading_pair,
+                        paper_connector=paper_connector,
+                        market_connector=market_connector,
+                        config=paper_cfg,
+                        time_fn=lambda: float(self.market_data_provider.time()),
+                        on_fill=getattr(controller, "did_fill_order", None),
+                    )
+                    native_ok = install_paper_adapter_on_connector(paper_connector=paper_connector, adapter=adapter)
+                    strategy_ok = False
+                    if not native_ok:
+                        strategy_ok = install_paper_adapter_on_strategy(
+                            strategy=self,
+                            connector_name=connector_name,
+                            adapter=adapter,
+                        )
+                    if not native_ok and not strategy_ok:
+                        self.connectors[connector_name] = adapter
+            if adapter is not None:
+                self._paper_adapter_installed.add(controller_id)
+                connector_obj = self.connectors.get(connector_name)
+                strategy_adapters = getattr(self, "_epp_internal_paper_adapters", {})
+                if bool(getattr(connector_obj, "_epp_internal_paper_delegate_installed", False)):
+                    mode = "native-delegation"
+                elif isinstance(strategy_adapters, dict) and connector_name in strategy_adapters:
+                    mode = "strategy-delegation"
+                else:
+                    mode = "legacy-replacement"
+                self.logger().info(f"Internal paper adapter installed for {connector_name}/{trading_pair} mode={mode}.")
+            else:
+                if controller_id not in self._paper_adapter_pending_logged:
+                    available = ",".join(sorted(self.connectors.keys())) if isinstance(self.connectors, dict) else "unknown"
+                    self.logger().warning(
+                        f"Internal paper adapter pending for {connector_name}/{trading_pair} "
+                        f"(available_connectors={available})."
+                    )
+                    self._paper_adapter_pending_logged.add(controller_id)
 
     def did_fail_order(self, order_failed_event: MarketOrderFailureEvent):
         """

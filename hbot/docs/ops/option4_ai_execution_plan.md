@@ -1074,6 +1074,11 @@ The paper trading challenge revealed a **critical architectural gap** and 6 stru
     - Call `install_paper_adapter(controller, connector_name, trading_pair, cfg)`.
   - This is **universal**: works for every current and future strategy that uses the shared script with no per-strategy code required.
 - **Config-driven activation**: `internal_paper_enabled: true` in any controller YAML enables the adapter for that controller automatically. `internal_paper_enabled: false` (or absent) leaves it disabled (live connectors are unaffected).
+- **Solution B (Execution Path Lock-In)**:
+  - Keep the native HB `PaperTradeExchange` instance in `strategy.connectors` unchanged.
+  - Monkey-patch native execution methods (`buy`, `sell`, `cancel`, `get_order_book`, `get_price_by_type`, balances, quantizers) to delegate to `PaperExecutionAdapter`.
+  - Preserve native event/listener pipeline and fill accounting (`fills.csv`, `fills_count_today`) on the original connector object.
+  - If native delegation cannot be installed for a runtime build, fall back to legacy connector replacement mode and log `mode=legacy-replacement` for fast diagnosis.
 
 ### Issue 1 (Critical) — Bot3 capital too small; edge gate kills trading before first fill
 - **Root cause**: `total_amount_quote=10` USDT is so small that the computed spread floor immediately exceeds the available edge, tripping the edge gate before any order fills. Bot3 CSV shows 3 rows, 0 fills, immediate `soft_pause`.
