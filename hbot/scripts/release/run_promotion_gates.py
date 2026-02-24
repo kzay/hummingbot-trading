@@ -274,6 +274,16 @@ def _run_ml_governance_check(root: Path) -> Tuple[int, str]:
         return 2, str(e)
 
 
+def _run_alerting_health_check(root: Path) -> Tuple[int, str]:
+    cmd = [sys.executable, str(root / "scripts" / "release" / "check_alerting_health.py")]
+    try:
+        proc = subprocess.run(cmd, cwd=str(root), capture_output=True, text=True, check=False)
+        msg = (proc.stdout or "") + ("\n" + proc.stderr if proc.stderr else "")
+        return int(proc.returncode), msg.strip()
+    except Exception as e:
+        return 2, str(e)
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description="Run promotion gate contract checks.")
     parser.add_argument("--max-report-age-min", type=int, default=20, help="Max allowed age for fresh reports.")
@@ -304,6 +314,19 @@ def main() -> int:
         action="store_true",
         help="CI-like non-interactive mode: parity + integrity refresh, markdown summary, strict freshness defaults.",
     )
+    parser.add_argument(
+        "--check-alerting-health",
+        action="store_true",
+        default=True,
+        dest="check_alerting_health",
+        help="Run alerting health probe before evaluating alerting_health gate (default: True).",
+    )
+    parser.add_argument(
+        "--no-check-alerting-health",
+        action="store_false",
+        dest="check_alerting_health",
+        help="Skip alerting health probe (use existing last_webhook_sent.json).",
+    )
     args = parser.parse_args()
 
     root = Path("/workspace/hbot") if Path("/.dockerenv").exists() else Path(__file__).resolve().parents[2]
@@ -315,6 +338,8 @@ def main() -> int:
     parity_refresh_msg = ""
     integrity_refresh_rc = 0
     integrity_refresh_msg = ""
+    alerting_health_rc = 0
+    alerting_health_msg = ""
 
     max_report_age_min = float(args.max_report_age_min)
     refresh_parity_once = bool(args.refresh_parity_once or args.ci)
@@ -327,6 +352,9 @@ def main() -> int:
 
     if refresh_event_integrity_once:
         integrity_refresh_rc, integrity_refresh_msg = _refresh_event_store_integrity_once(root)
+
+    if args.check_alerting_health:
+        alerting_health_rc, alerting_health_msg = _run_alerting_health_check(root)
 
     # 1) Preflight checks
     required_files = [
@@ -345,6 +373,7 @@ def main() -> int:
         root / "scripts" / "release" / "check_ml_signal_governance.py",
         root / "scripts" / "release" / "check_accounting_integrity_v2.py",
         root / "scripts" / "release" / "check_market_data_freshness.py",
+        root / "scripts" / "release" / "check_alerting_health.py",
         root / "scripts" / "utils" / "refresh_event_store_integrity_local.py",
         root / "config" / "coordination_policy_v1.json",
         root / "config" / "ml_governance_policy_v1.json",
@@ -782,6 +811,8 @@ def main() -> int:
             "integrity_refresh_output": integrity_refresh_msg[:2000],
             "accounting_integrity_runner_output": accounting_msg[:2000],
             "market_data_freshness_runner_output": md_msg[:2000],
+            "alerting_health_runner_output": alerting_health_msg[:2000],
+            "alerting_health_rc": alerting_health_rc,
         },
     }
 
