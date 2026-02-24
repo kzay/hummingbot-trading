@@ -175,6 +175,7 @@ class EppV24Config(MarketMakingControllerConfigBase):
     margin_ratio_hard_stop_pct: Decimal = Field(default=Decimal("0.10"), description="Margin ratio below this triggers HARD_STOP (perps only)")
     position_recon_interval_s: int = Field(default=300, ge=30, le=3600, description="Seconds between position reconciliation checks")
     position_drift_soft_pause_pct: Decimal = Field(default=Decimal("0.05"), description="Position drift > this triggers SOFT_PAUSE")
+    startup_position_sync: bool = Field(default=True, description="Query exchange on first tick and adopt actual position if local state disagrees")
     order_ack_timeout_s: int = Field(default=30, ge=5, le=120, description="Seconds before an unacked order is considered stuck")
     max_active_executors: int = Field(default=10, ge=1, le=50, description="Maximum concurrent active executors")
     # Internal paper engine (Level 2 realism)
@@ -369,12 +370,15 @@ class EppV24Controller(MarketMakingControllerBase):
         self._ws_reconnect_count: int = 0
         self._last_connector_ready: bool = True
         self._last_daily_state_save_ts: float = 0.0
+        self._startup_position_sync_done: bool = False
         self._load_daily_state()
 
     async def update_processed_data(self):
         _t0 = _time_mod.perf_counter()
         now = float(self.market_data_provider.time())
         self._runtime_adapter.refresh_connector_cache()
+        if not self._startup_position_sync_done:
+            self._run_startup_position_sync()
         self._ensure_fee_config(now)
         self._refresh_funding_rate(now)
         self._check_position_reconciliation(now)
@@ -452,6 +456,8 @@ class EppV24Controller(MarketMakingControllerBase):
                 logger.error("Margin ratio %.4f below hard stop threshold %.4f", self._margin_ratio, self.config.margin_ratio_hard_stop_pct)
             elif self._margin_ratio < self.config.margin_ratio_soft_pause_pct:
                 risk_reasons.append("margin_ratio_warning")
+        if not self._startup_position_sync_done:
+            risk_reasons.append("startup_position_sync_pending")
         if self._position_drift_pct > self.config.position_drift_soft_pause_pct:
             risk_reasons.append("position_drift_high")
         if market.order_book_stale:
@@ -575,17 +581,19 @@ class EppV24Controller(MarketMakingControllerBase):
         mid_ref = to_decimal(self.processed_data.get("mid", event.price))
         adverse_ref = to_decimal(self.processed_data.get("adverse_drift_30s", Decimal("0")))
         fill_price = to_decimal(event.price)
-        is_maker = False
-        if event.trade_type.name.lower() == "buy" and fill_price < mid_ref:
-            is_maker = True
-        elif event.trade_type.name.lower() == "sell" and fill_price > mid_ref:
-            is_maker = True
+        is_maker = None
         try:
             trade_fee_is_maker = getattr(event.trade_fee, "is_maker", None)
             if trade_fee_is_maker is not None:
                 is_maker = bool(trade_fee_is_maker)
         except Exception:
             pass
+        if is_maker is None:
+            is_maker = False
+            if event.trade_type.name.lower() == "buy" and fill_price < mid_ref:
+                is_maker = True
+            elif event.trade_type.name.lower() == "sell" and fill_price > mid_ref:
+                is_maker = True
 
         fill_amount = to_decimal(event.amount)
         realized_pnl = _ZERO
@@ -667,7 +675,13 @@ class EppV24Controller(MarketMakingControllerBase):
             f"paper fills={self.processed_data.get('paper_fill_count', 0)} rejects={self.processed_data.get('paper_reject_count', 0)} avg_qdelay_ms={self.processed_data.get('paper_avg_queue_delay_ms', Decimal('0')):.1f}",
             f"fees maker={self._maker_fee_pct * Decimal('100'):.4f}% taker={self._taker_fee_pct * Decimal('100'):.4f}% source={self._fee_source}",
             f"guard_reasons={','.join(self._ops_guard.reasons) if self._ops_guard.reasons else 'none'}",
+            f"position_base={float(self._position_base):.8f} avg_entry={float(self._avg_entry_price):.2f} realized_pnl={float(self._realized_pnl_today):.4f}",
         ]
+        if abs(self._position_base) > _BALANCE_EPSILON:
+            lines.append(
+                f"** OPEN POSITION: {float(self._position_base):.8f} {self.config.trading_pair} "
+                f"(entry={float(self._avg_entry_price):.2f}) — will persist on exchange if bot stops **"
+            )
 
     def get_custom_info(self) -> dict:
         return dict(self.processed_data)
@@ -1127,7 +1141,11 @@ class EppV24Controller(MarketMakingControllerBase):
             logger.debug("Funding rate fetch failed for %s", self.config.trading_pair)
 
     def _check_position_reconciliation(self, now_ts: float) -> None:
-        """Periodically compare local position with exchange-reported position."""
+        """Periodically compare local position with exchange-reported position.
+
+        When drift exceeds the soft-pause threshold, auto-corrects local state
+        to match the exchange (source of truth) and saves immediately.
+        """
         if now_ts - self._last_position_recon_ts < self.config.position_recon_interval_s:
             return
         self._last_position_recon_ts = now_ts
@@ -1157,11 +1175,108 @@ class EppV24Controller(MarketMakingControllerBase):
             self._position_drift_pct = abs(exchange_pos - local_pos) / ref
             if self._position_drift_pct > self.config.position_drift_soft_pause_pct:
                 logger.warning(
-                    "Position drift %.4f%% (local=%.8f exchange=%.8f) exceeds threshold",
+                    "Position drift %.4f%% exceeds threshold — auto-correcting: "
+                    "local=%.8f -> exchange=%.8f",
                     float(self._position_drift_pct * _100), float(local_pos), float(exchange_pos),
                 )
+                self._position_base = exchange_pos
+                self._save_daily_state(force=True)
         except Exception:
             logger.debug("Position reconciliation failed for %s", self.config.trading_pair, exc_info=True)
+
+    _STARTUP_SYNC_MAX_RETRIES: int = 10
+
+    def _run_startup_position_sync(self) -> None:
+        """On first tick, query the exchange for actual position and adopt it.
+
+        Covers two critical scenarios:
+        1. Cross-day restart where daily_state.json day_key doesn't match
+           (position_base was already carried forward, but may be stale).
+        2. Crash/kill where daily_state.json was never written or is outdated.
+
+        If exchange reports a position that differs from local state, the
+        exchange value wins — because the exchange is the source of truth and
+        an untracked position can lead to liquidation.
+
+        Retries up to _STARTUP_SYNC_MAX_RETRIES ticks if the connector is not
+        ready yet. Blocks order placement via SOFT_PAUSE until sync succeeds.
+        """
+        if self._startup_position_sync_done:
+            return
+        if not self.config.startup_position_sync:
+            self._startup_position_sync_done = True
+            logger.info("Startup position sync disabled by config")
+            return
+        connector = self._connector()
+        if connector is None:
+            self._startup_sync_retries = getattr(self, "_startup_sync_retries", 0) + 1
+            if self._startup_sync_retries >= self._STARTUP_SYNC_MAX_RETRIES:
+                self._startup_position_sync_done = True
+                logger.error(
+                    "Startup position sync FAILED after %d retries: connector never became available. "
+                    "Position may be out of sync with exchange — manual verification required.",
+                    self._startup_sync_retries,
+                )
+            else:
+                logger.warning(
+                    "Startup position sync deferred: connector not available (attempt %d/%d)",
+                    self._startup_sync_retries, self._STARTUP_SYNC_MAX_RETRIES,
+                )
+            return
+        try:
+            exchange_pos: Optional[Decimal] = None
+            if self._is_perp:
+                pos_fn = getattr(connector, "get_position", None) or getattr(connector, "account_positions", None)
+                if callable(pos_fn):
+                    pos = pos_fn(self.config.trading_pair) if "trading_pair" in str(getattr(pos_fn, "__code__", "")) else pos_fn()
+                    if hasattr(pos, "amount"):
+                        exchange_pos = to_decimal(pos.amount)
+                    elif isinstance(pos, dict):
+                        entry = pos.get(self.config.trading_pair, {})
+                        exchange_pos = to_decimal(entry.get("amount", 0)) if isinstance(entry, dict) else None
+            else:
+                exchange_pos = to_decimal(connector.get_balance(self._runtime_adapter._base_asset))
+            if exchange_pos is None:
+                self._startup_sync_retries = getattr(self, "_startup_sync_retries", 0) + 1
+                if self._startup_sync_retries >= self._STARTUP_SYNC_MAX_RETRIES:
+                    self._startup_position_sync_done = True
+                    logger.error("Startup position sync FAILED: could not read exchange position after %d attempts", self._startup_sync_retries)
+                else:
+                    logger.warning("Startup position sync: could not read exchange position (attempt %d/%d)", self._startup_sync_retries, self._STARTUP_SYNC_MAX_RETRIES)
+                return
+            self._startup_position_sync_done = True
+            local_pos = self._position_base
+            if exchange_pos == local_pos:
+                logger.info(
+                    "Startup position sync OK: local=%.8f matches exchange",
+                    float(local_pos),
+                )
+                return
+            if exchange_pos == _ZERO and local_pos == _ZERO:
+                return
+            ref = max(abs(exchange_pos), abs(local_pos), _MIN_SPREAD)
+            drift_pct = abs(exchange_pos - local_pos) / ref
+            logger.warning(
+                "STARTUP POSITION SYNC: adopting exchange position. "
+                "local=%.8f -> exchange=%.8f (drift=%.4f%%)",
+                float(local_pos), float(exchange_pos), float(drift_pct * _100),
+            )
+            if local_pos == _ZERO and exchange_pos != _ZERO:
+                logger.warning(
+                    "ORPHAN POSITION DETECTED on exchange (%.8f %s). "
+                    "Bot had no local record. Adopting to prevent untracked liquidation risk.",
+                    float(exchange_pos), self.config.trading_pair,
+                )
+            self._position_base = exchange_pos
+            if self._avg_entry_price == _ZERO and exchange_pos != _ZERO:
+                mid = self._get_mid_price()
+                if mid > _ZERO:
+                    self._avg_entry_price = mid
+                    logger.info("Startup sync: avg_entry_price set to current mid %.2f (no prior entry price)", float(mid))
+            self._position_drift_pct = drift_pct
+            self._save_daily_state(force=True)
+        except Exception:
+            logger.warning("Startup position sync failed for %s", self.config.trading_pair, exc_info=True)
 
     def _get_mid_price(self) -> Decimal:
         return self._runtime_adapter.get_mid_price()
@@ -1596,7 +1711,14 @@ class EppV24Controller(MarketMakingControllerBase):
         return str(Path(self.config.log_dir) / "epp_v24" / f"{self.config.instance_name}_{self.config.variant}" / "daily_state.json")
 
     def _load_daily_state(self) -> None:
-        """Restore daily state from disk if the day matches."""
+        """Restore daily state from disk.
+
+        Same-day restart: full state restored (counters, position, equity).
+        Cross-day restart: only position_base and avg_entry_price are carried
+        forward — daily counters reset on the next _maybe_roll_day call.
+        This prevents the bot from "forgetting" an open exchange position
+        just because the calendar day rolled.
+        """
         import json
         from pathlib import Path
         path = Path(self._daily_state_path())
@@ -1605,19 +1727,27 @@ class EppV24Controller(MarketMakingControllerBase):
         try:
             data = json.loads(path.read_text(encoding="utf-8"))
             today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
-            if data.get("day_key") != today:
-                return
-            self._daily_key = data.get("day_key")
-            self._daily_equity_open = to_decimal(data["equity_open"]) if data.get("equity_open") else None
-            self._daily_equity_peak = to_decimal(data["equity_peak"]) if data.get("equity_peak") else None
-            self._traded_notional_today = to_decimal(data.get("traded_notional", "0"))
-            self._fills_count_today = int(data.get("fills_count", 0))
-            self._fees_paid_today_quote = to_decimal(data.get("fees_paid", "0"))
-            self._funding_cost_today_quote = to_decimal(data.get("funding_cost", "0"))
-            self._realized_pnl_today = to_decimal(data.get("realized_pnl", "0"))
-            self._position_base = to_decimal(data.get("position_base", "0"))
-            self._avg_entry_price = to_decimal(data.get("avg_entry_price", "0"))
-            logger.info("Restored daily state for %s (fills=%d, traded=%.2f)", today, self._fills_count_today, self._traded_notional_today)
+            saved_position = to_decimal(data.get("position_base", "0"))
+            saved_avg_entry = to_decimal(data.get("avg_entry_price", "0"))
+            if data.get("day_key") == today:
+                self._daily_key = data.get("day_key")
+                self._daily_equity_open = to_decimal(data["equity_open"]) if data.get("equity_open") else None
+                self._daily_equity_peak = to_decimal(data["equity_peak"]) if data.get("equity_peak") else None
+                self._traded_notional_today = to_decimal(data.get("traded_notional", "0"))
+                self._fills_count_today = int(data.get("fills_count", 0))
+                self._fees_paid_today_quote = to_decimal(data.get("fees_paid", "0"))
+                self._funding_cost_today_quote = to_decimal(data.get("funding_cost", "0"))
+                self._realized_pnl_today = to_decimal(data.get("realized_pnl", "0"))
+                self._position_base = saved_position
+                self._avg_entry_price = saved_avg_entry
+                logger.info("Restored daily state for %s (fills=%d, traded=%.2f)", today, self._fills_count_today, self._traded_notional_today)
+            else:
+                self._position_base = saved_position
+                self._avg_entry_price = saved_avg_entry
+                logger.info(
+                    "Cross-day restart: carried forward position_base=%.8f avg_entry=%.2f from %s",
+                    saved_position, saved_avg_entry, data.get("day_key", "?"),
+                )
         except Exception:
             logger.warning("Failed to load daily state from %s", path, exc_info=True)
 
@@ -1712,6 +1842,18 @@ class EppV24Controller(MarketMakingControllerBase):
                 "fee_source": self._fee_source,
                 "maker_fee_pct": str(self._maker_fee_pct),
                 "taker_fee_pct": str(self._taker_fee_pct),
+                "realized_pnl_today_quote": str(self._realized_pnl_today),
+                "position_base": str(self._position_base),
+                "avg_entry_price": str(self._avg_entry_price),
+                "funding_rate": str(self._funding_rate),
+                "funding_cost_today_quote": str(self._funding_cost_today_quote),
+                "margin_ratio": str(self._margin_ratio),
+                "position_drift_pct": str(self._position_drift_pct),
+                "ws_reconnect_count": str(self._ws_reconnect_count),
+                "order_book_stale": str(self._book_stale_since_ts > 0),
+                "_tick_duration_ms": str(self._tick_duration_ms),
+                "_indicator_duration_ms": str(self._indicator_duration_ms),
+                "_connector_io_duration_ms": str(self._connector_io_duration_ms),
             },
             ts=event_ts,
         )

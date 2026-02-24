@@ -2,10 +2,14 @@ from decimal import Decimal
 from types import SimpleNamespace
 
 from controllers.paper_engine import (
+    DepthFillModel,
+    FillDecision,
     MarketEvent,
     OrderType,
     PaperEngineConfig,
     PaperExecutionAdapter,
+    PaperOrder,
+    TradeType,
 )
 
 
@@ -228,3 +232,149 @@ def test_dust_fill_rejected():
     assert tracked.fill_count == 0
     assert tracked.executed_amount_base == Decimal("0")
     assert tracked.current_state == "OPEN"
+
+
+# --- Maker / taker classification tests ---
+
+def _make_order(side, price, order_type=OrderType.LIMIT, crossed=False) -> PaperOrder:
+    return PaperOrder(
+        order_id="test-order",
+        trading_pair="BTC-USDT",
+        trade_type=side,
+        order_type=order_type,
+        amount=Decimal("0.01"),
+        price=price,
+        creation_timestamp=1_700_000_000.0,
+        base_asset="BTC",
+        quote_asset="USDT",
+        crossed_at_creation=crossed,
+    )
+
+
+def test_resting_limit_buy_is_maker():
+    """A buy LIMIT order placed below the ask, later filled when ask drops, is a maker fill."""
+    cfg = PaperEngineConfig()
+    model = DepthFillModel(cfg)
+    book = _Book(Decimal("9999"), Decimal("0.3"), Decimal("10001"), Decimal("0.3"))
+    order = _make_order(TradeType.BUY, Decimal("9998"), crossed=False)
+    book._asks = [_Entry(Decimal("9998"), Decimal("0.3"))]
+    decision = model.evaluate(order, book, 1_700_000_010.0)
+    assert decision.fill_qty > 0
+    assert decision.is_taker is False, "resting limit buy should be maker"
+    assert decision.fill_price == Decimal("9998"), "maker fill at limit price"
+
+
+def test_resting_limit_sell_is_maker():
+    """A sell LIMIT order placed above the bid, later filled when bid rises, is a maker fill."""
+    cfg = PaperEngineConfig()
+    model = DepthFillModel(cfg)
+    book = _Book(Decimal("9999"), Decimal("0.3"), Decimal("10001"), Decimal("0.3"))
+    order = _make_order(TradeType.SELL, Decimal("10002"), crossed=False)
+    book._bids = [_Entry(Decimal("10002"), Decimal("0.3"))]
+    decision = model.evaluate(order, book, 1_700_000_010.0)
+    assert decision.fill_qty > 0
+    assert decision.is_taker is False, "resting limit sell should be maker"
+    assert decision.fill_price == Decimal("10002"), "maker fill at limit price"
+
+
+def test_crossing_limit_buy_is_taker():
+    """A buy LIMIT order that crosses the ask at creation is a taker fill."""
+    cfg = PaperEngineConfig()
+    model = DepthFillModel(cfg)
+    book = _Book(Decimal("9999"), Decimal("0.3"), Decimal("10001"), Decimal("0.3"))
+    order = _make_order(TradeType.BUY, Decimal("10005"), crossed=True)
+    decision = model.evaluate(order, book, 1_700_000_010.0)
+    assert decision.fill_qty > 0
+    assert decision.is_taker is True, "crossing buy should be taker"
+    assert decision.fill_price > Decimal("10001"), "taker fill includes slippage"
+
+
+def test_crossing_limit_sell_is_taker():
+    """A sell LIMIT order that crosses the bid at creation is a taker fill."""
+    cfg = PaperEngineConfig()
+    model = DepthFillModel(cfg)
+    book = _Book(Decimal("9999"), Decimal("0.3"), Decimal("10001"), Decimal("0.3"))
+    order = _make_order(TradeType.SELL, Decimal("9990"), crossed=True)
+    decision = model.evaluate(order, book, 1_700_000_010.0)
+    assert decision.fill_qty > 0
+    assert decision.is_taker is True, "crossing sell should be taker"
+    assert decision.fill_price < Decimal("9999"), "taker fill includes slippage"
+
+
+def test_limit_maker_always_maker():
+    """LIMIT_MAKER orders are always maker regardless of crossed_at_creation."""
+    cfg = PaperEngineConfig()
+    model = DepthFillModel(cfg)
+    book = _Book(Decimal("9999"), Decimal("0.3"), Decimal("10001"), Decimal("0.3"))
+    order = _make_order(TradeType.SELL, Decimal("10002"), order_type=OrderType.LIMIT_MAKER, crossed=False)
+    book._bids = [_Entry(Decimal("10002"), Decimal("0.3"))]
+    decision = model.evaluate(order, book, 1_700_000_010.0)
+    assert decision.fill_qty > 0
+    assert decision.is_taker is False
+
+
+def test_maker_fee_lower_than_taker():
+    """Maker fills should charge the lower maker_fee_bps."""
+    cfg = PaperEngineConfig(maker_fee_bps=Decimal("2.0"), taker_fee_bps=Decimal("10.0"))
+    assert cfg.maker_fee_bps < cfg.taker_fee_bps
+
+
+def test_adapter_resting_buy_classified_as_maker():
+    """End-to-end: a resting buy order on the adapter fills as maker."""
+    fill_events = []
+    paper = _ConnectorStub()
+    live = _ConnectorStub()
+    adapter = PaperExecutionAdapter(
+        connector_name="bitget_paper_trade",
+        trading_pair="BTC-USDT",
+        paper_connector=paper,
+        market_connector=live,
+        config=PaperEngineConfig(maker_fee_bps=Decimal("2.0"), taker_fee_bps=Decimal("10.0")),
+        time_fn=lambda: 1_700_000_500.0,
+    )
+
+    def _capture_fill(tag, connector, event):
+        fill_events.append(event)
+
+    adapter.add_listener(MarketEvent.OrderFilled, _capture_fill)
+    order_id = adapter.buy(
+        trading_pair="BTC-USDT",
+        amount=Decimal("0.01"),
+        order_type=OrderType.LIMIT,
+        price=Decimal("9990"),
+    )
+    tracked = adapter._order_tracker.fetch_order(order_id)
+    assert tracked is not None
+    assert tracked.crossed_at_creation is False, "buy at 9990 vs ask 10001 should not cross"
+    live._book = _Book(Decimal("9989"), Decimal("0.3"), Decimal("9990"), Decimal("0.3"))
+    adapter.refresh_open_orders(force=True)
+    tracked = adapter._order_tracker.fetch_order(order_id)
+    if tracked.executed_amount_base > 0:
+        fee_rate = tracked.cumulative_fee_paid_quote / tracked.executed_amount_quote
+        assert fee_rate < Decimal("0.001"), f"maker fee should be 2bps (0.0002), got {fee_rate}"
+
+
+def test_adapter_crossing_buy_classified_as_taker():
+    """End-to-end: a crossing buy order on the adapter fills as taker."""
+    paper = _ConnectorStub()
+    live = _ConnectorStub()
+    adapter = PaperExecutionAdapter(
+        connector_name="bitget_paper_trade",
+        trading_pair="BTC-USDT",
+        paper_connector=paper,
+        market_connector=live,
+        config=PaperEngineConfig(maker_fee_bps=Decimal("2.0"), taker_fee_bps=Decimal("10.0")),
+        time_fn=lambda: 1_700_000_600.0,
+    )
+    order_id = adapter.buy(
+        trading_pair="BTC-USDT",
+        amount=Decimal("0.01"),
+        order_type=OrderType.LIMIT,
+        price=Decimal("10005"),
+    )
+    tracked = adapter._order_tracker.fetch_order(order_id)
+    assert tracked is not None
+    assert tracked.crossed_at_creation is True, "buy at 10005 vs ask 10001 should cross"
+    if tracked.executed_amount_base > 0:
+        fee_rate = tracked.cumulative_fee_paid_quote / tracked.executed_amount_quote
+        assert fee_rate >= Decimal("0.0005"), f"taker fee should be 10bps (0.001), got {fee_rate}"

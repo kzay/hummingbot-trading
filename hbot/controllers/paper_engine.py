@@ -97,7 +97,7 @@ class PaperEngineConfig:
     min_partial_fill_ratio: Decimal = Decimal("0.15")
     max_partial_fill_ratio: Decimal = Decimal("0.85")
     max_fills_per_order: int = 8
-    maker_fee_bps: Decimal = Decimal("10.0")
+    maker_fee_bps: Decimal = Decimal("2.0")
     taker_fee_bps: Decimal = Decimal("10.0")
 
 
@@ -122,6 +122,7 @@ class PaperOrder:
     last_update_timestamp: float = 0.0
     fill_count: int = 0
     max_fills: int = 8
+    crossed_at_creation: bool = False
 
     @property
     def client_order_id(self) -> str:
@@ -265,13 +266,15 @@ class DepthFillModel:
             return FillDecision(fill_qty=Decimal("0"), fill_price=order.price, is_taker=False, queue_delay_ms=0)
 
         queue_factor = max(Decimal("0.05"), min(Decimal("1"), self._cfg.queue_participation))
-        is_cross = (order.trade_type == TradeType.BUY and order.price >= top_price) or (
+        is_touchable = (order.trade_type == TradeType.BUY and order.price >= top_price) or (
             order.trade_type == TradeType.SELL and order.price <= top_price
         )
-        if not is_cross and order.order_type == OrderType.LIMIT_MAKER:
+
+        # LIMIT_MAKER: always passive maker (queue simulation at limit price).
+        # Preserves original behavior — fills gradually without requiring
+        # the market to touch the order price.
+        if order.order_type == OrderType.LIMIT_MAKER and not is_touchable:
             queue_delay_ms = int(max(0, self._cfg.latency_ms) * 1.5)
-            # Passive maker simulation: allow queue-based partial fills without crossing.
-            queue_factor = max(Decimal("0.05"), min(Decimal("1"), self._cfg.queue_participation))
             max_partial = top_size * queue_factor if top_size > 0 else remaining * self._cfg.max_partial_fill_ratio
             partial_cap = remaining * self._cfg.max_partial_fill_ratio
             partial_floor = remaining * self._cfg.min_partial_fill_ratio
@@ -281,9 +284,27 @@ class DepthFillModel:
             fill_qty = max(fill_qty, min(remaining, partial_floor))
             return FillDecision(fill_qty=fill_qty, fill_price=order.price, is_taker=False, queue_delay_ms=queue_delay_ms)
 
-        # Crossing orders represent taker executions and should not be artificially
-        # fragmented by ratio caps when enough top-of-book size is available.
-        if is_cross:
+        # Resting LIMIT order: was placed without crossing the spread.
+        # When the market moves to touch the order price, it's a maker fill
+        # (the order was sitting in the book, incoming flow matched it).
+        is_resting_limit = not order.crossed_at_creation and order.order_type != OrderType.LIMIT_MAKER
+        if (is_resting_limit or order.order_type == OrderType.LIMIT_MAKER) and is_touchable:
+            queue_delay_ms = int(max(0, self._cfg.latency_ms) * 1.5)
+            max_partial = top_size * queue_factor if top_size > 0 else remaining * self._cfg.max_partial_fill_ratio
+            partial_cap = remaining * self._cfg.max_partial_fill_ratio
+            partial_floor = remaining * self._cfg.min_partial_fill_ratio
+            fill_qty = min(remaining, max_partial, partial_cap)
+            if fill_qty <= 0:
+                return FillDecision(fill_qty=Decimal("0"), fill_price=order.price, is_taker=False, queue_delay_ms=queue_delay_ms)
+            fill_qty = max(fill_qty, min(remaining, partial_floor))
+            return FillDecision(fill_qty=fill_qty, fill_price=order.price, is_taker=False, queue_delay_ms=queue_delay_ms)
+
+        # Resting LIMIT that market hasn't reached yet — no fill.
+        if is_resting_limit and not is_touchable:
+            return FillDecision(fill_qty=Decimal("0"), fill_price=order.price, is_taker=False, queue_delay_ms=0)
+
+        # Crossing order (crossed_at_creation=True): taker fill with slippage.
+        if is_touchable:
             max_fill = top_size * queue_factor if top_size > 0 else remaining
             fill_qty = min(remaining, max_fill)
             if fill_qty <= 0:
@@ -296,21 +317,7 @@ class DepthFillModel:
                 fill_price = top_price * (Decimal("1") - slippage_mult)
             return FillDecision(fill_qty=fill_qty, fill_price=fill_price, is_taker=True, queue_delay_ms=max(0, self._cfg.latency_ms))
 
-        max_partial = top_size * queue_factor if top_size > 0 else remaining * self._cfg.max_partial_fill_ratio
-        partial_cap = remaining * self._cfg.max_partial_fill_ratio
-        partial_floor = remaining * self._cfg.min_partial_fill_ratio
-        fill_qty = min(remaining, max_partial, partial_cap)
-        if fill_qty <= 0:
-            return FillDecision(fill_qty=Decimal("0"), fill_price=top_price, is_taker=is_cross, queue_delay_ms=0)
-        fill_qty = max(fill_qty, min(remaining, partial_floor))
-
-        bps = self._cfg.slippage_bps + (self._cfg.adverse_selection_bps if is_cross else Decimal("0"))
-        slippage_mult = bps / Decimal("10000")
-        if order.trade_type == TradeType.BUY:
-            fill_price = top_price * (Decimal("1") + slippage_mult)
-        else:
-            fill_price = top_price * (Decimal("1") - slippage_mult)
-        return FillDecision(fill_qty=fill_qty, fill_price=fill_price, is_taker=is_cross, queue_delay_ms=max(0, self._cfg.latency_ms))
+        return FillDecision(fill_qty=Decimal("0"), fill_price=order.price, is_taker=False, queue_delay_ms=0)
 
 
 class PaperExecutionAdapter(ConnectorBase):
@@ -594,19 +601,34 @@ class PaperExecutionAdapter(ConnectorBase):
             self.trigger_event(MarketEvent.OrderFailure, SimpleNamespace(order_id=oid, error_message="invalid_price"))
             return oid
 
+        quantized_price = self.quantize_order_price(trading_pair, to_decimal(price))
+        try:
+            book = self.get_order_book(trading_pair)
+            if side == TradeType.BUY:
+                ask_entry = next(iter(book.ask_entries()), None)
+                top_price = to_decimal(getattr(ask_entry, "price", 0)) if ask_entry else Decimal("0")
+                crossed = top_price > 0 and quantized_price >= top_price
+            else:
+                bid_entry = next(iter(book.bid_entries()), None)
+                top_price = to_decimal(getattr(bid_entry, "price", 0)) if bid_entry else Decimal("0")
+                crossed = top_price > 0 and quantized_price <= top_price
+        except Exception:
+            crossed = False
+
         order = PaperOrder(
             order_id=self._next_order_id(side),
             trading_pair=trading_pair,
             trade_type=side,
             order_type=order_type,
             amount=self.quantize_order_amount(trading_pair, amount),
-            price=self.quantize_order_price(trading_pair, to_decimal(price)),
+            price=quantized_price,
             creation_timestamp=now_ts,
             base_asset=self._base_asset,
             quote_asset=self._quote_asset,
             fee_asset=self._quote_asset,
             last_update_timestamp=now_ts,
             max_fills=max(1, int(self._config.max_fills_per_order)),
+            crossed_at_creation=crossed,
         )
 
         if not self._reserve_for_order(order):
@@ -775,6 +797,7 @@ class PaperExecutionAdapter(ConnectorBase):
                 logger.warning("Framework fill event construction failed for %s, using fallback", order.order_id, exc_info=True)
         fee_obj = SimpleNamespace(
             fee_amount_in_token=lambda *args, **kwargs: fee_quote,
+            is_maker=not is_taker,
         )
         fallback = SimpleNamespace(
             order_id=order.order_id,

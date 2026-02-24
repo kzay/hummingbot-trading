@@ -23,32 +23,34 @@ datasources:
     url: http://loki:3100
     editable: false
 
-  - name: PostgreSQL Ops
-    uid: postgres-ops
-    type: postgres
-    access: proxy
-    url: ${OPS_DB_HOST}:${OPS_DB_PORT}
-    user: ${OPS_DB_USER}
-    database: ${OPS_DB_NAME}
-    editable: true
-    jsonData:
-      sslmode: "disable"
-      postgresVersion: 1600
-      timescaledb: false
-    secureJsonData:
-      password: ${OPS_DB_PASSWORD}
+  # PostgreSQL Ops — disabled until OPS_DB_* env vars are configured
+  # - name: PostgreSQL Ops
+  #   uid: postgres-ops
+  #   type: postgres
+  #   access: proxy
+  #   url: ${OPS_DB_HOST}:${OPS_DB_PORT}
+  #   user: ${OPS_DB_USER}
+  #   database: ${OPS_DB_NAME}
+  #   editable: true
+  #   jsonData:
+  #     sslmode: "disable"
+  #     postgresVersion: 1600
+  #     timescaledb: false
+  #   secureJsonData:
+  #     password: ${OPS_DB_PASSWORD}
 
-  - name: ClickHouse Events
-    uid: clickhouse-events
-    type: grafana-clickhouse-datasource
-    access: proxy
-    url: http://${CH_HOST}:${CH_HTTP_PORT}
-    editable: true
-    jsonData:
-      defaultDatabase: ${CH_DB}
-      protocol: http
-      port: ${CH_HTTP_PORT}
-      server: ${CH_HOST}
-      username: ${CH_USER}
-    secureJsonData:
-      password: ${CH_PASSWORD}
+  # ClickHouse Events — disabled until ClickHouse container is running
+  # - name: ClickHouse Events
+  #   uid: clickhouse-events
+  #   type: grafana-clickhouse-datasource
+  #   access: proxy
+  #   url: http://${CH_HOST}:${CH_HTTP_PORT}
+  #   editable: true
+  #   jsonData:
+  #     defaultDatabase: ${CH_DB}
+  #     protocol: http
+  #     port: ${CH_HTTP_PORT}
+  #     server: ${CH_HOST}
+  #     username: ${CH_USER}
+  #   secureJsonData:
+  #     password: ${CH_PASSWORD}

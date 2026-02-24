@@ -1,118 +1,754 @@
 {
-  "annotations": { "list": [] },
+  "annotations": {
+    "list": [
+      {
+        "builtIn": 1,
+        "datasource": {"type": "grafana", "uid": "-- Grafana --"},
+        "enable": true,
+        "hide": true,
+        "iconColor": "rgba(0, 211, 255, 1)",
+        "name": "Annotations & Alerts",
+        "type": "dashboard"
+      }
+    ]
+  },
   "editable": true,
   "fiscalYearStartMonth": 0,
   "graphTooltip": 1,
   "id": null,
-  "links": [],
-  "liveNow": false,
-  "panels": [
+  "links": [
     {
-      "title": "Aggregate Equity (Quote)",
-      "type": "stat",
-      "gridPos": { "h": 6, "w": 6, "x": 0, "y": 0 },
-      "datasource": { "type": "prometheus", "uid": "prometheus" },
-      "targets": [{ "expr": "sum(hbot_bot_equity_quote)", "refId": "A" }],
-      "fieldConfig": { "defaults": { "unit": "currencyUSD" }, "overrides": [] }
-    },
-    {
-      "title": "Aggregate Daily PnL",
-      "type": "stat",
-      "gridPos": { "h": 6, "w": 6, "x": 6, "y": 0 },
-      "datasource": { "type": "prometheus", "uid": "prometheus" },
-      "targets": [{ "expr": "sum(hbot_bot_daily_pnl_quote)", "refId": "A" }],
-      "fieldConfig": { "defaults": { "unit": "currencyUSD" }, "overrides": [] }
-    },
-    {
-      "title": "Max Drawdown %",
-      "type": "stat",
-      "gridPos": { "h": 6, "w": 6, "x": 12, "y": 0 },
-      "datasource": { "type": "prometheus", "uid": "prometheus" },
-      "targets": [{ "expr": "max(hbot_bot_drawdown_pct) * 100", "refId": "A" }],
-      "fieldConfig": { "defaults": { "unit": "percent" }, "overrides": [] }
-    },
-    {
-      "title": "Rolling 1h Mean Daily PnL",
-      "type": "stat",
-      "gridPos": { "h": 6, "w": 6, "x": 18, "y": 0 },
-      "datasource": { "type": "prometheus", "uid": "prometheus" },
-      "targets": [{ "expr": "avg(avg_over_time(hbot_bot_daily_pnl_quote[1h]))", "refId": "A" }],
-      "fieldConfig": { "defaults": { "unit": "currencyUSD" }, "overrides": [] }
-    },
-    {
-      "title": "Equity Curve by Bot",
-      "type": "timeseries",
-      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 6 },
-      "datasource": { "type": "prometheus", "uid": "prometheus" },
-      "targets": [{ "expr": "hbot_bot_equity_quote", "legendFormat": "{{bot}}" }],
-      "fieldConfig": { "defaults": { "unit": "currencyUSD" }, "overrides": [] }
-    },
-    {
-      "title": "Drawdown Curve by Bot",
-      "type": "timeseries",
-      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 6 },
-      "datasource": { "type": "prometheus", "uid": "prometheus" },
-      "targets": [{ "expr": "hbot_bot_drawdown_pct * 100", "legendFormat": "{{bot}}" }],
-      "fieldConfig": { "defaults": { "unit": "percent" }, "overrides": [] }
-    },
-    {
-      "title": "Daily PnL Distribution (Current by Bot)",
-      "type": "bargauge",
-      "gridPos": { "h": 8, "w": 8, "x": 0, "y": 14 },
-      "datasource": { "type": "prometheus", "uid": "prometheus" },
-      "targets": [{ "expr": "hbot_bot_daily_pnl_quote", "legendFormat": "{{bot}}", "instant": true }],
-      "fieldConfig": { "defaults": { "unit": "currencyUSD" }, "overrides": [] }
-    },
-    {
-      "title": "Daily Loss % by Bot",
-      "type": "timeseries",
-      "gridPos": { "h": 8, "w": 8, "x": 8, "y": 14 },
-      "datasource": { "type": "prometheus", "uid": "prometheus" },
-      "targets": [{ "expr": "hbot_bot_daily_loss_pct * 100", "legendFormat": "{{bot}}" }],
-      "fieldConfig": { "defaults": { "unit": "percent" }, "overrides": [] }
-    },
-    {
-      "title": "Cancel Rate / Min by Bot",
-      "type": "timeseries",
-      "gridPos": { "h": 8, "w": 8, "x": 16, "y": 14 },
-      "datasource": { "type": "prometheus", "uid": "prometheus" },
-      "targets": [{ "expr": "hbot_bot_cancel_per_min", "legendFormat": "{{bot}}" }]
-    },
-    {
-      "title": "Base vs Target Allocation",
-      "type": "timeseries",
-      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 22 },
-      "datasource": { "type": "prometheus", "uid": "prometheus" },
-      "targets": [
-        { "expr": "hbot_bot_base_pct", "legendFormat": "{{bot}} base" },
-        { "expr": "hbot_bot_target_base_pct", "legendFormat": "{{bot}} target" }
-      ],
-      "fieldConfig": { "defaults": { "unit": "percentunit" }, "overrides": [] }
-    },
-    {
-      "title": "Risk Reasons Info",
-      "type": "table",
-      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 22 },
-      "datasource": { "type": "prometheus", "uid": "prometheus" },
-      "targets": [{ "expr": "hbot_bot_risk_reasons_info", "format": "table", "instant": true }]
-    },
-    {
-      "title": "Bot Errors (Loki)",
-      "type": "logs",
-      "gridPos": { "h": 8, "w": 24, "x": 0, "y": 30 },
-      "datasource": { "type": "loki", "uid": "loki" },
-      "targets": [{ "expr": "{job=\"bot_logs\"} |= \"ERROR\"" }]
+      "title": "Bot Deep Dive",
+      "type": "link",
+      "url": "/d/hbot-bot-deep-dive",
+      "keepTime": true,
+      "includeVars": true,
+      "targetBlank": false,
+      "icon": "external link"
     }
   ],
-  "refresh": "30s",
+  "liveNow": true,
+  "panels": [
+    {
+      "id": 100,
+      "title": "",
+      "type": "row",
+      "gridPos": {"h": 1, "w": 24, "x": 0, "y": 0},
+      "collapsed": false
+    },
+    {
+      "id": 1,
+      "title": "Bot State",
+      "type": "stat",
+      "gridPos": {"h": 4, "w": 4, "x": 0, "y": 1},
+      "datasource": {"type": "prometheus", "uid": "prometheus"},
+      "targets": [{"expr": "hbot_bot_state{bot=~\"$bot\", state=\"running\"}", "legendFormat": "{{bot}}", "refId": "A"}],
+      "fieldConfig": {
+        "defaults": {
+          "mappings": [
+            {"options": {"0": {"color": "red", "text": "STOPPED"}}, "type": "value"},
+            {"options": {"1": {"color": "green", "text": "RUNNING"}}, "type": "value"}
+          ],
+          "thresholds": {"mode": "absolute", "steps": [{"color": "red", "value": null}, {"color": "green", "value": 1}]}
+        }
+      },
+      "options": {
+        "reduceOptions": {"values": false, "calcs": ["lastNotNull"]},
+        "textMode": "value_and_name",
+        "colorMode": "background_solid",
+        "graphMode": "none",
+        "justifyMode": "center",
+        "orientation": "horizontal"
+      }
+    },
+    {
+      "id": 2,
+      "title": "Equity",
+      "type": "stat",
+      "gridPos": {"h": 4, "w": 5, "x": 4, "y": 1},
+      "datasource": {"type": "prometheus", "uid": "prometheus"},
+      "targets": [{"expr": "sum(hbot_bot_equity_quote{bot=~\"$bot\", exchange=~\"$exchange\"})", "legendFormat": "total", "refId": "A"}],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "currencyUSD",
+          "decimals": 2,
+          "color": {"mode": "fixed", "fixedColor": "light-blue"},
+          "thresholds": {"mode": "absolute", "steps": [{"color": "light-blue", "value": null}]}
+        }
+      },
+      "options": {
+        "reduceOptions": {"values": false, "calcs": ["lastNotNull"]},
+        "textMode": "value",
+        "colorMode": "background_solid",
+        "graphMode": "area",
+        "justifyMode": "center"
+      }
+    },
+    {
+      "id": 3,
+      "title": "Daily PnL",
+      "type": "stat",
+      "gridPos": {"h": 4, "w": 5, "x": 9, "y": 1},
+      "datasource": {"type": "prometheus", "uid": "prometheus"},
+      "targets": [{"expr": "sum(hbot_bot_daily_pnl_quote{bot=~\"$bot\", exchange=~\"$exchange\"})", "legendFormat": "pnl", "refId": "A"}],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "currencyUSD",
+          "decimals": 2,
+          "color": {"mode": "thresholds"},
+          "thresholds": {"mode": "absolute", "steps": [{"color": "red", "value": null}, {"color": "green", "value": 0}]}
+        }
+      },
+      "options": {
+        "reduceOptions": {"values": false, "calcs": ["lastNotNull"]},
+        "textMode": "value",
+        "colorMode": "background_solid",
+        "graphMode": "area",
+        "justifyMode": "center"
+      }
+    },
+    {
+      "id": 4,
+      "title": "Realized PnL",
+      "type": "stat",
+      "gridPos": {"h": 4, "w": 5, "x": 14, "y": 1},
+      "datasource": {"type": "prometheus", "uid": "prometheus"},
+      "targets": [{"expr": "sum(hbot_bot_realized_pnl_today_quote{bot=~\"$bot\", exchange=~\"$exchange\"})", "legendFormat": "realized", "refId": "A"}],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "currencyUSD",
+          "decimals": 4,
+          "color": {"mode": "thresholds"},
+          "thresholds": {"mode": "absolute", "steps": [{"color": "red", "value": null}, {"color": "green", "value": 0}]}
+        }
+      },
+      "options": {
+        "reduceOptions": {"values": false, "calcs": ["lastNotNull"]},
+        "textMode": "value",
+        "colorMode": "background_solid",
+        "graphMode": "area",
+        "justifyMode": "center"
+      }
+    },
+    {
+      "id": 5,
+      "title": "Drawdown",
+      "type": "stat",
+      "gridPos": {"h": 4, "w": 5, "x": 19, "y": 1},
+      "datasource": {"type": "prometheus", "uid": "prometheus"},
+      "targets": [{"expr": "max(hbot_bot_drawdown_pct{bot=~\"$bot\", exchange=~\"$exchange\"}) * 100", "legendFormat": "dd%", "refId": "A"}],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "percent",
+          "decimals": 2,
+          "color": {"mode": "thresholds"},
+          "thresholds": {"mode": "absolute", "steps": [{"color": "green", "value": null}, {"color": "yellow", "value": 0.5}, {"color": "red", "value": 2}]}
+        }
+      },
+      "options": {
+        "reduceOptions": {"values": false, "calcs": ["lastNotNull"]},
+        "textMode": "value",
+        "colorMode": "background_solid",
+        "graphMode": "none",
+        "justifyMode": "center"
+      }
+    },
+    {
+      "id": 101,
+      "title": "Strategy Signals",
+      "type": "row",
+      "gridPos": {"h": 1, "w": 24, "x": 0, "y": 5},
+      "collapsed": false
+    },
+    {
+      "id": 10,
+      "title": "Net Edge (bps)",
+      "type": "stat",
+      "gridPos": {"h": 3, "w": 4, "x": 0, "y": 6},
+      "datasource": {"type": "prometheus", "uid": "prometheus"},
+      "targets": [{"expr": "hbot_bot_net_edge_pct{bot=~\"$bot\", exchange=~\"$exchange\"} * 10000", "legendFormat": "{{bot}}", "refId": "A"}],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "none",
+          "decimals": 1,
+          "color": {"mode": "thresholds"},
+          "thresholds": {"mode": "absolute", "steps": [{"color": "red", "value": null}, {"color": "yellow", "value": 0}, {"color": "green", "value": 1}]}
+        }
+      },
+      "options": {
+        "reduceOptions": {"values": false, "calcs": ["lastNotNull"]},
+        "textMode": "value_and_name",
+        "colorMode": "background_solid",
+        "graphMode": "none",
+        "justifyMode": "center",
+        "orientation": "horizontal"
+      }
+    },
+    {
+      "id": 11,
+      "title": "Spread (bps)",
+      "type": "stat",
+      "gridPos": {"h": 3, "w": 4, "x": 4, "y": 6},
+      "datasource": {"type": "prometheus", "uid": "prometheus"},
+      "targets": [{"expr": "hbot_bot_spread_pct{bot=~\"$bot\", exchange=~\"$exchange\"} * 10000", "legendFormat": "{{bot}}", "refId": "A"}],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "none",
+          "decimals": 1,
+          "color": {"mode": "fixed", "fixedColor": "light-blue"}
+        }
+      },
+      "options": {
+        "reduceOptions": {"values": false, "calcs": ["lastNotNull"]},
+        "textMode": "value_and_name",
+        "colorMode": "value",
+        "graphMode": "none",
+        "justifyMode": "center",
+        "orientation": "horizontal"
+      }
+    },
+    {
+      "id": 12,
+      "title": "Turnover",
+      "type": "stat",
+      "gridPos": {"h": 3, "w": 4, "x": 8, "y": 6},
+      "datasource": {"type": "prometheus", "uid": "prometheus"},
+      "targets": [{"expr": "hbot_bot_turnover_today_x{bot=~\"$bot\", exchange=~\"$exchange\"}", "legendFormat": "{{bot}}", "refId": "A"}],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "none",
+          "decimals": 2,
+          "color": {"mode": "thresholds"},
+          "thresholds": {"mode": "absolute", "steps": [{"color": "green", "value": null}, {"color": "yellow", "value": 3}, {"color": "red", "value": 6}]}
+        }
+      },
+      "options": {
+        "reduceOptions": {"values": false, "calcs": ["lastNotNull"]},
+        "textMode": "value_and_name",
+        "colorMode": "value",
+        "graphMode": "none",
+        "justifyMode": "center",
+        "orientation": "horizontal"
+      }
+    },
+    {
+      "id": 13,
+      "title": "Fills",
+      "type": "stat",
+      "gridPos": {"h": 3, "w": 4, "x": 12, "y": 6},
+      "datasource": {"type": "prometheus", "uid": "prometheus"},
+      "targets": [{"expr": "sum(hbot_bot_fills_total{bot=~\"$bot\", exchange=~\"$exchange\"})", "legendFormat": "total", "refId": "A"}],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "color": {"mode": "fixed", "fixedColor": "light-purple"}
+        }
+      },
+      "options": {
+        "reduceOptions": {"values": false, "calcs": ["lastNotNull"]},
+        "textMode": "value",
+        "colorMode": "value",
+        "graphMode": "area",
+        "justifyMode": "center"
+      }
+    },
+    {
+      "id": 14,
+      "title": "Edge Gate",
+      "type": "stat",
+      "gridPos": {"h": 3, "w": 4, "x": 16, "y": 6},
+      "datasource": {"type": "prometheus", "uid": "prometheus"},
+      "targets": [{"expr": "hbot_bot_soft_pause_edge{bot=~\"$bot\", exchange=~\"$exchange\"}", "legendFormat": "{{bot}}", "refId": "A"}],
+      "fieldConfig": {
+        "defaults": {
+          "mappings": [
+            {"options": {"0": {"color": "green", "text": "OPEN"}}, "type": "value"},
+            {"options": {"1": {"color": "orange", "text": "BLOCKED"}}, "type": "value"}
+          ],
+          "thresholds": {"mode": "absolute", "steps": [{"color": "green", "value": null}, {"color": "orange", "value": 1}]}
+        }
+      },
+      "options": {
+        "reduceOptions": {"values": false, "calcs": ["lastNotNull"]},
+        "textMode": "value_and_name",
+        "colorMode": "background_solid",
+        "graphMode": "none",
+        "justifyMode": "center",
+        "orientation": "horizontal"
+      }
+    },
+    {
+      "id": 15,
+      "title": "Snapshot Age",
+      "type": "stat",
+      "gridPos": {"h": 3, "w": 4, "x": 20, "y": 6},
+      "datasource": {"type": "prometheus", "uid": "prometheus"},
+      "targets": [{"expr": "hbot_bot_snapshot_age_seconds{bot=~\"$bot\", exchange=~\"$exchange\"}", "legendFormat": "{{bot}}", "refId": "A"}],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "s",
+          "decimals": 0,
+          "color": {"mode": "thresholds"},
+          "thresholds": {"mode": "absolute", "steps": [{"color": "green", "value": null}, {"color": "yellow", "value": 60}, {"color": "red", "value": 300}]}
+        }
+      },
+      "options": {
+        "reduceOptions": {"values": false, "calcs": ["lastNotNull"]},
+        "textMode": "value_and_name",
+        "colorMode": "background_solid",
+        "graphMode": "none",
+        "justifyMode": "center",
+        "orientation": "horizontal"
+      }
+    },
+    {
+      "id": 102,
+      "title": "Equity & PnL",
+      "type": "row",
+      "gridPos": {"h": 1, "w": 24, "x": 0, "y": 9},
+      "collapsed": false
+    },
+    {
+      "id": 20,
+      "title": "Equity Curve",
+      "type": "timeseries",
+      "gridPos": {"h": 8, "w": 12, "x": 0, "y": 10},
+      "datasource": {"type": "prometheus", "uid": "prometheus"},
+      "targets": [{"expr": "hbot_bot_equity_quote{bot=~\"$bot\", exchange=~\"$exchange\"}", "legendFormat": "{{bot}}", "refId": "A"}],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "currencyUSD",
+          "custom": {"lineWidth": 2, "fillOpacity": 8, "gradientMode": "scheme", "axisSoftMin": 0, "showPoints": "never"},
+          "color": {"mode": "palette-classic"}
+        }
+      },
+      "options": {
+        "tooltip": {"mode": "multi", "sort": "desc"},
+        "legend": {"displayMode": "list", "placement": "bottom", "calcs": ["last"]}
+      }
+    },
+    {
+      "id": 21,
+      "title": "Daily PnL",
+      "type": "timeseries",
+      "gridPos": {"h": 8, "w": 12, "x": 12, "y": 10},
+      "datasource": {"type": "prometheus", "uid": "prometheus"},
+      "targets": [{"expr": "hbot_bot_daily_pnl_quote{bot=~\"$bot\", exchange=~\"$exchange\"}", "legendFormat": "{{bot}}", "refId": "A"}],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "currencyUSD",
+          "custom": {"lineWidth": 2, "fillOpacity": 15, "gradientMode": "scheme", "showPoints": "never", "thresholdsStyle": {"mode": "line+area"}},
+          "thresholds": {"mode": "absolute", "steps": [{"color": "red", "value": null}, {"color": "transparent", "value": 0}]},
+          "color": {"mode": "palette-classic"}
+        }
+      },
+      "options": {
+        "tooltip": {"mode": "multi", "sort": "desc"},
+        "legend": {"displayMode": "list", "placement": "bottom", "calcs": ["last"]}
+      }
+    },
+    {
+      "id": 103,
+      "title": "Risk & Position",
+      "type": "row",
+      "gridPos": {"h": 1, "w": 24, "x": 0, "y": 18},
+      "collapsed": false
+    },
+    {
+      "id": 30,
+      "title": "Drawdown %",
+      "type": "timeseries",
+      "gridPos": {"h": 7, "w": 8, "x": 0, "y": 19},
+      "datasource": {"type": "prometheus", "uid": "prometheus"},
+      "targets": [{"expr": "hbot_bot_drawdown_pct{bot=~\"$bot\", exchange=~\"$exchange\"} * 100", "legendFormat": "{{bot}}", "refId": "A"}],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "percent",
+          "custom": {"fillOpacity": 20, "gradientMode": "scheme", "showPoints": "never", "thresholdsStyle": {"mode": "area"}},
+          "thresholds": {"mode": "absolute", "steps": [{"color": "green", "value": null}, {"color": "yellow", "value": 0.5}, {"color": "red", "value": 2}]},
+          "min": 0
+        }
+      },
+      "options": {
+        "tooltip": {"mode": "multi", "sort": "desc"},
+        "legend": {"displayMode": "list", "placement": "bottom", "calcs": ["last", "max"]}
+      }
+    },
+    {
+      "id": 31,
+      "title": "Base % vs Target",
+      "type": "timeseries",
+      "gridPos": {"h": 7, "w": 8, "x": 8, "y": 19},
+      "datasource": {"type": "prometheus", "uid": "prometheus"},
+      "targets": [
+        {"expr": "hbot_bot_base_pct{bot=~\"$bot\", exchange=~\"$exchange\"} * 100", "legendFormat": "{{bot}} actual", "refId": "A"},
+        {"expr": "hbot_bot_target_base_pct{bot=~\"$bot\", exchange=~\"$exchange\"} * 100", "legendFormat": "{{bot}} target", "refId": "B"}
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "percent",
+          "custom": {"lineWidth": 2, "showPoints": "never"},
+          "min": 0, "max": 100
+        },
+        "overrides": [
+          {"matcher": {"id": "byRegexp", "options": ".*target.*"}, "properties": [{"id": "custom.lineStyle", "value": {"fill": "dash", "dash": [6, 3]}}, {"id": "custom.lineWidth", "value": 1}]}
+        ]
+      },
+      "options": {
+        "tooltip": {"mode": "multi", "sort": "desc"},
+        "legend": {"displayMode": "list", "placement": "bottom", "calcs": ["last"]}
+      }
+    },
+    {
+      "id": 32,
+      "title": "Net Edge & Spread (bps)",
+      "type": "timeseries",
+      "gridPos": {"h": 7, "w": 8, "x": 16, "y": 19},
+      "datasource": {"type": "prometheus", "uid": "prometheus"},
+      "targets": [
+        {"expr": "hbot_bot_net_edge_pct{bot=~\"$bot\", exchange=~\"$exchange\"} * 10000", "legendFormat": "{{bot}} edge", "refId": "A"},
+        {"expr": "hbot_bot_spread_pct{bot=~\"$bot\", exchange=~\"$exchange\"} * 10000", "legendFormat": "{{bot}} spread", "refId": "B"},
+        {"expr": "hbot_bot_spread_floor_pct{bot=~\"$bot\", exchange=~\"$exchange\"} * 10000", "legendFormat": "{{bot}} floor", "refId": "C"}
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "none",
+          "custom": {"lineWidth": 2, "showPoints": "never", "thresholdsStyle": {"mode": "line"}},
+          "thresholds": {"mode": "absolute", "steps": [{"color": "red", "value": null}, {"color": "transparent", "value": 0}]}
+        },
+        "overrides": [
+          {"matcher": {"id": "byRegexp", "options": ".*floor.*"}, "properties": [{"id": "custom.lineStyle", "value": {"fill": "dash", "dash": [4, 4]}}, {"id": "custom.lineWidth", "value": 1}]}
+        ]
+      },
+      "options": {
+        "tooltip": {"mode": "multi", "sort": "desc"},
+        "legend": {"displayMode": "list", "placement": "bottom", "calcs": ["last", "mean"]}
+      }
+    },
+    {
+      "id": 104,
+      "title": "Activity",
+      "type": "row",
+      "gridPos": {"h": 1, "w": 24, "x": 0, "y": 26},
+      "collapsed": false
+    },
+    {
+      "id": 40,
+      "title": "Fill Rate (per 5 min)",
+      "type": "timeseries",
+      "gridPos": {"h": 7, "w": 12, "x": 0, "y": 27},
+      "datasource": {"type": "prometheus", "uid": "prometheus"},
+      "targets": [{"expr": "increase(hbot_bot_fills_total{bot=~\"$bot\", exchange=~\"$exchange\"}[5m])", "legendFormat": "{{bot}}", "refId": "A"}],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "custom": {"fillOpacity": 30, "lineWidth": 2, "gradientMode": "scheme", "showPoints": "never", "drawStyle": "bars", "barAlignment": 0}
+        }
+      },
+      "options": {
+        "tooltip": {"mode": "multi", "sort": "desc"},
+        "legend": {"displayMode": "list", "placement": "bottom", "calcs": ["sum"]}
+      }
+    },
+    {
+      "id": 41,
+      "title": "Turnover (x capital)",
+      "type": "timeseries",
+      "gridPos": {"h": 7, "w": 12, "x": 12, "y": 27},
+      "datasource": {"type": "prometheus", "uid": "prometheus"},
+      "targets": [{"expr": "hbot_bot_turnover_today_x{bot=~\"$bot\", exchange=~\"$exchange\"}", "legendFormat": "{{bot}}", "refId": "A"}],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "decimals": 2,
+          "custom": {"fillOpacity": 10, "lineWidth": 2, "showPoints": "never"}
+        }
+      },
+      "options": {
+        "tooltip": {"mode": "multi", "sort": "desc"},
+        "legend": {"displayMode": "list", "placement": "bottom", "calcs": ["last"]}
+      }
+    },
+    {
+      "id": 105,
+      "title": "Position & Orders",
+      "type": "row",
+      "gridPos": {"h": 1, "w": 24, "x": 0, "y": 34},
+      "collapsed": false
+    },
+    {
+      "id": 50,
+      "title": "Position (BTC)",
+      "type": "stat",
+      "gridPos": {"h": 4, "w": 4, "x": 0, "y": 35},
+      "datasource": {"type": "prometheus", "uid": "prometheus"},
+      "targets": [{"expr": "hbot_bot_position_base{bot=~\"$bot\", exchange=~\"$exchange\"}", "legendFormat": "{{bot}}", "refId": "A"}],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "none",
+          "decimals": 8,
+          "color": {"mode": "thresholds"},
+          "thresholds": {"mode": "absolute", "steps": [{"color": "red", "value": null}, {"color": "green", "value": 0}]}
+        }
+      },
+      "options": {
+        "reduceOptions": {"values": false, "calcs": ["lastNotNull"]},
+        "textMode": "value_and_name",
+        "colorMode": "value",
+        "graphMode": "none",
+        "justifyMode": "center",
+        "orientation": "horizontal"
+      }
+    },
+    {
+      "id": 51,
+      "title": "Avg Entry",
+      "type": "stat",
+      "gridPos": {"h": 4, "w": 4, "x": 4, "y": 35},
+      "datasource": {"type": "prometheus", "uid": "prometheus"},
+      "targets": [{"expr": "hbot_bot_avg_entry_price{bot=~\"$bot\", exchange=~\"$exchange\"}", "legendFormat": "{{bot}}", "refId": "A"}],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "currencyUSD",
+          "decimals": 2,
+          "color": {"mode": "fixed", "fixedColor": "light-blue"}
+        }
+      },
+      "options": {
+        "reduceOptions": {"values": false, "calcs": ["lastNotNull"]},
+        "textMode": "value_and_name",
+        "colorMode": "value",
+        "graphMode": "none",
+        "justifyMode": "center",
+        "orientation": "horizontal"
+      }
+    },
+    {
+      "id": 52,
+      "title": "Buys",
+      "type": "stat",
+      "gridPos": {"h": 4, "w": 4, "x": 8, "y": 35},
+      "datasource": {"type": "prometheus", "uid": "prometheus"},
+      "targets": [{"expr": "hbot_bot_fills_buy_count{bot=~\"$bot\", exchange=~\"$exchange\"}", "legendFormat": "{{bot}}", "refId": "A"}],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "color": {"mode": "fixed", "fixedColor": "green"}
+        }
+      },
+      "options": {
+        "reduceOptions": {"values": false, "calcs": ["lastNotNull"]},
+        "textMode": "value_and_name",
+        "colorMode": "value",
+        "graphMode": "area",
+        "justifyMode": "center",
+        "orientation": "horizontal"
+      }
+    },
+    {
+      "id": 53,
+      "title": "Sells",
+      "type": "stat",
+      "gridPos": {"h": 4, "w": 4, "x": 12, "y": 35},
+      "datasource": {"type": "prometheus", "uid": "prometheus"},
+      "targets": [{"expr": "hbot_bot_fills_sell_count{bot=~\"$bot\", exchange=~\"$exchange\"}", "legendFormat": "{{bot}}", "refId": "A"}],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "color": {"mode": "fixed", "fixedColor": "red"}
+        }
+      },
+      "options": {
+        "reduceOptions": {"values": false, "calcs": ["lastNotNull"]},
+        "textMode": "value_and_name",
+        "colorMode": "value",
+        "graphMode": "area",
+        "justifyMode": "center",
+        "orientation": "horizontal"
+      }
+    },
+    {
+      "id": 54,
+      "title": "Maker Fills",
+      "type": "stat",
+      "gridPos": {"h": 4, "w": 4, "x": 16, "y": 35},
+      "datasource": {"type": "prometheus", "uid": "prometheus"},
+      "targets": [{"expr": "hbot_bot_fills_maker_count{bot=~\"$bot\", exchange=~\"$exchange\"}", "legendFormat": "{{bot}}", "refId": "A"}],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "color": {"mode": "fixed", "fixedColor": "light-green"}
+        }
+      },
+      "options": {
+        "reduceOptions": {"values": false, "calcs": ["lastNotNull"]},
+        "textMode": "value_and_name",
+        "colorMode": "value",
+        "graphMode": "none",
+        "justifyMode": "center",
+        "orientation": "horizontal"
+      }
+    },
+    {
+      "id": 55,
+      "title": "Taker Fills",
+      "type": "stat",
+      "gridPos": {"h": 4, "w": 4, "x": 20, "y": 35},
+      "datasource": {"type": "prometheus", "uid": "prometheus"},
+      "targets": [{"expr": "hbot_bot_fills_taker_count{bot=~\"$bot\", exchange=~\"$exchange\"}", "legendFormat": "{{bot}}", "refId": "A"}],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "color": {"mode": "fixed", "fixedColor": "orange"}
+        }
+      },
+      "options": {
+        "reduceOptions": {"values": false, "calcs": ["lastNotNull"]},
+        "textMode": "value_and_name",
+        "colorMode": "value",
+        "graphMode": "none",
+        "justifyMode": "center",
+        "orientation": "horizontal"
+      }
+    },
+    {
+      "id": 106,
+      "title": "Fees & Notional",
+      "type": "row",
+      "gridPos": {"h": 1, "w": 24, "x": 0, "y": 39},
+      "collapsed": false
+    },
+    {
+      "id": 60,
+      "title": "Total Fees Paid",
+      "type": "stat",
+      "gridPos": {"h": 4, "w": 6, "x": 0, "y": 40},
+      "datasource": {"type": "prometheus", "uid": "prometheus"},
+      "targets": [{"expr": "hbot_bot_total_fees_quote{bot=~\"$bot\", exchange=~\"$exchange\"}", "legendFormat": "{{bot}}", "refId": "A"}],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "currencyUSD",
+          "decimals": 4,
+          "color": {"mode": "fixed", "fixedColor": "orange"}
+        }
+      },
+      "options": {
+        "reduceOptions": {"values": false, "calcs": ["lastNotNull"]},
+        "textMode": "value_and_name",
+        "colorMode": "background_solid",
+        "graphMode": "area",
+        "justifyMode": "center"
+      }
+    },
+    {
+      "id": 61,
+      "title": "Buy Notional",
+      "type": "stat",
+      "gridPos": {"h": 4, "w": 6, "x": 6, "y": 40},
+      "datasource": {"type": "prometheus", "uid": "prometheus"},
+      "targets": [{"expr": "hbot_bot_buy_notional_quote{bot=~\"$bot\", exchange=~\"$exchange\"}", "legendFormat": "{{bot}}", "refId": "A"}],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "currencyUSD",
+          "decimals": 2,
+          "color": {"mode": "fixed", "fixedColor": "green"}
+        }
+      },
+      "options": {
+        "reduceOptions": {"values": false, "calcs": ["lastNotNull"]},
+        "textMode": "value_and_name",
+        "colorMode": "background_solid",
+        "graphMode": "none",
+        "justifyMode": "center"
+      }
+    },
+    {
+      "id": 62,
+      "title": "Sell Notional",
+      "type": "stat",
+      "gridPos": {"h": 4, "w": 6, "x": 12, "y": 40},
+      "datasource": {"type": "prometheus", "uid": "prometheus"},
+      "targets": [{"expr": "hbot_bot_sell_notional_quote{bot=~\"$bot\", exchange=~\"$exchange\"}", "legendFormat": "{{bot}}", "refId": "A"}],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "currencyUSD",
+          "decimals": 2,
+          "color": {"mode": "fixed", "fixedColor": "red"}
+        }
+      },
+      "options": {
+        "reduceOptions": {"values": false, "calcs": ["lastNotNull"]},
+        "textMode": "value_and_name",
+        "colorMode": "background_solid",
+        "graphMode": "none",
+        "justifyMode": "center"
+      }
+    },
+    {
+      "id": 63,
+      "title": "Avg Buy / Sell Price",
+      "type": "stat",
+      "gridPos": {"h": 4, "w": 6, "x": 18, "y": 40},
+      "datasource": {"type": "prometheus", "uid": "prometheus"},
+      "targets": [
+        {"expr": "hbot_bot_avg_buy_price{bot=~\"$bot\", exchange=~\"$exchange\"}", "legendFormat": "{{bot}} buy", "refId": "A"},
+        {"expr": "hbot_bot_avg_sell_price{bot=~\"$bot\", exchange=~\"$exchange\"}", "legendFormat": "{{bot}} sell", "refId": "B"}
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "currencyUSD",
+          "decimals": 2,
+          "color": {"mode": "palette-classic"}
+        }
+      },
+      "options": {
+        "reduceOptions": {"values": false, "calcs": ["lastNotNull"]},
+        "textMode": "value_and_name",
+        "colorMode": "value",
+        "graphMode": "none",
+        "justifyMode": "center",
+        "orientation": "horizontal"
+      }
+    }
+  ],
+  "refresh": "15s",
   "schemaVersion": 39,
   "style": "dark",
-  "tags": ["hummingbot", "trading", "performance"],
-  "templating": { "list": [] },
-  "time": { "from": "now-12h", "to": "now" },
-  "timepicker": {},
+  "tags": ["hummingbot", "trading", "desk"],
+  "templating": {
+    "list": [
+      {
+        "name": "bot",
+        "label": "Bot",
+        "type": "query",
+        "datasource": {"type": "prometheus", "uid": "prometheus"},
+        "query": "label_values(hbot_bot_state, bot)",
+        "includeAll": true,
+        "multi": true,
+        "allValue": ".+",
+        "refresh": 2,
+        "sort": 1,
+        "current": {"text": "All", "value": ["$__all"]}
+      },
+      {
+        "name": "exchange",
+        "label": "Exchange",
+        "type": "query",
+        "datasource": {"type": "prometheus", "uid": "prometheus"},
+        "query": "label_values(hbot_bot_state{bot=~\"$bot\"}, exchange)",
+        "includeAll": true,
+        "multi": true,
+        "allValue": ".+",
+        "refresh": 2,
+        "sort": 1,
+        "current": {"text": "All", "value": ["$__all"]}
+      }
+    ]
+  },
+  "time": {"from": "now-3h", "to": "now"},
+  "timepicker": {"hidden": false},
   "timezone": "utc",
-  "title": "Hummingbot Trading Desk Overview",
+  "title": "Trading Desk",
   "uid": "hbot-trading-overview",
-  "version": 2
+  "version": 4
 }

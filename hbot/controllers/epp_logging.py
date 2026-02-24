@@ -193,6 +193,18 @@ class CsvSplitLogger:
             "fee_source",
             "maker_fee_pct",
             "taker_fee_pct",
+            "realized_pnl_today_quote",
+            "position_base",
+            "avg_entry_price",
+            "funding_rate",
+            "funding_cost_today_quote",
+            "margin_ratio",
+            "position_drift_pct",
+            "ws_reconnect_count",
+            "order_book_stale",
+            "_tick_duration_ms",
+            "_indicator_duration_ms",
+            "_connector_io_duration_ms",
         )
         self._append("minute", row, fields)
 

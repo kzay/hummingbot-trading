@@ -2,9 +2,24 @@
 
 ## Current Status
 - Start date: 2026-02-21
-- Current phase: Day 2 - Event Store (Paused by operator)
-- Overall progress: 100%
-- Execution mode: documentation-first and controlled validation
+- Phase 1 complete: Day 1–82 (hardening plan fully executed)
+- Current phase: **Phase 2 — Multi-Bot Desk Expansion** (started 2026-02-24)
+- Active day: Day 85a - Bitget Paper Soak on Live Market Data (IN_PROGRESS)
+- Overall Phase 1 progress: 100% (Days 1–82 documented)
+- Phase 2 progress: 10% (Days 83–84 COMPLETED; Day 85a IN_PROGRESS; Days 85–102 pending/blocked)
+- Execution mode: Live enablement + strategy expansion
+- Audit date: 2026-02-24 (`MODE=AUDIT_EXISTING_PROJECT` — full desk audit integrated)
+
+## Phase 2 Context (Audit Integration — 2026-02-24)
+Three critical gaps identified in the 2026-02-24 audit:
+1. **Live deployment blocked** — Bitget unfunded; strict cycle FAIL (Day 2 gate). Wave A (Days 83-87) unblocks live.
+2. **Single strategy only** — EPP v2.4 MM is the only active strategy. Wave B (Days 88-91) adds DirectionalController.
+3. **No meta-control** — capital allocation is manual. Wave C (Days 92-102) adds MetaAllocator + full desk.
+
+Wave summary:
+- **Wave A (Days 83-87):** Gate resolution → strict cycle PASS → Bitget live smoke → fill recalibration → parity baseline
+- **Wave B (Days 88-91):** DirectionalController → backtest → paper soak → multi-bot parity
+- **Wave C (Days 92-102):** MetaAllocator, net exposure guard, TWAP utility, ExecutionAdapter protocol, directional live, mean-reversion, hedge mode, ML hardening, dynamic reallocation, funding hard stop, game-day drills
 
 ## Day-by-Day Tracker
 
@@ -92,6 +107,31 @@
 | Day 80 | Backup + retention + operational automation | COMPLETED | pg_backup.py with retention; archive_event_store.py with gzip; /health endpoints on both exporters |
 | Day 81 | Execution adapter protocol (migration readiness) | OPTIONAL | Define ExecutionAdapter protocol; refactor ConnectorRuntimeAdapter + PaperEngine |
 | Day 82 | Strategy runner abstraction (migration readiness) | OPTIONAL | Extract StrategyRunner base; HBStrategyRunner subclass |
+| — | **PHASE 2 — Multi-Bot Desk Expansion (Audit Integration 2026-02-24)** | — | — |
+| Day 83 | Resolve Day 2 event store gate | COMPLETED | All three checks pass: elapsed_window=36.05h, missing_correlation=0, delta=0; go=true (`2026-02-24T01:28Z`) |
+| Day 84 | Strict promotion cycle PASS | COMPLETED | strict_gate_rc=0, status=PASS, critical_failures=[]; readiness decision=GO (`2026-02-24T01:28Z`) |
+| Day 85a | Bitget paper soak on live market data | IN_PROGRESS | connector_name switched to bitget_perpetual; internal_paper_enabled=true; 4h paper soak + fill factor calibration on Bitget |
+| Day 85b | Startup position sync + cross-day position safety | COMPLETED | Exchange-authoritative position sync on first tick (with retry); cross-day restart preserves position_base/avg_entry_price; orphan position detection; auto-correct reconciliation; open-position shutdown warning |
+| Day 85c | Paper engine maker/taker classification fix | COMPLETED | Resting LIMIT orders now correctly classified as maker (was: 100% taker); `crossed_at_creation` flag tracks order state at submission; maker fee default 2bps (was: 10bps); controller prefers trade_fee.is_maker over price heuristic |
+| Day 85 | Bitget live micro-cap smoke (Day 15 revival) | BLOCKED | Requires Day 85a PASS + funded Bitget account; run check_bitget_min_order.py first |
+| Day 86 | Post-trade validation + fill factor recalibration (live data) | BLOCKED | Requires Day 85 live fills; recalibrate fill_factor and min_net_edge_bps |
+| Day 87 | Live vs testnet parity report (confidence baseline) | BLOCKED | Requires Day 85 live session; parity score baseline for Bitget |
+| Day 88 | DirectionalController v1 (EMA crossover) | PENDING | Reuses RegimeDetector, RiskPolicy, FeeManager; bot4 paper |
+| Day 89 | Directional controller backtest adapter + regression suite | PENDING | StrategyAdapter protocol; IS/OOS split; OOS Sharpe > 0.5 |
+| Day 90 | Bot4 wired to DirectionalController + paper soak | PENDING | 24h paper soak; directional KPIs gate-integrated |
+| Day 91 | Multi-bot parity report extension (MM + Directional) | PENDING | Cross-strategy exposure flagging; same-direction concurrent position detection |
+| Day 92 | MetaAllocator v1 — static capital split | PENDING | New service; MM 60%, Directional 30%, Reserve 10%; allocation intents via Redis |
+| Day 93 | Cross-strategy net exposure guard (CoordinationService v2) | PENDING | Net exposure cap enforcement; REDUCE_EXPOSURE → SOFT_PAUSE flow |
+| Day 94 | TWAPExecutorBot — emergency position unwind | PENDING | Execution utility; kill switch integration; paper validated on bot3 |
+| Day 95 | ExecutionAdapter protocol implementation (Days 81-82) | PENDING | Reduces HB coupling to <500 LOC; strategy code zero HB imports |
+| Day 96 | DirectionalController live micro-cap | BLOCKED | Requires Days 90 PASS + 93 active + 92 active; second live bot on desk |
+| Day 97 | MeanReversionController v1 (Bollinger/RSI) | PENDING | Regime gate: neutral only; OOS Sharpe > 0.3; 24h paper soak |
+| Day 98 | Hedge mode support (HEDGE position_mode) | PENDING | ConnectorRuntimeAdapter + epp_v2_4.py; hedge_inventory_ratio config |
+| Day 99 | ML signal hardening for live (latency SLA + fallback) | PENDING | p99 < 500ms SLA; signal_degraded fallback to signal_mode=off; canary test |
+| Day 100 | MetaAllocator v2 — dynamic reallocation on drawdown | PENDING | Drawdown tiers; reallocation to best Sharpe bot; manual freeze override |
+| Day 101 | Funding rate hard stop | PENDING | funding_rate_hard_stop_threshold config; SOFT_PAUSE on breach; Prometheus alert |
+| Day 102 | Bitget rate-limit + WS reconnect game-day drill | PENDING | Rate-limit graceful degradation + WS reconnect → SOFT_PAUSE → recovery drill |
+| Day 103 | Exchange-side protective stop (offline liquidation guard) | PENDING | Place server-side stop-loss on exchange after position opens; survives bot crash/restart; exchange-specific (Bitget trigger order / Binance stop-market); auto-cancel + re-place on position change |
 
 ## Completed Artifacts
 - `hbot/docs/ops/release_manifest_20260221.md`
@@ -863,3 +903,44 @@
     - `docs/ops/day7_readiness_pause_handoff_20260222.md`
   - resume condition formalized:
     - rerun Day2 + strict cycle after `2026-02-23T13:25Z`
+- Day85b startup position sync + cross-day position safety completed:
+  - **Problem solved:** bot restart (especially across day boundary) could lose track of open exchange positions, creating untracked liquidation risk.
+  - Changes to `controllers/epp_v2_4.py`:
+    - `startup_position_sync` config field (default `true`)
+    - `_run_startup_position_sync()` — queries exchange on first tick, adopts exchange position if local state disagrees (exchange is source of truth)
+    - `_load_daily_state()` — cross-day restart now preserves `position_base` and `avg_entry_price` (previously returned early, resetting to zero)
+    - `_startup_position_sync_done` flag — ensures sync runs exactly once
+    - Orphan position detection with explicit WARNING log when exchange has position but local state is zero
+  - Additional hardening (self-audit pass):
+    - Startup sync retries up to 10 ticks if connector not ready (was: silently gave up on first failure)
+    - `startup_position_sync_pending` risk reason blocks order placement until sync completes
+    - `_check_position_reconciliation` now auto-corrects local state when drift exceeds threshold (was: warning only)
+    - `to_format_status` shows open position warning with entry price (visible on stop + status command)
+  - Tests added to `tests/controllers/test_epp_v2_4_state.py` (10 new tests):
+    - `test_cross_day_restart_preserves_position` — verifies position survives day boundary
+    - `test_startup_sync_adopts_exchange_position` — exchange has position, local zero → adopt
+    - `test_startup_sync_no_drift` — matching positions → no change
+    - `test_startup_sync_corrects_stale_local` — exchange differs → exchange wins
+    - `test_startup_sync_disabled` — config toggle respected
+    - `test_startup_sync_both_zero` — no-op when both zero
+    - `test_startup_sync_retries_when_connector_unavailable` — defers then retries
+    - `test_startup_sync_gives_up_after_max_retries` — marks done after 10 failures
+    - `test_startup_sync_blocks_trading_while_pending` — risk reason emitted
+- Day85c paper engine maker/taker classification fix completed:
+  - **Problem solved:** paper engine classified 100% of fills as taker, making paper soak results unreliable (showed losses when strategy was actually profitable at maker rates).
+  - Root cause: `DepthFillModel.evaluate()` only used passive maker path for `LIMIT_MAKER` orders; regular `LIMIT` orders were treated as taker when price touched them.
+  - Changes to `controllers/paper_engine.py`:
+    - `crossed_at_creation` field added to `PaperOrder` — tracks whether order crossed the spread at submission time
+    - `_submit_order()` — checks current book at creation to set `crossed_at_creation`
+    - `DepthFillModel.evaluate()` — resting LIMIT orders (crossed_at_creation=False) now take the passive maker path (fill at limit price, is_taker=False)
+    - `maker_fee_bps` default changed from 10.0 to 2.0 (Bitget VIP0 maker rate)
+    - Fallback fill event now carries `is_maker` on `trade_fee` object
+  - Changes to `controllers/epp_v2_4.py`:
+    - `did_fill_order()` — checks `trade_fee.is_maker` first (authoritative), falls back to price heuristic only if unavailable
+  - Tests added to `tests/controllers/test_paper_engine.py` (8 new tests):
+    - `test_resting_limit_buy_is_maker` / `test_resting_limit_sell_is_maker`
+    - `test_crossing_limit_buy_is_taker` / `test_crossing_limit_sell_is_taker`
+    - `test_limit_maker_always_maker`
+    - `test_maker_fee_lower_than_taker`
+    - `test_adapter_resting_buy_classified_as_maker` (end-to-end)
+    - `test_adapter_crossing_buy_classified_as_taker` (end-to-end)

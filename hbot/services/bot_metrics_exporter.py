@@ -29,6 +29,25 @@ def _fmt_labels(labels: Dict[str, str]) -> str:
 
 
 @dataclass
+class FillStats:
+    buys: int = 0
+    sells: int = 0
+    maker_fills: int = 0
+    taker_fills: int = 0
+    buy_notional: float = 0.0
+    sell_notional: float = 0.0
+    total_fees: float = 0.0
+    total_realized_pnl: float = 0.0
+    avg_buy_price: float = 0.0
+    avg_sell_price: float = 0.0
+    last_fill_ts: str = ""
+    last_fill_side: str = ""
+    last_fill_price: float = 0.0
+    last_fill_amount: float = 0.0
+    last_fill_pnl: float = 0.0
+
+
+@dataclass
 class BotSnapshot:
     bot_name: str
     variant: str
@@ -66,6 +85,7 @@ class BotSnapshot:
     realized_pnl_today_quote: float
     ws_reconnect_count: float
     order_book_stale: float
+    fill_stats: Optional[FillStats] = None
 
 
 class BotMetricsExporter:
@@ -81,11 +101,19 @@ class BotMetricsExporter:
             if latest_minute is None:
                 continue
             log_dir = minute_file.parent
-            daily_row = self._read_last_csv_row(log_dir / "daily.csv") or {}
-            fills_total = self._count_csv_rows(log_dir / "fills.csv")
+            daily_state = self._read_daily_state_json(log_dir / "daily_state.json")
+            fills_path = log_dir / "fills.csv"
+            fills_total = self._count_csv_rows(fills_path)
+            fill_stats = self._compute_fill_stats(fills_path)
             recent_error_lines = self._count_recent_error_lines(self._data_root / bot_name / "logs")
 
             ts_epoch = _safe_iso_ts_to_epoch(str(latest_minute.get("ts", ""))) or 0.0
+
+            equity_now = _safe_float(latest_minute.get("equity_quote"))
+            equity_open = _safe_float(daily_state.get("equity_open")) if daily_state else 0.0
+            live_pnl = equity_now - equity_open if equity_open > 0 else 0.0
+            daily_fills = _safe_float(daily_state.get("fills_count")) if daily_state else 0.0
+
             snapshots.append(
                 BotSnapshot(
                     bot_name=bot_name,
@@ -104,15 +132,15 @@ class BotMetricsExporter:
                     taker_fee_pct=_safe_float(latest_minute.get("taker_fee_pct")),
                     soft_pause_edge=1.0 if str(latest_minute.get("soft_pause_edge", "")).lower() == "true" else 0.0,
                     fee_source=str(latest_minute.get("fee_source", "")),
-                    equity_quote=_safe_float(latest_minute.get("equity_quote")),
+                    equity_quote=equity_now,
                     base_pct=_safe_float(latest_minute.get("base_pct")),
                     target_base_pct=_safe_float(latest_minute.get("target_base_pct")),
                     daily_loss_pct=_safe_float(latest_minute.get("daily_loss_pct")),
                     drawdown_pct=_safe_float(latest_minute.get("drawdown_pct")),
                     cancel_per_min=_safe_float(latest_minute.get("cancel_per_min")),
                     risk_reasons=str(latest_minute.get("risk_reasons", "")),
-                    daily_pnl_quote=_safe_float(daily_row.get("pnl_quote")),
-                    daily_fills_count=_safe_float(daily_row.get("fills_count")),
+                    daily_pnl_quote=live_pnl,
+                    daily_fills_count=daily_fills,
                     fills_total=float(fills_total),
                     recent_error_lines=float(recent_error_lines),
                     tick_duration_ms=_safe_float(latest_minute.get("_tick_duration_ms")),
@@ -124,6 +152,7 @@ class BotMetricsExporter:
                     realized_pnl_today_quote=_safe_float(latest_minute.get("realized_pnl_today_quote")),
                     ws_reconnect_count=_safe_float(latest_minute.get("ws_reconnect_count")),
                     order_book_stale=1.0 if str(latest_minute.get("order_book_stale", "")).lower() == "true" else 0.0,
+                    fill_stats=fill_stats,
                 )
             )
         return snapshots
@@ -229,7 +258,34 @@ class BotMetricsExporter:
             lines.append(f"hbot_bot_realized_pnl_today_quote{_fmt_labels(base_labels)} {snapshot.realized_pnl_today_quote}")
             lines.append(f"hbot_bot_ws_reconnect_total{_fmt_labels(base_labels)} {snapshot.ws_reconnect_count}")
             lines.append(f"hbot_bot_order_book_stale{_fmt_labels(base_labels)} {snapshot.order_book_stale}")
+            if snapshot.fill_stats:
+                fs = snapshot.fill_stats
+                lines.append(f"hbot_bot_fills_buy_count{_fmt_labels(base_labels)} {fs.buys}")
+                lines.append(f"hbot_bot_fills_sell_count{_fmt_labels(base_labels)} {fs.sells}")
+                lines.append(f"hbot_bot_fills_maker_count{_fmt_labels(base_labels)} {fs.maker_fills}")
+                lines.append(f"hbot_bot_fills_taker_count{_fmt_labels(base_labels)} {fs.taker_fills}")
+                lines.append(f"hbot_bot_buy_notional_quote{_fmt_labels(base_labels)} {fs.buy_notional}")
+                lines.append(f"hbot_bot_sell_notional_quote{_fmt_labels(base_labels)} {fs.sell_notional}")
+                lines.append(f"hbot_bot_total_fees_quote{_fmt_labels(base_labels)} {fs.total_fees}")
+                lines.append(f"hbot_bot_avg_buy_price{_fmt_labels(base_labels)} {fs.avg_buy_price}")
+                lines.append(f"hbot_bot_avg_sell_price{_fmt_labels(base_labels)} {fs.avg_sell_price}")
+                lines.append(f"hbot_bot_position_base{_fmt_labels(base_labels)} {_safe_float(latest_minute.get('position_base'))}")
+                lines.append(f"hbot_bot_avg_entry_price{_fmt_labels(base_labels)} {_safe_float(latest_minute.get('avg_entry_price'))}")
         return "\n".join(lines) + "\n"
+
+    def _read_daily_state_json(self, path: Path) -> Optional[Dict[str, str]]:
+        """Read daily_state.json which is updated every 30s by the controller."""
+        if not path.exists():
+            return None
+        try:
+            import json
+            data = json.loads(path.read_text(encoding="utf-8"))
+            today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+            if data.get("day_key") == today:
+                return data
+            return data
+        except Exception:
+            return None
 
     def _read_last_csv_row(self, path: Path) -> Optional[Dict[str, str]]:
         if not path.exists():
@@ -243,6 +299,79 @@ class BotMetricsExporter:
                 return last
         except Exception:
             return None
+
+    def _compute_fill_stats(self, fills_path: Path) -> FillStats:
+        stats = FillStats()
+        if not fills_path.exists():
+            return stats
+        try:
+            buy_prices, sell_prices = [], []
+            with fills_path.open("r", encoding="utf-8", newline="") as fp:
+                reader = csv.DictReader(fp)
+                for row in reader:
+                    side = str(row.get("side", "")).lower()
+                    notional = _safe_float(row.get("notional_quote"))
+                    fee = _safe_float(row.get("fee_quote"))
+                    price = _safe_float(row.get("price"))
+                    amount = _safe_float(row.get("amount_base"))
+                    pnl = _safe_float(row.get("realized_pnl_quote"))
+                    is_maker = str(row.get("is_maker", "")).lower() == "true"
+                    stats.total_fees += fee
+                    stats.total_realized_pnl += pnl
+                    if is_maker:
+                        stats.maker_fills += 1
+                    else:
+                        stats.taker_fills += 1
+                    if side == "buy":
+                        stats.buys += 1
+                        stats.buy_notional += notional
+                        buy_prices.append(price)
+                    elif side == "sell":
+                        stats.sells += 1
+                        stats.sell_notional += notional
+                        sell_prices.append(price)
+                    stats.last_fill_ts = str(row.get("ts", ""))
+                    stats.last_fill_side = side
+                    stats.last_fill_price = price
+                    stats.last_fill_amount = amount
+                    stats.last_fill_pnl = pnl
+            if buy_prices:
+                stats.avg_buy_price = sum(buy_prices) / len(buy_prices)
+            if sell_prices:
+                stats.avg_sell_price = sum(sell_prices) / len(sell_prices)
+        except Exception:
+            pass
+        return stats
+
+    def _read_recent_fills(self, fills_path: Path, limit: int = 50) -> List[Dict[str, object]]:
+        if not fills_path.exists():
+            return []
+        try:
+            rows: List[Dict[str, str]] = []
+            with fills_path.open("r", encoding="utf-8", newline="") as fp:
+                reader = csv.DictReader(fp)
+                for row in reader:
+                    rows.append(row)
+            recent = rows[-limit:]
+            recent.reverse()
+            result = []
+            for row in recent:
+                result.append({
+                    "ts": row.get("ts", ""),
+                    "side": row.get("side", ""),
+                    "price": _safe_float(row.get("price")),
+                    "amount": _safe_float(row.get("amount_base")),
+                    "notional": _safe_float(row.get("notional_quote")),
+                    "fee": _safe_float(row.get("fee_quote")),
+                    "is_maker": str(row.get("is_maker", "")).lower() == "true",
+                    "pnl": _safe_float(row.get("realized_pnl_quote")),
+                    "order_id": row.get("order_id", ""),
+                    "state": row.get("state", ""),
+                    "spread_pct": _safe_float(row.get("expected_spread_pct")),
+                })
+            return result
+        except Exception:
+            return []
 
     def _count_csv_rows(self, path: Path) -> int:
         if not path.exists():
@@ -282,10 +411,37 @@ class MetricsHandler(BaseHTTPRequestHandler):
     metrics_path: str = "/metrics"
 
     def do_GET(self):
+        import json as _json
         if self.path == "/health":
             self.send_response(200)
             self.end_headers()
             self.wfile.write(b'{"status":"ok"}')
+            return
+        if self.path.startswith("/fills"):
+            bot_filter = None
+            if "?" in self.path:
+                params = dict(p.split("=", 1) for p in self.path.split("?", 1)[1].split("&") if "=" in p)
+                bot_filter = params.get("bot")
+            limit = 50
+            all_fills: list = []
+            data_root = self.exporter._data_root
+            for fills_file in data_root.glob("*/logs/epp_v24/*/fills.csv"):
+                bot_name = fills_file.parts[-5]
+                if bot_filter and bot_name != bot_filter:
+                    continue
+                fills = self.exporter._read_recent_fills(fills_file, limit)
+                for f in fills:
+                    f["bot"] = bot_name
+                all_fills.extend(fills)
+            all_fills.sort(key=lambda x: x.get("ts", ""), reverse=True)
+            all_fills = all_fills[:limit]
+            body = _json.dumps(all_fills, indent=2).encode("utf-8")
+            self.send_response(200)
+            self.send_header("Content-Type", "application/json")
+            self.send_header("Content-Length", str(len(body)))
+            self.send_header("Access-Control-Allow-Origin", "*")
+            self.end_headers()
+            self.wfile.write(body)
             return
         if self.path != self.metrics_path:
             self.send_response(404)
