@@ -2116,20 +2116,554 @@ The HB coupling surface is concentrated in 5 files (~2100 LOC). Formalizing an `
 
 ---
 
-## Migration Trigger Guardrail (Option 4 — Updated)
+## Migration Trigger Guardrail (Option 4 — Updated, Audit-Confirmed 2026-02-24)
 
-**Do not migrate execution platform now.** Revisit if ANY trigger fires:
+**Decision: Keep Hummingbot v2.12.0 as execution engine. Do not migrate.** Revisit if ANY trigger fires:
 - HB V2 framework makes a breaking change requiring > 1 week adaptation
 - Primary exchange switches from Bitget to Binance/Bybit (unlocks NautilusTrader)
-- Strategy evolves beyond market making (directional alpha needs proper backtest)
+- Strategy evolves beyond market making AND directional alpha needs sub-100ms execution
 - Team grows to 2+ developers with bandwidth to maintain custom framework
-- Post-trade validator consistently flags CRITICAL on fill model assumptions
-- parity and reconciliation are stable for multiple windows
-- portfolio risk controls are proven in production-like soak
-- rollback to current baseline is tested end-to-end
+- Post-trade validator consistently flags CRITICAL on fill model assumptions for 3+ consecutive live sessions
+- Parity and reconciliation are stable for multiple windows AND migration readiness Days 81-82 are complete
+- Portfolio risk controls are proven in production-like soak (>7 days live)
 
-### Migration Readiness Status
+**Audit rationale (2026-02-24):** Architecture is sound, 80% portable, and not the bottleneck. The bottleneck is live enablement and strategy diversity. Migration cost (6–16 weeks) far exceeds benefit at current scale. Revisit at 90-day checkpoint if 3+ live bots are running and HB coupling becomes friction.
+
+### Migration Readiness Status (Audit-Updated)
 - **Portable components**: 80% of codebase (services, backtest, analysis, config, monitoring) — zero HB imports
 - **Coupled components**: 5 files, ~2100 LOC — documented in `docs/dev/hb_compatibility_matrix.md`
-- **Adapter protocol**: defined (Day 81, optional) — not yet implemented
+- **Adapter protocol**: defined (Day 81, optional) — not yet implemented; implement in Day 95 if Phase 2 strategy expansion triggers friction
 - **Estimated migration effort if triggered**: 6-10 weeks (ccxt DIY) or 12-16 weeks (NautilusTrader + Bitget adapter)
+
+---
+
+## Phase 2 — Multi-Bot Desk Expansion (Audit Integration — 2026-02-24)
+
+### Audit Summary
+Full `MODE=AUDIT_EXISTING_PROJECT` audit completed 2026-02-24. The platform is production-grade for a solo desk with 80+ days of systematic hardening. The three critical gaps identified are:
+
+1. **Live deployment still blocked** — Bitget account unfunded; Day 15 never executed.
+2. **Single strategy family** — only EPP v2.4 MM exists. No directional, technical, hedge, or meta strategies.
+3. **Day 2 event store gate** — strict promotion cycle is `FAIL` due to elapsed_window check. Resume condition (`2026-02-23T13:25Z`) has passed; rerun required.
+
+Phase 2 addresses these gaps in three waves:
+- **Wave A (Days 83-87):** Unblock live — resolve gate, pass strict cycle, fund account, go live, validate.
+- **Wave B (Days 88-91):** Second strategy — `DirectionalController`, backtest, paper soak, multi-bot parity.
+- **Wave C (Days 92-102):** Meta-control and full desk — `MetaAllocator`, TWAP utility, mean-reversion, hedge mode, ML hardening.
+
+### Phase 2 30/60/90-Day Roadmap
+
+| Horizon | Goal | Key Deliverables |
+|---|---|---|
+| 30 days (Wave A+B) | First live fills + second strategy on paper | Live smoke pass, fill recalibration, DirectionalController v1, bot4 paper soak |
+| 60 days (Wave C start) | Two live bots, meta-capital control | MetaAllocator v1, TWAPExecutorBot, cross-strategy net exposure gate |
+| 90 days (Wave C end) | Full 3-strategy desk, dynamic allocation | MeanReversionController, hedge mode, ML latency SLA, MetaAllocator v2 |
+
+### Phase 2 Risk Register (Audit-Identified)
+
+| Risk | Severity | Mitigation | Day |
+|---|---|---|---|
+| Live fill factor diverges from testnet calibration | HIGH | Recalibrate immediately after 100 live fills; widen edge floor temporarily | 86 |
+| Cross-strategy net position compounding (MM + Directional same asset) | HIGH | Net exposure cap in CoordinationService v2 before second live bot | 93 |
+| ML signal latency spikes degrading execution quality at live | MEDIUM | Latency SLA gate; fallback to signal_off mode | 99 |
+| Bitget API rate limits differ from testnet | MEDIUM | Rate-limit game-day drill before any live scale-up | 102 |
+| Paper adverse selection underestimates live slippage | MEDIUM | Conservative min_net_edge_bps initially; monitor post-trade fill deviation alert | 86 |
+| Funding rate negative accumulation | MEDIUM | Hard stop on extreme negative funding | 101 |
+| Single-exchange dependency | LOW | Architecture is ccxt-backed; add exchange as future hardening | — |
+
+---
+
+## Day 83 - Resolve Day 2 Event Store Gate (Live Unblock P0)
+
+### Context
+Day 2 event store gate resume condition was `2026-02-23T13:25Z` (24h after reanchor at `2026-02-22T13:25Z`). The `elapsed_window` check should now pass. Gate must be confirmed before strict cycle rerun.
+
+### Tasks
+- Run `scripts/utils/day2_gate_evaluator.py` — verify all three checks pass (`elapsed_window`, `missing_correlation`, `delta_since_baseline_tolerance`). Resume condition (`2026-02-23T13:25Z`) is past; `elapsed_window` should now pass.
+- If `elapsed_window` still fails: inspect `reports/event_store/day2_gate_eval_latest.json` for exact value; check system clock / TZ drift in container.
+- If gate passes: validate JSONL event ordering for the last 24h — run `scripts/utils/event_store_count_check.py` and confirm no ordering gaps. Document in `docs/ops/day83_day2_gate_resolution_YYYYMMDD.md`.
+- **Do not formally accept with compensating control** — a live trading desk requires a real audit trail, not a row-count check. If the gate is structurally broken (non-timing issue): fix the integrity check first; accept only if the fix is confirmed working.
+
+### Done Criteria
+- `day2_gate_eval_latest.json` → all three checks `pass: true` (not formal accept — actual gate pass)
+- JSONL ordering integrity confirmed via `event_store_count_check.py`
+- `strict_cycle_latest.json` blocker list no longer contains `day2_event_store_gate`
+- Evidence document committed: `docs/ops/day83_day2_gate_resolution_YYYYMMDD.md`
+
+---
+
+## Day 84 - Strict Promotion Cycle PASS (Live Unblock P0)
+
+### Context
+Strict cycle has been `FAIL` since Day 34 due solely to the Day 2 event store gate. Once Day 83 clears that blocker, a clean strict cycle run confirms platform readiness for live.
+
+### Tasks
+- Run `scripts/release/run_strict_promotion_cycle.py` — full run, no overrides.
+- Inspect `reports/promotion_gates/strict_cycle_latest.json` for `status=PASS`.
+- If any unexpected new failures: triage individually. Do not bypass critical gates.
+- On PASS: update `docs/ops/option4_readiness_decision_latest.md` status from `HOLD` to `GO` with evidence link.
+- Commit `strict_cycle_latest.json` and updated readiness decision.
+
+### Done Criteria
+- `strict_cycle_latest.json` → `status=PASS`
+- `option4_readiness_decision_latest.md` → `status=GO`
+- Evidence artifact committed with timestamp
+
+---
+
+## Day 85a - Bitget Paper Soak on Live Market Data (Pre-Live Validation — P0)
+
+### Context
+Before placing any real orders on Bitget, run bot1 against live Bitget market data with `internal_paper_enabled: true`. This is the intermediate step between testnet (Binance) and live (Bitget): real order book, real spreads, real microstructure — but all fills simulated locally. Provides a far more reliable fill factor baseline than testnet, and validates the Bitget connector (API auth, WS market data streaming) without financial risk.
+
+**Paper engine safety confirmed:** `install_paper_adapter` intercepts `buy/sell/cancel` via two layers (native connector delegation + strategy-level delegation + last-resort connector replacement). The live Bitget connector is used read-only for `get_order_book()` and `get_price_by_type()` only. Zero real orders can be placed.
+
+### Pre-conditions
+- `connector_name: bitget_perpetual` set in `epp_v2_4_bot_a.yml` ✅ (done)
+- `internal_paper_enabled: true` already set ✅
+- `data/bot1/conf/connectors/bitget_perpetual.yml` credentials present ✅
+- Day 84 strict cycle PASS ✅
+
+### Tasks
+- Start bot1 with updated config (Bitget connector, paper enabled).
+- Verify startup logs: confirm `paper adapter installed` log line appears; confirm no real order placement (check Bitget account via ccxt or exchange UI — open orders should be zero).
+- Run 4h paper soak collecting fills against live Bitget BTC-USDT perp order book.
+- Run `scripts/analysis/validate_paper_soak.py --bot=bot1` → verify 7 KPIs pass against Bitget market conditions.
+- Run `scripts/analysis/calibrate_fill_factor.py` on paper fills → compute fill factor baseline on Bitget data.
+- Run `scripts/analysis/edge_report.py` → compare edge estimates using Bitget-calibrated fill factor vs testnet calibration.
+- Run `scripts/analysis/parity_report.py` → compare testnet paper results vs Bitget paper results (parity score).
+- Verify Prometheus metrics stream correctly for Bitget connector (market data freshness, connector_status, order book age).
+- Document results in `docs/ops/day85a_bitget_paper_soak_YYYYMMDD.md`.
+
+### Done Criteria
+- Startup log confirms `paper adapter installed` for `bitget_perpetual`
+- Bitget exchange account shows zero open orders throughout the soak
+- Paper soak KPI validator PASS artifact produced
+- Bitget fill factor baseline documented and compared vs testnet baseline
+- Edge report shows positive net edge using Bitget-calibrated assumptions
+- Prometheus metrics: `connector_status=ready`, market data freshness < 5s
+- `docs/ops/day85a_bitget_paper_soak_YYYYMMDD.md` with evidence
+
+### Gate to Day 85 (Live)
+- Paper soak PASS on Bitget market data
+- Bitget fill factor delta vs testnet < 30% (if delta > 30%: review `min_net_edge_bps` before live)
+- Zero real orders confirmed on exchange throughout soak
+
+---
+
+## Day 85 - Bitget Live Micro-Cap Smoke (Day 15 Revival — P0)
+
+### Context
+Day 15 was blocked due to unfunded Bitget account. This is the first live execution. Micro-cap only ($10–50 USDT). All kill switch, reconciliation, and monitoring paths must be validated before any scale-up.
+
+### Pre-conditions
+- Day 84 strict cycle `PASS` confirmed ✅
+- **Day 85a Bitget paper soak PASS** — fill factor baseline and edge report validated on live Bitget data
+- `connector_name: bitget_perpetual` already set in `epp_v2_4_bot_a.yml` ✅
+- Bitget account funded (minimum per contract size — see minimum order check below)
+- Credentials in `.env`: `BOT1_BITGET_API_KEY`, `BOT1_BITGET_API_SECRET`, `BOT1_BITGET_PASSPHRASE` populated
+- **Minimum order size validated** (run `scripts/ops/check_bitget_min_order.py` — see below)
+
+### Tasks
+- **Run minimum order size check first** (adversarial correction): `python hbot/scripts/ops/check_bitget_min_order.py`
+  - This script queries Bitget perp market limits via ccxt and prints `min_amount`, `min_cost`, and a recommended `total_amount_quote`.
+  - If `min_cost > 50 USDT`: revise `total_amount_quote` upward to the exchange minimum + 20% buffer before proceeding.
+  - If `min_cost > 500 USDT`: halt Day 85 and reassess micro-cap framing — document decision in `docs/ops/day85_min_order_assessment.md`.
+  - **Do not skip this check** — a $10 order on BTC perp will not place (Bitget minimum ~0.001 BTC ≈ $100); the smoke session would produce zero fills and post-trade validation would silently pass with nothing validated.
+- Switch connector: update `hbot/data/bot1/conf/controllers/epp_v2_4_bot_a.yml` → `connector_name: bitget_perpetual`.
+- Set `total_amount_quote` to the value from the minimum order check (not hardcoded to 10). `leverage: 1`. `position_mode: ONEWAY`.
+- Run preflight: `scripts/ops/preflight.py` → confirm API key valid, balance readable, order book streaming.
+- Start bot1 in isolation (no other bots active during smoke).
+- Run 1-hour live smoke: observe fills, reconciliation closure, Prometheus metrics streaming, Grafana dashboards rendering live data.
+- Manually trigger kill switch: `services/kill_switch/main.py --dry-run=false` → verify all open orders cancelled, audit event emitted.
+- Restart bot1 — confirm startup orphan scan runs and positions reconcile.
+
+### Done Criteria
+- Minimum order size check script run and `total_amount_quote` confirmed valid for Bitget
+- At least 1 live fill recorded in `fills.csv` (zero fills = FAIL, not PASS)
+- Reconciliation reports `status=clean` or `status=warning` (not `critical`) after smoke session
+- Kill switch fires cleanly and audit event appears in event store
+- Prometheus + Grafana show live bot1 metrics (not testnet/paper)
+- `docs/ops/day85_live_smoke_YYYYMMDD.md` with evidence including min order check output
+
+---
+
+## Day 86 - Post-Trade Validation + Fill Factor Recalibration (Live Data — P0)
+
+### Context
+Fill factor calibrated from testnet data. Live Bitget fills will differ. The post-trade validator and fill factor calibration scripts must be run against the first live session's fills before any config changes or scale-up.
+
+### Tasks
+- Run `scripts/analysis/post_trade_validator.py` against live fills from Day 85 session.
+- Review CRITICAL flags: `fill_factor` deviation, `adverse_selection` vs config assumptions.
+- Run `scripts/analysis/calibrate_fill_factor.py` on live fills CSV → compute live `fill_factor` estimate.
+- Compare live fill factor vs paper config (`paper_fill_factor` in YAML). If delta > 15%: update `fill_factor` in `epp_v2_4_bot_a.yml` and document.
+- Adjust `min_net_edge_bps` conservatively: start at `min_net_edge_bps: 3` for live (up from 1) until 3+ sessions of fill data are available.
+- Run `scripts/analysis/edge_report.py` → confirm positive net edge after fees/slippage/adverse selection.
+- Document all calibration decisions in `docs/ops/day86_live_fill_calibration_YYYYMMDD.md`.
+
+### Done Criteria
+- Live fill factor documented and compared vs paper assumption
+- `min_net_edge_bps` set conservatively for live
+- Edge report shows positive net edge at recalibrated fill factor
+- Post-trade validator shows no CRITICAL flags (or CRITICAL flags are acknowledged with mitigation plan)
+
+---
+
+## Day 87 - Live vs Testnet Parity Report (Confidence Baseline)
+
+### Context
+`parity_report.py` currently compares backtest vs paper vs testnet. With first live session data, a backtest vs paper vs live comparison produces the desk's first real parity baseline for Bitget.
+
+### Tasks
+- Run `scripts/analysis/parity_report.py` with live session as the live leg.
+- Review parity score: divergences >10% in fill rate, spread capture, or edge are WARN; >25% are CRITICAL.
+- Document parity gaps in `docs/ops/day87_live_parity_baseline_YYYYMMDD.md`.
+- If parity score is acceptable (>80%): update `config/parity_thresholds.json` with live-specific thresholds.
+- If parity score is poor (<70%): halt scale-up and investigate model assumptions (fill factor, latency, adverse selection).
+
+### Done Criteria
+- Parity report produced with backtest vs paper vs live comparison
+- Parity score documented and thresholds updated
+- Decision recorded: scale-up approved or hold pending investigation
+
+---
+
+## Day 88 - DirectionalController v1 (EMA Crossover — P1)
+
+### Context
+First strategy addition beyond MM. Reuses existing `RegimeDetector`, `RiskPolicy`, `FeeManager` from the decomposed controller layer. Trend-following via EMA crossover is signal-sensitive, not execution-sensitive — validates on daily bars.
+
+### Tasks
+- Create `hbot/controllers/directional_v1.py` — EMA crossover controller:
+  - Reuse `RegimeDetector` for market context
+  - Reuse `RiskPolicy` for pre-trade gate
+  - Signal: fast EMA (20) crosses slow EMA (50) on 1h bars
+  - Entry: market order when cross confirmed + regime not `high_vol`
+  - Exit: opposite cross, stop-loss, or time-limit (24h max)
+  - Position sizing: fixed fractional via `OrderSizer`
+- Create `hbot/data/bot4/conf/controllers/directional_v1_bot_d.yml` config template
+- Reuse `OpsGuard` state machine for RUNNING/SOFT_PAUSE/HARD_STOP
+- No-lookahead proof: signal computed on closed bars only (bar index T-1); add assertion
+- Structured logging via `EppLogging` pattern; emit fills to Redis Stream
+- Register in `config/strategy_catalog/`
+
+### Done Criteria
+- Controller runs in paper mode on bot4 without errors
+- No-lookahead assertion fires correctly if violated (unit test)
+- All risk policy gates applied (spread floor N/A for directional; use max_position_size cap)
+- Structured log entries appear in Loki
+
+---
+
+## Day 89 - Directional Controller Backtest Adapter + Regression Suite (P1)
+
+### Context
+Generic backtest harness (`scripts/backtest/harness/`) is strategy-agnostic. A `DirectionalV1Adapter` plugs the new controller into the harness exactly as `EppV24Adapter` does for MM.
+
+### Tasks
+- Create `scripts/backtest/adapters/directional_v1_adapter.py` — implements `StrategyAdapter` protocol
+- Run backtest over 3-month BTC-USDT daily/1h bar dataset; fix fee assumptions (taker 0.10%, slippage 0.10%)
+- Produce backtest report: Sharpe, max drawdown, win rate, avg hold time, edge per trade
+- Add `directional_v1` entry to backtest regression suite (`run_backtest_regression.py`)
+- No-lookahead check embedded in adapter: assert signal uses only `bar[:-1]` data
+- Out-of-sample split: last 20% of data withheld; backtest reports IS and OOS metrics separately
+- Document baseline metrics in `docs/strategy/directional_v1_backtest_baseline.md`
+
+### Done Criteria
+- Backtest regression entry added and passing deterministically
+- **OOS Sharpe > 0 is the hard gate** (negative OOS Sharpe = no edge, strategy blocked from paper promotion regardless of IS metrics)
+- OOS Sharpe > 0.5 and max drawdown < 15% is the target bar for paper promotion without caveats
+- No-lookahead assertion passes in unit test
+- Backtest report committed to `reports/backtest_regression/`
+- If OOS Sharpe is in range (0, 0.5): paper soak still proceeds but with a documented caveat and tighter paper drawdown limit (5% instead of 10%)
+
+---
+
+## Day 90 - Bot4 Wired to DirectionalController + Paper Soak (P1)
+
+### Context
+Bot4 is currently empty. Wire it to `directional_v1_bot_d.yml` and run the 24h paper soak using the existing `validate_paper_soak.py` framework. Paper soak KPIs are adapted for directional (different from MM KPIs).
+
+### Tasks
+- Wire bot4 in `docker-compose.yml` to `directional_v1_bot_d.yml` config; set `internal_paper_enabled: true`
+- Run 24h paper soak; collect fills, positions, equity curve
+- Extend `validate_paper_soak.py` with directional KPIs: trade count > 0 per 24h, stop-loss rate < 50%, avg hold time > 1h, equity drawdown < 10%
+- Run `validate_paper_soak.py --bot=bot4` → produce evidence artifact
+- Wire bot4 paper soak into promotion gates as Level 3 check (parallel to bot1/bot3 soak)
+
+### Done Criteria
+- Bot4 paper soak PASS artifact produced
+- Directional paper KPIs defined and gate-integrated
+- `docs/ops/day90_directional_paper_soak_YYYYMMDD.md` with evidence
+
+---
+
+## Day 91 - Multi-Bot Parity Report Extension (MM + Directional — P1)
+
+### Context
+Current parity report compares one bot across environments (backtest/paper/live). With two active strategies, the report must also compare cross-strategy behavior to detect capital interaction effects.
+
+### Tasks
+- Extend `scripts/analysis/parity_report.py` to accept multiple bot specs
+- Add MM (bot1) vs Directional (bot4) side-by-side section: capital utilization, net exposure, concurrent position periods
+- Detect and flag: periods where both bots hold the same-direction position in the same asset (potential compounding risk)
+- Output new section in parity report markdown artifact
+- Add `multi_bot_cross_exposure` check to promotion gates
+
+### Done Criteria
+- Parity report produces MM vs Directional cross-comparison
+- Same-direction concurrent position periods flagged in output
+- Gate check added and passing (or failing with documented reason)
+- **Day 96 hard gate:** if same-direction concurrent positions exceed `max_net_exposure_pct` (from `portfolio_limits_v1.json`) during any paper session window, Day 96 is automatically blocked until Day 93 (net exposure guard) is complete and validated against the same paper data. This block is enforced in the promotion gate — not an operator decision.
+
+---
+
+## Day 92 - MetaAllocator v1 — Static Capital Split (P2)
+
+### Context
+With two active bots, capital allocation is currently manual (each bot has a fixed `total_amount_quote` in its YAML). `MetaAllocator` v1 enforces desk-wide capital policy and prevents individual bots from exceeding their allocation.
+
+### Tasks
+- Create `hbot/services/meta_allocator/main.py`:
+  - Reads `config/portfolio_limits_v1.json` for desk-wide capital budget
+  - Computes per-bot allocation: MM=60%, Directional=30%, Reserve=10%
+  - Publishes allocation intents to Redis Stream `meta_allocation` every 60s
+  - HB Bridge consumes `meta_allocation` → updates `total_amount_quote` in running controller via intent
+- Add `meta_allocation` stream to `contracts/stream_names.py` and `contracts/event_schemas.py`
+- Dry-run mode: log allocations without pushing to HB Bridge
+- Gate check: `check_meta_allocator_policy.py` validates no bot exceeds its allocation cap
+
+### Done Criteria
+- MetaAllocator service runs and publishes allocation events
+- HB Bridge acknowledges allocation intents (dry-run validated first)
+- Gate check integrated into promotion gates
+- `docs/techspec/meta_allocator_v1.md` contract published
+
+---
+
+## Day 93 - Cross-Strategy Net Exposure Guard (CoordinationService v2 — P2)
+
+### Context
+Audit identified that MM (long bias on inventory) + Directional (trend long) could compound net exposure on the same asset unintentionally. `CoordinationService` must enforce a net exposure cap across all bots.
+
+### Tasks
+- Extend `hbot/services/coordination_service/main.py`:
+  - Subscribe to position events from both bots via Redis Streams
+  - Compute desk-level net exposure per asset (sum of signed positions)
+  - If net exposure > `max_net_exposure_pct` (config, default 5% of desk capital): emit `risk_decision` event with `action=REDUCE_EXPOSURE`
+  - HB Bridge routes `REDUCE_EXPOSURE` to the bot with largest same-direction position → `SOFT_PAUSE` until exposure normalizes
+- Add `max_net_exposure_pct` to `config/portfolio_limits_v1.json`
+- Extend `check_coordination_policy.py` to verify net exposure enforcement logic
+- Stress test: inject synthetic position data showing both bots long → verify `REDUCE_EXPOSURE` fires
+
+### Done Criteria
+- Net exposure guard fires in stress test with injected data
+- `REDUCE_EXPOSURE` → `SOFT_PAUSE` flow validated
+- Policy check passes in promotion gates
+- `docs/risk/net_exposure_policy_v2.md` published
+
+---
+
+## Day 94 - TWAPExecutorBot — Emergency Position Unwind (P2)
+
+### Context
+When kill switch fires or `HARD_STOP` is triggered on a position-holding bot, the current behavior is cancel-all via ccxt. For large positions, an orderly TWAP unwind is safer than a single market order. `TWAPExecutorBot` is an execution utility that the kill switch service or operator can trigger.
+
+### Tasks
+- Create `hbot/controllers/twap_executor.py`:
+  - Input: `asset`, `side` (reduce), `total_qty`, `duration_minutes`, `slices`
+  - Computes slice size = `total_qty / slices`; places one limit order per slice on a timer
+  - Uses `OpsGuard` with single allowed state: `EXECUTING → DONE | ABORTED`
+  - Abort on SIGTERM or kill switch event; cancel remaining slices
+  - Emits fill events to Redis Stream for reconciliation
+- Wire to bot3 (paper) for validation; paper soak: unwind 0.01 BTC in 10 slices over 10 minutes
+- Operator CLI: `python scripts/ops/trigger_twap_unwind.py --bot=bot3 --asset=BTC-USDT --qty=0.01 --duration=10 --slices=10`
+- Integrate with kill switch: if kill switch is triggered AND position > `twap_threshold_usdt` (config), route to TWAPExecutor instead of immediate cancel
+
+### Done Criteria
+- TWAP unwind runs on paper bot3 and produces fills CSV
+- Abort path tested: SIGTERM mid-run cancels remaining slices
+- Kill switch integration documented (manual trigger only for now)
+
+---
+
+## Day 95 - ExecutionAdapter Protocol Implementation (Days 81-82 — P2)
+
+### Context
+Days 81-82 defined the `ExecutionAdapter` protocol but marked it optional. With two strategies now active and `TWAPExecutorBot` added, the HB coupling surface is causing real friction (three controllers importing HB primitives directly). Implement the protocol now.
+
+### Tasks
+- Implement `hbot/controllers/execution_adapter.py` — full protocol as defined in Day 81 tasks
+- Refactor `ConnectorRuntimeAdapter` to implement protocol
+- Refactor `PaperExecutionAdapter` to implement protocol
+- Refactor `DirectionalController` and `TWAPExecutorBot` to call only the protocol
+- Verify: `from hummingbot` imports exist only in `ConnectorRuntimeAdapter` and `HBStrategyRunner`
+- Update `docs/dev/hb_compatibility_matrix.md` with new coupling surface measurement
+
+### Done Criteria
+- Strategy code has zero direct `from hummingbot` imports (except adapter files)
+- All unit tests pass after refactor
+- Swapping execution adapter requires one config change
+- Coupling surface reduced from ~2100 LOC to < 500 LOC in adapter files
+
+---
+
+## Day 96 - DirectionalController Live Micro-Cap (P2)
+
+### Context
+Bot4 directional paper soak (Day 90) must have passed. This is the second live bot on the desk. Micro-cap only (10–30 USDT). Cross-strategy net exposure guard (Day 93) must be active before enabling.
+
+### Pre-conditions
+- Day 90 paper soak PASS
+- Day 91 multi-bot parity gate PASS (no blocked concurrent exposure violations)
+- Day 92 MetaAllocator allocating budget to bot4
+- Day 93 net exposure guard active and validated against paper data
+- Day 94 TWAPExecutorBot available as emergency unwind
+- **Redis persistence validated**: confirm `appendonly yes` in Redis compose config; run a controlled Redis restart and verify all stream data replays correctly. Two live bots with broken Redis persistence = undefined coordination state on crash.
+- Strict cycle PASS (re-run after all Days 88-95 changes)
+
+### Tasks
+- Switch bot4 connector to `bitget_perpetual` with `total_amount_quote: 10`
+- Run 1-hour live smoke in parallel with bot1 (both live simultaneously for first time)
+- Monitor cross-strategy net exposure in Grafana; verify guard does not false-fire
+- Run `post_trade_validator.py --bot=bot4` after smoke session
+- Confirm reconciliation service closes bot4 fills within threshold
+
+### Done Criteria
+- Both bot1 and bot4 live simultaneously without triggering net exposure guard
+- Bot4 live fills in CSV; reconciliation clean
+- Cross-strategy Grafana dashboard showing both bots
+- `docs/ops/day96_directional_live_smoke_YYYYMMDD.md` with evidence
+
+---
+
+## Day 97 - MeanReversionController v1 — Bollinger/RSI (P3)
+
+### Context
+Third strategy family. Mean reversion complements the trend-following directional controller — tends to perform when directional underperforms (range-bound markets). Uses `RegimeDetector`: only active in `neutral` regime.
+
+### Tasks
+- Create `hbot/controllers/mean_reversion_v1.py`:
+  - Signal: RSI(14) < 30 → buy; RSI > 70 → sell; confirmation from Bollinger Band (price outside 2σ band)
+  - Regime gate: only trade in `neutral` regime (not in `up`/`down`/`high_vol`)
+  - Exit: RSI returns to 50 zone or stop-loss
+  - Reuse `RiskPolicy`, `FeeManager`, `OrderSizer`
+- Backtest adapter + regression suite (same pattern as Day 89)
+- OOS validation: IS/OOS split; OOS Sharpe > 0.3
+- Paper soak on bot3 (replacing paper smoke bot) for 24h
+
+### Done Criteria
+- Backtest regression entry added and deterministic
+- OOS Sharpe > 0.3 and max drawdown < 20%
+- 24h paper soak PASS
+- `docs/strategy/mean_reversion_v1_backtest_baseline.md` committed
+
+---
+
+## Day 98 - Hedge Mode Support (HEDGE position_mode — P3)
+
+### Context
+Current EPP v2.4 runs `ONEWAY` mode on Bitget perp. Hedge mode enables holding simultaneous long + short positions (required for basis/funding arb strategies and for hedging MM inventory risk directly).
+
+### Tasks
+- Add `position_mode: HEDGE` support to `ConnectorRuntimeAdapter`:
+  - Separate long/short position tracking
+  - Dual-sided orders: buy orders open long, sell orders open short
+  - Funding rate fetch adapts to both sides
+- Update `epp_v2_4.py` to support hedge mode: add `hedge_inventory_ratio` config (0.0 = no hedge, 0.5 = 50% hedged)
+- Preflight check: warn if exchange account is in ONEWAY mode when HEDGE config is set (require manual mode switch via exchange UI)
+- Paper validation: run bot3 in hedge mode for 24h; verify long/short positions tracked independently
+
+### Done Criteria
+- Hedge mode paper soak runs without position tracking errors
+- `position_mode: HEDGE` in config switches behavior without code changes
+- `docs/techspec/hedge_mode_spec.md` published with switching runbook
+
+---
+
+## Day 99 - ML Signal Hardening for Live (Latency SLA + Fallback — P3)
+
+### Context
+`signal_service` is deployed and `check_ml_signal_governance.py` is gate-integrated. The signal→execution path has not been stress-tested under live conditions. Latency spikes in ML inference can cause stale signals being acted on, which is dangerous for live trading.
+
+### Tasks
+- Add latency SLA measurement to `signal_service/main.py`:
+  - Track `inference_latency_ms` per signal; export as Prometheus metric
+  - If `inference_latency_ms` p99 > 500ms over a 60s window: emit `signal_degraded` event to Redis
+- Add fallback policy in `risk_service/main.py`:
+  - On `signal_degraded`: switch to `signal_mode=off` (no ML signal gating, strategy runs on pure regime detection)
+  - On recovery (p99 < 200ms for 120s): switch back to `signal_mode=on`
+  - Log all mode transitions as structured events
+- Add `ml_signal_latency_sla` Prometheus alert: fire if p99 > 300ms for 5m
+- Canary test: replay 1h of live market data through signal service; measure latency distribution
+- Update `check_ml_signal_governance.py` to verify fallback policy is configured
+
+### Done Criteria
+- Latency metric exported and visible in Grafana
+- Fallback mode switches automatically and recovers automatically (integration test)
+- Canary latency test p99 < 200ms on local hardware
+- Alert fires in test and routes to Slack
+
+---
+
+## Day 100 - MetaAllocator v2 — Dynamic Reallocation on Drawdown (P3)
+
+### Context
+MetaAllocator v1 uses static splits. v2 reduces allocation to a bot experiencing drawdown and reallocates the budget to the best-performing bot (or to reserve). This prevents a drawdown bot from consuming full capital while losing.
+
+### Tasks
+- Extend `hbot/services/meta_allocator/main.py`:
+  - Subscribe to `portfolio_risk` events per bot (daily drawdown from `portfolio_risk_service`)
+  - Drawdown tiers: bot drawdown > 5% → reduce allocation 20%; > 10% → reduce 50%; > 15% → suspend (allocation = 0)
+  - Reallocate freed capital to reserve or best-performing bot (highest rolling Sharpe over 24h)
+  - Manual override: operator can freeze allocations via `meta_allocator_freeze` flag in Redis
+- Config: `config/meta_allocator_v2.json` with tier thresholds and reallocation policy
+- Dry-run validation: inject synthetic drawdown events; verify allocation adjustments
+- Gate check extension: `check_meta_allocator_policy.py` verifies drawdown tiers are configured
+
+### Done Criteria
+- Dynamic reallocation fires correctly in dry-run with synthetic drawdown events
+- Manual freeze override works
+- Gate check passes
+- `docs/techspec/meta_allocator_v2.md` contract published
+
+---
+
+## Day 101 - Funding Rate Hard Stop (P3)
+
+### Context
+Funding rate is modeled in the edge formula (Day 66/70) but there is no hard stop for extreme negative funding accumulation. A bot holding a long position during sustained high negative funding will silently bleed capital.
+
+### Tasks
+- Add `funding_rate_hard_stop_threshold` config to `epp_v2_4_bot_a.yml` (default: `-0.005` = -0.5% per 8h)
+- In `epp_v2_4.py` tick loop: fetch `funding_rate` from `processed_data` (already present); if funding rate < threshold and position is held > 1 funding period: trigger `OpsGuard.soft_pause()` and emit `funding_rate_breach` audit event
+- After `SOFT_PAUSE`: position exits naturally via time-limit; bot does not re-enter until funding rate normalises (> `-0.001`)
+- Prometheus metric: `funding_rate_current` and `funding_rate_breach_count`
+- Alert: fire if `funding_rate_current` < -0.003 for 2 consecutive periods
+
+### Done Criteria
+- Hard stop triggers in paper test when synthetic funding rate is set to -0.006
+- Recovery (re-entry allowed) confirmed when funding normalises
+- Prometheus metric and alert operational
+
+---
+
+## Day 102 - Bitget Rate-Limit + WS Reconnect Game-Day Drill (P2)
+
+### Context
+The existing game-day drill tested Redis outage (Day 9). Bitget-specific failure modes have not been drilled: API rate limits and WebSocket reconnect under load. These are the most common live failure modes for a market-making bot.
+
+### Tasks
+- **Rate-limit drill**: configure `rate_limiter.py` with a deliberately low token bucket (5 req/s) for bot1 in a controlled test session; observe how order placement degrades gracefully; verify no error cascade, no double-placement, no HARD_STOP triggered by rate limit errors alone
+- **WS reconnect drill**: kill the Bitget WS connection by temporarily blocking the IP (or using a mock WS proxy that closes after 30s); verify:
+  - `connector_status` in `processed_data` → `reconnecting`
+  - Bot enters `SOFT_PAUSE` within the WS staleness window (>30s no TOB update)
+  - On WS recovery: bot exits `SOFT_PAUSE`, runs startup orphan scan, resumes normally
+- Document drill results in `docs/ops/day102_bitget_game_day_YYYYMMDD.md`
+- Update `docs/ops/game_day_runbook.md` with Bitget-specific drills
+
+### Done Criteria
+- Rate-limit degradation is graceful (no crash, no double-placement)
+- WS reconnect → SOFT_PAUSE → recovery flow validated end-to-end
+- Runbook updated with Bitget-specific failure scenarios

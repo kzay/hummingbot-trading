@@ -1,0 +1,10 @@
+{
+  "total_events": 1014,
+  "events_by_stream": {
+    "hb.market_data.v1": 690,
+    "hb.execution_intent.v1": 162,
+    "hb.audit.v1": 162
+  },
+  "missing_correlation_count": 0,
+  "last_update_utc": "2026-02-24T00:40:57.422607+00:00"
+}

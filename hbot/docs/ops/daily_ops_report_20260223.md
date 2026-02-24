@@ -25,7 +25,7 @@
 ## 4) Metrics before/after
 - Day2 GO: `True`
 - Day2 checks:
-  - `[{'name': 'elapsed_window', 'pass': True, 'value_hours': 34.25, 'required_hours': 24.0}, {'name': 'missing_correlation', 'pass': True, 'value': 0, 'required': 0}, {'name': 'delta_since_baseline_tolerance', 'pass': True, 'max_delta_observed': 0, 'max_allowed_delta': 5}]`
+  - `[{'name': 'elapsed_window', 'pass': True, 'value_hours': 34.5, 'required_hours': 24.0}, {'name': 'missing_correlation', 'pass': True, 'value': 0, 'required': 0}, {'name': 'delta_since_baseline_tolerance', 'pass': True, 'max_delta_observed': 0, 'max_allowed_delta': 5}]`
 - Reconciliation: `status=warning`, `critical_count=0`
 - Parity: `status=pass`, `failed_bots=0`
 - Portfolio risk: `status=ok`, `critical_count=0`
@@ -49,4 +49,4 @@
 - If strict cycle PASS is achieved, update readiness decision from provisional HOLD to final GO/NO-GO.
 
 ---
-Generated at: `2026-02-23T23:44:36.503992+00:00`
+Generated at: `2026-02-23T23:59:36.333559+00:00`

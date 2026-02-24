@@ -1,23 +1,21 @@
 # Option 4 Readiness Decision (Latest)
 
 ## Decision Timestamp
-- 2026-02-22T16:37:46.247133+00:00
+- 2026-02-24T00:41:46.436732+00:00
 
 ## Decision
-- **Status: HOLD**
+- **Status: GO**
 
 ## Decision Inputs
-- Strict gate status: `FAIL`
-- Day2 gate GO: `False`
-- Soak aggregate status: `hold`
+- Strict gate status: `PASS`
+- Day2 gate GO: `True`
+- Soak aggregate status: `ready`
 - Reconciliation status: `warning`
 - Parity status: `pass`
 - Portfolio risk status: `ok`
 
 ## Blockers
-- day2_event_store_gate
-- strict_cycle_not_pass
-- soak_not_ready
+- (none)
 
 ## Evidence
 - Strict cycle: `F:\Environement\git-repo\hummingbot_custo\hbot\reports\promotion_gates\strict_cycle_latest.json`

@@ -1,155 +1,226 @@
 {
-  "annotations": {"list": []},
+  "annotations": {
+    "list": [
+      {
+        "builtIn": 1,
+        "datasource": {"type": "grafana", "uid": "-- Grafana --"},
+        "enable": true,
+        "hide": true,
+        "iconColor": "rgba(0, 211, 255, 1)",
+        "name": "Annotations & Alerts",
+        "type": "dashboard"
+      },
+      {
+        "datasource": {"type": "loki", "uid": "loki"},
+        "enable": true,
+        "expr": "{job=\"bot_logs\"} |= \"kill_switch\"",
+        "hide": false,
+        "iconColor": "red",
+        "name": "Kill Switch Events",
+        "step": "60s"
+      }
+    ]
+  },
   "editable": true,
   "fiscalYearStartMonth": 0,
   "graphTooltip": 1,
   "id": null,
-  "links": [],
+  "links": [
+    {
+      "title": "Trading Desk",
+      "type": "link",
+      "url": "/d/hbot-trading-overview",
+      "keepTime": true,
+      "includeVars": false,
+      "targetBlank": false,
+      "icon": "external link"
+    },
+    {
+      "title": "Bot Deep Dive",
+      "type": "link",
+      "url": "/d/hbot-bot-deep-dive",
+      "keepTime": true,
+      "includeVars": false,
+      "targetBlank": false,
+      "icon": "external link"
+    }
+  ],
   "liveNow": false,
-  "refresh": "30s",
-  "schemaVersion": 39,
-  "style": "dark",
-  "tags": ["hummingbot", "control-plane", "health"],
-  "time": {"from": "now-6h", "to": "now"},
-  "timepicker": {},
-  "timezone": "utc",
-  "title": "Hummingbot Control Plane Health",
-  "uid": "hbot-cp-health",
-  "version": 1,
-  "templating": {
-    "list": [
-      {
-        "name": "freshness_warn_sec",
-        "type": "constant",
-        "label": "Freshness warn (sec)",
-        "query": "1800",
-        "current": {"value": "1800"}
-      }
-    ]
-  },
   "panels": [
-
     {
-      "title": "— DESK READINESS AT A GLANCE —",
-      "type": "row",
-      "gridPos": {"h": 1, "w": 24, "x": 0, "y": 0},
-      "collapsed": false
+      "id": 1,
+      "title": "Active Alerts",
+      "type": "alertlist",
+      "gridPos": {"h": 3, "w": 20, "x": 0, "y": 0},
+      "options": {
+        "alertInstanceLabelFilter": "",
+        "alertName": "",
+        "dashboardAlerts": false,
+        "groupBy": [],
+        "groupMode": "default",
+        "maxItems": 20,
+        "sortOrder": 1,
+        "stateFilter": {"error": true, "firing": true, "noData": false, "normal": false, "pending": true},
+        "viewMode": "list"
+      },
+      "targets": []
     },
-
     {
+      "id": 2,
+      "title": "Last Refresh",
+      "type": "stat",
+      "gridPos": {"h": 3, "w": 4, "x": 20, "y": 0},
+      "datasource": {"type": "prometheus", "uid": "prometheus"},
+      "targets": [{"expr": "time()", "refId": "A", "legendFormat": ""}],
+      "fieldConfig": {
+        "defaults": {"unit": "dateTimeAsLocal", "color": {"mode": "fixed", "fixedColor": "text"}},
+        "overrides": []
+      },
+      "options": {
+        "reduceOptions": {"values": false, "calcs": ["lastNotNull"], "fields": ""},
+        "orientation": "auto",
+        "textMode": "value",
+        "colorMode": "none",
+        "graphMode": "none",
+        "justifyMode": "center"
+      }
+    },
+    {
+      "id": 3,
+      "title": "— Desk Readiness —",
+      "type": "row",
+      "gridPos": {"h": 1, "w": 24, "x": 0, "y": 3},
+      "collapsed": false,
+      "panels": []
+    },
+    {
+      "id": 4,
       "title": "Readiness GO / NO-GO",
-      "description": "hbot_control_plane_gate_status{gate=\"readiness_go\"}",
+      "description": "Final readiness decision. GO = all critical gates passing. NO-GO = at least one critical gate failing.",
       "type": "stat",
-      "gridPos": {"h": 5, "w": 4, "x": 0, "y": 1},
+      "gridPos": {"h": 5, "w": 4, "x": 0, "y": 4},
       "datasource": {"type": "prometheus", "uid": "prometheus"},
-      "targets": [{"expr": "hbot_control_plane_gate_status{gate=\"readiness_go\"}", "legendFormat": "Readiness"}],
+      "targets": [{"expr": "hbot_control_plane_gate_status{gate=\"readiness_go\"}", "legendFormat": "Readiness", "refId": "A"}],
       "fieldConfig": {
         "defaults": {
-          "mappings": [{"type": "value", "options": {"0": {"text": "NO-GO", "color": "red"}, "1": {"text": "GO", "color": "green"}}}],
-          "thresholds": {"mode": "absolute", "steps": [{"color": "red", "value": null}, {"color": "green", "value": 1}]},
-          "unit": "short"
-        }, "overrides": []
+          "unit": "short",
+          "color": {"mode": "thresholds"},
+          "mappings": [{"type": "value", "options": {"0": {"text": "NO-GO", "color": "red", "index": 0}, "1": {"text": "GO", "color": "green", "index": 1}}}],
+          "thresholds": {"mode": "absolute", "steps": [{"color": "red", "value": null}, {"color": "green", "value": 1}]}
+        },
+        "overrides": []
       },
-      "options": {"reduceOptions": {"calcs": ["lastNotNull"]}, "orientation": "auto", "textMode": "value", "colorMode": "background"}
+      "options": {"reduceOptions": {"calcs": ["lastNotNull"]}, "orientation": "auto", "textMode": "value", "colorMode": "background", "graphMode": "none", "justifyMode": "center"}
     },
-
     {
-      "title": "Day 2 Gate GO",
-      "description": "hbot_control_plane_gate_status{gate=\"day2_go\"}",
+      "id": 5,
+      "title": "Day 2 Gate",
+      "description": "Event store gate: elapsed_window + missing_correlation + delta_since_baseline_tolerance all passing.",
       "type": "stat",
-      "gridPos": {"h": 5, "w": 4, "x": 4, "y": 1},
+      "gridPos": {"h": 5, "w": 4, "x": 4, "y": 4},
       "datasource": {"type": "prometheus", "uid": "prometheus"},
-      "targets": [{"expr": "hbot_control_plane_gate_status{gate=\"day2_go\"}", "legendFormat": "Day2 Gate"}],
+      "targets": [{"expr": "hbot_control_plane_gate_status{gate=\"day2_go\"}", "legendFormat": "Day2", "refId": "A"}],
       "fieldConfig": {
         "defaults": {
-          "mappings": [{"type": "value", "options": {"0": {"text": "NO-GO", "color": "red"}, "1": {"text": "GO", "color": "green"}}}],
-          "thresholds": {"mode": "absolute", "steps": [{"color": "red", "value": null}, {"color": "green", "value": 1}]},
-          "unit": "short"
-        }, "overrides": []
+          "unit": "short",
+          "color": {"mode": "thresholds"},
+          "mappings": [{"type": "value", "options": {"0": {"text": "NO-GO", "color": "red", "index": 0}, "1": {"text": "GO", "color": "green", "index": 1}}}],
+          "thresholds": {"mode": "absolute", "steps": [{"color": "red", "value": null}, {"color": "green", "value": 1}]}
+        },
+        "overrides": []
       },
-      "options": {"reduceOptions": {"calcs": ["lastNotNull"]}, "orientation": "auto", "textMode": "value", "colorMode": "background"}
+      "options": {"reduceOptions": {"calcs": ["lastNotNull"]}, "orientation": "auto", "textMode": "value", "colorMode": "background", "graphMode": "none", "justifyMode": "center"}
     },
-
     {
+      "id": 6,
       "title": "Promotion Gate",
-      "description": "hbot_control_plane_gate_status{gate=\"promotion_latest\"}",
+      "description": "Latest promotion gate run result. PASS = all gates green. FAIL = at least one critical gate failing.",
       "type": "stat",
-      "gridPos": {"h": 5, "w": 4, "x": 8, "y": 1},
+      "gridPos": {"h": 5, "w": 4, "x": 8, "y": 4},
       "datasource": {"type": "prometheus", "uid": "prometheus"},
-      "targets": [{"expr": "hbot_control_plane_gate_status{gate=\"promotion_latest\"}", "legendFormat": "Promotion"}],
+      "targets": [{"expr": "hbot_control_plane_gate_status{gate=\"promotion_latest\"}", "legendFormat": "Promotion", "refId": "A"}],
       "fieldConfig": {
         "defaults": {
-          "mappings": [{"type": "value", "options": {"0": {"text": "FAIL", "color": "red"}, "1": {"text": "PASS", "color": "green"}}}],
-          "thresholds": {"mode": "absolute", "steps": [{"color": "red", "value": null}, {"color": "green", "value": 1}]},
-          "unit": "short"
-        }, "overrides": []
+          "unit": "short",
+          "color": {"mode": "thresholds"},
+          "mappings": [{"type": "value", "options": {"0": {"text": "FAIL", "color": "red", "index": 0}, "1": {"text": "PASS", "color": "green", "index": 1}}}],
+          "thresholds": {"mode": "absolute", "steps": [{"color": "red", "value": null}, {"color": "green", "value": 1}]}
+        },
+        "overrides": []
       },
-      "options": {"reduceOptions": {"calcs": ["lastNotNull"]}, "orientation": "auto", "textMode": "value", "colorMode": "background"}
+      "options": {"reduceOptions": {"calcs": ["lastNotNull"]}, "orientation": "auto", "textMode": "value", "colorMode": "background", "graphMode": "none", "justifyMode": "center"}
     },
-
     {
+      "id": 7,
       "title": "Strict Cycle",
-      "description": "hbot_control_plane_gate_status{gate=\"strict_cycle\"}",
+      "description": "Strict promotion cycle: all critical + non-critical gates must pass. Blocks live deployment if FAIL.",
       "type": "stat",
-      "gridPos": {"h": 5, "w": 4, "x": 12, "y": 1},
+      "gridPos": {"h": 5, "w": 4, "x": 12, "y": 4},
       "datasource": {"type": "prometheus", "uid": "prometheus"},
-      "targets": [{"expr": "hbot_control_plane_gate_status{gate=\"strict_cycle\"}", "legendFormat": "Strict"}],
+      "targets": [{"expr": "hbot_control_plane_gate_status{gate=\"strict_cycle\"}", "legendFormat": "Strict", "refId": "A"}],
       "fieldConfig": {
         "defaults": {
-          "mappings": [{"type": "value", "options": {"0": {"text": "FAIL", "color": "red"}, "1": {"text": "PASS", "color": "green"}}}],
-          "thresholds": {"mode": "absolute", "steps": [{"color": "red", "value": null}, {"color": "green", "value": 1}]},
-          "unit": "short"
-        }, "overrides": []
+          "unit": "short",
+          "color": {"mode": "thresholds"},
+          "mappings": [{"type": "value", "options": {"0": {"text": "FAIL", "color": "red", "index": 0}, "1": {"text": "PASS", "color": "green", "index": 1}}}],
+          "thresholds": {"mode": "absolute", "steps": [{"color": "red", "value": null}, {"color": "green", "value": 1}]}
+        },
+        "overrides": []
       },
-      "options": {"reduceOptions": {"calcs": ["lastNotNull"]}, "orientation": "auto", "textMode": "value", "colorMode": "background"}
+      "options": {"reduceOptions": {"calcs": ["lastNotNull"]}, "orientation": "auto", "textMode": "value", "colorMode": "background", "graphMode": "none", "justifyMode": "center"}
     },
-
     {
+      "id": 8,
       "title": "Reconciliation",
-      "description": "hbot_control_plane_gate_status{gate=\"reconciliation_ok\"}",
+      "description": "Fill reconciliation: fills.csv vs exchange API fill history. Warns on discrepancy, fails on critical gap.",
       "type": "stat",
-      "gridPos": {"h": 5, "w": 4, "x": 16, "y": 1},
+      "gridPos": {"h": 5, "w": 4, "x": 16, "y": 4},
       "datasource": {"type": "prometheus", "uid": "prometheus"},
-      "targets": [{"expr": "hbot_control_plane_gate_status{gate=\"reconciliation_ok\"}", "legendFormat": "Recon"}],
+      "targets": [{"expr": "hbot_control_plane_gate_status{gate=\"reconciliation_ok\"}", "legendFormat": "Reconciliation", "refId": "A"}],
       "fieldConfig": {
         "defaults": {
-          "mappings": [{"type": "value", "options": {"0": {"text": "FAIL", "color": "red"}, "1": {"text": "OK", "color": "green"}}}],
-          "thresholds": {"mode": "absolute", "steps": [{"color": "red", "value": null}, {"color": "green", "value": 1}]},
-          "unit": "short"
-        }, "overrides": []
+          "unit": "short",
+          "color": {"mode": "thresholds"},
+          "mappings": [{"type": "value", "options": {"0": {"text": "FAIL", "color": "red", "index": 0}, "1": {"text": "OK", "color": "green", "index": 1}}}],
+          "thresholds": {"mode": "absolute", "steps": [{"color": "red", "value": null}, {"color": "green", "value": 1}]}
+        },
+        "overrides": []
       },
-      "options": {"reduceOptions": {"calcs": ["lastNotNull"]}, "orientation": "auto", "textMode": "value", "colorMode": "background"}
+      "options": {"reduceOptions": {"calcs": ["lastNotNull"]}, "orientation": "auto", "textMode": "value", "colorMode": "background", "graphMode": "none", "justifyMode": "center"}
     },
-
     {
+      "id": 9,
       "title": "Parity",
-      "description": "hbot_control_plane_gate_status{gate=\"parity_pass\"}",
+      "description": "Backtest vs paper vs live parity check. FAIL = parity divergence above threshold across bot environments.",
       "type": "stat",
-      "gridPos": {"h": 5, "w": 4, "x": 20, "y": 1},
+      "gridPos": {"h": 5, "w": 4, "x": 20, "y": 4},
       "datasource": {"type": "prometheus", "uid": "prometheus"},
-      "targets": [{"expr": "hbot_control_plane_gate_status{gate=\"parity_pass\"}", "legendFormat": "Parity"}],
+      "targets": [{"expr": "hbot_control_plane_gate_status{gate=\"parity_pass\"}", "legendFormat": "Parity", "refId": "A"}],
       "fieldConfig": {
         "defaults": {
-          "mappings": [{"type": "value", "options": {"0": {"text": "FAIL", "color": "red"}, "1": {"text": "PASS", "color": "green"}}}],
-          "thresholds": {"mode": "absolute", "steps": [{"color": "red", "value": null}, {"color": "green", "value": 1}]},
-          "unit": "short"
-        }, "overrides": []
+          "unit": "short",
+          "color": {"mode": "thresholds"},
+          "mappings": [{"type": "value", "options": {"0": {"text": "FAIL", "color": "red", "index": 0}, "1": {"text": "PASS", "color": "green", "index": 1}}}],
+          "thresholds": {"mode": "absolute", "steps": [{"color": "red", "value": null}, {"color": "green", "value": 1}]}
+        },
+        "overrides": []
       },
-      "options": {"reduceOptions": {"calcs": ["lastNotNull"]}, "orientation": "auto", "textMode": "value", "colorMode": "background"}
+      "options": {"reduceOptions": {"calcs": ["lastNotNull"]}, "orientation": "auto", "textMode": "value", "colorMode": "background", "graphMode": "none", "justifyMode": "center"}
     },
-
     {
-      "title": "— CONTROL PLANE SERVICES — STATUS · FRESHNESS · FINDINGS —",
+      "id": 10,
+      "title": "— Service Health —",
       "type": "row",
-      "gridPos": {"h": 1, "w": 24, "x": 0, "y": 6},
-      "collapsed": false
+      "gridPos": {"h": 1, "w": 24, "x": 0, "y": 9},
+      "collapsed": false,
+      "panels": []
     },
-
     {
-      "title": "Service Status Table (Present / Fresh / Gate / Findings / Age)",
-      "description": "Single-screen health of every control-plane service. Green = healthy. Red = stale or failing.",
+      "id": 11,
+      "title": "Control Plane Services (Present / Fresh / Gate / Findings / Age)",
+      "description": "Single-table health view of every control-plane service. Age > 30min = STALE (yellow), Age > 60min = RED. Findings > 0 = warnings/errors.",
       "type": "table",
-      "gridPos": {"h": 10, "w": 24, "x": 0, "y": 7},
+      "gridPos": {"h": 10, "w": 24, "x": 0, "y": 10},
       "datasource": {"type": "prometheus", "uid": "prometheus"},
       "targets": [
         {"expr": "hbot_control_plane_report_present", "legendFormat": "{{report}}", "instant": true, "refId": "present", "format": "table"},
@@ -157,231 +228,458 @@
         {"expr": "hbot_control_plane_report_age_seconds", "legendFormat": "{{report}}", "instant": true, "refId": "age", "format": "table"},
         {"expr": "hbot_control_plane_finding_count", "legendFormat": "{{report}}", "instant": true, "refId": "findings", "format": "table"}
       ],
-      "options": {"showHeader": true},
+      "options": {"showHeader": true, "sortBy": [{"displayName": "Value #age", "desc": true}]},
       "fieldConfig": {
         "defaults": {
           "thresholds": {"mode": "absolute", "steps": [{"color": "green", "value": null}, {"color": "red", "value": 0.5}]}
         },
         "overrides": [
-          {"matcher": {"id": "byName", "options": "Value #age"}, "properties": [{"id": "unit", "value": "s"}, {"id": "displayName", "value": "Age (s)"}, {"id": "thresholds", "value": {"mode": "absolute", "steps": [{"color": "green", "value": null}, {"color": "yellow", "value": 900}, {"color": "red", "value": 1800}]}}]},
-          {"matcher": {"id": "byName", "options": "Value #present"}, "properties": [{"id": "displayName", "value": "Present"}, {"id": "mappings", "value": [{"type": "value", "options": {"0": {"text": "MISSING", "color": "red"}, "1": {"text": "OK", "color": "green"}}}]}]},
-          {"matcher": {"id": "byName", "options": "Value #fresh"}, "properties": [{"id": "displayName", "value": "Fresh"}, {"id": "mappings", "value": [{"type": "value", "options": {"0": {"text": "STALE", "color": "red"}, "1": {"text": "FRESH", "color": "green"}}}]}]},
-          {"matcher": {"id": "byName", "options": "Value #findings"}, "properties": [{"id": "displayName", "value": "Findings"}, {"id": "thresholds", "value": {"mode": "absolute", "steps": [{"color": "green", "value": null}, {"color": "yellow", "value": 1}, {"color": "red", "value": 3}]}}]}
+          {"matcher": {"id": "byName", "options": "Time"}, "properties": [{"id": "custom.hidden", "value": true}]},
+          {"matcher": {"id": "byName", "options": "Value #age"}, "properties": [
+            {"id": "unit", "value": "s"},
+            {"id": "displayName", "value": "Age"},
+            {"id": "thresholds", "value": {"mode": "absolute", "steps": [{"color": "green", "value": null}, {"color": "yellow", "value": 1800}, {"color": "red", "value": 3600}]}}
+          ]},
+          {"matcher": {"id": "byName", "options": "Value #present"}, "properties": [
+            {"id": "displayName", "value": "Present"},
+            {"id": "mappings", "value": [{"type": "value", "options": {"0": {"text": "MISSING", "color": "red"}, "1": {"text": "OK", "color": "green"}}}]}
+          ]},
+          {"matcher": {"id": "byName", "options": "Value #fresh"}, "properties": [
+            {"id": "displayName", "value": "Fresh"},
+            {"id": "mappings", "value": [{"type": "value", "options": {"0": {"text": "STALE", "color": "red"}, "1": {"text": "FRESH", "color": "green"}}}]}
+          ]},
+          {"matcher": {"id": "byName", "options": "Value #findings"}, "properties": [
+            {"id": "displayName", "value": "Findings"},
+            {"id": "thresholds", "value": {"mode": "absolute", "steps": [{"color": "green", "value": null}, {"color": "yellow", "value": 1}, {"color": "red", "value": 3}]}}
+          ]}
         ]
       }
     },
-
     {
-      "title": "Service Report Age Trend (seconds)",
-      "description": "How old each control-plane service's last report is over time. Red zone = stale.",
+      "id": 12,
+      "title": "— Report Age Trend —",
+      "type": "row",
+      "gridPos": {"h": 1, "w": 24, "x": 0, "y": 20},
+      "collapsed": false,
+      "panels": []
+    },
+    {
+      "id": 13,
+      "title": "Service Report Age (seconds)",
+      "description": "How stale each control-plane service report is over time. Lines trending up = service has stopped producing reports.",
       "type": "timeseries",
-      "gridPos": {"h": 8, "w": 24, "x": 0, "y": 17},
+      "gridPos": {"h": 8, "w": 24, "x": 0, "y": 21},
       "datasource": {"type": "prometheus", "uid": "prometheus"},
       "targets": [
-        {"expr": "hbot_control_plane_report_age_seconds", "legendFormat": "{{report}}"}
+        {"expr": "hbot_control_plane_report_age_seconds", "legendFormat": "{{report}}", "refId": "A"}
       ],
       "fieldConfig": {
-        "defaults": {"unit": "s", "thresholds": {"mode": "absolute", "steps": [{"color": "green", "value": null}, {"color": "yellow", "value": 900}, {"color": "red", "value": 1800}]}},
+        "defaults": {
+          "unit": "s",
+          "thresholds": {"mode": "absolute", "steps": [{"color": "green", "value": null}, {"color": "yellow", "value": 1800}, {"color": "red", "value": 3600}]}
+        },
         "overrides": []
       },
-      "options": {"legend": {"displayMode": "table", "placement": "bottom"}}
-    },
-
-    {
-      "title": "— WALLET · POSITIONS (EXCHANGE SNAPSHOT) —",
-      "type": "row",
-      "gridPos": {"h": 1, "w": 24, "x": 0, "y": 25},
-      "collapsed": false
-    },
-
-    {
-      "title": "Equity Quote per Bot",
-      "description": "Live equity from exchange snapshot probe.",
-      "type": "stat",
-      "gridPos": {"h": 5, "w": 12, "x": 0, "y": 26},
-      "datasource": {"type": "prometheus", "uid": "prometheus"},
-      "targets": [{"expr": "hbot_exchange_snapshot_equity_quote", "legendFormat": "{{bot}} ({{exchange}})"}],
-      "fieldConfig": {
-        "defaults": {"unit": "currencyUSD", "thresholds": {"mode": "absolute", "steps": [{"color": "red", "value": null}, {"color": "yellow", "value": 100}, {"color": "green", "value": 500}]}},
-        "overrides": []
-      },
-      "options": {"reduceOptions": {"calcs": ["lastNotNull"]}, "orientation": "horizontal", "textMode": "value_and_name", "colorMode": "background"}
-    },
-
-    {
-      "title": "Base % (Inventory Position) per Bot",
-      "description": "base_pct from exchange snapshot: 0=full quote, 1=full base.",
-      "type": "gauge",
-      "gridPos": {"h": 5, "w": 6, "x": 12, "y": 26},
-      "datasource": {"type": "prometheus", "uid": "prometheus"},
-      "targets": [{"expr": "hbot_exchange_snapshot_base_pct", "legendFormat": "{{bot}}"}],
-      "fieldConfig": {
-        "defaults": {"unit": "percentunit", "min": 0, "max": 1, "thresholds": {"mode": "absolute", "steps": [{"color": "red", "value": null}, {"color": "yellow", "value": 0.1}, {"color": "green", "value": 0.2}, {"color": "yellow", "value": 0.8}, {"color": "red", "value": 0.9}]}},
-        "overrides": []
+      "options": {
+        "tooltip": {"mode": "multi", "sort": "desc"},
+        "legend": {"displayMode": "table", "placement": "bottom", "calcs": ["last", "max"]},
+        "thresholds": {"mode": "line"},
+        "thresholdsStyle": {"mode": "area"}
       }
     },
-
     {
-      "title": "Exchange Probe Status",
-      "description": "API probe status per bot: ok / disabled / paper_only / error.",
-      "type": "table",
-      "gridPos": {"h": 5, "w": 6, "x": 18, "y": 26},
+      "id": 14,
+      "title": "— Bot Execution State —",
+      "type": "row",
+      "gridPos": {"h": 1, "w": 24, "x": 0, "y": 29},
+      "collapsed": false,
+      "panels": []
+    },
+    {
+      "id": 15,
+      "title": "Active Bot States",
+      "description": "One-hot state per bot. Green = running. Only shows currently active states (value=1).",
+      "type": "stat",
+      "gridPos": {"h": 5, "w": 12, "x": 0, "y": 30},
       "datasource": {"type": "prometheus", "uid": "prometheus"},
-      "targets": [{"expr": "hbot_exchange_snapshot_probe_status", "legendFormat": "{{bot}} {{status}}", "instant": true, "format": "table"}],
+      "targets": [
+        {"expr": "sum by (bot, state) (hbot_bot_state == 1)", "legendFormat": "{{bot}} — {{state}}", "refId": "A"}
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "none",
+          "color": {"mode": "thresholds"},
+          "mappings": [{"type": "value", "options": {"1": {"text": "ACTIVE", "color": "green"}}}],
+          "thresholds": {"mode": "absolute", "steps": [{"color": "green", "value": null}]}
+        },
+        "overrides": []
+      },
+      "options": {
+        "reduceOptions": {"calcs": ["lastNotNull"]},
+        "orientation": "horizontal",
+        "textMode": "value_and_name",
+        "colorMode": "background",
+        "graphMode": "none",
+        "justifyMode": "auto"
+      }
+    },
+    {
+      "id": 16,
+      "title": "Bot Snapshot Age",
+      "description": "How stale each bot's minute.csv snapshot is. Green < 60s = healthy data flow. Red > 300s = bot may be crashed or stuck.",
+      "type": "stat",
+      "gridPos": {"h": 5, "w": 12, "x": 12, "y": 30},
+      "datasource": {"type": "prometheus", "uid": "prometheus"},
+      "targets": [
+        {"expr": "hbot_bot_snapshot_age_seconds", "legendFormat": "{{bot}}", "refId": "A"}
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "s",
+          "color": {"mode": "thresholds"},
+          "thresholds": {"mode": "absolute", "steps": [{"color": "green", "value": null}, {"color": "yellow", "value": 60}, {"color": "red", "value": 300}]}
+        },
+        "overrides": []
+      },
+      "options": {
+        "reduceOptions": {"calcs": ["lastNotNull"]},
+        "orientation": "horizontal",
+        "textMode": "value_and_name",
+        "colorMode": "value",
+        "graphMode": "none",
+        "justifyMode": "auto"
+      }
+    },
+    {
+      "id": 17,
+      "title": "— Container Health —",
+      "type": "row",
+      "gridPos": {"h": 1, "w": 24, "x": 0, "y": 35},
+      "collapsed": false,
+      "panels": []
+    },
+    {
+      "id": 18,
+      "title": "Container CPU % (hbot-*)",
+      "description": "CPU usage per hbot container (5-minute rate). High sustained CPU on a bot = runaway loop or infinite backoff.",
+      "type": "timeseries",
+      "gridPos": {"h": 8, "w": 8, "x": 0, "y": 36},
+      "datasource": {"type": "prometheus", "uid": "prometheus"},
+      "targets": [
+        {"expr": "rate(container_cpu_usage_seconds_total{name=~\"hbot-.*\"}[5m]) * 100", "legendFormat": "{{name}}", "refId": "A"}
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "percent",
+          "thresholds": {"mode": "absolute", "steps": [{"color": "green", "value": null}, {"color": "yellow", "value": 50}, {"color": "red", "value": 90}]}
+        },
+        "overrides": []
+      },
+      "options": {
+        "tooltip": {"mode": "multi", "sort": "desc"},
+        "legend": {"displayMode": "table", "placement": "bottom", "calcs": ["last", "max"]},
+        "thresholds": {"mode": "off"}
+      }
+    },
+    {
+      "id": 19,
+      "title": "Container Memory (hbot-*)",
+      "description": "Memory usage per hbot container. Growing trend = memory leak.",
+      "type": "timeseries",
+      "gridPos": {"h": 8, "w": 8, "x": 8, "y": 36},
+      "datasource": {"type": "prometheus", "uid": "prometheus"},
+      "targets": [
+        {"expr": "container_memory_usage_bytes{name=~\"hbot-.*\"}", "legendFormat": "{{name}}", "refId": "A"}
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "bytes",
+          "thresholds": {"mode": "absolute", "steps": [{"color": "green", "value": null}, {"color": "yellow", "value": 800000000}, {"color": "red", "value": 1200000000}]}
+        },
+        "overrides": []
+      },
+      "options": {
+        "tooltip": {"mode": "multi", "sort": "desc"},
+        "legend": {"displayMode": "table", "placement": "bottom", "calcs": ["last", "max"]},
+        "thresholds": {"mode": "off"}
+      }
+    },
+    {
+      "id": 20,
+      "title": "Container Restarts 24h (hbot-*)",
+      "description": "Restart count in the last 24h. Any restart > 0 is a reliability event worth investigating.",
+      "type": "stat",
+      "gridPos": {"h": 8, "w": 8, "x": 16, "y": 36},
+      "datasource": {"type": "prometheus", "uid": "prometheus"},
+      "targets": [
+        {"expr": "increase(container_restart_count{name=~\"hbot-.*\"}[24h])", "legendFormat": "{{name}}", "refId": "A"}
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "color": {"mode": "thresholds"},
+          "thresholds": {"mode": "absolute", "steps": [{"color": "green", "value": null}, {"color": "yellow", "value": 1}, {"color": "red", "value": 3}]}
+        },
+        "overrides": []
+      },
+      "options": {
+        "reduceOptions": {"calcs": ["lastNotNull"]},
+        "orientation": "horizontal",
+        "textMode": "value_and_name",
+        "colorMode": "background",
+        "graphMode": "none",
+        "justifyMode": "auto"
+      }
+    },
+    {
+      "id": 21,
+      "title": "— Host System —",
+      "type": "row",
+      "gridPos": {"h": 1, "w": 24, "x": 0, "y": 44},
+      "collapsed": false,
+      "panels": []
+    },
+    {
+      "id": 22,
+      "title": "Host CPU %",
+      "description": "Overall host CPU utilization. Sustained > 80% can cause tick-loop latency in bots.",
+      "type": "timeseries",
+      "gridPos": {"h": 8, "w": 6, "x": 0, "y": 45},
+      "datasource": {"type": "prometheus", "uid": "prometheus"},
+      "targets": [
+        {"expr": "100 - (avg(rate(node_cpu_seconds_total{mode=\"idle\"}[5m])) * 100)", "legendFormat": "CPU %", "refId": "A"}
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "percent",
+          "min": 0,
+          "max": 100,
+          "thresholds": {"mode": "absolute", "steps": [{"color": "green", "value": null}, {"color": "yellow", "value": 70}, {"color": "red", "value": 90}]}
+        },
+        "overrides": []
+      },
+      "options": {
+        "tooltip": {"mode": "single"},
+        "legend": {"displayMode": "list", "placement": "bottom"},
+        "thresholds": {"mode": "off"}
+      }
+    },
+    {
+      "id": 23,
+      "title": "Host Memory",
+      "description": "Host RAM usage. High memory = bot containers may be OOM-killed.",
+      "type": "timeseries",
+      "gridPos": {"h": 8, "w": 6, "x": 6, "y": 45},
+      "datasource": {"type": "prometheus", "uid": "prometheus"},
+      "targets": [
+        {"expr": "node_memory_MemTotal_bytes - node_memory_MemAvailable_bytes", "legendFormat": "used", "refId": "A"},
+        {"expr": "node_memory_MemTotal_bytes", "legendFormat": "total", "refId": "B"}
+      ],
+      "fieldConfig": {
+        "defaults": {"unit": "bytes"},
+        "overrides": [
+          {"matcher": {"id": "byName", "options": "total"}, "properties": [{"id": "custom.lineStyle", "value": {"fill": "dash", "dash": [6, 3]}}]}
+        ]
+      },
+      "options": {
+        "tooltip": {"mode": "multi"},
+        "legend": {"displayMode": "list", "placement": "bottom"},
+        "thresholds": {"mode": "off"}
+      }
+    },
+    {
+      "id": 24,
+      "title": "Host Disk Usage %",
+      "description": "Disk utilization. Logs, event store, and Postgres data grow over time. Alert at 80%.",
+      "type": "timeseries",
+      "gridPos": {"h": 8, "w": 6, "x": 12, "y": 45},
+      "datasource": {"type": "prometheus", "uid": "prometheus"},
+      "targets": [
+        {"expr": "100 - ((node_filesystem_avail_bytes{mountpoint=\"/\"} / node_filesystem_size_bytes{mountpoint=\"/\"}) * 100)", "legendFormat": "disk %", "refId": "A"}
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "percent",
+          "min": 0,
+          "max": 100,
+          "thresholds": {"mode": "absolute", "steps": [{"color": "green", "value": null}, {"color": "yellow", "value": 70}, {"color": "red", "value": 85}]}
+        },
+        "overrides": []
+      },
+      "options": {
+        "tooltip": {"mode": "single"},
+        "legend": {"displayMode": "list", "placement": "bottom"},
+        "thresholds": {"mode": "line"},
+        "thresholdsStyle": {"mode": "area"}
+      }
+    },
+    {
+      "id": 25,
+      "title": "Host Network I/O",
+      "description": "Network throughput. Sustained high outbound = high order rate or log shipping. High inbound = market data feed.",
+      "type": "timeseries",
+      "gridPos": {"h": 8, "w": 6, "x": 18, "y": 45},
+      "datasource": {"type": "prometheus", "uid": "prometheus"},
+      "targets": [
+        {"expr": "rate(node_network_receive_bytes_total{device!=\"lo\"}[5m])", "legendFormat": "rx {{device}}", "refId": "A"},
+        {"expr": "rate(node_network_transmit_bytes_total{device!=\"lo\"}[5m])", "legendFormat": "tx {{device}}", "refId": "B"}
+      ],
+      "fieldConfig": {
+        "defaults": {"unit": "Bps"},
+        "overrides": []
+      },
+      "options": {
+        "tooltip": {"mode": "multi", "sort": "desc"},
+        "legend": {"displayMode": "list", "placement": "bottom"},
+        "thresholds": {"mode": "off"}
+      }
+    },
+    {
+      "id": 26,
+      "title": "— Errors & Alerts —",
+      "type": "row",
+      "gridPos": {"h": 1, "w": 24, "x": 0, "y": 53},
+      "collapsed": false,
+      "panels": []
+    },
+    {
+      "id": 27,
+      "title": "Error Lines per Bot (recent)",
+      "description": "ERROR line count from recent log tail per bot. Yellow > 5, red > 20 = bot generating excessive errors.",
+      "type": "stat",
+      "gridPos": {"h": 5, "w": 12, "x": 0, "y": 54},
+      "datasource": {"type": "prometheus", "uid": "prometheus"},
+      "targets": [
+        {"expr": "hbot_bot_recent_error_lines", "legendFormat": "{{bot}}", "refId": "A"}
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "color": {"mode": "thresholds"},
+          "thresholds": {"mode": "absolute", "steps": [{"color": "green", "value": null}, {"color": "yellow", "value": 5}, {"color": "red", "value": 20}]}
+        },
+        "overrides": []
+      },
+      "options": {
+        "reduceOptions": {"calcs": ["lastNotNull"]},
+        "orientation": "horizontal",
+        "textMode": "value_and_name",
+        "colorMode": "background",
+        "graphMode": "none",
+        "justifyMode": "auto"
+      }
+    },
+    {
+      "id": 28,
+      "title": "Bot + Control Plane Errors (Loki)",
+      "description": "ERROR-level log lines from all hbot containers. Use time range and search to investigate incidents.",
+      "type": "logs",
+      "gridPos": {"h": 8, "w": 12, "x": 12, "y": 54},
+      "datasource": {"type": "loki", "uid": "loki"},
+      "targets": [
+        {"expr": "{job=\"bot_logs\"} |= \"ERROR\"", "refId": "A"}
+      ],
+      "options": {
+        "showTime": true,
+        "showLabels": false,
+        "showCommonLabels": false,
+        "wrapLogMessage": true,
+        "prettifyLogMessage": false,
+        "enableLogDetails": true,
+        "sortOrder": "Descending",
+        "dedupStrategy": "none"
+      }
+    },
+    {
+      "id": 29,
+      "title": "— Blotter (Postgres) —",
+      "type": "row",
+      "gridPos": {"h": 1, "w": 24, "x": 0, "y": 62},
+      "collapsed": false,
+      "panels": []
+    },
+    {
+      "id": 30,
+      "title": "Last 100 Fills",
+      "description": "Latest fills from Postgres operational store. Shows real recorded fills in reverse chronological order.",
+      "type": "table",
+      "gridPos": {"h": 10, "w": 24, "x": 0, "y": 63},
+      "datasource": {"type": "postgres", "uid": "postgres-ops"},
+      "targets": [
+        {
+          "editorMode": "code",
+          "format": "table",
+          "rawQuery": true,
+          "rawSql": "SELECT ts_utc, bot, variant, side, price::numeric(18,8), amount::numeric(18,8), fee_paid_quote::numeric(18,8), source_path FROM fills ORDER BY ts_utc DESC NULLS LAST LIMIT 100;",
+          "refId": "A"
+        }
+      ],
       "fieldConfig": {
         "defaults": {},
         "overrides": [
-          {"matcher": {"id": "byName", "options": "status"}, "properties": [{"id": "mappings", "value": [{"type": "value", "options": {"ok": {"color": "green", "text": "OK"}, "disabled": {"color": "blue", "text": "DISABLED"}, "paper_only": {"color": "yellow", "text": "PAPER"}, "error": {"color": "red", "text": "ERROR"}}}]}]}
+          {"matcher": {"id": "byName", "options": "side"}, "properties": [{"id": "mappings", "value": [{"type": "value", "options": {"buy": {"color": "green", "text": "BUY"}, "sell": {"color": "red", "text": "SELL"}}}]}]},
+          {"matcher": {"id": "byName", "options": "price"}, "properties": [{"id": "unit", "value": "currencyUSD"}, {"id": "decimals", "value": 2}]},
+          {"matcher": {"id": "byName", "options": "fee_paid_quote"}, "properties": [{"id": "unit", "value": "currencyUSD"}, {"id": "decimals", "value": 6}]}
         ]
+      },
+      "options": {"showHeader": true}
+    },
+    {
+      "id": 31,
+      "title": "Equity History (Postgres)",
+      "description": "Historical equity snapshots from Postgres. Long-term view of equity across all bots and sessions.",
+      "type": "timeseries",
+      "gridPos": {"h": 8, "w": 24, "x": 0, "y": 73},
+      "datasource": {"type": "postgres", "uid": "postgres-ops"},
+      "targets": [
+        {
+          "editorMode": "code",
+          "format": "time_series",
+          "rawQuery": true,
+          "rawSql": "SELECT ts_utc AS \"time\", bot, equity_quote FROM bot_snapshots WHERE $__timeFilter(ts_utc) ORDER BY ts_utc;",
+          "refId": "A"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {"unit": "currencyUSD"},
+        "overrides": []
+      },
+      "options": {
+        "tooltip": {"mode": "multi", "sort": "desc"},
+        "legend": {"displayMode": "table", "placement": "bottom", "calcs": ["last", "max", "min"]},
+        "thresholds": {"mode": "off"}
       }
-    },
-
-    {
-      "title": "— BLOTTER ACTIVITY —",
-      "type": "row",
-      "gridPos": {"h": 1, "w": 24, "x": 0, "y": 31},
-      "collapsed": false
-    },
-
-    {
-      "title": "Last Fill Age per Bot (seconds)",
-      "description": "How long ago the last fill was recorded. High = no recent trading activity.",
-      "type": "stat",
-      "gridPos": {"h": 5, "w": 12, "x": 0, "y": 32},
-      "datasource": {"type": "prometheus", "uid": "prometheus"},
-      "targets": [{"expr": "hbot_bot_blotter_last_fill_age_seconds", "legendFormat": "{{bot}} ({{variant}})"}],
-      "fieldConfig": {
-        "defaults": {"unit": "s", "thresholds": {"mode": "absolute", "steps": [{"color": "green", "value": null}, {"color": "yellow", "value": 3600}, {"color": "red", "value": 86400}]}},
-        "overrides": []
-      },
-      "options": {"reduceOptions": {"calcs": ["lastNotNull"]}, "orientation": "horizontal", "textMode": "value_and_name", "colorMode": "value"}
-    },
-
-    {
-      "title": "Total Fills per Bot",
-      "description": "Cumulative fill rows from fills.csv per bot.",
-      "type": "stat",
-      "gridPos": {"h": 5, "w": 12, "x": 12, "y": 32},
-      "datasource": {"type": "prometheus", "uid": "prometheus"},
-      "targets": [{"expr": "hbot_bot_blotter_fills_total", "legendFormat": "{{bot}} ({{variant}})"}],
-      "fieldConfig": {
-        "defaults": {"unit": "short", "thresholds": {"mode": "absolute", "steps": [{"color": "blue", "value": null}]}},
-        "overrides": []
-      },
-      "options": {"reduceOptions": {"calcs": ["lastNotNull"]}, "orientation": "horizontal", "textMode": "value_and_name", "colorMode": "value"}
-    },
-
-    {
-      "title": "— BOT STATE (EXECUTION PLANE) —",
-      "type": "row",
-      "gridPos": {"h": 1, "w": 24, "x": 0, "y": 37},
-      "collapsed": false
-    },
-
-    {
-      "title": "Bot State (running / soft_pause / hard_stop)",
-      "description": "One-hot state gauge per bot. Red = hard_stop. Yellow = soft_pause.",
-      "type": "stat",
-      "gridPos": {"h": 5, "w": 12, "x": 0, "y": 38},
-      "datasource": {"type": "prometheus", "uid": "prometheus"},
-      "targets": [{"expr": "sum by (bot, state) (hbot_bot_state == 1)", "legendFormat": "{{bot}} — {{state}}"}],
-      "fieldConfig": {
-        "defaults": {
-          "mappings": [{"type": "value", "options": {"0": {"text": "—"}, "1": {"text": "ACTIVE", "color": "green"}}}],
-          "thresholds": {"mode": "absolute", "steps": [{"color": "green", "value": null}]},
-          "unit": "short"
-        }, "overrides": []
-      },
-      "options": {"reduceOptions": {"calcs": ["lastNotNull"]}, "orientation": "horizontal", "textMode": "value_and_name", "colorMode": "background"}
-    },
-
-    {
-      "title": "Bot Snapshot Age (seconds)",
-      "description": "How stale each bot's last minute.csv snapshot is.",
-      "type": "stat",
-      "gridPos": {"h": 5, "w": 12, "x": 12, "y": 38},
-      "datasource": {"type": "prometheus", "uid": "prometheus"},
-      "targets": [{"expr": "hbot_bot_snapshot_age_seconds", "legendFormat": "{{bot}}"}],
-      "fieldConfig": {
-        "defaults": {"unit": "s", "thresholds": {"mode": "absolute", "steps": [{"color": "green", "value": null}, {"color": "yellow", "value": 120}, {"color": "red", "value": 300}]}},
-        "overrides": []
-      },
-      "options": {"reduceOptions": {"calcs": ["lastNotNull"]}, "orientation": "horizontal", "textMode": "value_and_name", "colorMode": "value"}
-    },
-
-    {
-      "title": "— CONTAINER HEALTH (CONTROL PLANE) —",
-      "type": "row",
-      "gridPos": {"h": 1, "w": 24, "x": 0, "y": 43},
-      "collapsed": false
-    },
-
-    {
-      "title": "Container CPU % (hbot-* services)",
-      "type": "timeseries",
-      "gridPos": {"h": 8, "w": 8, "x": 0, "y": 44},
-      "datasource": {"type": "prometheus", "uid": "prometheus"},
-      "targets": [{"expr": "rate(container_cpu_usage_seconds_total{name=~\"hbot-.*\"}[5m]) * 100", "legendFormat": "{{name}}"}],
-      "fieldConfig": {"defaults": {"unit": "percent"}, "overrides": []}
-    },
-
-    {
-      "title": "Container Memory (hbot-* services)",
-      "type": "timeseries",
-      "gridPos": {"h": 8, "w": 8, "x": 8, "y": 44},
-      "datasource": {"type": "prometheus", "uid": "prometheus"},
-      "targets": [{"expr": "container_memory_usage_bytes{name=~\"hbot-.*\"}", "legendFormat": "{{name}}"}],
-      "fieldConfig": {"defaults": {"unit": "bytes"}, "overrides": []}
-    },
-
-    {
-      "title": "Container Restarts 24h (hbot-* services)",
-      "description": "Any restart > 0 in the last 24h is a potential reliability event.",
-      "type": "stat",
-      "gridPos": {"h": 8, "w": 8, "x": 16, "y": 44},
-      "datasource": {"type": "prometheus", "uid": "prometheus"},
-      "targets": [{"expr": "increase(container_restart_count{name=~\"hbot-.*\"}[24h])", "legendFormat": "{{name}}"}],
-      "fieldConfig": {
-        "defaults": {
-          "unit": "short",
-          "thresholds": {"mode": "absolute", "steps": [{"color": "green", "value": null}, {"color": "yellow", "value": 1}, {"color": "red", "value": 3}]}
-        }, "overrides": []
-      },
-      "options": {"reduceOptions": {"calcs": ["lastNotNull"]}, "orientation": "horizontal", "textMode": "value_and_name", "colorMode": "background"}
-    },
-
-    {
-      "title": "— ERRORS · ALERTS (RECENT) —",
-      "type": "row",
-      "gridPos": {"h": 1, "w": 24, "x": 0, "y": 52},
-      "collapsed": false
-    },
-
-    {
-      "title": "Recent Error Lines per Bot",
-      "description": "ERROR line count in the last N lines of each bot's log.",
-      "type": "stat",
-      "gridPos": {"h": 5, "w": 12, "x": 0, "y": 53},
-      "datasource": {"type": "prometheus", "uid": "prometheus"},
-      "targets": [{"expr": "hbot_bot_recent_error_lines", "legendFormat": "{{bot}}"}],
-      "fieldConfig": {
-        "defaults": {
-          "unit": "short",
-          "thresholds": {"mode": "absolute", "steps": [{"color": "green", "value": null}, {"color": "yellow", "value": 5}, {"color": "red", "value": 20}]}
-        }, "overrides": []
-      },
-      "options": {"reduceOptions": {"calcs": ["lastNotNull"]}, "orientation": "horizontal", "textMode": "value_and_name", "colorMode": "background"}
-    },
-
-    {
-      "title": "Bot + Control Plane Errors (Loki)",
-      "description": "ERROR-level log lines from all hbot containers.",
-      "type": "logs",
-      "gridPos": {"h": 8, "w": 12, "x": 12, "y": 53},
-      "datasource": {"type": "loki", "uid": "loki"},
-      "targets": [{"expr": "{job=\"bot_logs\"} |= \"ERROR\""}],
-      "options": {"showTime": true, "sortOrder": "Descending", "dedupStrategy": "none"}
     }
-
-  ]
+  ],
+  "refresh": "15s",
+  "schemaVersion": 39,
+  "style": "dark",
+  "tags": ["hummingbot", "ops", "infra", "control-plane"],
+  "templating": {
+    "list": [
+      {
+        "name": "freshness_warn_sec",
+        "label": "Freshness warn (sec)",
+        "type": "constant",
+        "query": "1800",
+        "current": {"value": "1800"}
+      }
+    ]
+  },
+  "time": {"from": "now-12h", "to": "now"},
+  "timepicker": {
+    "hidden": false,
+    "quick_ranges": [
+      {"display": "Last 15 minutes", "from": "now-15m", "to": "now"},
+      {"display": "Last 1 hour", "from": "now-1h", "to": "now"},
+      {"display": "Last 6 hours", "from": "now-6h", "to": "now"},
+      {"display": "Last 12 hours", "from": "now-12h", "to": "now"},
+      {"display": "Last 24 hours", "from": "now-24h", "to": "now"},
+      {"display": "Last 7 days", "from": "now-7d", "to": "now"}
+    ]
+  },
+  "timezone": "utc",
+  "title": "Ops & Infrastructure",
+  "uid": "hbot-cp-health",
+  "version": 2
 }

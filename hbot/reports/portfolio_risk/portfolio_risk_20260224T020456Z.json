@@ -1,0 +1,82 @@
+{
+  "ts_utc": "2026-02-24T02:04:56.161621+00:00",
+  "status": "warning",
+  "critical_count": 0,
+  "warning_count": 1,
+  "portfolio_action": "soft_pause",
+  "limits_path": "/workspace/hbot/config/portfolio_limits_v1.json",
+  "publish_actions_enabled": true,
+  "synthetic_breach": false,
+  "metrics": {
+    "portfolio_daily_loss_pct": 0.00029992344669626446,
+    "abs_net_exposure_quote": 9636.0231,
+    "max_equity_share_pct": 0.5812661698059954,
+    "total_equity_quote": 13563.9769,
+    "concentration_candidate_bot_count": 2,
+    "concentration_min_equity_quote": 100.0
+  },
+  "risk_scope_bots": [
+    "bot1",
+    "bot4"
+  ],
+  "bots": {
+    "bot1": {
+      "equity_quote": 7884.2809,
+      "base_pct": 0.16289131707623455,
+      "daily_loss_pct": 0.0005091339675834471,
+      "drawdown_pct": 0.0005664902694721032,
+      "directional_exposure_quote": -5315.7191,
+      "base_exposure_abs_quote": 1284.2809
+    },
+    "bot2": {
+      "equity_quote": 77232.195,
+      "base_pct": 0.8705203186313687,
+      "daily_loss_pct": 0.0,
+      "drawdown_pct": 0.0,
+      "directional_exposure_quote": 57232.19500000001,
+      "base_exposure_abs_quote": 67232.195
+    },
+    "bot3": {
+      "equity_quote": 7890.2555,
+      "base_pct": 0.16352518622495812,
+      "daily_loss_pct": 0.0012096238298755313,
+      "drawdown_pct": 0.0012277538756013374,
+      "directional_exposure_quote": -5309.7445,
+      "base_exposure_abs_quote": 1290.2555000000002
+    },
+    "bot4": {
+      "equity_quote": 5679.696,
+      "base_pct": 0.11967119366952034,
+      "daily_loss_pct": 9.507460715700515e-06,
+      "drawdown_pct": 1.100398899002484e-05,
+      "directional_exposure_quote": -4320.304,
+      "base_exposure_abs_quote": 679.696
+    }
+  },
+  "findings": [
+    {
+      "severity": "warning",
+      "check": "concentration_cap",
+      "message": "concentration_warning",
+      "details": {
+        "max_equity_share_pct": 0.5812661698059954,
+        "cap_pct": 0.7,
+        "warn_level_pct": 0.5599999999999999,
+        "candidate_bot_count": 2,
+        "min_equity_quote": 100.0
+      }
+    }
+  ],
+  "actions": [
+    {
+      "bot": "bot1",
+      "action": "soft_pause",
+      "event_id": "765f643e-ee0d-4afb-8cfd-e825264cadd5"
+    },
+    {
+      "bot": "bot4",
+      "action": "soft_pause",
+      "event_id": "2953842a-a85c-4fee-aa0c-709ead31b5e3"
+    }
+  ]
+}

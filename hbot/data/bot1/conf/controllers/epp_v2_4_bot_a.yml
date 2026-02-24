@@ -3,8 +3,9 @@ id: epp_v2_4_bot_a
 controller_name: epp_v2_4
 controller_type: market_making
 
-# Testnet: binance_perpetual_testnet.  Live: binance_perpetual.
-connector_name: binance_perpetual_testnet
+# Paper on live market data: bitget_perpetual + internal_paper_enabled: true (Day 85a)
+# Live: set internal_paper_enabled: false (Day 85)
+connector_name: bitget_perpetual
 trading_pair: BTC-USDT
 
 total_amount_quote: 50
@@ -41,7 +42,7 @@ edge_resume_bps: 4
 edge_state_hold_s: 120
 
 sample_interval_s: 10
-spread_floor_recalc_s: 300
+spread_floor_recalc_s: 30
 cancel_budget_per_min: 50
 internal_paper_enabled: true
 paper_seed: 7

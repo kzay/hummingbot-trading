@@ -1,6 +1,13 @@
 {
-  "ts_utc": "2026-02-21T17:33:51.597975+00:00",
-  "status": "critical",
-  "critical_count": 1,
-  "warning_count": 10
+  "ts_utc": "2026-02-24T02:33:42.630548+00:00",
+  "mode": "live",
+  "probes": [
+    {
+      "endpoint": "alert_webhook_sink",
+      "url": "http://127.0.0.1:19093/healthz",
+      "ok": true,
+      "reason": "HTTP 200"
+    }
+  ],
+  "status": "ok"
 }

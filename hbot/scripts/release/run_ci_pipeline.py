@@ -81,6 +81,32 @@ def main() -> int:
     steps = [
         _run(
             root,
+            "ruff_lint",
+            [
+                sys.executable,
+                "-m",
+                "ruff",
+                "check",
+                str(root / "controllers"),
+                str(root / "services"),
+            ],
+            dry_run=bool(args.dry_run),
+        ),
+        _run(
+            root,
+            "mypy_typecheck",
+            [
+                sys.executable,
+                "-m",
+                "mypy",
+                str(root / "controllers"),
+                str(root / "services" / "contracts"),
+                "--ignore-missing-imports",
+            ],
+            dry_run=bool(args.dry_run),
+        ),
+        _run(
+            root,
             "tests",
             [
                 sys.executable,
@@ -134,6 +160,8 @@ def main() -> int:
         "failed_steps": failed_steps,
         "steps": steps,
         "evidence_paths": {
+            "ruff_lint": "inline (see step output)",
+            "mypy_typecheck": "inline (see step output)",
             "tests": str(root / "reports" / "tests" / "latest.json"),
             "replay_regression_multi_window": str(root / "reports" / "replay_regression_multi_window" / "latest.json"),
             "promotion_gates": str(root / "reports" / "promotion_gates" / "latest.json"),
