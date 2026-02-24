@@ -1,5 +1,5 @@
 {
-  "ts_utc": "2026-02-24T12:44:55.198990+00:00",
+  "ts_utc": "2026-02-24T12:34:55.158655+00:00",
   "status": "pass",
   "failed_bots": 0,
   "checked_bots": 2,
@@ -18,7 +18,7 @@
         "order_failed_total": 0,
         "risk_denied_total": 0,
         "equity_first": 7866.9427,
-        "equity_last": 7862.1407
+        "equity_last": 7865.8449
       },
       "metrics": [
         {
@@ -50,9 +50,9 @@
         },
         {
           "metric": "realized_pnl_delta_quote",
-          "value": -4.80199999999968,
+          "value": -1.0977999999995518,
           "expected": 0.0,
-          "delta": -4.80199999999968,
+          "delta": -1.0977999999995518,
           "max_abs_delta": 600.0,
           "pass": true
         }

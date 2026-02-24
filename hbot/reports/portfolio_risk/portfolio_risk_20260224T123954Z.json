@@ -1,5 +1,5 @@
 {
-  "ts_utc": "2026-02-24T12:44:54.505477+00:00",
+  "ts_utc": "2026-02-24T12:39:54.490558+00:00",
   "status": "warning",
   "critical_count": 0,
   "warning_count": 1,
@@ -8,10 +8,10 @@
   "publish_actions_enabled": true,
   "synthetic_breach": false,
   "metrics": {
-    "portfolio_daily_loss_pct": 0.0019291082442763068,
-    "abs_net_exposure_quote": 9658.1633,
-    "max_equity_share_pct": 0.5805815617315782,
-    "total_equity_quote": 13541.8367,
+    "portfolio_daily_loss_pct": 0.0017758478928468957,
+    "abs_net_exposure_quote": 9656.078300000001,
+    "max_equity_share_pct": 0.5806461285138705,
+    "total_equity_quote": 13543.921699999999,
     "concentration_candidate_bot_count": 2,
     "concentration_min_equity_quote": 100.0
   },
@@ -21,12 +21,12 @@
   ],
   "bots": {
     "bot1": {
-      "equity_quote": 7862.1407,
-      "base_pct": 0.16053397518057647,
-      "daily_loss_pct": 0.0033158487400278065,
-      "drawdown_pct": 0.003550374436939042,
-      "directional_exposure_quote": -5337.8593,
-      "base_exposure_abs_quote": 1262.1407000000002
+      "equity_quote": 7864.2257,
+      "base_pct": 0.16075653830738862,
+      "daily_loss_pct": 0.0030515331376147078,
+      "drawdown_pct": 0.003286121029556116,
+      "directional_exposure_quote": -5335.7743,
+      "base_exposure_abs_quote": 1264.2257
     },
     "bot2": {
       "equity_quote": 77232.195,
@@ -59,7 +59,7 @@
       "check": "concentration_cap",
       "message": "concentration_warning",
       "details": {
-        "max_equity_share_pct": 0.5805815617315782,
+        "max_equity_share_pct": 0.5806461285138705,
         "cap_pct": 0.7,
         "warn_level_pct": 0.5599999999999999,
         "candidate_bot_count": 2,
@@ -71,12 +71,12 @@
     {
       "bot": "bot1",
       "action": "soft_pause",
-      "event_id": "540b82db-bd05-43a2-9de6-45c91b30b0b2"
+      "event_id": "5f2c2d51-5371-4f45-9392-8b2af8dfbb87"
     },
     {
       "bot": "bot4",
       "action": "soft_pause",
-      "event_id": "4427ffc7-feed-474e-9a79-39dc2dfe34de"
+      "event_id": "4cd59e92-d227-4e06-a7bb-e84f2c52d215"
     }
   ]
 }

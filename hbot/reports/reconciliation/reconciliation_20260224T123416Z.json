@@ -1,5 +1,5 @@
 {
-  "ts_utc": "2026-02-24T12:44:16.467332+00:00",
+  "ts_utc": "2026-02-24T12:34:16.398232+00:00",
   "checked_bots": 3,
   "status": "warning",
   "critical_count": 0,
@@ -12,14 +12,14 @@
       "bot": "bot1",
       "exchange": "bitget_paper_trade",
       "trading_pair": "BTC-USDT",
-      "mid": 63107.035,
-      "equity_quote": 7862.1407,
+      "mid": 63292.245,
+      "equity_quote": 7865.8449,
       "base_balance": 0.02,
       "quote_balance": 6600.0,
-      "fees_paid_today_quote": 12.142240970743,
+      "fees_paid_today_quote": 12.10292987275,
       "funding_paid_today_quote": 0.0,
-      "daily_loss_pct": 0.0033158487400278065,
-      "drawdown_pct": 0.003550374436939042,
+      "daily_loss_pct": 0.002846267035251499,
+      "drawdown_pct": 0.003080903227525213,
       "fee_source": "project:/home/hummingbot/project_config/fee_profiles.json"
     },
     {
@@ -58,7 +58,7 @@
       "message": "fills_present_without_order_filled_events",
       "bot": "bot1",
       "details": {
-        "fills_csv": 10,
+        "fills_csv": 3,
         "fills_events": 0
       }
     },
