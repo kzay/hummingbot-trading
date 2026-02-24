@@ -176,6 +176,9 @@ class EppV24Config(MarketMakingControllerConfigBase):
     position_recon_interval_s: int = Field(default=300, ge=30, le=3600, description="Seconds between position reconciliation checks")
     position_drift_soft_pause_pct: Decimal = Field(default=Decimal("0.05"), description="Position drift > this triggers SOFT_PAUSE")
     startup_position_sync: bool = Field(default=True, description="Query exchange on first tick and adopt actual position if local state disagrees")
+    protective_stop_enabled: bool = Field(default=False, description="Place server-side stop-loss on exchange that survives bot offline")
+    protective_stop_loss_pct: Decimal = Field(default=Decimal("0.03"), description="Stop-loss distance from avg entry price (0.03 = 3%)")
+    protective_stop_refresh_s: int = Field(default=60, ge=10, le=600, description="Seconds between protective stop updates")
     order_ack_timeout_s: int = Field(default=30, ge=5, le=120, description="Seconds before an unacked order is considered stuck")
     max_active_executors: int = Field(default=10, ge=1, le=50, description="Maximum concurrent active executors")
     # Internal paper engine (Level 2 realism)
@@ -371,6 +374,18 @@ class EppV24Controller(MarketMakingControllerBase):
         self._last_connector_ready: bool = True
         self._last_daily_state_save_ts: float = 0.0
         self._startup_position_sync_done: bool = False
+        self._protective_stop = None
+        if self.config.protective_stop_enabled and not self.config.no_trade:
+            from controllers.protective_stop import ProtectiveStopManager
+            self._protective_stop = ProtectiveStopManager(
+                exchange_id=self.config.connector_name,
+                trading_pair=self.config.trading_pair,
+                stop_loss_pct=self.config.protective_stop_loss_pct,
+                refresh_interval_s=self.config.protective_stop_refresh_s,
+            )
+            if not self._protective_stop.initialize():
+                logger.warning("Protective stop manager failed to initialize — continuing without")
+                self._protective_stop = None
         self._load_daily_state()
 
     async def update_processed_data(self):
@@ -382,6 +397,8 @@ class EppV24Controller(MarketMakingControllerBase):
         self._ensure_fee_config(now)
         self._refresh_funding_rate(now)
         self._check_position_reconciliation(now)
+        if self._protective_stop is not None:
+            self._protective_stop.update(self._position_base, self._avg_entry_price)
         if self.config.require_fee_resolution and self._fee_resolution_error:
             self._ops_guard.force_hard_stop("fee_unresolved")
             return
@@ -678,9 +695,13 @@ class EppV24Controller(MarketMakingControllerBase):
             f"position_base={float(self._position_base):.8f} avg_entry={float(self._avg_entry_price):.2f} realized_pnl={float(self._realized_pnl_today):.4f}",
         ]
         if abs(self._position_base) > _BALANCE_EPSILON:
+            stop_info = "NO PROTECTIVE STOP"
+            if self._protective_stop and self._protective_stop.active_stop_order_id:
+                stop_price = float(self._avg_entry_price * (Decimal("1") - self.config.protective_stop_loss_pct))
+                stop_info = f"STOP @ {stop_price:.2f} (order={self._protective_stop.active_stop_order_id})"
             lines.append(
                 f"** OPEN POSITION: {float(self._position_base):.8f} {self.config.trading_pair} "
-                f"(entry={float(self._avg_entry_price):.2f}) — will persist on exchange if bot stops **"
+                f"(entry={float(self._avg_entry_price):.2f}) — {stop_info} **"
             )
 
     def get_custom_info(self) -> dict:

@@ -245,6 +245,25 @@ services:
       timeout: 5s
       retries: 5
 
+  mosquitto:
+    image: eclipse-mosquitto:2.0
+    container_name: hbot-mosquitto
+    profiles:
+      - external
+    restart: unless-stopped
+    logging: *default-logging
+    ports:
+      - "${MQTT_BIND_IP:-127.0.0.1}:${MQTT_PORT:-1883}:1883"
+    networks:
+      - trading
+    volumes:
+      - ../config/mosquitto:/mosquitto/config:ro
+    healthcheck:
+      test: ["CMD-SHELL", "mosquitto_sub -t '$$SYS/broker/uptime' -C 1 -W 3 || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
   signal-service:
     <<: *control-plane-image
     container_name: hbot-signal-service
@@ -357,6 +376,7 @@ services:
       - EVENT_PRODUCER_NAME=coordination_service
     volumes:
       - ..:/workspace/hbot:ro
+      - ../reports:/workspace/hbot/reports
     depends_on:
       redis:
         condition: service_healthy

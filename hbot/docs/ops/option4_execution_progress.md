@@ -131,7 +131,7 @@ Wave summary:
 | Day 100 | MetaAllocator v2 — dynamic reallocation on drawdown | PENDING | Drawdown tiers; reallocation to best Sharpe bot; manual freeze override |
 | Day 101 | Funding rate hard stop | PENDING | funding_rate_hard_stop_threshold config; SOFT_PAUSE on breach; Prometheus alert |
 | Day 102 | Bitget rate-limit + WS reconnect game-day drill | PENDING | Rate-limit graceful degradation + WS reconnect → SOFT_PAUSE → recovery drill |
-| Day 103 | Exchange-side protective stop (offline liquidation guard) | PENDING | Place server-side stop-loss on exchange after position opens; survives bot crash/restart; exchange-specific (Bitget trigger order / Binance stop-market); auto-cancel + re-place on position change |
+| Day 103 | Exchange-side protective stop (offline liquidation guard) | COMPLETED | `controllers/protective_stop.py`: ccxt-based stop-loss trigger on Bitget; auto-place on position open, cancel+replace on fill, cancel on close; `protective_stop_enabled` + `protective_stop_loss_pct` config; integrated into tick loop |
 
 ## Completed Artifacts
 - `hbot/docs/ops/release_manifest_20260221.md`
