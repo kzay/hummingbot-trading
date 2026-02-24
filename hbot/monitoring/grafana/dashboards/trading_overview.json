@@ -480,13 +480,13 @@
       "id": 50,
       "title": "Position (BTC)",
       "type": "stat",
-      "gridPos": {"h": 4, "w": 4, "x": 0, "y": 35},
+      "gridPos": {"h": 5, "w": 6, "x": 0, "y": 35},
       "datasource": {"type": "prometheus", "uid": "prometheus"},
-      "targets": [{"expr": "hbot_bot_position_base{bot=~\"$bot\", exchange=~\"$exchange\"}", "legendFormat": "{{bot}}", "refId": "A"}],
+      "targets": [{"expr": "hbot_bot_position_base{bot=~\"$bot\", exchange=~\"$exchange\"} and hbot_bot_snapshot_age_seconds{bot=~\"$bot\", exchange=~\"$exchange\"} < 300", "legendFormat": "{{bot}}", "refId": "A"}],
       "fieldConfig": {
         "defaults": {
           "unit": "none",
-          "decimals": 8,
+          "decimals": 6,
           "color": {"mode": "thresholds"},
           "thresholds": {"mode": "absolute", "steps": [{"color": "red", "value": null}, {"color": "green", "value": 0}]}
         }
@@ -494,19 +494,19 @@
       "options": {
         "reduceOptions": {"values": false, "calcs": ["lastNotNull"]},
         "textMode": "value_and_name",
-        "colorMode": "value",
+        "colorMode": "background_solid",
         "graphMode": "none",
         "justifyMode": "center",
-        "orientation": "horizontal"
+        "orientation": "auto"
       }
     },
     {
       "id": 51,
-      "title": "Avg Entry",
+      "title": "Avg Entry Price",
       "type": "stat",
-      "gridPos": {"h": 4, "w": 4, "x": 4, "y": 35},
+      "gridPos": {"h": 5, "w": 6, "x": 6, "y": 35},
       "datasource": {"type": "prometheus", "uid": "prometheus"},
-      "targets": [{"expr": "hbot_bot_avg_entry_price{bot=~\"$bot\", exchange=~\"$exchange\"}", "legendFormat": "{{bot}}", "refId": "A"}],
+      "targets": [{"expr": "hbot_bot_avg_entry_price{bot=~\"$bot\", exchange=~\"$exchange\"} and hbot_bot_snapshot_age_seconds{bot=~\"$bot\", exchange=~\"$exchange\"} < 300", "legendFormat": "{{bot}}", "refId": "A"}],
       "fieldConfig": {
         "defaults": {
           "unit": "currencyUSD",
@@ -517,114 +517,76 @@
       "options": {
         "reduceOptions": {"values": false, "calcs": ["lastNotNull"]},
         "textMode": "value_and_name",
-        "colorMode": "value",
+        "colorMode": "background_solid",
         "graphMode": "none",
         "justifyMode": "center",
-        "orientation": "horizontal"
+        "orientation": "auto"
       }
     },
     {
       "id": 52,
-      "title": "Buys",
+      "title": "Buys / Sells",
       "type": "stat",
-      "gridPos": {"h": 4, "w": 4, "x": 8, "y": 35},
+      "gridPos": {"h": 5, "w": 6, "x": 12, "y": 35},
       "datasource": {"type": "prometheus", "uid": "prometheus"},
-      "targets": [{"expr": "hbot_bot_fills_buy_count{bot=~\"$bot\", exchange=~\"$exchange\"}", "legendFormat": "{{bot}}", "refId": "A"}],
+      "targets": [
+        {"expr": "sum(hbot_bot_fills_buy_count{bot=~\"$bot\", exchange=~\"$exchange\"})", "legendFormat": "buys", "refId": "A"},
+        {"expr": "sum(hbot_bot_fills_sell_count{bot=~\"$bot\", exchange=~\"$exchange\"})", "legendFormat": "sells", "refId": "B"}
+      ],
       "fieldConfig": {
         "defaults": {
           "unit": "short",
-          "color": {"mode": "fixed", "fixedColor": "green"}
+          "color": {"mode": "palette-classic"}
         }
       },
       "options": {
         "reduceOptions": {"values": false, "calcs": ["lastNotNull"]},
         "textMode": "value_and_name",
-        "colorMode": "value",
-        "graphMode": "area",
+        "colorMode": "background_solid",
+        "graphMode": "none",
         "justifyMode": "center",
-        "orientation": "horizontal"
-      }
-    },
-    {
-      "id": 53,
-      "title": "Sells",
-      "type": "stat",
-      "gridPos": {"h": 4, "w": 4, "x": 12, "y": 35},
-      "datasource": {"type": "prometheus", "uid": "prometheus"},
-      "targets": [{"expr": "hbot_bot_fills_sell_count{bot=~\"$bot\", exchange=~\"$exchange\"}", "legendFormat": "{{bot}}", "refId": "A"}],
-      "fieldConfig": {
-        "defaults": {
-          "unit": "short",
-          "color": {"mode": "fixed", "fixedColor": "red"}
-        }
-      },
-      "options": {
-        "reduceOptions": {"values": false, "calcs": ["lastNotNull"]},
-        "textMode": "value_and_name",
-        "colorMode": "value",
-        "graphMode": "area",
-        "justifyMode": "center",
-        "orientation": "horizontal"
+        "orientation": "auto"
       }
     },
     {
       "id": 54,
-      "title": "Maker Fills",
+      "title": "Maker / Taker",
       "type": "stat",
-      "gridPos": {"h": 4, "w": 4, "x": 16, "y": 35},
+      "gridPos": {"h": 5, "w": 6, "x": 18, "y": 35},
       "datasource": {"type": "prometheus", "uid": "prometheus"},
-      "targets": [{"expr": "hbot_bot_fills_maker_count{bot=~\"$bot\", exchange=~\"$exchange\"}", "legendFormat": "{{bot}}", "refId": "A"}],
+      "targets": [
+        {"expr": "sum(hbot_bot_fills_maker_count{bot=~\"$bot\", exchange=~\"$exchange\"})", "legendFormat": "maker", "refId": "A"},
+        {"expr": "sum(hbot_bot_fills_taker_count{bot=~\"$bot\", exchange=~\"$exchange\"})", "legendFormat": "taker", "refId": "B"}
+      ],
       "fieldConfig": {
         "defaults": {
           "unit": "short",
-          "color": {"mode": "fixed", "fixedColor": "light-green"}
+          "color": {"mode": "palette-classic"}
         }
       },
       "options": {
         "reduceOptions": {"values": false, "calcs": ["lastNotNull"]},
         "textMode": "value_and_name",
-        "colorMode": "value",
+        "colorMode": "background_solid",
         "graphMode": "none",
         "justifyMode": "center",
-        "orientation": "horizontal"
-      }
-    },
-    {
-      "id": 55,
-      "title": "Taker Fills",
-      "type": "stat",
-      "gridPos": {"h": 4, "w": 4, "x": 20, "y": 35},
-      "datasource": {"type": "prometheus", "uid": "prometheus"},
-      "targets": [{"expr": "hbot_bot_fills_taker_count{bot=~\"$bot\", exchange=~\"$exchange\"}", "legendFormat": "{{bot}}", "refId": "A"}],
-      "fieldConfig": {
-        "defaults": {
-          "unit": "short",
-          "color": {"mode": "fixed", "fixedColor": "orange"}
-        }
-      },
-      "options": {
-        "reduceOptions": {"values": false, "calcs": ["lastNotNull"]},
-        "textMode": "value_and_name",
-        "colorMode": "value",
-        "graphMode": "none",
-        "justifyMode": "center",
-        "orientation": "horizontal"
+        "orientation": "auto"
       }
     },
     {
       "id": 106,
       "title": "Fees & Notional",
       "type": "row",
-      "gridPos": {"h": 1, "w": 24, "x": 0, "y": 39},
+      "gridPos": {"h": 1, "w": 24, "x": 0, "y": 40},
       "collapsed": false
     },
     {
       "id": 60,
-      "title": "Total Fees Paid",
+      "title": "Total Fees",
       "type": "stat",
-      "gridPos": {"h": 4, "w": 6, "x": 0, "y": 40},
+      "gridPos": {"h": 5, "w": 6, "x": 0, "y": 41},
       "datasource": {"type": "prometheus", "uid": "prometheus"},
-      "targets": [{"expr": "hbot_bot_total_fees_quote{bot=~\"$bot\", exchange=~\"$exchange\"}", "legendFormat": "{{bot}}", "refId": "A"}],
+      "targets": [{"expr": "sum(hbot_bot_total_fees_quote{bot=~\"$bot\", exchange=~\"$exchange\"})", "legendFormat": "fees", "refId": "A"}],
       "fieldConfig": {
         "defaults": {
           "unit": "currencyUSD",
@@ -634,7 +596,7 @@
       },
       "options": {
         "reduceOptions": {"values": false, "calcs": ["lastNotNull"]},
-        "textMode": "value_and_name",
+        "textMode": "value",
         "colorMode": "background_solid",
         "graphMode": "area",
         "justifyMode": "center"
@@ -644,9 +606,9 @@
       "id": 61,
       "title": "Buy Notional",
       "type": "stat",
-      "gridPos": {"h": 4, "w": 6, "x": 6, "y": 40},
+      "gridPos": {"h": 5, "w": 6, "x": 6, "y": 41},
       "datasource": {"type": "prometheus", "uid": "prometheus"},
-      "targets": [{"expr": "hbot_bot_buy_notional_quote{bot=~\"$bot\", exchange=~\"$exchange\"}", "legendFormat": "{{bot}}", "refId": "A"}],
+      "targets": [{"expr": "sum(hbot_bot_buy_notional_quote{bot=~\"$bot\", exchange=~\"$exchange\"})", "legendFormat": "bought", "refId": "A"}],
       "fieldConfig": {
         "defaults": {
           "unit": "currencyUSD",
@@ -656,7 +618,7 @@
       },
       "options": {
         "reduceOptions": {"values": false, "calcs": ["lastNotNull"]},
-        "textMode": "value_and_name",
+        "textMode": "value",
         "colorMode": "background_solid",
         "graphMode": "none",
         "justifyMode": "center"
@@ -666,9 +628,9 @@
       "id": 62,
       "title": "Sell Notional",
       "type": "stat",
-      "gridPos": {"h": 4, "w": 6, "x": 12, "y": 40},
+      "gridPos": {"h": 5, "w": 6, "x": 12, "y": 41},
       "datasource": {"type": "prometheus", "uid": "prometheus"},
-      "targets": [{"expr": "hbot_bot_sell_notional_quote{bot=~\"$bot\", exchange=~\"$exchange\"}", "legendFormat": "{{bot}}", "refId": "A"}],
+      "targets": [{"expr": "sum(hbot_bot_sell_notional_quote{bot=~\"$bot\", exchange=~\"$exchange\"})", "legendFormat": "sold", "refId": "A"}],
       "fieldConfig": {
         "defaults": {
           "unit": "currencyUSD",
@@ -678,7 +640,7 @@
       },
       "options": {
         "reduceOptions": {"values": false, "calcs": ["lastNotNull"]},
-        "textMode": "value_and_name",
+        "textMode": "value",
         "colorMode": "background_solid",
         "graphMode": "none",
         "justifyMode": "center"
@@ -688,11 +650,11 @@
       "id": 63,
       "title": "Avg Buy / Sell Price",
       "type": "stat",
-      "gridPos": {"h": 4, "w": 6, "x": 18, "y": 40},
+      "gridPos": {"h": 5, "w": 6, "x": 18, "y": 41},
       "datasource": {"type": "prometheus", "uid": "prometheus"},
       "targets": [
-        {"expr": "hbot_bot_avg_buy_price{bot=~\"$bot\", exchange=~\"$exchange\"}", "legendFormat": "{{bot}} buy", "refId": "A"},
-        {"expr": "hbot_bot_avg_sell_price{bot=~\"$bot\", exchange=~\"$exchange\"}", "legendFormat": "{{bot}} sell", "refId": "B"}
+        {"expr": "hbot_bot_avg_buy_price{bot=~\"$bot\", exchange=~\"$exchange\"} and hbot_bot_snapshot_age_seconds{bot=~\"$bot\", exchange=~\"$exchange\"} < 300", "legendFormat": "{{bot}} buy", "refId": "A"},
+        {"expr": "hbot_bot_avg_sell_price{bot=~\"$bot\", exchange=~\"$exchange\"} and hbot_bot_snapshot_age_seconds{bot=~\"$bot\", exchange=~\"$exchange\"} < 300", "legendFormat": "{{bot}} sell", "refId": "B"}
       ],
       "fieldConfig": {
         "defaults": {
@@ -704,10 +666,161 @@
       "options": {
         "reduceOptions": {"values": false, "calcs": ["lastNotNull"]},
         "textMode": "value_and_name",
-        "colorMode": "value",
+        "colorMode": "background_solid",
         "graphMode": "none",
         "justifyMode": "center",
-        "orientation": "horizontal"
+        "orientation": "auto"
+      }
+    }
+    ,
+    {
+      "id": 107,
+      "title": "Open Positions",
+      "type": "row",
+      "gridPos": {"h": 1, "w": 24, "x": 0, "y": 46},
+      "collapsed": false
+    },
+    {
+      "id": 70,
+      "title": "Open Positions",
+      "type": "table",
+      "gridPos": {"h": 8, "w": 24, "x": 0, "y": 47},
+      "datasource": {"type": "prometheus", "uid": "prometheus"},
+      "targets": [
+        {"expr": "hbot_bot_position_base{bot=~\"$bot\", exchange=~\"$exchange\"} != 0", "legendFormat": "", "refId": "position", "format": "table", "instant": true},
+        {"expr": "hbot_bot_avg_entry_price{bot=~\"$bot\", exchange=~\"$exchange\"}", "legendFormat": "", "refId": "entry", "format": "table", "instant": true},
+        {"expr": "hbot_bot_equity_quote{bot=~\"$bot\", exchange=~\"$exchange\"}", "legendFormat": "", "refId": "equity", "format": "table", "instant": true},
+        {"expr": "hbot_bot_daily_pnl_quote{bot=~\"$bot\", exchange=~\"$exchange\"}", "legendFormat": "", "refId": "pnl", "format": "table", "instant": true},
+        {"expr": "hbot_bot_realized_pnl_today_quote{bot=~\"$bot\", exchange=~\"$exchange\"}", "legendFormat": "", "refId": "realized", "format": "table", "instant": true},
+        {"expr": "hbot_bot_drawdown_pct{bot=~\"$bot\", exchange=~\"$exchange\"} * 100", "legendFormat": "", "refId": "dd", "format": "table", "instant": true},
+        {"expr": "hbot_bot_base_pct{bot=~\"$bot\", exchange=~\"$exchange\"} * 100", "legendFormat": "", "refId": "basepct", "format": "table", "instant": true},
+        {"expr": "hbot_bot_margin_ratio{bot=~\"$bot\", exchange=~\"$exchange\"}", "legendFormat": "", "refId": "margin", "format": "table", "instant": true}
+      ],
+      "transformations": [
+        {"id": "merge", "options": {}},
+        {"id": "organize", "options": {
+          "excludeByName": {"Time": true, "__name__": true, "instance": true, "job": true, "variant": true, "regime": true},
+          "renameByName": {
+            "bot": "Bot",
+            "exchange": "Exchange",
+            "pair": "Pair",
+            "Value #position": "Position",
+            "Value #entry": "Avg Entry",
+            "Value #equity": "Equity",
+            "Value #pnl": "Daily PnL",
+            "Value #realized": "Realized PnL",
+            "Value #dd": "Drawdown %",
+            "Value #basepct": "Base %",
+            "Value #margin": "Margin Ratio"
+          },
+          "indexByName": {
+            "Bot": 0,
+            "Exchange": 1,
+            "Pair": 2,
+            "Position": 3,
+            "Avg Entry": 4,
+            "Equity": 5,
+            "Daily PnL": 6,
+            "Realized PnL": 7,
+            "Drawdown %": 8,
+            "Base %": 9,
+            "Margin Ratio": 10
+          }
+        }}
+      ],
+      "fieldConfig": {
+        "defaults": {"custom": {"align": "center"}},
+        "overrides": [
+          {"matcher": {"id": "byName", "options": "Bot"}, "properties": [{"id": "custom.width", "value": 80}]},
+          {"matcher": {"id": "byName", "options": "Position"}, "properties": [{"id": "decimals", "value": 6}]},
+          {"matcher": {"id": "byName", "options": "Avg Entry"}, "properties": [{"id": "unit", "value": "currencyUSD"}, {"id": "decimals", "value": 2}]},
+          {"matcher": {"id": "byName", "options": "Equity"}, "properties": [{"id": "unit", "value": "currencyUSD"}, {"id": "decimals", "value": 2}]},
+          {"matcher": {"id": "byName", "options": "Daily PnL"}, "properties": [{"id": "unit", "value": "currencyUSD"}, {"id": "decimals", "value": 2}, {"id": "custom.cellOptions", "value": {"type": "color-text"}}, {"id": "thresholds", "value": {"mode": "absolute", "steps": [{"color": "red", "value": null}, {"color": "green", "value": 0}]}}]},
+          {"matcher": {"id": "byName", "options": "Realized PnL"}, "properties": [{"id": "unit", "value": "currencyUSD"}, {"id": "decimals", "value": 4}, {"id": "custom.cellOptions", "value": {"type": "color-text"}}, {"id": "thresholds", "value": {"mode": "absolute", "steps": [{"color": "red", "value": null}, {"color": "green", "value": 0}]}}]},
+          {"matcher": {"id": "byName", "options": "Drawdown %"}, "properties": [{"id": "unit", "value": "percent"}, {"id": "decimals", "value": 2}]},
+          {"matcher": {"id": "byName", "options": "Base %"}, "properties": [{"id": "unit", "value": "percent"}, {"id": "decimals", "value": 1}]},
+          {"matcher": {"id": "byName", "options": "Margin Ratio"}, "properties": [{"id": "decimals", "value": 2}]}
+        ]
+      },
+      "options": {
+        "showHeader": true,
+        "cellHeight": "md",
+        "footer": {"show": false}
+      }
+    },
+    {
+      "id": 108,
+      "title": "Recent Trades",
+      "type": "row",
+      "gridPos": {"h": 1, "w": 24, "x": 0, "y": 55},
+      "collapsed": false
+    },
+    {
+      "id": 71,
+      "title": "Recent Trades (last 50 fills)",
+      "type": "table",
+      "gridPos": {"h": 10, "w": 24, "x": 0, "y": 56},
+      "datasource": {"type": "prometheus", "uid": "prometheus"},
+      "targets": [
+        {"expr": "hbot_bot_fills_buy_count{bot=~\"$bot\", exchange=~\"$exchange\"}", "legendFormat": "", "refId": "buys", "format": "table", "instant": true},
+        {"expr": "hbot_bot_fills_sell_count{bot=~\"$bot\", exchange=~\"$exchange\"}", "legendFormat": "", "refId": "sells", "format": "table", "instant": true},
+        {"expr": "hbot_bot_fills_maker_count{bot=~\"$bot\", exchange=~\"$exchange\"}", "legendFormat": "", "refId": "maker", "format": "table", "instant": true},
+        {"expr": "hbot_bot_fills_taker_count{bot=~\"$bot\", exchange=~\"$exchange\"}", "legendFormat": "", "refId": "taker", "format": "table", "instant": true},
+        {"expr": "hbot_bot_total_fees_quote{bot=~\"$bot\", exchange=~\"$exchange\"}", "legendFormat": "", "refId": "fees", "format": "table", "instant": true},
+        {"expr": "hbot_bot_buy_notional_quote{bot=~\"$bot\", exchange=~\"$exchange\"}", "legendFormat": "", "refId": "buynotional", "format": "table", "instant": true},
+        {"expr": "hbot_bot_sell_notional_quote{bot=~\"$bot\", exchange=~\"$exchange\"}", "legendFormat": "", "refId": "sellnotional", "format": "table", "instant": true},
+        {"expr": "hbot_bot_avg_buy_price{bot=~\"$bot\", exchange=~\"$exchange\"}", "legendFormat": "", "refId": "avgbuy", "format": "table", "instant": true},
+        {"expr": "hbot_bot_avg_sell_price{bot=~\"$bot\", exchange=~\"$exchange\"}", "legendFormat": "", "refId": "avgsell", "format": "table", "instant": true}
+      ],
+      "transformations": [
+        {"id": "merge", "options": {}},
+        {"id": "organize", "options": {
+          "excludeByName": {"Time": true, "__name__": true, "instance": true, "job": true, "variant": true, "regime": true},
+          "renameByName": {
+            "bot": "Bot",
+            "exchange": "Exchange",
+            "pair": "Pair",
+            "Value #buys": "Buys",
+            "Value #sells": "Sells",
+            "Value #maker": "Maker",
+            "Value #taker": "Taker",
+            "Value #fees": "Total Fees",
+            "Value #buynotional": "Buy Volume",
+            "Value #sellnotional": "Sell Volume",
+            "Value #avgbuy": "Avg Buy",
+            "Value #avgsell": "Avg Sell"
+          },
+          "indexByName": {
+            "Bot": 0,
+            "Exchange": 1,
+            "Pair": 2,
+            "Buys": 3,
+            "Sells": 4,
+            "Maker": 5,
+            "Taker": 6,
+            "Total Fees": 7,
+            "Buy Volume": 8,
+            "Sell Volume": 9,
+            "Avg Buy": 10,
+            "Avg Sell": 11
+          }
+        }}
+      ],
+      "fieldConfig": {
+        "defaults": {"custom": {"align": "center"}},
+        "overrides": [
+          {"matcher": {"id": "byName", "options": "Bot"}, "properties": [{"id": "custom.width", "value": 80}]},
+          {"matcher": {"id": "byName", "options": "Total Fees"}, "properties": [{"id": "unit", "value": "currencyUSD"}, {"id": "decimals", "value": 4}]},
+          {"matcher": {"id": "byName", "options": "Buy Volume"}, "properties": [{"id": "unit", "value": "currencyUSD"}, {"id": "decimals", "value": 2}]},
+          {"matcher": {"id": "byName", "options": "Sell Volume"}, "properties": [{"id": "unit", "value": "currencyUSD"}, {"id": "decimals", "value": 2}]},
+          {"matcher": {"id": "byName", "options": "Avg Buy"}, "properties": [{"id": "unit", "value": "currencyUSD"}, {"id": "decimals", "value": 2}]},
+          {"matcher": {"id": "byName", "options": "Avg Sell"}, "properties": [{"id": "unit", "value": "currencyUSD"}, {"id": "decimals", "value": 2}]}
+        ]
+      },
+      "options": {
+        "showHeader": true,
+        "cellHeight": "md",
+        "footer": {"show": true, "reducer": ["sum"]}
       }
     }
   ],
