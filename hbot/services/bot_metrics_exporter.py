@@ -85,6 +85,8 @@ class BotSnapshot:
     realized_pnl_today_quote: float
     ws_reconnect_count: float
     order_book_stale: float
+    position_base: float = 0.0
+    avg_entry_price: float = 0.0
     fill_stats: Optional[FillStats] = None
 
 
@@ -152,6 +154,8 @@ class BotMetricsExporter:
                     realized_pnl_today_quote=_safe_float(latest_minute.get("realized_pnl_today_quote")),
                     ws_reconnect_count=_safe_float(latest_minute.get("ws_reconnect_count")),
                     order_book_stale=1.0 if str(latest_minute.get("order_book_stale", "")).lower() == "true" else 0.0,
+                    position_base=_safe_float(latest_minute.get("position_base")),
+                    avg_entry_price=_safe_float(latest_minute.get("avg_entry_price")),
                     fill_stats=fill_stats,
                 )
             )
@@ -269,8 +273,8 @@ class BotMetricsExporter:
                 lines.append(f"hbot_bot_total_fees_quote{_fmt_labels(base_labels)} {fs.total_fees}")
                 lines.append(f"hbot_bot_avg_buy_price{_fmt_labels(base_labels)} {fs.avg_buy_price}")
                 lines.append(f"hbot_bot_avg_sell_price{_fmt_labels(base_labels)} {fs.avg_sell_price}")
-                lines.append(f"hbot_bot_position_base{_fmt_labels(base_labels)} {_safe_float(latest_minute.get('position_base'))}")
-                lines.append(f"hbot_bot_avg_entry_price{_fmt_labels(base_labels)} {_safe_float(latest_minute.get('avg_entry_price'))}")
+                lines.append(f"hbot_bot_position_base{_fmt_labels(base_labels)} {snapshot.position_base}")
+                lines.append(f"hbot_bot_avg_entry_price{_fmt_labels(base_labels)} {snapshot.avg_entry_price}")
         return "\n".join(lines) + "\n"
 
     def _read_daily_state_json(self, path: Path) -> Optional[Dict[str, str]]:
