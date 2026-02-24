@@ -270,10 +270,10 @@ class EppV24Controller(MarketMakingControllerBase):
             levels_min=2,
             levels_max=3,
             refresh_s=70,
-            target_base_pct=Decimal("0.65"),
+            target_base_pct=Decimal("0.60"),
             quote_size_pct_min=Decimal("0.0006"),
             quote_size_pct_max=Decimal("0.0010"),
-            one_sided="buy_only",
+            one_sided="off",
         ),
         "down": RegimeSpec(
             spread_min=Decimal("0.0035"),
@@ -281,10 +281,10 @@ class EppV24Controller(MarketMakingControllerBase):
             levels_min=2,
             levels_max=3,
             refresh_s=60,
-            target_base_pct=Decimal("0.25"),
+            target_base_pct=Decimal("0.35"),
             quote_size_pct_min=Decimal("0.0005"),
             quote_size_pct_max=Decimal("0.0008"),
-            one_sided="sell_only",
+            one_sided="off",
         ),
         "high_vol_shock": RegimeSpec(
             spread_min=Decimal("0.0080"),
@@ -295,7 +295,7 @@ class EppV24Controller(MarketMakingControllerBase):
             target_base_pct=Decimal("0.40"),
             quote_size_pct_min=Decimal("0.0003"),
             quote_size_pct_max=Decimal("0.0005"),
-            one_sided="sell_only",
+            one_sided="off",
         ),
     }
 
