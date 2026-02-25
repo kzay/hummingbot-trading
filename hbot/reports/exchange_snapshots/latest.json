@@ -1,5 +1,5 @@
 {
-  "ts_utc": "2026-02-25T03:50:05.230777+00:00",
+  "ts_utc": "2026-02-25T14:23:57.713175+00:00",
   "source": "exchange_snapshot_service",
   "mode": "proxy_local",
   "account_map_path": "/workspace/hbot/config/exchange_account_map.json",
