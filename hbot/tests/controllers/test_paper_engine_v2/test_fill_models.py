@@ -29,12 +29,22 @@ class TestQueuePositionFillModel:
 
     # -- Spec test vectors --------------------------------------------------
 
-    def test_v1_passive_maker_not_touched(self):
-        """V1: LIMIT_MAKER @ 99.95, asks=[100.05]. Not touchable → partial fill."""
+    def test_v1_passive_maker_not_touched_no_fill(self):
+        """V1: LIMIT_MAKER @ 99.95, asks=[100.05]. Not touchable → NO fill.
+        Passive orders only fill when the market reaches their price."""
         model = self._make()
         order = make_order("buy", "limit_maker", "99.95", "2.0")
         order.status = OrderStatus.OPEN
         book = make_book("100.00", "100.05", bid_size="5.0", ask_size="3.0")
+        decision = model.evaluate(order, book, _now())
+        assert decision.fill_quantity == Decimal("0")
+
+    def test_v1_passive_maker_touched_fills(self):
+        """V1b: LIMIT_MAKER @ 99.95, ask drops to 99.90 → touchable → fill."""
+        model = self._make()
+        order = make_order("buy", "limit_maker", "99.95", "2.0")
+        order.status = OrderStatus.OPEN
+        book = make_book("99.85", "99.90", bid_size="5.0", ask_size="3.0")
         decision = model.evaluate(order, book, _now())
         assert decision.fill_quantity > Decimal("0")
         assert decision.fill_price == Decimal("99.95")

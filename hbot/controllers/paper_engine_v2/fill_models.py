@@ -120,14 +120,13 @@ class QueuePositionFillModel:
         if order.crossed_at_creation or order.order_type == PaperOrderType.MARKET:
             return self._taker_fill(order, top_level, remaining, now_ns)
 
-        # Resting limit not yet touched
+        # Passive order (LIMIT or LIMIT_MAKER) — only fills when the market
+        # has reached the order price (touchable). A resting order behind
+        # the spread does NOT fill — it must wait for the market to come to it.
         if not is_touchable:
-            if order.order_type == PaperOrderType.LIMIT_MAKER:
-                return self._passive_maker_fill(order, top_level, remaining, latency_ms)
-            # Regular limit: no fill yet
             return _NO_FILL
 
-        # Market touched the order price
+        # Market touched the order price — apply queue position probability
         if self._rng.random() > cfg.prob_fill_on_limit:
             return _NO_FILL  # queue position miss
 
