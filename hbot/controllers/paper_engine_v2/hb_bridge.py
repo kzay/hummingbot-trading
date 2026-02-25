@@ -331,7 +331,7 @@ def _install_order_delegation(
         logger.debug("strategy buy/sell/cancel not callable, skipping delegation patch")
         return
 
-    def _patched_buy(self, conn_name, trading_pair, amount, order_type, price=Decimal("NaN"), **kwargs):
+    def _patched_buy(self, conn_name, trading_pair, amount, order_type, price=Decimal("NaN"), position_action=None, **kwargs):
         bridge = getattr(self, "_paper_desk_v2_bridges", {}).get(conn_name)
         if bridge is not None:
             _desk: PaperDesk = bridge["desk"]
@@ -344,9 +344,9 @@ def _install_order_delegation(
             )
             _fire_hb_events(self, conn_name, event)
             return getattr(event, "order_id", None)
-        return original_buy(conn_name, trading_pair, amount, order_type, price, **kwargs)
+        return original_buy(conn_name, trading_pair, amount, order_type, price, position_action=position_action, **kwargs)
 
-    def _patched_sell(self, conn_name, trading_pair, amount, order_type, price=Decimal("NaN"), **kwargs):
+    def _patched_sell(self, conn_name, trading_pair, amount, order_type, price=Decimal("NaN"), position_action=None, **kwargs):
         bridge = getattr(self, "_paper_desk_v2_bridges", {}).get(conn_name)
         if bridge is not None:
             _desk: PaperDesk = bridge["desk"]
@@ -359,9 +359,9 @@ def _install_order_delegation(
             )
             _fire_hb_events(self, conn_name, event)
             return getattr(event, "order_id", None)
-        return original_sell(conn_name, trading_pair, amount, order_type, price, **kwargs)
+        return original_sell(conn_name, trading_pair, amount, order_type, price, position_action=position_action, **kwargs)
 
-    def _patched_cancel(self, conn_name, trading_pair, order_id):
+    def _patched_cancel(self, conn_name, trading_pair, order_id, *args, **kwargs):
         bridge = getattr(self, "_paper_desk_v2_bridges", {}).get(conn_name)
         if bridge is not None:
             _desk: PaperDesk = bridge["desk"]
@@ -370,7 +370,7 @@ def _install_order_delegation(
             if event:
                 _fire_hb_events(self, conn_name, event)
             return
-        return original_cancel(conn_name, trading_pair, order_id)
+        return original_cancel(conn_name, trading_pair, order_id, *args, **kwargs)
 
     try:
         strategy.buy = MethodType(_patched_buy, strategy)
