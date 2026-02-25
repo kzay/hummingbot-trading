@@ -106,7 +106,7 @@ class BotMetricsExporter:
             if latest_minute is None:
                 continue
             log_dir = minute_file.parent
-            daily_state = self._read_daily_state_json(log_dir / "daily_state.json")
+            daily_state = self._read_daily_state_any(log_dir)
             fills_path = log_dir / "fills.csv"
             fills_total = self._count_csv_rows(fills_path)
             fill_stats = self._compute_fill_stats(fills_path)
@@ -224,6 +224,10 @@ class BotMetricsExporter:
                 "# TYPE hbot_bot_fills_total gauge",
                 "# HELP hbot_bot_recent_error_lines Number of ERROR lines in recent bot log tail.",
                 "# TYPE hbot_bot_recent_error_lines gauge",
+                "# HELP hbot_bot_position_base Current position size in base asset (signed: >0 long, <0 short).",
+                "# TYPE hbot_bot_position_base gauge",
+                "# HELP hbot_bot_avg_entry_price Average entry price of the current position.",
+                "# TYPE hbot_bot_avg_entry_price gauge",
             ]
         )
         for snapshot in self.collect():
@@ -277,6 +281,9 @@ class BotMetricsExporter:
             lines.append(f"hbot_bot_realized_pnl_today_quote{_fmt_labels(base_labels)} {snapshot.realized_pnl_today_quote}")
             lines.append(f"hbot_bot_ws_reconnect_total{_fmt_labels(base_labels)} {snapshot.ws_reconnect_count}")
             lines.append(f"hbot_bot_order_book_stale{_fmt_labels(base_labels)} {snapshot.order_book_stale}")
+            # Position metrics — always exported regardless of fill_stats
+            lines.append(f"hbot_bot_position_base{_fmt_labels(base_labels)} {snapshot.position_base}")
+            lines.append(f"hbot_bot_avg_entry_price{_fmt_labels(base_labels)} {snapshot.avg_entry_price}")
             if snapshot.fill_stats:
                 fs = snapshot.fill_stats
                 lines.append(f"hbot_bot_fills_buy_count{_fmt_labels(base_labels)} {fs.buys}")
@@ -288,23 +295,20 @@ class BotMetricsExporter:
                 lines.append(f"hbot_bot_total_fees_quote{_fmt_labels(base_labels)} {fs.total_fees}")
                 lines.append(f"hbot_bot_avg_buy_price{_fmt_labels(base_labels)} {fs.avg_buy_price}")
                 lines.append(f"hbot_bot_avg_sell_price{_fmt_labels(base_labels)} {fs.avg_sell_price}")
-                lines.append(f"hbot_bot_position_base{_fmt_labels(base_labels)} {snapshot.position_base}")
-                lines.append(f"hbot_bot_avg_entry_price{_fmt_labels(base_labels)} {snapshot.avg_entry_price}")
         return "\n".join(lines) + "\n"
 
-    def _read_daily_state_json(self, path: Path) -> Optional[Dict[str, str]]:
-        """Read daily_state.json which is updated every 30s by the controller."""
-        if not path.exists():
-            return None
-        try:
-            import json
-            data = json.loads(path.read_text(encoding="utf-8"))
-            today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
-            if data.get("day_key") == today:
-                return data
-            return data
-        except Exception:
-            return None
+    def _read_daily_state_any(self, log_dir: Path) -> Optional[Dict[str, str]]:
+        """Read any daily_state*.json file (v1 or v2 naming convention)."""
+        import json
+        candidates = sorted(log_dir.glob("daily_state*.json"), key=lambda p: p.stat().st_mtime, reverse=True)
+        for path in candidates:
+            try:
+                data = json.loads(path.read_text(encoding="utf-8"))
+                if isinstance(data, dict):
+                    return data
+            except Exception:
+                continue
+        return None
 
     def _read_last_csv_row(self, path: Path) -> Optional[Dict[str, str]]:
         if not path.exists():
