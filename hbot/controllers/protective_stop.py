@@ -5,38 +5,161 @@ holds a position. This order survives bot crashes/restarts because it lives on
 the exchange, not in the bot.
 
 Lifecycle:
-  1. Position opens → place stop at entry * (1 - stop_loss_pct) for longs
-  2. Position changes (new fill) → cancel old stop, place new one
-  3. Position closes → cancel stop
-  4. Bot restarts → check for existing protective stop, adopt or re-place
+  1. Position opens -> place stop at entry * (1 - stop_loss_pct) for longs
+  2. Position changes (new fill) -> cancel old stop, place new one
+  3. Position closes -> cancel stop
+  4. Bot restarts -> check for existing protective stop, adopt or re-place
+
+Architecture:
+  ``ProtectiveStopBackend`` defines the exchange-agnostic interface.
+  ``BitgetStopBackend`` implements it via ccxt for Bitget.
+  ``create_stop_backend()`` is the factory that resolves credentials and
+  returns the appropriate backend (or ``None`` on failure).
+  ``ProtectiveStopManager`` is the stateful manager consumed by the controller.
 """
 from __future__ import annotations
 
 import logging
 import os
 import time
+from abc import ABC, abstractmethod
 from decimal import Decimal
 from typing import Any, Dict, Optional
 
 logger = logging.getLogger(__name__)
 
-try:
-    import ccxt
-except Exception:
-    ccxt = None
-
 _ZERO = Decimal("0")
 
 
+class ProtectiveStopBackend(ABC):
+    """Exchange-agnostic interface for server-side stop-loss orders."""
+
+    @abstractmethod
+    def place_stop(self, symbol: str, side: str, amount: Decimal, trigger_price: Decimal) -> Optional[str]:
+        """Place a stop order. Return order ID on success, None on failure."""
+
+    @abstractmethod
+    def cancel_stop(self, symbol: str, order_id: str) -> bool:
+        """Cancel a stop order. Return True on success."""
+
+    @abstractmethod
+    def cancel_all_stops(self, symbol: str) -> None:
+        """Cancel all protective stop orders for the symbol."""
+
+
+class BitgetStopBackend(ProtectiveStopBackend):
+    """Bitget implementation via ccxt."""
+
+    def __init__(self, exchange: Any, is_perp: bool):
+        self._exchange = exchange
+        self._is_perp = is_perp
+
+    def place_stop(self, symbol: str, side: str, amount: Decimal, trigger_price: Decimal) -> Optional[str]:
+        try:
+            order = self._exchange.create_order(
+                symbol=symbol,
+                type="market",
+                side=side,
+                amount=float(amount),
+                params={
+                    "stopLoss": {
+                        "triggerPrice": float(trigger_price),
+                        "type": "mark_price",
+                    },
+                },
+            )
+            order_id = str(order.get("id", ""))
+            logger.info(
+                "Protective stop placed: %s %s %.8f @ trigger %.2f (order=%s)",
+                side, symbol, float(amount), float(trigger_price), order_id,
+            )
+            return order_id
+        except Exception as exc:
+            logger.error("Failed to place protective stop: %s", exc)
+            return None
+
+    def cancel_stop(self, symbol: str, order_id: str) -> bool:
+        try:
+            self._exchange.cancel_order(order_id, symbol=symbol)
+            logger.info("Protective stop canceled: %s", order_id)
+            return True
+        except Exception as exc:
+            logger.warning("Failed to cancel protective stop %s: %s", order_id, exc)
+            return False
+
+    def cancel_all_stops(self, symbol: str) -> None:
+        pass
+
+
+def _resolve_credentials(exchange_id: str) -> Dict[str, str]:
+    """Resolve API credentials from environment variables.
+
+    Supports per-bot prefixed vars (e.g. BOT1_BITGET_API_KEY) as well as
+    global vars (BITGET_API_KEY). The per-bot prefix is tried first.
+    """
+    clean_id = exchange_id.replace("_paper_trade", "").replace("_perpetual", "")
+    upper = clean_id.upper()
+
+    api_key = os.getenv(f"{upper}_API_KEY", "") or os.getenv(f"BOT1_{upper}_API_KEY", "")
+    secret = os.getenv(f"{upper}_API_SECRET", "") or os.getenv(f"BOT1_{upper}_API_SECRET", "")
+    passphrase = os.getenv(f"{upper}_PASSPHRASE", "") or os.getenv(f"BOT1_{upper}_PASSPHRASE", "")
+
+    return {"api_key": api_key, "secret": secret, "passphrase": passphrase}
+
+
+def create_stop_backend(exchange_id: str, is_perp: bool) -> Optional[ProtectiveStopBackend]:
+    """Factory: create a ProtectiveStopBackend for the given exchange.
+
+    Returns None if ccxt is unavailable, credentials are missing, or
+    the exchange client fails to initialize.
+    """
+    try:
+        import ccxt as ccxt_lib
+    except ImportError:
+        logger.warning("Protective stop disabled: ccxt not installed")
+        return None
+
+    clean_id = exchange_id.replace("_paper_trade", "").replace("_perpetual", "")
+    exchange_cls = getattr(ccxt_lib, clean_id, None)
+    if exchange_cls is None:
+        logger.warning("Protective stop disabled: ccxt.%s not available", clean_id)
+        return None
+
+    creds = _resolve_credentials(exchange_id)
+    if not creds["api_key"] or not creds["secret"]:
+        logger.warning("Protective stop disabled: no API credentials for %s", clean_id)
+        return None
+
+    try:
+        cfg: Dict[str, Any] = {
+            "apiKey": creds["api_key"],
+            "secret": creds["secret"],
+            "enableRateLimit": True,
+            "options": {"defaultType": "swap" if is_perp else "spot"},
+        }
+        if creds["passphrase"]:
+            cfg["password"] = creds["passphrase"]
+
+        exchange = exchange_cls(cfg)
+        exchange.load_markets()
+        return BitgetStopBackend(exchange, is_perp)
+    except Exception as exc:
+        logger.warning("Protective stop init failed for %s: %s", clean_id, exc)
+        return None
+
+
 class ProtectiveStopManager:
+    """Stateful manager that tracks position and maintains the stop order."""
+
     def __init__(
         self,
         exchange_id: str,
         trading_pair: str,
         stop_loss_pct: Decimal,
         refresh_interval_s: int = 60,
+        backend: Optional[ProtectiveStopBackend] = None,
     ):
-        self._exchange_id = exchange_id.replace("_paper_trade", "").replace("_perpetual", "")
+        self._exchange_id = exchange_id
         self._is_perp = "perpetual" in exchange_id or "swap" in exchange_id
         self._trading_pair = trading_pair
         self._ccxt_symbol = trading_pair.replace("-", "/")
@@ -45,59 +168,40 @@ class ProtectiveStopManager:
             self._ccxt_symbol = f"{self._ccxt_symbol}:{quote}"
         self._stop_loss_pct = stop_loss_pct
         self._refresh_interval_s = refresh_interval_s
-        self._exchange: Any = None
+        self._backend = backend
         self._current_stop_order_id: Optional[str] = None
         self._last_position_base: Decimal = _ZERO
         self._last_avg_entry: Decimal = _ZERO
         self._last_refresh_ts: float = 0.0
-        self._enabled = False
-        self._init_error: str = ""
+        self._enabled = backend is not None
+        self._init_error: str = "" if self._enabled else "no_backend"
 
     def initialize(self) -> bool:
-        if ccxt is None:
-            self._init_error = "ccxt not installed"
-            logger.warning("Protective stop disabled: ccxt not installed")
-            return False
-
-        api_key = os.getenv("BITGET_API_KEY", "") or os.getenv("BOT1_BITGET_API_KEY", "")
-        secret = os.getenv("BITGET_API_SECRET", "") or os.getenv("BOT1_BITGET_API_SECRET", "")
-        passphrase = os.getenv("BITGET_PASSPHRASE", "") or os.getenv("BOT1_BITGET_PASSPHRASE", "")
-
-        if not api_key or not secret:
-            self._init_error = "missing API credentials in env"
-            logger.warning("Protective stop disabled: no API credentials")
-            return False
-
-        try:
-            exchange_cls = getattr(ccxt, "bitget", None)
-            if exchange_cls is None:
-                self._init_error = "ccxt.bitget not available"
-                return False
-
-            cfg: Dict[str, Any] = {
-                "apiKey": api_key,
-                "secret": secret,
-                "enableRateLimit": True,
-                "options": {"defaultType": "swap" if self._is_perp else "spot"},
-            }
-            if passphrase:
-                cfg["password"] = passphrase
-
-            self._exchange = exchange_cls(cfg)
-            self._exchange.load_markets()
+        """Initialize the stop manager. Creates backend via factory if none was injected."""
+        if self._backend is not None:
             self._enabled = True
             logger.info(
-                "Protective stop initialized: %s %s stop_loss=%.2f%%",
-                self._exchange_id, self._ccxt_symbol, float(self._stop_loss_pct * 100),
+                "Protective stop initialized: %s stop_loss=%.2f%%",
+                self._ccxt_symbol, float(self._stop_loss_pct * 100),
             )
             return True
-        except Exception as exc:
-            self._init_error = str(exc)
-            logger.warning("Protective stop init failed: %s", exc)
-            return False
+        self._backend = create_stop_backend(
+            exchange_id=self._exchange_id,
+            is_perp=self._is_perp,
+        )
+        self._enabled = self._backend is not None
+        if self._enabled:
+            self._init_error = ""
+            logger.info(
+                "Protective stop initialized: %s stop_loss=%.2f%%",
+                self._ccxt_symbol, float(self._stop_loss_pct * 100),
+            )
+        else:
+            self._init_error = "backend_creation_failed"
+        return self._enabled
 
     def update(self, position_base: Decimal, avg_entry_price: Decimal) -> None:
-        if not self._enabled:
+        if not self._enabled or self._backend is None:
             return
 
         now = time.time()
@@ -133,46 +237,16 @@ class ProtectiveStopManager:
             self._cancel_stop()
 
         if self._current_stop_order_id is None:
-            self._place_stop(stop_side, abs(position_base), stop_price)
+            order_id = self._backend.place_stop(self._ccxt_symbol, stop_side, abs(position_base), stop_price)
+            self._current_stop_order_id = order_id
 
         self._last_position_base = position_base
         self._last_avg_entry = avg_entry_price
 
-    def _place_stop(self, side: str, amount: Decimal, trigger_price: Decimal) -> None:
-        try:
-            order = self._exchange.create_order(
-                symbol=self._ccxt_symbol,
-                type="market",
-                side=side,
-                amount=float(amount),
-                params={
-                    "stopLoss": {
-                        "triggerPrice": float(trigger_price),
-                        "type": "mark_price",
-                    },
-                },
-            )
-            self._current_stop_order_id = str(order.get("id", ""))
-            logger.info(
-                "Protective stop placed: %s %s %.8f @ trigger %.2f (order=%s)",
-                side, self._ccxt_symbol, float(amount), float(trigger_price),
-                self._current_stop_order_id,
-            )
-        except Exception as exc:
-            logger.error("Failed to place protective stop: %s", exc)
-            self._current_stop_order_id = None
-
     def _cancel_stop(self) -> None:
-        if not self._current_stop_order_id:
+        if not self._current_stop_order_id or self._backend is None:
             return
-        try:
-            self._exchange.cancel_order(
-                self._current_stop_order_id,
-                symbol=self._ccxt_symbol,
-            )
-            logger.info("Protective stop canceled: %s", self._current_stop_order_id)
-        except Exception as exc:
-            logger.warning("Failed to cancel protective stop %s: %s", self._current_stop_order_id, exc)
+        self._backend.cancel_stop(self._ccxt_symbol, self._current_stop_order_id)
         self._current_stop_order_id = None
 
     def cancel_all(self) -> None:

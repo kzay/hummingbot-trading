@@ -1,0 +1,87 @@
+{
+  "ts_utc": "2026-02-24T23:59:20.891738+00:00",
+  "checked_bots": 3,
+  "status": "warning",
+  "critical_count": 0,
+  "warning_count": 3,
+  "exchange_source_enabled": false,
+  "exchange_snapshot_path": "/workspace/hbot/reports/exchange_snapshots/latest.json",
+  "thresholds_path": "/workspace/hbot/config/reconciliation_thresholds.json",
+  "accounting_snapshots": [
+    {
+      "bot": "bot1",
+      "exchange": "bitget_paper_trade",
+      "trading_pair": "BTC-USDT",
+      "mid": 64081.635,
+      "equity_quote": 7881.6327,
+      "base_balance": 0.02,
+      "quote_balance": 6600.0,
+      "fees_paid_today_quote": 21.904769855939,
+      "funding_paid_today_quote": 0.0,
+      "daily_loss_pct": 0.0008448464751663575,
+      "drawdown_pct": 0.0016310071328441249,
+      "fee_source": "project:/home/hummingbot/project_config/fee_profiles.json"
+    },
+    {
+      "bot": "bot3",
+      "exchange": "bitget_paper_trade",
+      "trading_pair": "BTC-USDT",
+      "mid": 64512.775,
+      "equity_quote": 7890.2555,
+      "base_balance": 0.02,
+      "quote_balance": 6600.0,
+      "fees_paid_today_quote": 4.619097435669,
+      "funding_paid_today_quote": 0.0,
+      "daily_loss_pct": 0.0012096238298755313,
+      "drawdown_pct": 0.0012277538756013374,
+      "fee_source": "project:/home/hummingbot/project_config/fee_profiles.json"
+    },
+    {
+      "bot": "bot4",
+      "exchange": "binance_perpetual_testnet",
+      "trading_pair": "BTC-USDT",
+      "mid": 68083.4,
+      "equity_quote": 5653.9602594,
+      "base_balance": 0.01,
+      "quote_balance": 4973.1262594,
+      "fees_paid_today_quote": 0.0,
+      "funding_paid_today_quote": 0.0,
+      "daily_loss_pct": 0.00034448615836111575,
+      "drawdown_pct": 0.0003800427903995444,
+      "fee_source": "project:/home/hummingbot/project_config/fee_profiles.json"
+    }
+  ],
+  "findings": [
+    {
+      "severity": "warning",
+      "check": "fill_parity",
+      "message": "fills_present_without_order_filled_events",
+      "bot": "bot1",
+      "details": {
+        "fills_csv": 1467,
+        "fills_events": 0
+      }
+    },
+    {
+      "severity": "warning",
+      "check": "fill_parity",
+      "message": "fills_present_without_order_filled_events",
+      "bot": "bot3",
+      "details": {
+        "fills_csv": 626,
+        "fills_events": 0
+      }
+    },
+    {
+      "severity": "warning",
+      "check": "inventory",
+      "message": "inventory_drift_warning",
+      "bot": "bot4",
+      "details": {
+        "drift": 0.5295828112042212,
+        "warn_threshold": 0.4,
+        "critical_threshold": 0.55
+      }
+    }
+  ]
+}

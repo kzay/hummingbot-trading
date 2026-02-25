@@ -98,7 +98,80 @@ class _CsvBuffer:
         self._last_flush_ts = now
 
 
+class _FillWal:
+    """Write-ahead log for fill events — atomic append, replay on startup.
+
+    Each fill is appended as a single JSON line to ``fills.wal``.  On startup
+    the CsvSplitLogger replays any WAL entries into the CSV, then truncates
+    the WAL.  This ensures no fill data is lost even on a mid-flush crash.
+    """
+
+    def __init__(self, wal_path: Path, csv_buffer: _CsvBuffer, fill_fields: Iterable[str]):
+        self._path = wal_path
+        self._csv_buffer = csv_buffer
+        self._fields = list(fill_fields)
+        self._replay_on_init()
+
+    def append(self, row: Dict[str, object]) -> None:
+        try:
+            import json as _json
+            line = _json.dumps(row, default=str) + "\n"
+            with self._path.open("a", encoding="utf-8") as f:
+                f.write(line)
+                f.flush()
+        except Exception:
+            logger.warning("Fill WAL append failed", exc_info=True)
+
+    def mark_flushed(self) -> None:
+        """Truncate WAL after CSV has been flushed."""
+        try:
+            self._path.write_text("", encoding="utf-8")
+        except Exception:
+            pass
+
+    def _replay_on_init(self) -> None:
+        if not self._path.exists() or self._path.stat().st_size == 0:
+            return
+        import json as _json
+        replayed = 0
+        try:
+            with self._path.open("r", encoding="utf-8") as f:
+                for line in f:
+                    line = line.strip()
+                    if not line:
+                        continue
+                    row = _json.loads(line)
+                    self._csv_buffer.write(row, self._fields)
+                    replayed += 1
+            self._csv_buffer.flush()
+            self._path.write_text("", encoding="utf-8")
+            if replayed:
+                logger.info("Fill WAL replayed %d entries into CSV", replayed)
+        except Exception:
+            logger.warning("Fill WAL replay failed", exc_info=True)
+
+
 class CsvSplitLogger:
+    FILL_FIELDS = (
+        "ts",
+        "bot_variant",
+        "exchange",
+        "trading_pair",
+        "side",
+        "price",
+        "amount_base",
+        "notional_quote",
+        "fee_quote",
+        "order_id",
+        "state",
+        "mid_ref",
+        "expected_spread_pct",
+        "adverse_drift_30s",
+        "fee_source",
+        "is_maker",
+        "realized_pnl_quote",
+    )
+
     def __init__(
         self,
         base_log_dir: str,
@@ -118,6 +191,11 @@ class CsvSplitLogger:
         }
         for key, path in paths.items():
             self._buffers[key] = _CsvBuffer(path, flush_rows=flush_rows, flush_interval_s=flush_interval_s)
+        self._fill_wal = _FillWal(
+            wal_path=self.log_dir / "fills.wal",
+            csv_buffer=self._buffers["fills"],
+            fill_fields=self.FILL_FIELDS,
+        )
 
     def flush_all(self) -> None:
         for buf in self._buffers.values():
@@ -136,26 +214,10 @@ class CsvSplitLogger:
 
     def log_fill(self, data: Dict[str, object], ts: Optional[str] = None) -> None:
         row = {"ts": ts or self._now_iso(), **data}
-        fields = (
-            "ts",
-            "bot_variant",
-            "exchange",
-            "trading_pair",
-            "side",
-            "price",
-            "amount_base",
-            "notional_quote",
-            "fee_quote",
-            "order_id",
-            "state",
-            "mid_ref",
-            "expected_spread_pct",
-            "adverse_drift_30s",
-            "fee_source",
-            "is_maker",
-            "realized_pnl_quote",
-        )
-        self._append("fills", row, fields)
+        self._fill_wal.append(row)
+        self._append("fills", row, self.FILL_FIELDS)
+        self._buffers["fills"].flush()
+        self._fill_wal.mark_flushed()
 
     def log_minute(self, data: Dict[str, object], ts: Optional[str] = None) -> None:
         row = {"ts": ts or self._now_iso(), **data}
@@ -170,16 +232,24 @@ class CsvSplitLogger:
             "equity_quote",
             "base_pct",
             "target_base_pct",
+            "net_base_pct",
+            "target_net_base_pct",
             "spread_pct",
             "spread_floor_pct",
             "net_edge_pct",
+            "net_edge_gate_pct",
+            "net_edge_ewma_pct",
             "skew",
             "adverse_drift_30s",
+            "adverse_drift_smooth_30s",
+            "drift_spread_mult",
             "soft_pause_edge",
             "base_balance",
             "quote_balance",
             "market_spread_pct",
             "market_spread_bps",
+            "best_bid_price",
+            "best_ask_price",
             "best_bid_size",
             "best_ask_size",
             "turnover_today_x",

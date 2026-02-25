@@ -8,7 +8,8 @@ from __future__ import annotations
 from decimal import Decimal
 from typing import Dict, List
 
-from controllers.epp_v2_4 import EppV24Controller, RegimeSpec, _clip
+from controllers.core import RegimeSpec, clip
+from controllers.epp_v2_4 import EppV24Controller
 from controllers.price_buffer import MidPriceBuffer
 from controllers.regime_detector import RegimeDetector
 from controllers.spread_engine import SpreadEngine
@@ -71,7 +72,7 @@ class EppV24Adapter:
         levels = self._spread_engine.pick_levels(regime_spec, turnover_x)
 
         inv_error = self._target_base_pct - state.base_pct
-        skew = _clip(inv_error * Decimal("0.5"), Decimal("-0.003"), Decimal("0.003"))
+        skew = clip(inv_error * Decimal("0.5"), Decimal("-0.003"), Decimal("0.003"))
 
         buy_spreads, sell_spreads = self._spread_engine.build_side_spreads(
             spread_pct, skew, levels, regime_spec.one_sided, Decimal("0.0001"),

@@ -87,6 +87,9 @@ class BotSnapshot:
     order_book_stale: float
     position_base: float = 0.0
     avg_entry_price: float = 0.0
+    market_spread_bps: float = 0.0
+    best_bid_price: float = 0.0
+    best_ask_price: float = 0.0
     fill_stats: Optional[FillStats] = None
 
 
@@ -128,6 +131,9 @@ class BotMetricsExporter:
                     net_edge_pct=_safe_float(latest_minute.get("net_edge_pct")),
                     spread_pct=_safe_float(latest_minute.get("spread_pct")),
                     spread_floor_pct=_safe_float(latest_minute.get("spread_floor_pct")),
+                    market_spread_bps=_safe_float(latest_minute.get("market_spread_bps")),
+                    best_bid_price=_safe_float(latest_minute.get("best_bid_price")),
+                    best_ask_price=_safe_float(latest_minute.get("best_ask_price")),
                     turnover_today_x=_safe_float(latest_minute.get("turnover_today_x")),
                     orders_active=_safe_float(latest_minute.get("orders_active")),
                     maker_fee_pct=_safe_float(latest_minute.get("maker_fee_pct")),
@@ -178,6 +184,12 @@ class BotMetricsExporter:
                 "# TYPE hbot_bot_spread_pct gauge",
                 "# HELP hbot_bot_spread_floor_pct Active spread floor percentage from minute snapshot.",
                 "# TYPE hbot_bot_spread_floor_pct gauge",
+                "# HELP hbot_bot_market_spread_bps Observed market spread in basis points from order book (minute snapshot).",
+                "# TYPE hbot_bot_market_spread_bps gauge",
+                "# HELP hbot_bot_best_bid_price Best bid price from order book (minute snapshot).",
+                "# TYPE hbot_bot_best_bid_price gauge",
+                "# HELP hbot_bot_best_ask_price Best ask price from order book (minute snapshot).",
+                "# TYPE hbot_bot_best_ask_price gauge",
                 "# HELP hbot_bot_turnover_today_x Daily turnover multiplier from minute snapshot.",
                 "# TYPE hbot_bot_turnover_today_x gauge",
                 "# HELP hbot_bot_orders_active Number of active orders in current minute snapshot.",
@@ -232,6 +244,9 @@ class BotMetricsExporter:
             lines.append(f"hbot_bot_net_edge_pct{_fmt_labels(base_labels)} {snapshot.net_edge_pct}")
             lines.append(f"hbot_bot_spread_pct{_fmt_labels(base_labels)} {snapshot.spread_pct}")
             lines.append(f"hbot_bot_spread_floor_pct{_fmt_labels(base_labels)} {snapshot.spread_floor_pct}")
+            lines.append(f"hbot_bot_market_spread_bps{_fmt_labels(base_labels)} {snapshot.market_spread_bps}")
+            lines.append(f"hbot_bot_best_bid_price{_fmt_labels(base_labels)} {snapshot.best_bid_price}")
+            lines.append(f"hbot_bot_best_ask_price{_fmt_labels(base_labels)} {snapshot.best_ask_price}")
             lines.append(f"hbot_bot_turnover_today_x{_fmt_labels(base_labels)} {snapshot.turnover_today_x}")
             lines.append(f"hbot_bot_orders_active{_fmt_labels(base_labels)} {snapshot.orders_active}")
             lines.append(f"hbot_bot_soft_pause_edge{_fmt_labels(base_labels)} {snapshot.soft_pause_edge}")

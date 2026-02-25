@@ -10,12 +10,21 @@ from decimal import Decimal
 from typing import TypedDict
 
 
+PROCESSED_STATE_SCHEMA_VERSION: int = 2
+"""Increment whenever a field is added, removed, or changes semantics.
+Consumers should check this on deserialization and drop/log on mismatch."""
+
+
 class ProcessedState(TypedDict, total=False):
     """Snapshot of controller state produced every tick cycle.
 
     All price/pct values are Decimal.  ``pct`` fields are in [0, 1] scale
     (e.g. 0.003 = 0.3 %).  ``bps`` fields are basis points (1 bps = 0.01 %).
     """
+
+    # -- Schema --
+    schema_version: int
+    """Schema version of this ProcessedState. Compare with PROCESSED_STATE_SCHEMA_VERSION."""
 
     # -- Reference pricing --
     reference_price: Decimal
@@ -34,6 +43,10 @@ class ProcessedState(TypedDict, total=False):
     """Target base allocation ratio [0..1]."""
     base_pct: Decimal
     """Current base allocation ratio [0..1]."""
+    target_net_base_pct: Decimal
+    """Perps: signed net exposure target as fraction of equity. Spot: equals target_base_pct."""
+    net_base_pct: Decimal
+    """Perps: signed net exposure as fraction of equity. Spot: equals base_pct."""
     base_balance: Decimal
     """Base asset balance."""
     quote_balance: Decimal
@@ -48,10 +61,18 @@ class ProcessedState(TypedDict, total=False):
     """Minimum spread that clears the edge gate."""
     net_edge_pct: Decimal
     """Estimated net edge after fees/slippage/drift."""
+    net_edge_gate_pct: Decimal
+    """Edge value used by edge gate (may be smoothed)."""
+    net_edge_ewma_pct: Decimal
+    """EWMA-smoothed net edge for debugging edge gate stability."""
     skew: Decimal
     """Inventory skew applied to buy/sell spread asymmetry."""
     adverse_drift_30s: Decimal
-    """Absolute mid price drift over the last 30 seconds."""
+    """Raw absolute mid price drift over the last 30 seconds (used for regime detection)."""
+    adverse_drift_smooth_30s: Decimal
+    """EWMA-smoothed adverse drift used for cost model and edge gate (less spiky than raw)."""
+    drift_spread_mult: Decimal
+    """Spread multiplier applied due to drift spike (1.0 = no widening, >1 = widened)."""
 
     # -- Market microstructure --
     market_spread_pct: Decimal

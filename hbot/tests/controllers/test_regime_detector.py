@@ -1,6 +1,7 @@
 from decimal import Decimal
 
-from controllers.epp_v2_4 import EppV24Controller, RegimeSpec
+from controllers.core import RegimeSpec
+from controllers.epp_v2_4 import EppV24Controller
 from controllers.price_buffer import MidPriceBuffer
 from controllers.regime_detector import RegimeDetector
 

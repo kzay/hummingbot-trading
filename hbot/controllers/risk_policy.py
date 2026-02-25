@@ -7,7 +7,6 @@ from __future__ import annotations
 from decimal import Decimal
 from typing import List, Tuple
 
-from controllers.epp_v2_4 import _clip
 
 
 class RiskPolicy:

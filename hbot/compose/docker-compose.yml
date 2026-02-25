@@ -98,7 +98,8 @@ services:
       <<: *hbot-env
       CONFIG_PASSWORD: ${BOT1_PASSWORD:-}
       CONFIG_FILE_NAME: v2_with_controllers.py
-      SCRIPT_CONFIG: v2_epp_v2_4_bitget_paper_smoke.yml
+      SCRIPT_CONFIG: v2_epp_v2_4_bot_a.yml
+      BOT_MODE: ${BOT1_MODE:-paper}
       HEADLESS_MODE: "true"
       BOT_POLICY_ROLE: live_microcap_primary
       BOT_POLICY_MODE: live
@@ -695,6 +696,45 @@ services:
       timeout: 10s
       retries: 3
       start_period: 30s
+
+  kill-switch:
+    <<: *control-plane-image
+    container_name: hbot-kill-switch
+    profiles:
+      - external
+    restart: unless-stopped
+    logging: *default-logging
+    command: >
+      /bin/sh -lc "python /workspace/hbot/services/kill_switch/main.py"
+    ports:
+      - "${KILL_SWITCH_HTTP_PORT:-9900}:9900"
+    environment:
+      - KILL_SWITCH_DRY_RUN=${KILL_SWITCH_DRY_RUN:-true}
+      - KILL_SWITCH_EXCHANGE=${KILL_SWITCH_EXCHANGE:-bitget}
+      - KILL_SWITCH_API_KEY=${KILL_SWITCH_API_KEY:-}
+      - KILL_SWITCH_SECRET=${KILL_SWITCH_SECRET:-}
+      - KILL_SWITCH_PASSPHRASE=${KILL_SWITCH_PASSPHRASE:-}
+      - KILL_SWITCH_HTTP_PORT=9900
+      - EXT_SIGNAL_RISK_ENABLED=true
+      - REDIS_HOST=${REDIS_HOST:-redis}
+      - REDIS_PORT=${REDIS_PORT:-6379}
+      - REDIS_DB=${REDIS_DB:-0}
+      - REDIS_PASSWORD=${REDIS_PASSWORD:-}
+      - HB_INSTANCE_NAME=bot1
+      - EVENT_PRODUCER_NAME=kill_switch
+    volumes:
+      - ..:/workspace/hbot
+    depends_on:
+      redis:
+        condition: service_healthy
+    networks:
+      - trading
+    healthcheck:
+      test: ["CMD-SHELL", "curl -sf http://localhost:9900/health || exit 1"]
+      interval: 15s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
 
   ops-db-writer:
     <<: *control-plane-image

@@ -4,7 +4,8 @@ from decimal import Decimal
 from pathlib import Path
 from types import SimpleNamespace
 
-from controllers.epp_v2_4 import EppV24Controller, RegimeSpec
+from controllers.core import RegimeSpec
+from controllers.epp_v2_4 import EppV24Controller
 
 
 class _DummyController:

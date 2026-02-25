@@ -1,0 +1,62 @@
+{
+  "ts_utc": "2026-02-24T18:29:31.772285+00:00",
+  "status": "hold",
+  "blockers": [
+    "day2_event_store_gate",
+    "stale_reports"
+  ],
+  "freshness": {
+    "reconciliation_fresh": true,
+    "parity_fresh": true,
+    "portfolio_risk_fresh": true,
+    "strict_cycle_fresh": false
+  },
+  "day2_gate": {
+    "go": false,
+    "checks": [
+      {
+        "name": "elapsed_window",
+        "pass": true,
+        "value_hours": 53.04,
+        "required_hours": 24.0
+      },
+      {
+        "name": "missing_correlation",
+        "pass": true,
+        "value": 0,
+        "required": 0
+      },
+      {
+        "name": "delta_since_baseline_tolerance",
+        "pass": false,
+        "max_delta_observed": 400,
+        "max_allowed_delta": 5
+      }
+    ],
+    "path": "/workspace/hbot/reports/event_store/day2_gate_eval_latest.json"
+  },
+  "reconciliation": {
+    "status": "warning",
+    "critical_count": 0,
+    "warning_count": 4,
+    "path": "/workspace/hbot/reports/reconciliation/latest.json"
+  },
+  "parity": {
+    "status": "pass",
+    "failed_bots": 0,
+    "checked_bots": 2,
+    "path": "/workspace/hbot/reports/parity/latest.json"
+  },
+  "portfolio_risk": {
+    "status": "warning",
+    "critical_count": 0,
+    "warning_count": 1,
+    "path": "/workspace/hbot/reports/portfolio_risk/latest.json"
+  },
+  "strict_cycle": {
+    "status": "PASS",
+    "rc": 0,
+    "critical_failures": [],
+    "path": "/workspace/hbot/reports/promotion_gates/strict_cycle_latest.json"
+  }
+}

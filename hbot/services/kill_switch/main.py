@@ -3,6 +3,9 @@
 Listens for ``kill_switch`` execution intents on Redis and cancels all open
 orders on the target exchange via ccxt.  Optionally flattens positions.
 
+Also exposes an HTTP endpoint (default port 9900) for out-of-process
+triggering — survives bot process death since this runs in its own container.
+
 Requires manual container restart to resume trading — there is no auto-recovery.
 """
 from __future__ import annotations
@@ -10,8 +13,10 @@ from __future__ import annotations
 import json
 import logging
 import os
+import threading
 import time
 from datetime import datetime, timezone
+from http.server import BaseHTTPRequestHandler, HTTPServer
 from pathlib import Path
 from typing import Dict, List, Optional
 
@@ -34,6 +39,8 @@ from services.contracts.stream_names import (
 from services.hb_bridge.redis_client import RedisStreamClient
 
 logger = logging.getLogger(__name__)
+
+_kill_switch_state: Dict[str, object] = {"triggered": False, "last_result": None}
 
 
 def _cancel_all_orders_ccxt(
@@ -115,6 +122,124 @@ def _publish_audit(
     )
 
 
+class _KillSwitchHTTPHandler(BaseHTTPRequestHandler):
+    """Minimal HTTP handler for out-of-process kill switch triggering."""
+
+    exchange_id: str = ""
+    api_key: str = ""
+    secret: str = ""
+    passphrase: str = ""
+    dry_run: bool = True
+    shutdown: Optional[ShutdownHandler] = None
+    redis_client: Optional[RedisStreamClient] = None
+    svc_cfg: Optional[ServiceSettings] = None
+    report_path: Optional[Path] = None
+
+    def do_POST(self):
+        if self.path == "/kill":
+            self._handle_kill()
+        else:
+            self.send_response(404)
+            self.end_headers()
+
+    def do_GET(self):
+        if self.path == "/health":
+            self.send_response(200)
+            self.send_header("Content-Type", "application/json")
+            self.end_headers()
+            body = json.dumps({"status": "ok", "triggered": _kill_switch_state["triggered"]})
+            self.wfile.write(body.encode())
+        elif self.path == "/status":
+            self.send_response(200)
+            self.send_header("Content-Type", "application/json")
+            self.end_headers()
+            body = json.dumps(_kill_switch_state, default=str)
+            self.wfile.write(body.encode())
+        else:
+            self.send_response(404)
+            self.end_headers()
+
+    def _handle_kill(self):
+        content_len = int(self.headers.get("Content-Length", 0))
+        body = json.loads(self.rfile.read(content_len)) if content_len > 0 else {}
+        trading_pair = body.get("trading_pair")
+
+        logger.warning("HTTP KILL SWITCH triggered (pair=%s, dry_run=%s)", trading_pair, self.dry_run)
+
+        result = _cancel_all_orders_ccxt(
+            exchange_id=self.exchange_id,
+            api_key=self.api_key,
+            secret=self.secret,
+            passphrase=self.passphrase,
+            trading_pair=trading_pair,
+            dry_run=self.dry_run,
+        )
+
+        _kill_switch_state["triggered"] = True
+        _kill_switch_state["last_result"] = result
+
+        report = {
+            "ts_utc": utc_now(),
+            "trigger": "http",
+            "exchange": self.exchange_id,
+            "trading_pair": trading_pair,
+            "dry_run": self.dry_run,
+            "result": result,
+        }
+        if self.report_path:
+            write_json(self.report_path, report)
+
+        if self.redis_client and self.svc_cfg:
+            _publish_audit(
+                client=self.redis_client,
+                producer=self.svc_cfg.producer_name,
+                instance_name=self.svc_cfg.instance_name,
+                action="http_triggered",
+                details=report,
+            )
+
+        self.send_response(200)
+        self.send_header("Content-Type", "application/json")
+        self.end_headers()
+        self.wfile.write(json.dumps(report, default=str).encode())
+
+        if not self.dry_run and self.shutdown:
+            logger.warning("HTTP kill switch executed — service will stop.")
+            self.shutdown._requested = True
+
+    def log_message(self, format, *args):
+        logger.debug(format, *args)
+
+
+def _start_http_server(
+    port: int,
+    exchange_id: str,
+    api_key: str,
+    secret: str,
+    passphrase: str,
+    dry_run: bool,
+    shutdown: ShutdownHandler,
+    redis_client: RedisStreamClient,
+    svc_cfg: ServiceSettings,
+    report_path: Path,
+) -> None:
+    """Start the HTTP kill switch endpoint in a daemon thread."""
+    _KillSwitchHTTPHandler.exchange_id = exchange_id
+    _KillSwitchHTTPHandler.api_key = api_key
+    _KillSwitchHTTPHandler.secret = secret
+    _KillSwitchHTTPHandler.passphrase = passphrase
+    _KillSwitchHTTPHandler.dry_run = dry_run
+    _KillSwitchHTTPHandler.shutdown = shutdown
+    _KillSwitchHTTPHandler.redis_client = redis_client
+    _KillSwitchHTTPHandler.svc_cfg = svc_cfg
+    _KillSwitchHTTPHandler.report_path = report_path
+
+    server = HTTPServer(("0.0.0.0", port), _KillSwitchHTTPHandler)
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    logger.info("Kill switch HTTP server listening on port %d", port)
+
+
 def run() -> None:
     configure_logging()
     redis_cfg = RedisSettings()
@@ -140,9 +265,23 @@ def run() -> None:
     consumer = f"kill-switch-{svc_cfg.instance_name}"
     client.create_group(EXECUTION_INTENT_STREAM, group)
 
+    http_port = int(os.getenv("KILL_SWITCH_HTTP_PORT", "9900"))
+    _start_http_server(
+        port=http_port,
+        exchange_id=exchange_id,
+        api_key=api_key,
+        secret=secret,
+        passphrase=passphrase,
+        dry_run=dry_run,
+        shutdown=shutdown,
+        redis_client=client,
+        svc_cfg=svc_cfg,
+        report_path=report_path,
+    )
+
     logger.info(
-        "Kill switch service started: exchange=%s dry_run=%s instance=%s",
-        exchange_id, dry_run, svc_cfg.instance_name,
+        "Kill switch service started: exchange=%s dry_run=%s instance=%s http_port=%d",
+        exchange_id, dry_run, svc_cfg.instance_name, http_port,
     )
 
     while not shutdown.requested:

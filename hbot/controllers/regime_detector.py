@@ -8,7 +8,7 @@ from __future__ import annotations
 from decimal import Decimal
 from typing import Dict, Tuple
 
-from controllers.epp_v2_4 import RegimeSpec, _clip
+from controllers.core import RegimeSpec
 from controllers.price_buffer import MidPriceBuffer
 
 

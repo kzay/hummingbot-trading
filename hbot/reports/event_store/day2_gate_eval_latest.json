@@ -1,15 +1,15 @@
 {
-  "ts_utc": "2026-02-24T12:41:56.107112+00:00",
+  "ts_utc": "2026-02-25T03:49:35.597477+00:00",
   "go": false,
   "gate": "day2_event_store",
   "baseline_file": "/workspace/hbot/reports/event_store/baseline_counts.json",
-  "integrity_file": "/workspace/hbot/reports/event_store/integrity_20260224.json",
-  "source_compare_file": "/workspace/hbot/reports/event_store/source_compare_20260224T124155Z.json",
+  "integrity_file": "/workspace/hbot/reports/event_store/integrity_20260225.json",
+  "source_compare_file": "/workspace/hbot/reports/event_store/source_compare_20260225T034935Z.json",
   "checks": [
     {
       "name": "elapsed_window",
       "pass": true,
-      "value_hours": 47.28,
+      "value_hours": 62.41,
       "required_hours": 24.0
     },
     {
@@ -21,7 +21,7 @@
     {
       "name": "delta_since_baseline_tolerance",
       "pass": false,
-      "max_delta_observed": 264,
+      "max_delta_observed": 700,
       "max_allowed_delta": 5
     }
   ]

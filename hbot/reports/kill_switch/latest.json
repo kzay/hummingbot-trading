@@ -1,0 +1,14 @@
+{
+  "ts_utc": "2026-02-25T03:49:08.647223+00:00",
+  "trigger": "execution_intent",
+  "instance_name": "bot1",
+  "exchange": "bitget",
+  "trading_pair": null,
+  "dry_run": true,
+  "result": {
+    "status": "error",
+    "error": "missing_credentials",
+    "cancelled": []
+  },
+  "entry_id": "1771991348646-0"
+}

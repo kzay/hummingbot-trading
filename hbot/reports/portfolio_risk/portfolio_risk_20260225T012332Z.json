@@ -1,0 +1,82 @@
+{
+  "ts_utc": "2026-02-25T01:23:32.380496+00:00",
+  "status": "critical",
+  "critical_count": 1,
+  "warning_count": 0,
+  "portfolio_action": "kill_switch",
+  "limits_path": "/workspace/hbot/config/portfolio_limits_v1.json",
+  "publish_actions_enabled": true,
+  "synthetic_breach": false,
+  "metrics": {
+    "portfolio_daily_loss_pct": 8.73821084356275e-06,
+    "abs_net_exposure_quote": 4820.304,
+    "max_equity_share_pct": 0.9190898710875098,
+    "total_equity_quote": 6179.696,
+    "concentration_candidate_bot_count": 2,
+    "concentration_min_equity_quote": 100.0
+  },
+  "risk_scope_bots": [
+    "bot1",
+    "bot4"
+  ],
+  "bots": {
+    "bot1": {
+      "equity_quote": 500.0,
+      "base_pct": 0.0,
+      "daily_loss_pct": 0.0,
+      "drawdown_pct": 0.0,
+      "directional_exposure_quote": -500.0,
+      "base_exposure_abs_quote": 0.0
+    },
+    "bot2": {
+      "equity_quote": 77232.195,
+      "base_pct": 0.8705203186313687,
+      "daily_loss_pct": 0.0,
+      "drawdown_pct": 0.0,
+      "directional_exposure_quote": 57232.19500000001,
+      "base_exposure_abs_quote": 67232.195
+    },
+    "bot3": {
+      "equity_quote": 7890.2555,
+      "base_pct": 0.16352518622495812,
+      "daily_loss_pct": 0.0012096238298755313,
+      "drawdown_pct": 0.0012277538756013374,
+      "directional_exposure_quote": -5309.7445,
+      "base_exposure_abs_quote": 1290.2555000000002
+    },
+    "bot4": {
+      "equity_quote": 5679.696,
+      "base_pct": 0.11967119366952034,
+      "daily_loss_pct": 9.507460715700515e-06,
+      "drawdown_pct": 1.100398899002484e-05,
+      "directional_exposure_quote": -4320.304,
+      "base_exposure_abs_quote": 679.696
+    }
+  },
+  "findings": [
+    {
+      "severity": "critical",
+      "check": "concentration_cap",
+      "message": "concentration_breach",
+      "details": {
+        "max_equity_share_pct": 0.9190898710875098,
+        "cap_pct": 0.7,
+        "warn_level_pct": 0.5599999999999999,
+        "candidate_bot_count": 2,
+        "min_equity_quote": 100.0
+      }
+    }
+  ],
+  "actions": [
+    {
+      "bot": "bot1",
+      "action": "kill_switch",
+      "event_id": "8c73ec49-3c5e-4250-be53-8e0dd1ad5fd8"
+    },
+    {
+      "bot": "bot4",
+      "action": "kill_switch",
+      "event_id": "c54f3dab-082d-4022-81cf-f47b784bf6aa"
+    }
+  ]
+}

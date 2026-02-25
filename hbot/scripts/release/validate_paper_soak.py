@@ -55,8 +55,32 @@ def _read_minute_rows(path: Path, window_hours: float) -> List[Dict[str, str]]:
     return rows
 
 
+def _read_fills_rows(path: Path, window_hours: float) -> List[Dict[str, str]]:
+    if not path.exists():
+        return []
+    cutoff_ts = datetime.now(timezone.utc).timestamp() - window_hours * 3600
+    rows: List[Dict[str, str]] = []
+    try:
+        with path.open("r", encoding="utf-8", newline="") as f:
+            reader = csv.DictReader(f)
+            for row in reader:
+                ts_str = str(row.get("ts", "")).strip()
+                if not ts_str:
+                    continue
+                try:
+                    ts = datetime.fromisoformat(ts_str.replace("Z", "+00:00")).timestamp()
+                except Exception:
+                    continue
+                if ts >= cutoff_ts:
+                    rows.append(row)
+    except Exception:
+        pass
+    return rows
+
+
 def validate(
     rows: List[Dict[str, str]],
+    fills_rows: Optional[List[Dict[str, str]]] = None,
     cancel_budget_per_min: int = 50,
 ) -> Dict[str, object]:
     """Evaluate all 7 KPIs against the rows and return per-KPI results."""
@@ -81,7 +105,11 @@ def validate(
     )
     cancel_ok_pct = cancel_ok_count / total if total > 0 else 0
 
-    paper_fills = max(int(safe_float(r.get("paper_fill_count", "0"))) for r in rows) if rows else 0
+    # Prefer ground-truth fills evidence from fills.csv when available, since
+    # the paper adapter counters in minute.csv can be missing/laggy depending
+    # on the delegation path.
+    fills_rows = fills_rows or []
+    paper_fills = len(fills_rows)
 
     warmup_cutoff = max(1, total // 4)
     post_warmup = rows[warmup_cutoff:]
@@ -139,18 +167,29 @@ def main() -> None:
     parser.add_argument("--bot", default="bot3", help="Bot instance name")
     parser.add_argument("--variant", default="a", help="Controller variant")
     parser.add_argument("--window-hours", type=float, default=2.0, help="Lookback window in hours")
+    parser.add_argument("--minutes", type=float, default=None, help="Lookback window in minutes (overrides --window-hours)")
     parser.add_argument("--data-root", default=str(_HBOT_ROOT / "data"), help="Data root path")
     parser.add_argument("--cancel-budget", type=int, default=50, help="Cancel budget per minute")
     args = parser.parse_args()
 
+    if args.minutes is not None:
+        try:
+            args.window_hours = float(args.minutes) / 60.0
+        except Exception:
+            pass
+
     minute_path = Path(args.data_root) / args.bot / "logs" / "epp_v24" / f"{args.bot}_{args.variant}" / "minute.csv"
+    fills_path = Path(args.data_root) / args.bot / "logs" / "epp_v24" / f"{args.bot}_{args.variant}" / "fills.csv"
     rows = _read_minute_rows(minute_path, args.window_hours)
-    result = validate(rows, cancel_budget_per_min=args.cancel_budget)
+    fills_rows = _read_fills_rows(fills_path, args.window_hours)
+    result = validate(rows, fills_rows=fills_rows, cancel_budget_per_min=args.cancel_budget)
     result["ts_utc"] = utc_now()
     result["bot"] = args.bot
     result["variant"] = args.variant
     result["window_hours"] = args.window_hours
     result["minute_path"] = str(minute_path)
+    result["fills_path"] = str(fills_path)
+    result["fills_in_window"] = len(fills_rows)
 
     out_dir = _HBOT_ROOT / "reports" / "paper_soak"
     out_dir.mkdir(parents=True, exist_ok=True)

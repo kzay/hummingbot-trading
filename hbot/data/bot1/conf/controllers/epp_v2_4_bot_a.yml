@@ -1,13 +1,15 @@
-# EPP v2.4 - Phase 0 - Bot A (ACTIVE TRADING)
+# EPP v2.4 — Bot A (Primary Strategy)
+# Mode is controlled by BOT_MODE env var (paper|live), NOT by this file.
 id: epp_v2_4_bot_a
 controller_name: epp_v2_4
 controller_type: market_making
 
-# Paper on live market data: bitget_perpetual + internal_paper_enabled: true (Day 85a)
-# Live: set internal_paper_enabled: false (Day 85)
+# ── Connector ──────────────────────────────────────────────────────
 connector_name: bitget_perpetual
+connector_type: perp
 trading_pair: BTC-USDT
 
+# ── Order sizing ───────────────────────────────────────────────────
 total_amount_quote: 50
 buy_spreads: "0.0020,0.0030"
 sell_spreads: "0.0020,0.0030"
@@ -23,13 +25,14 @@ time_limit: 300
 take_profit_order_type: LIMIT
 skip_rebalance: true
 
+# ── Identity ───────────────────────────────────────────────────────
 variant: a
 enabled: true
 no_trade: false
 instance_name: bot1
 log_dir: /home/hummingbot/logs
 
-# VIP0 fee model
+# ── Fee model ──────────────────────────────────────────────────────
 fee_mode: auto
 fee_profile: vip0
 require_fee_resolution: true
@@ -37,14 +40,31 @@ spot_fee_pct: 0.0010
 slippage_est_pct: 0.0005
 turnover_cap_x: 3.0
 turnover_penalty_step: 0.0005
+
+# ── Edge gate ──────────────────────────────────────────────────────
 min_net_edge_bps: 1
 edge_resume_bps: 4
 edge_state_hold_s: 120
+edge_gate_ewma_period: 8
 
+# ── Perp inventory ────────────────────────────────────────────────
+# Delta-neutral: target net exposure = 0 for balanced MM
+perp_target_net_base_pct: 0.0
+min_base_pct: 0.0
+max_base_pct: 0.90
+
+# ── Drift protection ──────────────────────────────────────────────
+adverse_drift_ewma_alpha: 0.25
+drift_spike_threshold_bps: 5
+drift_spike_mult_max: 1.8
+
+# ── Sampling ───────────────────────────────────────────────────────
 sample_interval_s: 10
 spread_floor_recalc_s: 30
 cancel_budget_per_min: 50
-internal_paper_enabled: true
+
+# ── Paper simulation params (only active when BOT_MODE=paper) ─────
+paper_equity_quote: 500
 paper_seed: 7
 paper_latency_ms: 150
 paper_queue_participation: 0.35

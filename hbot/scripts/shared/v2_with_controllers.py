@@ -131,16 +131,19 @@ class V2WithControllers(StrategyV2Base):
         self._preflight_failed = False
         self._paper_adapter_installed: Set[str] = set()
         self._paper_adapter_pending_logged: Set[str] = set()
+        self._paper_desk_v2 = None  # PaperDesk v2 -- created on first paper adapter install
         self._init_external_bus()
         self._install_internal_paper_adapters()
 
     def on_tick(self):
         self._install_internal_paper_adapters()
+        self._tick_paper_adapters()
         if not self._preflight_checked:
             self._run_preflight_once()
             if self._preflight_failed:
                 return
         super().on_tick()
+        self._tick_paper_adapters()
         self._publish_market_state_to_bus()
         self._consume_execution_intents()
         if not self._is_stop_triggered:
@@ -261,6 +264,7 @@ class V2WithControllers(StrategyV2Base):
             self.connectors[connector_name].set_position_mode(position_mode)
 
     def _install_internal_paper_adapters(self):
+        bot_mode = os.getenv("BOT_MODE", "").strip().lower()
         for controller_id, controller in self.controllers.items():
             if controller_id in self._paper_adapter_installed:
                 continue
@@ -269,8 +273,11 @@ class V2WithControllers(StrategyV2Base):
                 continue
             connector_name = str(getattr(cfg, "connector_name", ""))
             trading_pair = str(getattr(cfg, "trading_pair", ""))
-            internal_paper_enabled = bool(getattr(cfg, "internal_paper_enabled", False))
-            if not connector_name.endswith("_paper_trade") or not internal_paper_enabled or not trading_pair:
+            is_paper = bot_mode == "paper" if bot_mode in ("paper", "live") else bool(getattr(cfg, "internal_paper_enabled", False))
+            if not is_paper or not trading_pair:
+                if bot_mode == "live" and controller_id not in self._paper_adapter_pending_logged:
+                    self.logger().info(f"LIVE MODE: no paper adapter for {connector_name}/{trading_pair}")
+                    self._paper_adapter_pending_logged.add(controller_id)
                 continue
             paper_cfg = PaperEngineConfig(
                 enabled=True,
@@ -292,8 +299,10 @@ class V2WithControllers(StrategyV2Base):
                 cfg=paper_cfg,
             )
             if adapter is None:
-                # Fallback install path for HB builds where controller.strategy is not bound
-                # during early ticks; we can still install using this strategy's connectors map.
+                # Fallback install: resolve real connector for market data.
+                # For _paper_trade connectors, the canonical name points to
+                # the real exchange. For direct connectors (bitget_perpetual
+                # in paper mode), the connector itself provides market data.
                 paper_connector = self.connectors.get(connector_name)
                 if paper_connector is not None:
                     canonical_name = connector_name
@@ -303,7 +312,16 @@ class V2WithControllers(StrategyV2Base):
                             canonical_name = str(profile.get("requires_paper_trade_exchange") or connector_name[:-12])
                         else:
                             canonical_name = connector_name[:-12]
-                    market_connector = self.connectors.get(canonical_name) or paper_connector
+                    market_connector = self.connectors.get(canonical_name)
+                    if market_connector is None:
+                        try:
+                            provider = getattr(self, "market_data_provider", None)
+                            if provider is not None:
+                                market_connector = provider.get_connector(canonical_name)
+                        except Exception:
+                            market_connector = None
+                    if market_connector is None:
+                        market_connector = paper_connector
                     adapter = PaperExecutionAdapter(
                         connector_name=connector_name,
                         trading_pair=trading_pair,
@@ -313,8 +331,15 @@ class V2WithControllers(StrategyV2Base):
                         time_fn=lambda: float(self.market_data_provider.time()),
                         on_fill=getattr(controller, "did_fill_order", None),
                     )
-                    native_ok = install_paper_adapter_on_connector(paper_connector=paper_connector, adapter=adapter)
+                    # For real exchange connectors (e.g. bitget_perpetual), NEVER
+                    # patch the connector internals — it breaks HB's readiness
+                    # lifecycle. Use strategy-level delegation only.
+                    # For HB paper_trade wrappers, native delegation is fine.
+                    is_paper_connector = connector_name.endswith("_paper_trade")
+                    native_ok = False
                     strategy_ok = False
+                    if is_paper_connector:
+                        native_ok = install_paper_adapter_on_connector(paper_connector=paper_connector, adapter=adapter)
                     if not native_ok:
                         strategy_ok = install_paper_adapter_on_strategy(
                             strategy=self,
@@ -334,6 +359,8 @@ class V2WithControllers(StrategyV2Base):
                 else:
                     mode = "legacy-replacement"
                 self.logger().info(f"Internal paper adapter installed for {connector_name}/{trading_pair} mode={mode}.")
+                # --- Also install PaperDesk v2 bridge ---
+                self._install_paper_desk_v2(controller, cfg, connector_name, trading_pair)
             else:
                 if controller_id not in self._paper_adapter_pending_logged:
                     available = ",".join(sorted(self.connectors.keys())) if isinstance(self.connectors, dict) else "unknown"
@@ -342,6 +369,51 @@ class V2WithControllers(StrategyV2Base):
                         f"(available_connectors={available})."
                     )
                     self._paper_adapter_pending_logged.add(controller_id)
+
+    def _install_paper_desk_v2(self, controller: Any, cfg: Any, connector_name: str, trading_pair: str) -> None:
+        """Install PaperDesk v2 bridge alongside the v1 adapter.
+
+        v2 provides: shared portfolio, position tracking, funding simulation,
+        persistence, and event log. v1 adapter handles HB connector wiring.
+        """
+        try:
+            from controllers.paper_engine_v2.desk import PaperDesk
+            from controllers.paper_engine_v2.hb_bridge import install_paper_desk_bridge
+            from controllers.paper_engine_v2.types import InstrumentId
+
+            connector_type = str(getattr(cfg, "resolved_connector_type", "spot"))
+            instrument_type = "perp" if connector_type == "perp" else "spot"
+            venue = connector_name.replace("_paper_trade", "").replace("_perpetual", "")
+            iid = InstrumentId(venue=venue, trading_pair=trading_pair, instrument_type=instrument_type)
+
+            if self._paper_desk_v2 is None:
+                self._paper_desk_v2 = PaperDesk.from_epp_config(cfg)
+                self.logger().info("PaperDesk v2 created.")
+
+            success = install_paper_desk_bridge(
+                strategy=self,
+                desk=self._paper_desk_v2,
+                connector_name=connector_name,
+                instrument_id=iid,
+                trading_pair=trading_pair,
+            )
+            if success:
+                self.logger().info(f"PaperDesk v2 bridge installed for {connector_name}/{trading_pair}")
+        except Exception as exc:
+            self.logger().warning(f"PaperDesk v2 install failed (non-critical): {exc}")
+
+    def _tick_paper_adapters(self):
+        """Call refresh_open_orders on all strategy-delegated paper adapters so fills are processed."""
+        adapters = getattr(self, "_epp_internal_paper_adapters", None)
+        if not isinstance(adapters, dict):
+            return
+        for adapter in adapters.values():
+            try:
+                refresh_fn = getattr(adapter, "refresh_open_orders", None)
+                if callable(refresh_fn):
+                    refresh_fn(force=True)
+            except Exception:
+                pass
 
     def did_fail_order(self, order_failed_event: MarketOrderFailureEvent):
         """
@@ -481,10 +553,10 @@ class V2WithControllers(StrategyV2Base):
             try:
                 if value is None:
                     return False
-                target = float(value)
+                target = Decimal(str(value))
             except Exception:
                 return False
-            if target < 0.0 or target > 1.0:
+            if target < Decimal("0") or target > Decimal("1"):
                 return False
         return True
 

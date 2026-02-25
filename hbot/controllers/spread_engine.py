@@ -8,7 +8,7 @@ from __future__ import annotations
 from decimal import Decimal
 from typing import List, Tuple
 
-from controllers.epp_v2_4 import RegimeSpec, _clip
+from controllers.core import RegimeSpec, clip
 
 
 class SpreadEngine:
@@ -26,7 +26,7 @@ class SpreadEngine:
 
     def pick_spread_pct(self, regime_spec: RegimeSpec, turnover_x: Decimal) -> Decimal:
         """Interpolate spread between regime min/max based on turnover ratio."""
-        ratio = _clip(
+        ratio = clip(
             turnover_x / max(self._turnover_cap_x, Decimal("0.0001")),
             Decimal("0"),
             Decimal("1"),
@@ -37,7 +37,7 @@ class SpreadEngine:
         """Choose number of order levels based on turnover ratio."""
         if regime_spec.levels_min == regime_spec.levels_max:
             return regime_spec.levels_min
-        ratio = _clip(
+        ratio = clip(
             turnover_x / max(self._turnover_cap_x, Decimal("0.0001")),
             Decimal("0"),
             Decimal("1"),

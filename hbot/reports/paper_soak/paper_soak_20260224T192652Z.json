@@ -1,0 +1,49 @@
+{
+  "status": "FAIL",
+  "reason": "kpi_failure",
+  "sample_count": 31,
+  "kpis": {
+    "running_pct": {
+      "value": 0.5161,
+      "threshold": 0.65,
+      "pass": false
+    },
+    "max_turnover_x": {
+      "value": 2.276,
+      "threshold": 3.0,
+      "pass": true
+    },
+    "max_daily_loss_pct": {
+      "value": 0.000427,
+      "threshold": 0.015,
+      "pass": true
+    },
+    "max_drawdown_pct": {
+      "value": 0.001213,
+      "threshold": 0.025,
+      "pass": true
+    },
+    "cancel_budget_compliance_pct": {
+      "value": 1.0,
+      "threshold": 0.95,
+      "pass": true
+    },
+    "paper_fill_count": {
+      "value": 69,
+      "threshold": 1,
+      "pass": true
+    },
+    "paper_reject_count_post_warmup": {
+      "value": 0,
+      "threshold": 5,
+      "pass": true
+    }
+  },
+  "ts_utc": "2026-02-24T19:26:52.978685+00:00",
+  "bot": "bot1",
+  "variant": "a",
+  "window_hours": 0.5,
+  "minute_path": "hbot\\data\\bot1\\logs\\epp_v24\\bot1_a\\minute.csv",
+  "fills_path": "hbot\\data\\bot1\\logs\\epp_v24\\bot1_a\\fills.csv",
+  "fills_in_window": 69
+}

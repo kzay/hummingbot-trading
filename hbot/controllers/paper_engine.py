@@ -1,3 +1,16 @@
+"""Paper Engine v1 — backward-compatible adapter for Hummingbot.
+
+This module remains fully functional and is used by the running bot.
+Paper Engine v2 (controllers/paper_engine_v2/) runs alongside it and provides:
+- Shared multi-instrument portfolio
+- Position tracking (avg entry, PnL, funding)
+- Persistent state (Redis + JSON)
+- Full event log
+
+Both engines coexist: v1 handles HB connector wiring; v2 handles desk-level
+accounting and simulation quality. The PaperDesk v2 bridge is installed by
+v2_with_controllers.py._install_paper_desk_v2() after v1 adapter installation.
+"""
 from __future__ import annotations
 
 import logging
@@ -14,6 +27,7 @@ logger = logging.getLogger(__name__)
 try:
     from hummingbot.core.data_type.common import OrderType, PriceType, TradeType
     from hummingbot.connector.connector_base import ConnectorBase
+    from hummingbot.connector.budget_checker import BudgetChecker
     from hummingbot.core.event.events import (
         BuyOrderCompletedEvent,
         BuyOrderCreatedEvent,
@@ -28,6 +42,7 @@ try:
     _HAS_FRAMEWORK_EVENTS = True
 except Exception:  # pragma: no cover - local fallback for unit tests
     _HAS_FRAMEWORK_EVENTS = False
+    BudgetChecker = None
     class _EnumValue:
         def __init__(self, value: int, name: str):
             self.value = value
@@ -69,6 +84,41 @@ try:
     from services.common.exchange_profiles import resolve_profile
 except Exception:  # pragma: no cover - standalone test fallback
     resolve_profile = None
+
+_ZERO = Decimal("0")
+_ONE = Decimal("1")
+_10K = Decimal("10000")
+_DUST = Decimal("1e-10")
+_RESERVE_EPS = Decimal("1e-12")
+
+
+class PaperBudgetChecker:
+    """Drop-in replacement for HB's BudgetChecker that reports paper balances.
+
+    Installed on real exchange connectors during paper mode so the
+    PositionExecutor's budget validation passes without requiring real
+    funds on the exchange. All methods return the order candidates
+    unchanged (unlimited paper budget).
+    """
+
+    def __init__(self, exchange: Any, paper_equity_quote: Decimal = Decimal("10000")):
+        self._exchange = exchange
+        self._paper_equity = paper_equity_quote
+
+    def reset_locked_collateral(self):
+        pass
+
+    def adjust_candidates(self, order_candidates, all_or_none=True):
+        return list(order_candidates)
+
+    def adjust_candidate_and_lock_available_collateral(self, order_candidate, all_or_none=True):
+        return order_candidate
+
+    def adjust_candidate(self, order_candidate, all_or_none=True):
+        return order_candidate
+
+    def populate_collateral_entries(self, order_candidate):
+        return order_candidate
 
 
 def _canonical_connector_name(connector_name: str) -> str:
@@ -182,6 +232,26 @@ class _OrderTrackerShim:
     def remove(self, client_order_id: str) -> None:
         self._orders.pop(client_order_id, None)
 
+    @property
+    def active_orders(self) -> Dict[str, "PaperOrder"]:
+        return {oid: o for oid, o in self._orders.items() if o.is_open}
+
+    @property
+    def all_fillable_orders(self) -> Dict[str, "PaperOrder"]:
+        return self.active_orders
+
+    @property
+    def all_updatable_orders(self) -> Dict[str, "PaperOrder"]:
+        return self.active_orders
+
+    @property
+    def lost_orders(self) -> Dict[str, "PaperOrder"]:
+        return {}
+
+    @property
+    def all_orders(self) -> Dict[str, "PaperOrder"]:
+        return dict(self._orders)
+
     def iter_open(self) -> Iterable[PaperOrder]:
         for order in list(self._orders.values()):
             if order.is_open:
@@ -216,28 +286,28 @@ class PaperLedger:
     reserved: Dict[str, Decimal] = field(default_factory=dict)
 
     def total(self, asset: str) -> Decimal:
-        return self.balances.get(asset, Decimal("0"))
+        return self.balances.get(asset, _ZERO)
 
     def available(self, asset: str) -> Decimal:
-        return self.total(asset) - self.reserved.get(asset, Decimal("0"))
+        return self.total(asset) - self.reserved.get(asset, _ZERO)
 
     def reserve(self, asset: str, amount: Decimal) -> bool:
-        amount = max(Decimal("0"), amount)
-        if self.available(asset) + Decimal("1e-12") < amount:
+        amount = max(_ZERO, amount)
+        if self.available(asset) + _RESERVE_EPS < amount:
             return False
-        self.reserved[asset] = self.reserved.get(asset, Decimal("0")) + amount
+        self.reserved[asset] = self.reserved.get(asset, _ZERO) + amount
         return True
 
     def release(self, asset: str, amount: Decimal) -> None:
-        amount = max(Decimal("0"), amount)
-        current = self.reserved.get(asset, Decimal("0"))
-        self.reserved[asset] = max(Decimal("0"), current - amount)
+        amount = max(_ZERO, amount)
+        current = self.reserved.get(asset, _ZERO)
+        self.reserved[asset] = max(_ZERO, current - amount)
 
     def credit(self, asset: str, amount: Decimal) -> None:
         self.balances[asset] = self.total(asset) + amount
 
     def debit(self, asset: str, amount: Decimal) -> bool:
-        if self.available(asset) + Decimal("1e-12") < amount:
+        if self.available(asset) + _RESERVE_EPS < amount:
             return False
         self.balances[asset] = self.total(asset) - amount
         return True
@@ -246,6 +316,8 @@ class PaperLedger:
 class DepthFillModel:
     def __init__(self, cfg: PaperEngineConfig):
         self._cfg = cfg
+        import random
+        self._rng = random.Random(cfg.seed)
 
     def _top(self, book: Any, side: Any) -> Tuple[Decimal, Decimal]:
         try:
@@ -254,70 +326,70 @@ class DepthFillModel:
             else:
                 entry = next(iter(book.bid_entries()), None)
             if entry is None:
-                return Decimal("0"), Decimal("0")
+                return _ZERO, _ZERO
             return to_decimal(getattr(entry, "price", 0)), to_decimal(getattr(entry, "amount", 0))
         except Exception:
-            return Decimal("0"), Decimal("0")
+            logger.debug("Paper engine top-of-book read failed", exc_info=True)
+            return _ZERO, _ZERO
 
     def evaluate(self, order: PaperOrder, book: Any, now_ts: float) -> FillDecision:
         top_price, top_size = self._top(book, order.trade_type)
-        remaining = max(Decimal("0"), order.amount - order.executed_amount_base)
+        remaining = max(_ZERO, order.amount - order.executed_amount_base)
         if top_price <= 0 or remaining <= 0:
-            return FillDecision(fill_qty=Decimal("0"), fill_price=order.price, is_taker=False, queue_delay_ms=0)
+            return FillDecision(fill_qty=_ZERO, fill_price=order.price, is_taker=False, queue_delay_ms=0)
 
-        queue_factor = max(Decimal("0.05"), min(Decimal("1"), self._cfg.queue_participation))
+        base_qf = max(Decimal("0.05"), min(_ONE, self._cfg.queue_participation))
+        jitter = Decimal(str(self._rng.uniform(0.8, 1.2)))
+        queue_factor = max(Decimal("0.05"), min(Decimal("1"), base_qf * jitter))
         is_touchable = (order.trade_type == TradeType.BUY and order.price >= top_price) or (
             order.trade_type == TradeType.SELL and order.price <= top_price
         )
 
-        # LIMIT_MAKER: always passive maker (queue simulation at limit price).
-        # Preserves original behavior — fills gradually without requiring
-        # the market to touch the order price.
+        partial_fill_ratio = Decimal(str(self._rng.uniform(
+            float(self._cfg.min_partial_fill_ratio),
+            float(self._cfg.max_partial_fill_ratio),
+        )))
+
         if order.order_type == OrderType.LIMIT_MAKER and not is_touchable:
             queue_delay_ms = int(max(0, self._cfg.latency_ms) * 1.5)
-            max_partial = top_size * queue_factor if top_size > 0 else remaining * self._cfg.max_partial_fill_ratio
-            partial_cap = remaining * self._cfg.max_partial_fill_ratio
+            max_partial = top_size * queue_factor if top_size > 0 else remaining * partial_fill_ratio
+            partial_cap = remaining * partial_fill_ratio
             partial_floor = remaining * self._cfg.min_partial_fill_ratio
             fill_qty = min(remaining, max_partial, partial_cap)
             if fill_qty <= 0:
-                return FillDecision(fill_qty=Decimal("0"), fill_price=order.price, is_taker=False, queue_delay_ms=queue_delay_ms)
+                return FillDecision(fill_qty=_ZERO, fill_price=order.price, is_taker=False, queue_delay_ms=queue_delay_ms)
             fill_qty = max(fill_qty, min(remaining, partial_floor))
             return FillDecision(fill_qty=fill_qty, fill_price=order.price, is_taker=False, queue_delay_ms=queue_delay_ms)
 
-        # Resting LIMIT order: was placed without crossing the spread.
-        # When the market moves to touch the order price, it's a maker fill
-        # (the order was sitting in the book, incoming flow matched it).
         is_resting_limit = not order.crossed_at_creation and order.order_type != OrderType.LIMIT_MAKER
         if (is_resting_limit or order.order_type == OrderType.LIMIT_MAKER) and is_touchable:
             queue_delay_ms = int(max(0, self._cfg.latency_ms) * 1.5)
-            max_partial = top_size * queue_factor if top_size > 0 else remaining * self._cfg.max_partial_fill_ratio
-            partial_cap = remaining * self._cfg.max_partial_fill_ratio
+            max_partial = top_size * queue_factor if top_size > 0 else remaining * partial_fill_ratio
+            partial_cap = remaining * partial_fill_ratio
             partial_floor = remaining * self._cfg.min_partial_fill_ratio
             fill_qty = min(remaining, max_partial, partial_cap)
             if fill_qty <= 0:
-                return FillDecision(fill_qty=Decimal("0"), fill_price=order.price, is_taker=False, queue_delay_ms=queue_delay_ms)
+                return FillDecision(fill_qty=_ZERO, fill_price=order.price, is_taker=False, queue_delay_ms=queue_delay_ms)
             fill_qty = max(fill_qty, min(remaining, partial_floor))
             return FillDecision(fill_qty=fill_qty, fill_price=order.price, is_taker=False, queue_delay_ms=queue_delay_ms)
 
-        # Resting LIMIT that market hasn't reached yet — no fill.
         if is_resting_limit and not is_touchable:
-            return FillDecision(fill_qty=Decimal("0"), fill_price=order.price, is_taker=False, queue_delay_ms=0)
+            return FillDecision(fill_qty=_ZERO, fill_price=order.price, is_taker=False, queue_delay_ms=0)
 
-        # Crossing order (crossed_at_creation=True): taker fill with slippage.
         if is_touchable:
             max_fill = top_size * queue_factor if top_size > 0 else remaining
             fill_qty = min(remaining, max_fill)
             if fill_qty <= 0:
-                return FillDecision(fill_qty=Decimal("0"), fill_price=top_price, is_taker=True, queue_delay_ms=0)
+                return FillDecision(fill_qty=_ZERO, fill_price=top_price, is_taker=True, queue_delay_ms=0)
             bps = self._cfg.slippage_bps + self._cfg.adverse_selection_bps
-            slippage_mult = bps / Decimal("10000")
+            slippage_mult = bps / _10K
             if order.trade_type == TradeType.BUY:
-                fill_price = top_price * (Decimal("1") + slippage_mult)
+                fill_price = top_price * (_ONE + slippage_mult)
             else:
-                fill_price = top_price * (Decimal("1") - slippage_mult)
+                fill_price = top_price * (_ONE - slippage_mult)
             return FillDecision(fill_qty=fill_qty, fill_price=fill_price, is_taker=True, queue_delay_ms=max(0, self._cfg.latency_ms))
 
-        return FillDecision(fill_qty=Decimal("0"), fill_price=order.price, is_taker=False, queue_delay_ms=0)
+        return FillDecision(fill_qty=_ZERO, fill_price=order.price, is_taker=False, queue_delay_ms=0)
 
 
 class PaperExecutionAdapter(ConnectorBase):
@@ -364,6 +436,25 @@ class PaperExecutionAdapter(ConnectorBase):
         self._paper_total_queue_delay_ms = 0
         self._dropped_relay_count = 0
         self._last_refresh_open_orders_ts: float = 0.0
+        self._last_order_fill_ts: Dict[str, float] = {}
+
+    def get_order_book(self, trading_pair: str):  # type: ignore[override]
+        """Return the *market* order book for paper simulation.
+
+        Internal paper mode is intended to simulate execution while using live
+        market data. Some paper connectors expose a synthetic/empty order book;
+        using that collapses spread and tends to produce unrealistic
+        always-taker fills. We therefore prefer the market connector's book.
+        """
+        if self._market_connector is not None:
+            return self._market_connector.get_order_book(trading_pair)
+        return self._paper_connector.get_order_book(trading_pair)
+
+    def get_price_by_type(self, trading_pair: str, price_type: Any) -> Decimal:  # type: ignore[override]
+        """Resolve `PriceType` values from the market connector when possible."""
+        if self._market_connector is not None:
+            return to_decimal(self._market_connector.get_price_by_type(trading_pair, price_type))
+        return to_decimal(self._paper_connector.get_price_by_type(trading_pair, price_type))
 
     @property
     def paper_stats(self) -> Dict[str, Decimal]:
@@ -441,7 +532,7 @@ class PaperExecutionAdapter(ConnectorBase):
             trigger(event_tag, event)
             return
         except Exception:
-            pass
+            logger.debug("event relay attempt with enum tag failed, trying int tag", exc_info=True)
         try:
             trigger(tag_value, event)
         except Exception:
@@ -539,7 +630,7 @@ class PaperExecutionAdapter(ConnectorBase):
             if best_ask is not None or best_bid is not None:
                 return book
         except Exception:
-            pass
+            logger.debug("Order book read failed for %s", self.trading_pair, exc_info=True)
         return None
 
     def cancel(self, trading_pair: str, client_order_id: str):
@@ -558,7 +649,7 @@ class PaperExecutionAdapter(ConnectorBase):
                 order_id=order.order_id,
             )
         else:
-            cancel_event = SimpleNamespace(order_id=order.order_id, timestamp=order.last_update_timestamp)
+            cancel_event = SimpleNamespace(order_id=order.order_id, exchange_order_id=order.order_id, timestamp=order.last_update_timestamp)
         self.trigger_event(MarketEvent.OrderCancelled, cancel_event)
         return True
 
@@ -585,8 +676,27 @@ class PaperExecutionAdapter(ConnectorBase):
         try:
             book = self.get_order_book(self.trading_pair)
         except Exception:
+            logger.warning("Paper engine order book unavailable for %s", self.trading_pair, exc_info=True)
             return
-        for order in list(self._order_tracker.iter_open()):
+        open_orders = list(self._order_tracker.iter_open())
+        if open_orders and self._paper_fill_count == 0:
+            try:
+                ask = next(iter(book.ask_entries()), None)
+                bid = next(iter(book.bid_entries()), None)
+                ask_p = float(getattr(ask, "price", 0)) if ask else 0
+                bid_p = float(getattr(bid, "price", 0)) if bid else 0
+                sample_order = open_orders[0]
+                logger.info(
+                    "Paper refresh: %d open orders, book bid=%.2f ask=%.2f, "
+                    "sample_order side=%s price=%.2f crossed=%s",
+                    len(open_orders), bid_p, ask_p,
+                    str(getattr(sample_order, "trade_type", "?")),
+                    float(getattr(sample_order, "price", 0)),
+                    getattr(sample_order, "crossed_at_creation", "?"),
+                )
+            except Exception:
+                logger.info("Paper refresh: %d open orders (diagnostic failed)", len(open_orders))
+        for order in open_orders:
             self._apply_fill(order, book, now_ts)
 
     def _submit_order(self, trading_pair: str, amount: Decimal, order_type: Any, side: Any, price: Decimal) -> str:
@@ -598,7 +708,7 @@ class PaperExecutionAdapter(ConnectorBase):
         if price <= 0:
             self._paper_reject_count += 1
             oid = self._next_order_id(side)
-            self.trigger_event(MarketEvent.OrderFailure, SimpleNamespace(order_id=oid, error_message="invalid_price"))
+            self.trigger_event(MarketEvent.OrderFailure, SimpleNamespace(order_id=oid, order_type=order_type, error_message="invalid_price"))
             return oid
 
         quantized_price = self.quantize_order_price(trading_pair, to_decimal(price))
@@ -635,7 +745,7 @@ class PaperExecutionAdapter(ConnectorBase):
             self._paper_reject_count += 1
             order.current_state = "FAILED"
             self._order_tracker.track(order)
-            self.trigger_event(MarketEvent.OrderFailure, SimpleNamespace(order_id=order.order_id, error_message="insufficient_balance"))
+            self.trigger_event(MarketEvent.OrderFailure, SimpleNamespace(order_id=order.order_id, order_type=order.order_type, error_message="insufficient_balance"))
             return order.order_id
 
         self._order_tracker.track(order)
@@ -694,6 +804,15 @@ class PaperExecutionAdapter(ConnectorBase):
         return False
 
     def _apply_fill(self, order: PaperOrder, book: Any, now_ts: float) -> None:
+        # Prevent unrealistically fast repeated partial fills on the same order.
+        # Without this, multiple refresh cycles within the same second can fill
+        # the same order many times, creating clustered burst fills.
+        min_dt = max(0.0, float(getattr(self._config, "latency_ms", 0))) / 1000.0
+        if min_dt > 0:
+            last_ts = float(self._last_order_fill_ts.get(order.order_id, 0.0))
+            if last_ts > 0 and (now_ts - last_ts) < min_dt:
+                return
+
         decision = self._fill_model.evaluate(order, book, now_ts)
         if decision.fill_qty <= 0:
             return
@@ -754,6 +873,7 @@ class PaperExecutionAdapter(ConnectorBase):
         self._paper_total_queue_delay_ms += decision.queue_delay_ms
 
         fill_event = self._build_fill_event(order, fill_price, fill_qty, fee_quote, now_ts, decision.is_taker)
+        self._last_order_fill_ts[order.order_id] = now_ts
         self.trigger_event(MarketEvent.OrderFilled, fill_event)
         if callable(self._on_fill):
             try:
@@ -1015,7 +1135,13 @@ def _install_native_connector_delegation(paper_connector: Any, adapter: PaperExe
         paper_connector.quantize_order_price = MethodType(_delegate_quantize_price, paper_connector)
 
         # V2 executor compatibility: keep native connector instance, provide adapter internals.
-        paper_connector._order_tracker = adapter._order_tracker
+        # Only replace the order tracker on synthetic paper connectors (e.g. bitget_paper_trade).
+        # Real exchange connectors (bitget_perpetual) have HB's full ClientOrderTracker
+        # with async polling loops that depend on the real interface (all_fillable_orders,
+        # lost_orders, etc.). Replacing it breaks readiness checks.
+        connector_name_str = str(getattr(paper_connector, "name", getattr(paper_connector, "display_name", "")))
+        if "paper_trade" in connector_name_str.lower():
+            paper_connector._order_tracker = adapter._order_tracker
         paper_connector._epp_internal_paper_adapter = adapter
         paper_connector._epp_internal_paper_delegate_originals = originals
         paper_connector._epp_internal_paper_delegate_installed = True
@@ -1088,6 +1214,7 @@ def _install_strategy_order_delegation(strategy: Any, connector_name: str, adapt
         adapters = {}
         strategy._epp_internal_paper_adapters = adapters
     adapters[connector_name] = adapter
+
     return True
 
 

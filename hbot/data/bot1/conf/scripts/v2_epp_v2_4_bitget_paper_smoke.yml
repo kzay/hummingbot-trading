@@ -1,6 +1,10 @@
 script_file_name: v2_with_controllers.py
 
-markets: {}
+markets:
+  bitget_paper_trade:
+    - BTC-USDT
+  bitget_perpetual:
+    - BTC-USDT
 candles_config: []
 controllers_config:
   - epp_v2_4_bitget_paper_smoke.yml

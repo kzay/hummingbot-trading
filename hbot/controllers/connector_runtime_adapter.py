@@ -75,7 +75,7 @@ class ConnectorRuntimeAdapter:
             try:
                 return to_decimal(connector.get_price_by_type(self.trading_pair, PriceType.MidPrice))
             except Exception:
-                logger.warning("Mid price read failed on connector for %s", self.trading_pair)
+                logger.warning("Mid price read failed on connector for %s", self.trading_pair, exc_info=True)
         try:
             return to_decimal(
                 self._controller.market_data_provider.get_price_by_type(
@@ -132,6 +132,7 @@ class ConnectorRuntimeAdapter:
             status = getattr(connector, "status_dict", None)
             return dict(status) if isinstance(status, dict) else {}
         except Exception:
+            logger.debug("status_dict read failed for %s", self.connector_name, exc_info=True)
             return {}
 
     def ready(self) -> bool:
@@ -142,7 +143,7 @@ class ConnectorRuntimeAdapter:
             ready_attr = getattr(connector, "ready", None)
             return bool(ready_attr() if callable(ready_attr) else ready_attr)
         except Exception:
-            logger.warning("Connector ready check failed for %s", self.connector_name)
+            logger.warning("Connector ready check failed for %s", self.connector_name, exc_info=True)
             return False
 
     def status_summary(self) -> Dict[str, bool]:

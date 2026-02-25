@@ -43,6 +43,7 @@ class MidPriceBuffer:
         self._atr_values: Dict[int, Decimal] = {}
         self._prev_close: Optional[Decimal] = None
         self._bar_count: int = 0
+        self._drift_ewma: Optional[Decimal] = None
 
     @property
     def bars(self) -> List[MinuteBar]:
@@ -158,6 +159,11 @@ class MidPriceBuffer:
         return atr_val / price
 
     def adverse_drift_30s(self, now_ts: float) -> Decimal:
+        """Raw 30-second adverse drift (absolute price change / older price).
+
+        Used for regime detection and diagnostics. Use :meth:`adverse_drift_smooth`
+        for cost-model inputs to avoid edge-gate flapping from single-tick spikes.
+        """
         if len(self._samples) < 2:
             return _ZERO
         now_mid = self._samples[-1][1]
@@ -170,6 +176,20 @@ class MidPriceBuffer:
         if older is None or older <= 0:
             return _ZERO
         return abs(now_mid - older) / older
+
+    def adverse_drift_smooth(self, now_ts: float, alpha: Decimal) -> Decimal:
+        """EWMA-smoothed adverse drift for stable cost modeling.
+
+        Applies exponential smoothing to the raw 30s drift so that transient
+        microstructure spikes do not immediately suppress net edge and trigger
+        edge-gate pauses. ``alpha`` controls responsiveness (0.05=slow, 0.5=fast).
+        """
+        raw = self.adverse_drift_30s(now_ts)
+        if self._drift_ewma is None:
+            self._drift_ewma = raw
+        else:
+            self._drift_ewma = alpha * raw + (_ONE - alpha) * self._drift_ewma
+        return self._drift_ewma
 
     @staticmethod
     def minute_iso(minute_ts: int) -> str:

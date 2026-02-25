@@ -1,6 +1,7 @@
 from decimal import Decimal
 
-from controllers.epp_v2_4 import EppV24Controller, RegimeSpec
+from controllers.core import RegimeSpec
+from controllers.epp_v2_4 import EppV24Controller
 from controllers.spread_engine import SpreadEngine
 
 NEUTRAL = EppV24Controller.PHASE0_SPECS["neutral_low_vol"]
