@@ -12,7 +12,7 @@ from typing import Dict, List
 
 TEST_GROUPS: Dict[str, List[str]] = {
     "unit": [
-        "tests/controllers/test_paper_engine.py",
+        "tests/controllers/test_paper_engine_v2/",
         "tests/controllers/test_epp_v2_4_state.py",
         "tests/services/test_event_schemas.py",
         "tests/services/test_intent_idempotency.py",

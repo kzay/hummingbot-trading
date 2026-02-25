@@ -166,7 +166,7 @@ def cmd_fast_checks(root: Path) -> int:
     syntax = _run_cmd(root, [sys.executable, "-m", "compileall", "controllers", "services", "scripts", "tests"], "compileall")
     unit_modules = [
         "tests.services.test_event_schemas",
-        "tests.controllers.test_paper_engine",
+        "tests.controllers.test_paper_engine_v2",
     ]
     unit_runner_payload = _run_unit_checks_in_control_plane(root, unit_modules)
     unit_results = (
