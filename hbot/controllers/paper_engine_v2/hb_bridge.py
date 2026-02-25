@@ -427,7 +427,12 @@ def _hb_order_type_to_v2(hb_order_type: Any) -> PaperOrderType:
 
 
 def _fire_hb_events(strategy: Any, connector_name: str, event: Any) -> None:
-    """Convert v2 event to HB event and fire on strategy/connector."""
+    """Convert v2 event to HB event and fire on the correct controller.
+
+    The controller's did_fill_order() writes to fills.csv and updates
+    minute.csv — this is what Grafana reads. Without this, fills are
+    invisible to the dashboard regardless of paper/live mode.
+    """
     if event is None:
         return
     try:
@@ -438,61 +443,130 @@ def _fire_hb_events(strategy: Any, connector_name: str, event: Any) -> None:
         elif isinstance(event, OrderRejected):
             _fire_reject_event(strategy, connector_name, event)
     except Exception as exc:
-        logger.debug("HB event fire failed: %s", exc)
+        logger.warning("HB event fire failed: %s", exc, exc_info=True)
+
+
+def _find_controller_for_connector(strategy: Any, connector_name: str) -> Any:
+    """Find the controller that owns this connector_name."""
+    controllers = getattr(strategy, "controllers", {})
+    for cid, ctrl in controllers.items():
+        cfg = getattr(ctrl, "config", None)
+        if cfg and str(getattr(cfg, "connector_name", "")) == connector_name:
+            return ctrl
+    return None
+
+
+def _determine_trade_type(order_id: str):
+    """Infer TradeType from paper order ID prefix."""
+    try:
+        from hummingbot.core.data_type.common import TradeType
+        if "buy" in order_id.lower() or order_id.startswith("paper_v2_") and int(order_id.split("_")[-1]) % 2 == 1:
+            return TradeType.BUY
+        return TradeType.SELL
+    except Exception:
+        return None
 
 
 def _fire_fill_event(strategy: Any, connector_name: str, fill_event: OrderFilled) -> None:
-    """Fire OrderFilledEvent to HB strategy."""
+    """Fire fill event directly to the controller's did_fill_order().
+
+    This is the critical path: controller.did_fill_order() writes to
+    fills.csv, updates daily counters, and feeds Grafana.
+    """
     try:
-        from hummingbot.core.event.events import OrderFilledEvent, TradeFee, TokenAmount  # type: ignore
+        from hummingbot.core.event.events import OrderFilledEvent as HBOrderFilledEvent  # type: ignore
         from hummingbot.core.data_type.common import TradeType  # type: ignore
+
+        # Determine side from the order_id or source_bot
+        # The desk stores the side in the PositionChanged event, but OrderFilled
+        # doesn't carry it. We look it up from the desk's internal order tracker.
+        trade_type = TradeType.BUY  # default
+        bridges = getattr(strategy, "_paper_desk_v2_bridges", {})
+        bridge = bridges.get(connector_name)
+        if bridge:
+            _desk: PaperDesk = bridge["desk"]
+            for key, engine in _desk._engines.items():
+                # get_order_side works even after order is filled and removed
+                side_str = engine.get_order_side(fill_event.order_id)
+                if side_str:
+                    trade_type = TradeType.BUY if side_str == "buy" else TradeType.SELL
+                    break
+
         now = time.time()
-        fee = TradeFee(
-            percent=Decimal("0"),
-            flat_fees=[TokenAmount(fill_event.instrument_id.quote_asset, fill_event.fee)],
-        )
-        hb_fill = OrderFilledEvent(
+
+        # Build fee object
+        try:
+            from hummingbot.core.event.events import TradeFee, TokenAmount
+            fee = TradeFee(
+                percent=Decimal("0"),
+                flat_fees=[TokenAmount(fill_event.instrument_id.quote_asset, fill_event.fee)],
+            )
+        except Exception:
+            fee = SimpleNamespace(
+                percent=Decimal("0"),
+                flat_fees=[],
+                fee_amount_in_token=lambda *a, **k: fill_event.fee,
+                is_maker=fill_event.is_maker,
+            )
+
+        hb_fill = HBOrderFilledEvent(
             timestamp=now,
             order_id=fill_event.order_id,
             trading_pair=fill_event.instrument_id.trading_pair,
-            trade_type=TradeType.BUY if fill_event.source_bot else TradeType.BUY,
+            trade_type=trade_type,
             order_type=None,
             price=fill_event.fill_price,
             amount=fill_event.fill_quantity,
             trade_fee=fee,
         )
+
+        # Fire to the controller directly (writes fills.csv, updates counters)
+        controller = _find_controller_for_connector(strategy, connector_name)
+        if controller and hasattr(controller, "did_fill_order"):
+            try:
+                controller.did_fill_order(hb_fill)
+            except Exception as exc:
+                logger.warning("Controller did_fill_order failed: %s", exc, exc_info=True)
+
+        # Also fire to the strategy (for V2 base class accounting)
         if hasattr(strategy, "did_fill_order"):
-            strategy.did_fill_order(hb_fill)
+            try:
+                strategy.did_fill_order(hb_fill)
+            except Exception:
+                pass
+
     except Exception as exc:
-        logger.debug("Fill event fire failed: %s", exc)
+        logger.warning("Fill event fire failed: %s", exc, exc_info=True)
 
 
 def _fire_cancel_event(strategy: Any, connector_name: str, cancel_event: OrderCanceled) -> None:
-    """Fire OrderCancelledEvent to HB strategy."""
+    """Fire cancel event to controller."""
     try:
-        from hummingbot.core.event.events import OrderCancelledEvent  # type: ignore
-        hb_cancel = OrderCancelledEvent(
+        from hummingbot.core.event.events import OrderCancelledEvent as HBCancelEvent
+        hb_cancel = HBCancelEvent(
             timestamp=time.time(),
             order_id=cancel_event.order_id,
         )
-        if hasattr(strategy, "did_cancel_order"):
-            strategy.did_cancel_order(hb_cancel)
+        controller = _find_controller_for_connector(strategy, connector_name)
+        if controller and hasattr(controller, "did_cancel_order"):
+            controller.did_cancel_order(hb_cancel)
     except Exception as exc:
         logger.debug("Cancel event fire failed: %s", exc)
 
 
 def _fire_reject_event(strategy: Any, connector_name: str, reject_event: OrderRejected) -> None:
-    """Fire MarketOrderFailureEvent to HB strategy."""
+    """Fire reject event to controller."""
     try:
-        from hummingbot.core.event.events import MarketOrderFailureEvent  # type: ignore
-        hb_fail = MarketOrderFailureEvent(
+        from hummingbot.core.event.events import MarketOrderFailureEvent as HBFailEvent
+        hb_fail = HBFailEvent(
             timestamp=time.time(),
             order_id=reject_event.order_id,
             order_type=None,
             error_message=reject_event.reason,
         )
-        if hasattr(strategy, "did_fail_order"):
-            strategy.did_fail_order(hb_fail)
+        controller = _find_controller_for_connector(strategy, connector_name)
+        if controller and hasattr(controller, "did_fail_order"):
+            controller.did_fail_order(hb_fail)
     except Exception as exc:
         logger.debug("Reject event fire failed: %s", exc)
 
@@ -504,13 +578,24 @@ def drive_desk_tick(
 ) -> None:
     """Call from strategy on_tick() to drive the desk.
 
-    Converts EngineEvents to HB events and fires them on the strategy.
+    Drives all engines, then converts fill/cancel/reject events into
+    HB events and fires them on the correct controller. This is what
+    makes fills appear in fills.csv and Grafana.
     """
     try:
         all_events = desk.tick(now_ns)
+        if not all_events:
+            return
         bridges: Dict = getattr(strategy, "_paper_desk_v2_bridges", {})
-        for connector_name in bridges:
-            for event in all_events:
-                _fire_hb_events(strategy, connector_name, event)
+        for event in all_events:
+            # Route event to the correct connector bridge
+            event_iid = getattr(event, "instrument_id", None)
+            if event_iid is None:
+                continue
+            for conn_name, bridge in bridges.items():
+                bridge_iid = bridge.get("instrument_id")
+                if bridge_iid and bridge_iid == event_iid:
+                    _fire_hb_events(strategy, conn_name, event)
+                    break
     except Exception as exc:
         logger.error("drive_desk_tick failed: %s", exc, exc_info=True)

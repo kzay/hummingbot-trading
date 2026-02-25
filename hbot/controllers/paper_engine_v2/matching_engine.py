@@ -89,6 +89,7 @@ class OrderMatchingEngine:
         # inflight queue: (due_at_ns, action: str, order: PaperOrder)
         self._inflight: List[Tuple[int, str, PaperOrder]] = []
         self._last_fill_ns: Dict[str, int] = {}
+        self._order_sides: Dict[str, str] = {}  # order_id → side value (kept after fill for event routing)
         # liquidity consumption tracking
         self._consumed: Dict[Decimal, Decimal] = {}
 
@@ -162,6 +163,10 @@ class OrderMatchingEngine:
     def get_order(self, order_id: str) -> Optional[PaperOrder]:
         return self._orders.get(order_id)
 
+    def get_order_side(self, order_id: str) -> Optional[str]:
+        """Return the side ('buy'/'sell') of an order, even after it was filled and removed."""
+        return self._order_sides.get(order_id)
+
     # -- Internal ----------------------------------------------------------
 
     def _submit_order_impl(self, order: PaperOrder, now_ns: int) -> EngineEvent:
@@ -210,6 +215,7 @@ class OrderMatchingEngine:
         else:
             order.status = OrderStatus.OPEN
             self._orders[order.order_id] = order
+            self._order_sides[order.order_id] = order.side.value
 
         return OrderAccepted(
             event_id=_uuid(), timestamp_ns=now_ns, instrument_id=self._iid,
