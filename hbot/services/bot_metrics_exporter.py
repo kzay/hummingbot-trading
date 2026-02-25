@@ -100,7 +100,11 @@ class BotMetricsExporter:
 
     def collect(self) -> List[BotSnapshot]:
         snapshots: List[BotSnapshot] = []
-        for minute_file in self._data_root.glob("*/logs/epp_v24/*/minute.csv"):
+        try:
+            minute_files = list(self._data_root.glob("*/logs/epp_v24/*/minute.csv"))
+        except OSError:
+            return snapshots
+        for minute_file in minute_files:
             bot_name = minute_file.parts[-5]
             latest_minute = self._read_last_csv_row(minute_file)
             if latest_minute is None:
@@ -167,7 +171,17 @@ class BotMetricsExporter:
             )
         return snapshots
 
+    _last_render_cache: str = ""
+
     def render_prometheus(self) -> str:
+        try:
+            result = self._render_prometheus_impl()
+            self._last_render_cache = result
+            return result
+        except Exception:
+            return self._last_render_cache or "# hbot_exporter_error 1\n"
+
+    def _render_prometheus_impl(self) -> str:
         now = datetime.now(timezone.utc).timestamp()
         lines: List[str] = []
         lines.extend(
