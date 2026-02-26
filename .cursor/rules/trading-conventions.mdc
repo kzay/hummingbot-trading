@@ -1,0 +1,41 @@
+---
+description: Coding conventions for the hbot trading system Python source
+globs: hbot/**/*.py
+alwaysApply: false
+---
+
+# hbot Python Conventions
+
+## Architecture rules
+- Controllers are PURE logic — no Redis, no HTTP, no subprocess calls inside `epp_v2_4.py`
+- Redis I/O lives in `hb_bridge.py` or dedicated service `main.py` files only
+- Paper simulation state lives in `PaperDesk` (`desk.py`), never in the controller
+- Risk policy configs come from JSON files in `hbot/config/`, never hardcoded
+
+## Code style
+- All monetary values use `Decimal`, never `float` — import `from decimal import Decimal`
+- Use `to_decimal()` from `hbot/controllers/epp_v2_4.py` for safe conversion
+- Log at `logger.info/warning/error` — never `print()` in production code
+- Guard every external call (Redis, ccxt, file I/O) with `try/except Exception`
+
+## Service pattern
+Every service `main.py` must:
+1. Use `ShutdownHandler` from `services.common.graceful_shutdown`
+2. Use `configure_logging()` from `services.common.logging_config`
+3. Write a `latest.json` to `reports/<service>/` on every cycle
+4. Publish audit events to `hb.audit.v1` Redis stream on state changes
+
+## Testing conventions
+- Test files: `hbot/tests/<domain>/test_<module>.py`
+- Use `pytest.importorskip("hummingbot")` if the test imports hummingbot internals
+- Paper engine tests use fixtures from `hbot/tests/controllers/test_paper_engine_v2/conftest.py`
+- No real network calls in unit tests — mock ccxt and Redis with `unittest.mock`
+
+## Decimal constants already defined in epp_v2_4.py
+`_ZERO, _ONE, _TWO, _10K` — reuse these, don't redeclare
+
+## Config changes
+Config field additions to `EppV24Config` need:
+1. A `Field(default=..., description="...")` with a sensible default
+2. An entry in `hbot/data/bot1/conf/controllers/epp_v2_4_bot_a.yml` with a comment
+3. A note in `hbot/docs/strategy/epp_v2_4_strategy_spec.md` if it's strategy-facing

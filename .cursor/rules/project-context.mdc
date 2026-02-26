@@ -1,0 +1,46 @@
+---
+description: Project orientation and backlog pointer for the hbot EPP trading system
+alwaysApply: true
+---
+
+# Project: hbot — EPP v2.4 Algorithmic Trading Desk
+
+## What this is
+Hummingbot-based market-making bot for BTC-USDT perpetual futures on Bitget.
+Paper trading (Paper Engine v2 / PaperDesk v2) is the primary environment.
+Live deployment requires passing all promotion gates and the go-live hardening checklist.
+
+## Workspace layout
+```
+hbot/
+  controllers/        # Trading logic (epp_v2_4.py is the main controller)
+  controllers/paper_engine_v2/  # Paper simulation (desk.py, hb_bridge.py, portfolio.py)
+  services/           # Supporting microservices (kill_switch, reconciliation, signal, etc.)
+  scripts/            # Ops, analysis, and release scripts
+  tests/              # pytest test suite
+  compose/            # docker-compose.yml (all services)
+  monitoring/         # Prometheus, Grafana, Alertmanager configs
+  config/             # JSON risk/policy configs
+  data/bot1/          # Bot state, fills, minute logs, conf
+  docs/               # Strategy specs, ops runbooks
+  BACKLOG.md          # All known gaps with AI-executable specs — CHECK THIS FIRST
+  .env.example        # All required env vars
+```
+
+## Non-negotiables before touching production
+- All changes must compile: `python -m py_compile hbot/controllers/epp_v2_4.py`
+- Promotion gates must pass: `cd hbot && python scripts/release/run_strict_promotion_cycle.py`
+- Never commit `.env` (only `.env.example`)
+- Bot1 is paper-only. `BOT_MODE=paper` in compose. Do not change connector to `bitget` without completing go-live checklist.
+
+## Key files
+- Main controller: `hbot/controllers/epp_v2_4.py` (2300+ lines)
+- Paper bridge: `hbot/controllers/paper_engine_v2/hb_bridge.py`
+- Bot1 config: `hbot/data/bot1/conf/controllers/epp_v2_4_bot_a.yml`
+- Compose: `hbot/compose/docker-compose.yml`
+- Backlog: `hbot/BACKLOG.md`
+
+## Before starting any task
+1. Read `hbot/BACKLOG.md` for the full task spec including pre-answered design decisions
+2. Check if relevant tests exist in `hbot/tests/`
+3. After changes: compile + run `python -m pytest hbot/tests/ -x -q --ignore=hbot/tests/integration` from workspace root with `PYTHONPATH=hbot`
