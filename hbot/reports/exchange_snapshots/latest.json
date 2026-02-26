@@ -1,5 +1,5 @@
 {
-  "ts_utc": "2026-02-26T01:49:43.827839+00:00",
+  "ts_utc": "2026-02-26T03:27:58.679372+00:00",
   "source": "exchange_snapshot_service",
   "mode": "proxy_local",
   "account_map_path": "/workspace/hbot/config/exchange_account_map.json",
@@ -12,8 +12,8 @@
   "account_probe_cache": {},
   "bots": {
     "bot1": {
-      "base_pct": 0.5425835901244974,
-      "equity_quote": 494.2371231601256,
+      "base_pct": 0.4100245337561255,
+      "equity_quote": 494.14404689381007,
       "exchange": "bitget_perpetual",
       "trading_pair": "BTC-USDT",
       "source": "local_minute_proxy"

@@ -27,6 +27,8 @@ from controllers.paper_engine_v2.types import (
     EngineEvent,
     InstrumentId,
     InstrumentSpec,
+    OrderFilled,
+    OrderRejected,
     OrderSide,
     PaperOrder,
     PaperOrderType,
@@ -148,7 +150,6 @@ class PaperDesk:
         key = instrument_id.key
         engine = self._engines.get(key)
         if engine is None:
-            from controllers.paper_engine_v2.types import OrderRejected
             oid = self._next_order_id()
             return OrderRejected(
                 event_id=_uuid(), timestamp_ns=self._now_ns(),
@@ -269,7 +270,6 @@ class PaperDesk:
 
         # Journal fill events for replay/postmortem
         try:
-            from controllers.paper_engine_v2.types import OrderFilled
             for ev in all_events:
                 if isinstance(ev, OrderFilled):
                     self._state_store.journal_event("order_filled", {
@@ -308,7 +308,6 @@ class PaperDesk:
         reject_count = 0
         total_delay = 0
         for ev in self._event_log:
-            from controllers.paper_engine_v2.types import OrderFilled, OrderRejected
             if isinstance(ev, OrderFilled):
                 if instrument_id is None or ev.instrument_id == instrument_id:
                     fill_count += 1

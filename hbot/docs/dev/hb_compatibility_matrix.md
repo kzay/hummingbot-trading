@@ -1,3 +1,5 @@
+> **Note (2026-02-26):** References to `paper_engine.py` below describe the v1 implementation. Current system uses `paper_engine_v2/` exclusively. The v1 patches listed here are no longer applied.
+
 # Hummingbot Compatibility Matrix
 
 ## Target Version

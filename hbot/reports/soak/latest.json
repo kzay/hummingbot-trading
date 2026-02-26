@@ -1,5 +1,5 @@
 {
-  "ts_utc": "2026-02-26T01:48:18.208921+00:00",
+  "ts_utc": "2026-02-26T03:28:20.496692+00:00",
   "status": "hold",
   "blockers": [
     "day2_event_store_gate",
@@ -17,8 +17,8 @@
     "checks": [
       {
         "name": "elapsed_window",
-        "pass": true,
-        "value_hours": 84.36,
+        "pass": false,
+        "value_hours": 0.25,
         "required_hours": 24.0
       },
       {
@@ -29,8 +29,8 @@
       },
       {
         "name": "delta_since_baseline_tolerance",
-        "pass": false,
-        "max_delta_observed": 1583,
+        "pass": true,
+        "max_delta_observed": 0,
         "max_allowed_delta": 5
       }
     ],

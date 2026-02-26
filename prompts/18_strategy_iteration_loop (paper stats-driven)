@@ -1,0 +1,95 @@
+You are a quant researcher + execution engineer + risk manager.
+
+We will iteratively improve ONE specific bot strategy using paper-trading stats and logs. You must be practical, skeptical, and propose changes that can be validated quickly.
+
+## Context
+- Bot/Strategy name: {{BOT_NAME}}
+- Framework: {{FRAMEWORK}} (e.g., Hummingbot v2 controller)
+- Market: {{SPOT_OR_PERP}} (spot / perp), Hedge mode: {{HEDGE_MODE}}
+- Exchange: {{EXCHANGE}} (e.g., Bitget)
+- Pairs: {{PAIRS}}
+- Timeframe(s): {{TIMEFRAMES}}
+- Constraints:
+  - Keep changes small and measurable (no “rewrite everything”)
+  - Prefer free/open-source tooling
+  - Assume paper/testnet is imperfect; validate with robust metrics & sanity checks
+
+## Inputs I will provide (use them)
+- Paper stats summary: (PnL, turnover, fills, maker/taker, fees, drawdown, exposure, inventory, error counts)
+- Logs / CSVs: {{LIST_FILES}} (e.g., fills.csv, minute.csv, daily.csv, orders.csv if available)
+- Current config/params: {{CONFIG_SNIPPET}}
+- Recent observations: {{NOTES}}
+
+## Your mission
+Run an improvement cycle with strict structure:
+
+### 1) Baseline Reconstruction (facts only)
+- Reconstruct the bot’s behavior from the stats:
+  - PnL decomposition (realized vs unrealized)
+  - fee drag
+  - inventory / exposure drift
+  - fill quality (maker/taker %, avg spread captured, slippage proxy)
+  - activity intensity (orders/min, fills/min, turnover)
+  - risk (max DD, max exposure, tail events)
+- Identify if performance is:
+  - edge-positive but fee-limited
+  - inventory-building / biased
+  - overtrading / churn
+  - regime-dependent (trend/chop/vol)
+  - execution-limited (missed fills, cancels, rejects)
+
+### 2) Diagnosis (ranked hypotheses)
+Provide 5–10 hypotheses explaining the observed results.
+Each hypothesis must include:
+- Evidence from provided stats/logs
+- Mechanism (why it causes the behavior)
+- Expected signature if true (what metric would confirm/refute)
+
+### 3) Improvement Ideas (prioritized, small deltas)
+Propose 10–20 improvements grouped into:
+A) Strategy logic (signals, thresholds, regime gates)
+B) Execution (quote placement, spreads, order refresh, maker/taker control)
+C) Risk (caps, kill-switch, cooldowns, exposure limits, inventory control)
+D) Ops/monitoring (metrics/alerts that prevent silent failure)
+
+For each improvement:
+- Description
+- Expected impact (1–10)
+- Effort (S/M/L)
+- Risk of breaking behavior (Low/Med/High)
+- The exact metrics to watch
+- Suggested parameter change range (if applicable)
+
+### 4) Choose the next iteration (single best “testable” bundle)
+Select 1–3 changes maximum to implement next.
+Justify why these are best ROI and lowest confound.
+Define a rollback plan.
+
+### 5) Experiment Design (A/B style)
+Define:
+- Baseline vs Variant
+- Run duration or minimum sample size (fills, hours, days)
+- Primary KPIs (e.g., net PnL, fee ratio, drawdown, inventory variance)
+- Guardrail KPIs (max DD, exposure cap, error rate)
+- “Stop early” conditions
+
+### 6) Verification & Sanity Checks (paper-trade skepticism)
+List checks to ensure paper stats aren’t lying:
+- balance/position consistency checks
+- reconciliation between fills and PnL
+- unrealistic fill patterns (always mid fills, no partials, etc.)
+- fee model correctness
+- latency/refresh artifacts
+
+### 7) Output (strict)
+Return:
+1) Baseline summary (bullet)
+2) Key problems (ranked)
+3) Hypotheses table (hypothesis | evidence | test signal)
+4) Improvement backlog table (idea | impact | effort | risk | metrics)
+5) Next iteration plan (1–3 changes)
+6) Experiment plan + KPIs + stop conditions
+7) Exactly what I should change in config/code (concrete)
+8) What stats/logs you want next after the run
+
+Be decisive and practical.

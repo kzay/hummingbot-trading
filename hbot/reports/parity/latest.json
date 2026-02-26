@@ -1,5 +1,5 @@
 {
-  "ts_utc": "2026-02-26T01:48:41.907598+00:00",
+  "ts_utc": "2026-02-26T03:28:52.809010+00:00",
   "status": "pass",
   "failed_bots": 0,
   "checked_bots": 2,
@@ -12,23 +12,22 @@
       "bot": "bot1",
       "pass": true,
       "summary": {
-        "intents_total": 0,
-        "actionable_intents": 0,
+        "intents_total": 20,
+        "actionable_intents": 20,
         "fills_total": 0,
         "order_failed_total": 0,
         "risk_denied_total": 0,
-        "equity_first": 499.95881829313095,
-        "equity_last": 494.2371231601256
+        "equity_first": 495.32719147331466,
+        "equity_last": 494.14404689381007
       },
       "metrics": [
         {
           "metric": "fill_ratio_delta",
-          "value": null,
+          "value": 0.0,
           "expected": 0.0,
-          "delta": null,
+          "delta": 0.0,
           "max_abs_delta": 0.25,
-          "pass": true,
-          "note": "insufficient_data"
+          "pass": true
         },
         {
           "metric": "slippage_delta_bps",
@@ -50,9 +49,9 @@
         },
         {
           "metric": "realized_pnl_delta_quote",
-          "value": -5.721695133005369,
+          "value": -1.1831445795045852,
           "expected": 0.0,
-          "delta": -5.721695133005369,
+          "delta": -1.1831445795045852,
           "max_abs_delta": 600.0,
           "pass": true
         }
@@ -62,8 +61,8 @@
       "bot": "bot4",
       "pass": true,
       "summary": {
-        "intents_total": 0,
-        "actionable_intents": 0,
+        "intents_total": 20,
+        "actionable_intents": 20,
         "fills_total": 0,
         "order_failed_total": 0,
         "risk_denied_total": 0,
@@ -73,12 +72,11 @@
       "metrics": [
         {
           "metric": "fill_ratio_delta",
-          "value": null,
+          "value": 0.0,
           "expected": 0.0,
-          "delta": null,
+          "delta": 0.0,
           "max_abs_delta": 0.25,
-          "pass": true,
-          "note": "insufficient_data"
+          "pass": true
         },
         {
           "metric": "slippage_delta_bps",

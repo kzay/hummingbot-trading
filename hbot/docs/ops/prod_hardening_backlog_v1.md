@@ -1,3 +1,5 @@
+> **Note (2026-02-26):** References to `paper_engine.py` in this doc are historical. The v1 paper engine has been fully replaced by `controllers/paper_engine_v2/`. All new work should target v2.
+
 # Production Hardening Backlog v2 (Audit Update)
 
 ## Purpose

@@ -1,4 +1,0 @@
-ts,bot_variant,exchange,trading_pair,state,equity_open_quote,equity_now_quote,pnl_quote,pnl_pct,turnover_x,fills_count,ops_events
-2026-02-20T00:00:00.363417+00:00,a,bitget_paper_trade,BTC-USDT,hard_stop,10000.0000000000,10000.0000000000,0E-10,0,0E+10,0,edge_gate_blocked
-2026-02-21T00:00:00.214440+00:00,a,bitget_paper_trade,BTC-USDT,soft_pause,77296.0050000000,78017.3750000000,721.3700000000,0.009332565117692693173469961352,0E+10,0,edge_gate_blocked
-2026-02-23T00:00:00.886785+00:00,a,bitget_perpetual,BTC-USDT,soft_pause,1.00000000,1.00,0E-8,0,0E+2,0,edge_gate_blocked|base_pct_below_min

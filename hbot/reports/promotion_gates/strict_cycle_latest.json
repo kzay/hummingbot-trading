@@ -1,8 +1,0 @@
-{
-  "ts_utc": "2026-02-24T01:28:51.174807+00:00",
-  "strict_gate_rc": 0,
-  "strict_gate_status": "PASS",
-  "critical_failures": [],
-  "gate_latest_path": "F:\\Environement\\git-repo\\hummingbot_custo\\hbot\\reports\\promotion_gates\\latest.json",
-  "stdout": "[promotion-gates] status=PASS validation_level=1\n[promotion-gates] evidence=F:\\Environement\\git-repo\\hummingbot_custo\\hbot\\reports\\promotion_gates\\promotion_gates_20260224T012851Z.json\n"
-}

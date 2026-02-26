@@ -1,8 +1,0 @@
-{
-  "ts_utc": "2026-02-22T13:25:12.993891+00:00",
-  "status": "applied",
-  "reason": "day36_reanchor_after_runtime_recovery",
-  "baseline_file": "F:\\Environement\\git-repo\\hummingbot_custo\\hbot\\reports\\event_store\\baseline_counts.json",
-  "backup_file": "F:\\Environement\\git-repo\\hummingbot_custo\\hbot\\reports\\event_store\\baseline_counts_backup_20260222T132512Z.json",
-  "preview_file": "F:\\Environement\\git-repo\\hummingbot_custo\\hbot\\reports\\event_store\\baseline_reset_preview_20260222T132512Z.json"
-}
