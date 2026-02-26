@@ -7,8 +7,7 @@
   "warn_buffer_ratio": 0.80,
   "portfolio_kill_switch_on_global_breach": true,
   "bot_action_scope": [
-    "bot1",
-    "bot4"
+    "bot1"
   ],
   "bot_overrides": {
     "bot2": {

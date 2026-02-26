@@ -4,6 +4,10 @@ from decimal import Decimal
 from pathlib import Path
 from types import SimpleNamespace
 
+import pytest
+
+pytest.importorskip("hummingbot")
+
 from controllers.core import RegimeSpec
 from controllers.epp_v2_4 import EppV24Controller
 

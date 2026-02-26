@@ -259,6 +259,8 @@ def run(once: bool = False, synthetic_drift: bool = False) -> None:
             equity_quote = _safe_float(minute.get("equity_quote"), -1.0)
             base_pct = _safe_float(minute.get("base_pct"), -1.0)
             target_base_pct = _safe_float(minute.get("target_base_pct"), base_pct)
+            exchange_name = str(minute.get("exchange", "")).lower()
+            is_perp = ("perpetual" in exchange_name) or exchange_name.endswith("_perp") or ("_perp_" in exchange_name)
             bot_cfg = _bot_thresholds(threshold_cfg, bot)
             if not bot_cfg.get("enabled", True):
                 continue
@@ -271,7 +273,8 @@ def run(once: bool = False, synthetic_drift: bool = False) -> None:
 
             if equity_quote <= 0:
                 findings.append(_severity("critical", "balance", "equity_non_positive", bot, {"equity_quote": equity_quote}))
-            if base_pct < 0 or base_pct > 1:
+            # Perpetual connectors can legitimately exceed 1.0 gross base_pct.
+            if base_pct < 0 or (base_pct > 1 and not is_perp):
                 findings.append(_severity("critical", "balance", "base_pct_out_of_range", bot, {"base_pct": base_pct}))
 
             accounting_snapshots.append(

@@ -17,7 +17,7 @@
   "bots": {
     "bot1": {
       "inventory_warn": 0.40,
-      "inventory_critical": 0.55
+      "inventory_critical": 0.65
     },
     "bot2": {
       "enabled": false

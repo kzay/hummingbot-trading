@@ -47,7 +47,7 @@
       "role": "connector_validation",
       "mode": "testnet_probe",
       "enabled": true,
-      "portfolio_action_enabled": true,
+      "portfolio_action_enabled": false,
       "exchange": "binance_perpetual_testnet",
       "allowed_symbols": [
         "BTC-USDT"
