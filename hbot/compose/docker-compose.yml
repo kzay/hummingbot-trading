@@ -730,7 +730,7 @@ services:
     networks:
       - trading
     healthcheck:
-      test: ["CMD-SHELL", "curl -sf http://localhost:9900/health || exit 1"]
+      test: ["CMD-SHELL", "python -c \"import urllib.request; urllib.request.urlopen('http://localhost:9900/health')\" 2>/dev/null || exit 1"]
       interval: 15s
       timeout: 5s
       retries: 3

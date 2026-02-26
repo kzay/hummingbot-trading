@@ -35,10 +35,31 @@ def _latest_integrity(path: Path) -> Path | None:
     return Path(files[-1])
 
 
+def _refresh_integrity(root: Path) -> None:
+    """Run the local integrity refresh script before evaluating to prevent stale-state false failures."""
+    import subprocess
+    import sys
+    refresh_script = root / "scripts" / "utils" / "refresh_event_store_integrity_local.py"
+    if not refresh_script.exists():
+        return
+    try:
+        subprocess.run(
+            [sys.executable, str(refresh_script)],
+            capture_output=True, timeout=30,
+        )
+    except Exception:
+        pass  # Non-fatal — gate evaluation proceeds with whatever integrity file exists
+
+
 def main() -> None:
     root = Path(__file__).resolve().parents[2]
     reports = root / "reports" / "event_store"
     reports.mkdir(parents=True, exist_ok=True)
+
+    # Always refresh local integrity snapshot first so the delta check uses
+    # up-to-date counts rather than a potentially hours-old snapshot.
+    if os.getenv("DAY2_GATE_SKIP_INTEGRITY_REFRESH", "").lower() not in ("1", "true", "yes"):
+        _refresh_integrity(root)
 
     gate_hours = float(os.getenv("DAY2_GATE_MIN_HOURS", "24"))
     max_allowed_delta = int(os.getenv("DAY2_GATE_MAX_DELTA", "5"))

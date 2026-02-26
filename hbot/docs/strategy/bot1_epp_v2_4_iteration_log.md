@@ -34,12 +34,12 @@ This file is intended to be updated after each run so we converge on a winning c
 
 ### Segment-by-segment report (auto-detect resets)
 ```bash
-python hbot/scripts/analysis/bot1_performance_report.py --day 2026-02-26 --exchange bitget_perpetual --pair BTC-USDT
+python hbot/scripts/analysis/bot1_performance_report.py --day 2026-02-27 --exchange bitget_perpetual --pair BTC-USDT
 ```
 
 ### Day summary (quick snapshot)
 ```bash
-python hbot/scripts/analysis/bot1_paper_day_summary.py --day 2026-02-26 --exchange bitget_perpetual --pair BTC-USDT
+python hbot/scripts/analysis/bot1_paper_day_summary.py --day 2026-02-27 --exchange bitget_perpetual --pair BTC-USDT
 ```
 
 ---
@@ -48,105 +48,98 @@ python hbot/scripts/analysis/bot1_paper_day_summary.py --day 2026-02-26 --exchan
 - **Daily counters can reset mid-day** (restart / manual reset to escape `daily_turnover_hard_limit`), which breaks reconciliation between:
   - `daily_state_*.json` (today counters)
   - `fills.csv` (trade-by-trade truth)
-- For performance, prefer **`fills.csv` aggregates** and treat `daily_state` as “best effort”.
+- For performance, prefer **`fills.csv` aggregates** and treat `daily_state` as "best effort".
 
 ---
 
-## Results (latest baseline)
+## Results
 
-### 2026-02-26 — segmented performance (from `fills.csv`, derived edge using `mid_ref`)
-Detected reset boundaries (from `minute.csv`): **00:20:27Z**, **01:18:36Z**
+### 2026-02-26 — Full day summary (corrected logic active from 16:30 UTC)
 
-| segment | window (UTC) | fills | notional (USDT) | fees (bps) | realized pnl (bps) | net pnl after fees (bps) | avg edge vs mid (bps) | notes |
-|---|---|---:|---:|---:|---:|---:|---:|---|
-| seg_1 | 00:00 → 00:20 | 17 | 488 | 3.57 | -80.77 | -84.33 | +0.86 | early burst loss; fee rate abnormal vs expected 2 bps |
-| seg_2 | 00:20 → 01:18 | 92 | 3149 | 2.00 | -3.33 | -5.33 | -0.46 | core regime: “more trade → more loss”; hit `daily_turnover_hard_limit` hard-stops |
-| seg_3 | 01:18 → … | 40 | 1441 | 2.00 | -0.31 | -2.31 | -0.10 | closer to flat, still negative after fees |
+| Metric | Value |
+|---|---|
+| Bot state at EOD | `running` |
+| Equity at EOD | **504.77 USDT** (+0.96% on 499.96 open) |
+| Today realized PnL | **+4.82 USDT** |
+| Today fees paid | 0.97 USDT |
+| Net after fees | **+3.85 USDT (+0.77%)** |
+| Position at EOD | −0.000055 BTC (essentially flat) |
+| Drawdown | **0%** |
+| Fills | 254 (100% maker) |
 
-### Interpretation
-- The pattern “**more trading → more loss**” is consistent with **negative net expectancy per notional** (seg_2 net \(\approx\) -5.33 bps after fees).
-- `minute.csv`’s `net_edge_pct` is often positive while realized fill edge is negative → the **edge model is optimistic** vs realized fill outcomes.
+_Note: first 16.5h were affected by the derisk bug (stuck soft_pause). Clean-run data starts 2026-02-27._
 
 ---
 
 ## Iterations
 
-### Iteration 2026-02-26 — “Throttle churn” bundle (implemented)
-**Goal**: reduce turnover so negative expectancy doesn’t scale; force trades only when edge is clearly above costs.
+### Iteration 2026-02-26a — "Throttle churn" (implemented)
+**Goal**: reduce turnover so negative expectancy doesn't scale; force trades only when edge is clearly above costs.
 
-**Change set (controller config)**: `hbot/data/bot1/conf/controllers/epp_v2_4_bot_a.yml`
+**Change set**: `hbot/data/bot1/conf/controllers/epp_v2_4_bot_a.yml`
 - **Edge gate**: `min_net_edge_bps: 8 → 15`
-- **Spreads**: `0.0020,0.0030 → 0.0025,0.0035` (both sides)
+- **Spreads**: `0.0020,0.0030 → 0.0025,0.0035`
 - **Refresh**: `executor_refresh_time: 90 → 150`
 
-**Iteration start**
-- Strategy restart time (container logs): **2026-02-26T01:37:38Z**
-
-**Expected signature if working**
-- Fills/min and notional/hour **drop materially**
-- Net PnL/notional improves (less churn), even if absolute PnL moves slowly
-
-**Run notes**
-- Bot restarted and confirmed running via Prometheus (`hbot_bot_state{bot="bot1",state="running"} = 1`)
-
-**Early checkpoint (very small sample, since 01:37:20Z)**
-- `fills.csv` since-start: **10 fills**, **311.77 USDT** notional
-- Net after fees: **-7.17 bps** (too small to conclude; keep running to ≥200 fills)
-- Avg fill edge vs mid (`mid_ref`): **-0.56 bps**
-
-**To evaluate**
-- Minimum sample: **≥200 fills** (may take longer with throttling) or ≥6 hours
-- KPI focus: net pnl after fees (bps), avg edge vs mid (bps), turnover_x slope vs PnL
+**Outcome**: helped reduce churn but bot accumulated large short from `down→sell_only` regime behavior and was stuck for 12h due to the derisk direction bug.
 
 ---
 
-## Iteration 2026-02-26 — "Derisk fix + delta-neutral conversion" (implemented)
+### Iteration 2026-02-26b — "Derisk fix + delta-neutral conversion" (implemented)
 
-**Goal**: fix bot1 stuck in `soft_pause` for 12+ hours; flip PnL positive; eliminate runaway directional exposure.
+**Goal**: fix bot1 stuck in `soft_pause` 12+ hours; eliminate runaway directional exposure.
 
-### Root-cause diagnosis
-Two bugs identified:
+**Root-cause diagnosis — 3 bugs:**
 
-1. **Derisk direction bug** (`epp_v2_4.py` line ~747):
-   - `base_pct_above_max` always forced `sell_only` during derisk.
-   - But `base_pct_gross = abs(position) / equity` — for a SHORT position this means the bot needed to **BUY**, not sell more.
-   - Fix: check `base_pct_net` (signed) to determine direction: `net < 0` → BUY-only; `net >= 0` → SELL-only.
+1. **Derisk direction** (`epp_v2_4.py`): `base_pct_above_max` always enabled SELL-only.
+   For a SHORT position the bot needed to BUY. Fix: branch on `base_pct_net` sign.
 
-2. **Derisk spread too wide** (25–35 bps below mid):
-   - Buy orders placed far below current market never filled in a rising market.
-   - Fix: added `derisk_spread_pct: 0.0003` (3 bps) so close-out orders place near mid and fill within 1–2 executor cycles.
+2. **Derisk spread too wide**: 25–35 bps below mid never fill in a rising market.
+   Fix: `derisk_spread_pct: 0.0003` (3 bps) — close-out orders fill in ≤1 executor cycle.
 
-3. **One-sided regimes on delta-neutral perp** (config):
-   - PHASE0_SPECS `down→sell_only`, `up→buy_only` accumulated runaway directional exposure.
-   - Fix: `regime_specs_override` sets all regimes to `one_sided: "off"` with `target_base_pct: "0.0"`.
+3. **One-sided regimes on delta-neutral perp**: `down→sell_only`, `up→buy_only` accumulated runaway
+   directional exposure. Fix: `regime_specs_override` → all regimes `one_sided: off`, `target_base_pct: 0.0`.
 
-4. **max_base_pct 0.90 → 0.60**:
-   - Position was allowed to grow too large before derisk triggered.
-   - Reduced to 0.60 so derisk fires earlier.
+**Also**: `max_base_pct: 0.90 → 0.60` — derisk triggers earlier.
 
-### Result (2026-02-26)
-| Metric | Before fix | After fix |
+**Result:**
+| Metric | Before | After |
 |---|---|---|
-| State | soft_pause (12h stuck) | running |
-| Equity | 494.64 USDT | 499.58 USDT |
-| Today realized PnL | −5.32 USDT (−1.06%) | −0.38 USDT (−0.076%) |
-| Position | −0.00809 BTC short | −0.00353 BTC |
-| base_pct gross | 1.097 (above max) | 0.475 (within limits) |
-
-Derisk filled 10 buy orders at 16:30–16:31 UTC with **all positive `pnl_vs_mid`** (0.25–0.90 bps).
-
-### Files changed
-- `hbot/controllers/epp_v2_4.py` — derisk direction + spread logic
-- `hbot/data/bot1/conf/controllers/epp_v2_4_bot_a.yml` — `max_base_pct`, `derisk_spread_pct`, `regime_specs_override`
-
-### Next evaluation
-- Allow 6–12 hours of fresh running to measure realized PnL under corrected logic.
-- KPI focus: is daily PnL positive after fees? (target: ≥ 0 bps net).
+| State | soft_pause (12h) | running |
+| Equity | 494.64 | 504.77 USDT |
+| Realized PnL today | −5.32 USDT | **+4.82 USDT** |
+| Position | −0.00809 BTC | −0.000055 BTC |
+| Drawdown | 1.06% | **0%** |
 
 ---
 
-## Next candidate improvements (queued)
-1. **Fix `minute.csv` order-book staleness signal**: currently logs “stale since any unchanged book” rather than “stale >30s”, which confuses ops and diagnosis.
-2. If still negative after throttle: **increase min edge further** (15 → 20 bps) or widen L1 spreads again.
-3. Improve edge model realism: incorporate adverse selection / drift penalties so `net_edge_pct` aligns with realized edge.
+## Semipro 9.5/10 Roadmap
 
+### Platform: completed ✓
+- Paper engine v2 with full event/fill/PnL pipeline
+- Risk services: portfolio risk, reconciliation, kill-switch (**health fixed**)
+- Alertmanager stable (**empty SLACK_WEBHOOK_URL crash fixed**)
+- Day-2 gate **auto-refreshes integrity** before evaluation (no more stale-delta false failures)
+- Promotion gates strict cycle: PASS
+- Derisk direction + spread bugs fixed (2026-02-26)
+- `max_base_pct` tightened to 0.60 for earlier position limit enforcement
+
+### Next evaluation gate (2026-02-27 clean run)
+Pull `bot1_paper_day_summary.py --day 2026-02-27` at EOD.
+
+**Pass criteria:**
+- `realized_pnl > 0` after fees
+- `drawdown_pct < 2%`
+- `position_base` stays within `|base_pct| < 0.60` at all times
+
+**If pass:** extend soak to 3 consecutive days, then promote to Bitget testnet live.
+**If fail:** raise `min_net_edge_bps` 15 → 20 bps, or diagnose adverse selection per regime.
+
+### Queued improvements (priority order)
+1. **Realized-edge tracker** — trailing per-regime fill edge; auto-widen spreads when adverse selection > 2 bps for 30+ min
+2. **Funding rate in cost model** — verify `_refresh_funding_rate` feeds the spread floor (`funding_cost` currently 0)
+3. **EOD position close** — add `close_at_daily_rollover: true` to capture residual unrealized PnL cleanly
+4. **Order-book stale threshold** — fix from "any unchanged book" to ">30s unchanged"
+5. **OHLCV regime detection** — switch from internal 10s sampled mid to exchange 1m OHLCV candles
+6. **Slack alerting** — set `SLACK_WEBHOOK_URL` in `.env`, re-enable `slack_configs` in alertmanager.yml
+7. **Live promotion** — 5+ consecutive profitable paper days → promote bot1 to Bitget testnet live

@@ -28,12 +28,15 @@ receivers:
     webhook_configs:
       - url: "http://alert-webhook-sink:19093/alert"
         send_resolved: true
-    slack_configs:
-      - api_url: "${SLACK_WEBHOOK_URL}"
-        channel: "${SLACK_ALERT_CHANNEL:-#trading-alerts}"
-        title: "{{ .GroupLabels.alertname }} [{{ .GroupLabels.severity }}]"
-        text: "{{ range .Alerts }}{{ .Annotations.description }}\n{{ end }}"
-        send_resolved: true
+    # slack_configs are intentionally disabled when SLACK_WEBHOOK_URL is not set.
+    # Alertmanager rejects api_url: "" (empty env var) with "unsupported scheme".
+    # To enable Slack alerts: set SLACK_WEBHOOK_URL in .env and uncomment below.
+    # slack_configs:
+    #   - api_url: "${SLACK_WEBHOOK_URL}"
+    #     channel: "${SLACK_ALERT_CHANNEL:-#trading-alerts}"
+    #     title: "{{ .GroupLabels.alertname }} [{{ .GroupLabels.severity }}]"
+    #     text: "{{ range .Alerts }}{{ .Annotations.description }}\n{{ end }}"
+    #     send_resolved: true
 
 inhibit_rules:
   - source_match:
