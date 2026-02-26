@@ -14,7 +14,7 @@
 
 ---
 
-### [P0-1] Wire signal service output into the controller `open`
+### [P0-1] Wire signal service output into the controller `done (2026-02-26)`
 
 **Why it matters**: `signal_service` publishes inventory and ML signals to Redis but nothing
 consumes them. The entire signal pipeline is a no-op.
@@ -439,6 +439,247 @@ No validation script exists.
 **File**: `hbot/docs/architecture/data_flow_signal_risk_execution.md` — check if it exists
 and covers the full loop from `signal_service` → Redis → `hb_bridge` → `apply_execution_intent`
 → `_external_target_base_pct_override`. Add or update after P0-1 is implemented.
+
+---
+
+## Path to 9.5 / 10 — Beyond the Backlog
+
+> These are not bug fixes. They are the items that turn a well-engineered paper bot
+> into a validated, deployable semipro trading desk. Work through them in order —
+> each stage gates the next. Do not skip ahead.
+
+### Scoring map
+
+| Stage | Score | Gate |
+|---|---|---|
+| Today (bugs fixed, infrastructure stable) | 6.5 | — |
+| Backlog P0 + P1 complete | 7.5 | All P0 items done, bot running cleanly |
+| 20-day paper run validated | 8.0 | Sharpe ≥ 1.5 annualized, PnL positive |
+| Walk-forward backtest passes | 8.5 | Out-of-sample edge confirmed on 6m history |
+| Order book signals + Kelly sizing | 8.8 | Edge stable after sizing change |
+| 4-week testnet live | 9.0 | No safety incidents, execution close to paper |
+| TCA + incident playbooks + secrets hygiene | 9.3 | All checklist items signed off |
+| Second uncorrelated strategy + portfolio allocation | 9.5 | Portfolio Sharpe > single-strategy Sharpe |
+
+---
+
+### [ROAD-1] 20-day paper run — prove statistical edge `open`
+
+**Gate**: complete after backlog P0+P1 are done and bot has run for 20 consecutive days.
+
+**Why**: one day of positive paper PnL is noise. Statistical significance requires N ≥ 20
+daily observations to produce a 90% confidence interval on Sharpe ratio that excludes zero.
+
+**What to measure each day**:
+Run `python hbot/scripts/analysis/bot1_paper_day_summary.py --day YYYY-MM-DD` and record
+into a tracking table:
+
+| date | realized_pnl_usdt | fees_usdt | net_pnl_usdt | net_pnl_bps | drawdown_pct | fills | turnover_x | dominant_regime |
+|---|---|---|---|---|---|---|---|---|
+
+**Pass criteria**:
+- Mean daily `net_pnl_bps` > 0 over the 20-day window
+- Sharpe ratio (annualised) ≥ 1.5: `sharpe = (mean_daily_pnl / std_daily_pnl) * sqrt(252)`
+- Max single-day drawdown < 2%
+- No day hits `max_daily_loss_pct_hard` (3%)
+- PnL decomposition shows spread capture is the dominant source (not lucky position carry)
+
+**If criteria fail**: raise `min_net_edge_bps` by 5 bps and repeat. Document each attempt
+in `hbot/docs/strategy/bot1_epp_v2_4_iteration_log.md`.
+
+**Implementation needed**:
+- Create `hbot/scripts/analysis/bot1_multi_day_summary.py --start YYYY-MM-DD --end YYYY-MM-DD`
+  that aggregates the daily summary across a date range and computes Sharpe, max drawdown,
+  win rate, and regime-breakdown table.
+- Output: JSON to `hbot/reports/strategy/multi_day_summary_latest.json` + console print.
+
+---
+
+### [ROAD-2] Walk-forward backtest on 6-month historical data `open`
+
+**Gate**: complete after ROAD-1 passes.
+
+**Why**: paper PnL with live data is not a backtest — you're seeing real prices in
+sequence. A walk-forward test fits parameters on months 1–9 and tests on months 10–12,
+proving the edge is not curve-fitted to recent conditions.
+
+**What is needed**:
+1. **Historical data pipeline**: fetch 6 months of Bitget BTC-USDT perpetual 1-minute
+   OHLCV + order book snapshots via `ccxt` or Bitget API. Store as Parquet in
+   `hbot/data/historical/bitget_btc_usdt_perp_1m_YYYYMM.parquet`.
+2. **Event-driven backtest engine**: a `BacktestRunner` class in
+   `hbot/scripts/backtesting/backtest_runner.py` that:
+   - Replays OHLCV bars as `MarketSnapshot` events
+   - Feeds them into a headless instance of `EppV24Controller` (no hummingbot runtime)
+   - Collects `fills`, `minute` rows, and final PnL
+   - Applies realistic fees (maker 0.02%, taker 0.06%) and slippage (1 bp per fill)
+3. **Walk-forward loop**: split data into 3 windows (fit/validate/test), run backtest on each.
+4. **Parameter stability check**: vary `min_net_edge_bps` ±5 bps and `max_base_pct` ±0.10.
+   If Sharpe degrades > 30% with ±1 std param change, the strategy is fragile.
+
+**Pass criteria**:
+- Out-of-sample Sharpe ≥ 1.0 on each of 3 test windows
+- Maximum out-of-sample drawdown < 5%
+- Edge does not vanish when fees increase 20% (break-even fee rate > 1.5× current)
+
+**Skill reference**: `hbot/.cursor/skills/backtesting-validation/SKILL.md`
+
+---
+
+### [ROAD-3] Order book imbalance signal `open`
+
+**Gate**: complete after ROAD-2 passes (validate that adding the signal improves Sharpe).
+
+**Why**: EMA/ATR-based regime detection is lagged. Order book imbalance is a leading
+signal — it predicts short-term price direction before price moves.
+
+**What to build**:
+- Add `imbalance` field computation in `hbot/controllers/epp_v2_4.py:_evaluate_market_conditions`:
+  ```python
+  bid_depth = sum of top-5 bid quantities (from order book)
+  ask_depth = sum of top-5 ask quantities
+  imbalance = (bid_depth - ask_depth) / (bid_depth + ask_depth)  # range [-1, +1]
+  ```
+- Feed `imbalance` into `skew` in `_compute_spread_and_edge`:
+  - `imbalance > 0.3` (strong bid): widen ask spread (more sellers incoming, less rush to sell)
+  - `imbalance < -0.3` (strong ask): widen bid spread
+  - This is additive to the existing inventory skew, capped by `inventory_skew_cap_pct`
+- Add `"ob_imbalance"` to `minute.csv` for tracking.
+
+**Validation**: run ROAD-2 backtest with and without imbalance signal. Keep only if
+out-of-sample Sharpe improves by ≥ 0.2.
+
+---
+
+### [ROAD-4] Kelly-adjusted position sizing `open`
+
+**Gate**: complete after ROAD-3 (need stable edge estimate to size from).
+
+**Why**: `total_amount_quote: 50` is arbitrary. Kelly sizing allocates more capital
+when estimated edge is high and less when uncertain, improving risk-adjusted returns.
+
+**What to build**:
+- Add `use_kelly_sizing: bool = False` and `kelly_fraction: Decimal = Decimal("0.25")`
+  to `EppV24Config` (fractional Kelly — full Kelly is too aggressive).
+- In `_apply_runtime_spreads_and_sizing`, when `use_kelly_sizing` is True:
+  ```
+  kelly_size = (fill_edge_ewma_bps / variance_bps) * kelly_fraction * equity_quote
+  total_amount_quote = clip(kelly_size, min_order_quote, max_order_quote)
+  ```
+  where `variance_bps` is the rolling std of `fill_edge_ewma_bps` over 50 fills.
+- Fall back to `config.total_amount_quote` when EWMA has < 20 observations.
+
+---
+
+### [ROAD-5] 4-week testnet live trading `open`
+
+**Gate**: complete after ROAD-4 and after go-live checklist (P0-4) is fully signed off.
+
+**Why**: paper engine simulates fills perfectly — real markets have partial fills,
+cancel-before-fill races, API rate limit spikes, and funding settlements at exact
+timestamps. You cannot discover these issues in paper mode.
+
+**Prerequisites**:
+- All P0 backlog items done
+- `KILL_SWITCH_DRY_RUN=false` tested on testnet (kill-switch actually cancels orders)
+- Bitget testnet account funded with test USDT
+- Separate API key for testnet (never use mainnet keys on testnet)
+- Change `connector_name: bitget_paper_trade` → `bitget_perpetual` in bot1 config only
+  after completing this checklist
+
+**What to monitor daily**:
+- Fill count ratio: testnet fills / paper fills (should be 0.5–2×, not 0 or 10×)
+- Execution slippage: actual fill price vs expected price from paper (`pnl_vs_mid_pct`)
+- Order rejection rate: `did_fail_order` events / total orders placed
+- Cancel-before-fill rate: orders cancelled before fill vs total placed
+- Any `position_drift_pct` > 1% (reconciliation alarm)
+
+**Pass criteria for live promotion**:
+- 20 testnet trading days, no HARD_STOP incidents
+- Execution slippage < 2 bps vs paper equivalent
+- Order rejection rate < 0.5%
+- Sharpe on testnet ≥ 0.8× paper Sharpe (some degradation is expected and acceptable)
+
+---
+
+### [ROAD-6] Transaction cost analysis (TCA) report `open`
+
+**Gate**: implement during ROAD-5 testnet run (need live data to validate).
+
+**Why**: TCA breaks down *why* fills are good or bad — essential for tuning and for
+proving the strategy to any external stakeholder.
+
+**What to build** (`hbot/scripts/analysis/bot1_tca_report.py`):
+- Input: `fills.csv` + `minute.csv` for a given date range
+- Output: for each fill, compute:
+  - `implementation_shortfall`: fill_price vs mid_at_order_placement
+  - `market_impact`: did price move against you in the 60s after fill?
+  - `adverse_selection_rate`: fraction of fills where `pnl_vs_mid_pct < 0`
+- Aggregate by: regime, time-of-day, order side, spread level
+- Print table: which regime has highest adverse selection? Which time of day?
+
+This report directly tells you where to widen spreads or reduce activity.
+
+---
+
+### [ROAD-7] Incident response playbooks `open`
+
+**Gate**: write before first live dollar of capital is deployed.
+
+**Why**: without a playbook, the first real incident becomes a learning experience
+that costs money. With a playbook, it's a drill.
+
+**Create `hbot/docs/ops/incident_playbooks/`** with one file per scenario:
+
+| File | Scenario |
+|---|---|
+| `01_bot_stopped_trading.md` | Bot in SOFT_PAUSE or HARD_STOP unexpectedly |
+| `02_kill_switch_fired.md` | Kill-switch triggered — recovery procedure |
+| `03_redis_down.md` | Redis went down mid-session — state recovery |
+| `04_large_unexpected_position.md` | Position > 2× max_base_pct — manual flatten |
+| `05_exchange_api_errors.md` | 429 rate limit or 5xx from exchange |
+| `06_daily_loss_limit_hit.md` | HARD_STOP from `max_daily_loss_pct_hard` |
+
+Each playbook: trigger indicators, immediate actions (< 2 min), diagnosis steps, recovery steps, post-incident review checklist.
+
+---
+
+### [ROAD-8] API key hygiene and secrets rotation `open`
+
+**Gate**: before first live capital.
+
+**Current gap**: single `BITGET_API_KEY` used for everything. No rotation procedure.
+
+**What to implement**:
+1. Three separate API keys (read-only data, trade-only bot, kill-switch emergency)
+2. Kill-switch key has trade+cancel permissions, NO read permissions (reduces surface)
+3. Document rotation procedure in `hbot/docs/ops/secrets_and_key_rotation.md` (update the existing file):
+   - Rotate every 90 days
+   - Steps: create new key → update `.env` → restart services → revoke old key → verify
+4. Set up IP allowlist on exchange for all three keys
+
+---
+
+### [ROAD-9] Second uncorrelated strategy `open`
+
+**Gate**: after ROAD-5 testnet live proves bot1 edge. Do not add complexity before edge is confirmed.
+
+**Why**: a single strategy is a single point of failure. Two uncorrelated strategies
+improve portfolio Sharpe: `sharpe_portfolio = sqrt(sharpe1² + sharpe2²) / sqrt(2)` when
+correlation ≈ 0.
+
+**Options (ranked by implementation effort)**:
+1. **ETH-USDT market-making on bot3** (lowest effort — reuse all infrastructure, new pair)
+   - Verify correlation of ETH/BTC returns < 0.7 to get real diversification benefit
+2. **Trend-following overlay on bot1** (medium effort — same pair, different logic)
+   - When `regime == "up"` or `"down"` for > 30 min, take a small directional position
+     in addition to market-making
+3. **Funding rate arbitrage on bot2** (higher effort — requires cross-exchange)
+   - Go long on low-funding exchange, short on high-funding exchange
+
+**Portfolio allocation rule**: allocate capital to each strategy proportional to its
+inverse variance: `alloc_i = (1/var_i) / sum(1/var_j)`. Rebalance weekly.
+Wire allocation through `hbot/config/multi_bot_policy_v1.json`.
 
 ---
 
