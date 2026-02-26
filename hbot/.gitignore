@@ -18,6 +18,8 @@ data/*/logs/**/*.log
 data/*/logs/**/*.log.*
 # Bot state snapshots — regenerated on every tick
 data/*/logs/**/*.json
+# Event journals and desk streams (append-only runtime logs)
+data/*/logs/**/*.jsonl
 # Keep only conf and scripts
 data/*/data/*.sqlite
 data/*/data/*.db
@@ -36,6 +38,9 @@ data/*/scripts/utility/
 # These are ephemeral artifacts — NOT source of truth for the repo.
 # Keep only: baseline_counts.json, day2_gate_eval_latest.json,
 #   latest.json (per subdir), promotion_gates/latest.*, readiness_decision_latest.*
+#
+# Daily ops generated markdown snapshots
+docs/ops/daily_ops_report_*.md
 #
 # Timestamped report snapshots (all subdirs)
 reports/accounting/accounting_integrity_*T*.json
@@ -59,6 +64,23 @@ reports/post_trade/post_trade_*T*.json
 reports/security/secrets_hygiene_*T*.json
 reports/strategy_catalog/strategy_catalog_check_*T*.json
 reports/coordination/coordination_*T*.json
+reports/**/*.jsonl
+reports/**/*_20*T*.json
+reports/**/*_20*T*.md
+reports/**/latest.json
+reports/**/latest.md
+reports/tests/coverage.json
+reports/tests/coverage.xml
+
+# Volatile latest pointers from runtime services
+reports/coordination/latest.json
+reports/exchange_snapshots/latest.json
+reports/kill_switch/latest.json
+reports/parity/latest.json
+reports/portfolio_risk/latest.json
+reports/reconciliation/latest.json
+reports/soak/latest.json
+reports/event_store/day2_gate_eval_latest.json
 
 # ---- Grafana / Prometheus runtime ----
 monitoring/grafana/grafana.db

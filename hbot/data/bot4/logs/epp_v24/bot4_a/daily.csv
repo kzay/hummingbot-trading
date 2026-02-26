@@ -1,2 +1,0 @@
-ts,bot_variant,exchange,trading_pair,state,equity_open_quote,equity_now_quote,pnl_quote,pnl_pct,turnover_x,fills_count,ops_events
-2026-02-22T00:00:00.086751+00:00,a,binance_perpetual_testnet,BTC-USDT,running,5697.5048684700,5655.9086416400,-41.5962268300,-0.007300779514940580060945009336,0E+10,0,
