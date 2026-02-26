@@ -26,7 +26,7 @@ import logging
 import time
 from decimal import Decimal
 from types import MethodType, SimpleNamespace
-from typing import Any, Callable, Dict, List, Optional, Protocol
+from typing import Any, Dict, List, Optional, Protocol
 
 from controllers.paper_engine_v2.data_feeds import HummingbotDataFeed
 from controllers.paper_engine_v2.desk import PaperDesk
@@ -157,11 +157,6 @@ class PaperBudgetChecker:
 def _install_budget_checker(connector: Any, equity_quote: Decimal) -> None:
     """Install PaperBudgetChecker on a connector if it has a _budget_checker."""
     try:
-        budget_cls = None
-        try:
-            from hummingbot.connector.utils import get_new_client_order_id  # type: ignore
-        except Exception:
-            pass
         for attr in ("_budget_checker", "budget_checker"):
             if hasattr(connector, attr):
                 setattr(connector, attr, PaperBudgetChecker(connector, equity_quote))
@@ -551,7 +546,7 @@ def _install_paper_stats(connector: Any, desk: PaperDesk, iid: InstrumentId) -> 
         def _paper_stats() -> Dict[str, Decimal]:
             return desk.paper_stats(iid)
 
-        connector.paper_stats = property(lambda self: _paper_stats()) if False else _paper_stats
+        connector.paper_stats = _paper_stats
         connector._epp_v2_paper_stats_installed = True
         logger.debug("paper_stats property installed on connector")
     except Exception as exc:
@@ -599,22 +594,11 @@ def _fire_hb_events(strategy: Any, connector_name: str, event: Any) -> None:
 def _find_controller_for_connector(strategy: Any, connector_name: str) -> Any:
     """Find the controller that owns this connector_name."""
     controllers = getattr(strategy, "controllers", {})
-    for cid, ctrl in controllers.items():
+    for _, ctrl in controllers.items():
         cfg = getattr(ctrl, "config", None)
         if cfg and str(getattr(cfg, "connector_name", "")) == connector_name:
             return ctrl
     return None
-
-
-def _determine_trade_type(order_id: str):
-    """Infer TradeType from paper order ID prefix."""
-    try:
-        from hummingbot.core.data_type.common import TradeType
-        if "buy" in order_id.lower() or order_id.startswith("paper_v2_") and int(order_id.split("_")[-1]) % 2 == 1:
-            return TradeType.BUY
-        return TradeType.SELL
-    except Exception:
-        return None
 
 
 def _fire_fill_event(strategy: Any, connector_name: str, fill_event: OrderFilled) -> None:

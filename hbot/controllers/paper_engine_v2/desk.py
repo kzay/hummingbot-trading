@@ -14,7 +14,7 @@ import time
 from collections import deque
 from dataclasses import dataclass, field
 from decimal import Decimal
-from typing import Any, Deque, Dict, List, Optional, Tuple
+from typing import Any, Deque, Dict, List, Optional
 
 from controllers.paper_engine_v2.fee_models import FeeModel, make_fee_model
 from controllers.paper_engine_v2.fill_models import FillModel, make_fill_model
@@ -306,7 +306,6 @@ class PaperDesk:
         """Return paper_stats dict compatible with existing paper_engine.py API."""
         fill_count = 0
         reject_count = 0
-        total_delay = 0
         for ev in self._event_log:
             if isinstance(ev, OrderFilled):
                 if instrument_id is None or ev.instrument_id == instrument_id:
@@ -314,11 +313,10 @@ class PaperDesk:
             elif isinstance(ev, OrderRejected):
                 if instrument_id is None or ev.instrument_id == instrument_id:
                     reject_count += 1
-        avg_delay = Decimal(str(total_delay / fill_count)) if fill_count > 0 else _ZERO
         return {
             "paper_fill_count": Decimal(str(fill_count)),
             "paper_reject_count": Decimal(str(reject_count)),
-            "paper_avg_queue_delay_ms": avg_delay,
+            "paper_avg_queue_delay_ms": _ZERO,
             "paper_dropped_relay_count": Decimal("0"),
         }
 

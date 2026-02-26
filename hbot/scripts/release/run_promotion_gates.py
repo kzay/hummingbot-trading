@@ -125,23 +125,6 @@ def _run_regression(root: Path) -> Tuple[int, str]:
         return 2, str(e)
 
 
-def _run_replay_regression_cycle(root: Path) -> Tuple[int, str]:
-    cmd = [
-        sys.executable,
-        str(root / "scripts" / "release" / "run_replay_regression_cycle.py"),
-        "--repeat",
-        "2",
-        "--min-events",
-        "1000",
-    ]
-    try:
-        proc = subprocess.run(cmd, cwd=str(root), capture_output=True, text=True, check=False)
-        msg = (proc.stdout or "") + ("\n" + proc.stderr if proc.stderr else "")
-        return int(proc.returncode), msg.strip()
-    except Exception as e:
-        return 2, str(e)
-
-
 def _refresh_parity_once(root: Path) -> Tuple[int, str]:
     cmd = [sys.executable, str(root / "services" / "shadow_execution" / "main.py"), "--once"]
     try:
