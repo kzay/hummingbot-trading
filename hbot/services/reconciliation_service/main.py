@@ -296,16 +296,33 @@ def run(once: bool = False, synthetic_drift: bool = False) -> None:
 
             if bot_cfg.get("inventory_check_enabled", True):
                 inv_drift = abs(base_pct - target_base_pct)
+                risk_reasons_raw = str(minute.get("risk_reasons", "") or "")
+                derisk_only_active = "derisk_only" in risk_reasons_raw.split("|")
                 if inv_drift >= bot_inv_critical:
-                    findings.append(
-                        _severity(
-                            "critical",
-                            "inventory",
-                            "inventory_drift_critical",
-                            bot,
-                            {"drift": inv_drift, "warn_threshold": bot_inv_warn, "critical_threshold": bot_inv_critical},
+                    if derisk_only_active:
+                        findings.append(
+                            _severity(
+                                "warning",
+                                "inventory",
+                                "inventory_drift_warning_derisk_only",
+                                bot,
+                                {
+                                    "drift": inv_drift,
+                                    "warn_threshold": bot_inv_warn,
+                                    "critical_threshold": bot_inv_critical,
+                                },
+                            )
                         )
-                    )
+                    else:
+                        findings.append(
+                            _severity(
+                                "critical",
+                                "inventory",
+                                "inventory_drift_critical",
+                                bot,
+                                {"drift": inv_drift, "warn_threshold": bot_inv_warn, "critical_threshold": bot_inv_critical},
+                            )
+                        )
                 elif inv_drift >= bot_inv_warn:
                     findings.append(
                         _severity(
