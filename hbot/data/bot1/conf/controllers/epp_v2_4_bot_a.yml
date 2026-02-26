@@ -57,11 +57,18 @@ edge_gate_ewma_period: 8
 # Cap concurrent executors to avoid runaway churn / memory growth.
 max_active_executors: 30
 
+# ── Derisk spread ───────────────────────────────────────────────────
+# During derisk-only mode, place close-out orders this close to mid
+# so they fill quickly without chasing a large adverse move.
+derisk_spread_pct: 0.0003
+
 # ── Perp inventory ────────────────────────────────────────────────
 # Delta-neutral: target net exposure = 0 for balanced MM
 perp_target_net_base_pct: 0.0
 min_base_pct: 0.0
-max_base_pct: 0.90
+# Lower derisk trigger from 0.90 → 0.60 so position is capped earlier
+# and the derisk cycle completes before large adverse moves.
+max_base_pct: 0.60
 
 # ── Drift protection ──────────────────────────────────────────────
 adverse_drift_ewma_alpha: 0.25
@@ -85,3 +92,21 @@ paper_adverse_selection_bps: 1.5
 paper_partial_fill_min_ratio: 0.15
 paper_partial_fill_max_ratio: 0.85
 paper_max_fills_per_order: 8
+
+# ── Regime overrides ────────────────────────────────────────────────
+# For delta-neutral perp MM: remove one-sided extremes in up/down
+# so the bot quotes two-sided with inventory skew instead of
+# accumulating pure directional exposure.
+regime_specs_override:
+  up:
+    one_sided: "off"
+    spread_min: "0.0030"
+    spread_max: "0.0060"
+    target_base_pct: "0.0"
+  down:
+    one_sided: "off"
+    spread_min: "0.0030"
+    spread_max: "0.0060"
+    target_base_pct: "0.0"
+  neutral_low_vol:
+    target_base_pct: "0.0"

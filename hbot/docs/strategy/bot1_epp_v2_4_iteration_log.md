@@ -100,6 +100,51 @@ Detected reset boundaries (from `minute.csv`): **00:20:27Z**, **01:18:36Z**
 
 ---
 
+## Iteration 2026-02-26 — "Derisk fix + delta-neutral conversion" (implemented)
+
+**Goal**: fix bot1 stuck in `soft_pause` for 12+ hours; flip PnL positive; eliminate runaway directional exposure.
+
+### Root-cause diagnosis
+Two bugs identified:
+
+1. **Derisk direction bug** (`epp_v2_4.py` line ~747):
+   - `base_pct_above_max` always forced `sell_only` during derisk.
+   - But `base_pct_gross = abs(position) / equity` — for a SHORT position this means the bot needed to **BUY**, not sell more.
+   - Fix: check `base_pct_net` (signed) to determine direction: `net < 0` → BUY-only; `net >= 0` → SELL-only.
+
+2. **Derisk spread too wide** (25–35 bps below mid):
+   - Buy orders placed far below current market never filled in a rising market.
+   - Fix: added `derisk_spread_pct: 0.0003` (3 bps) so close-out orders place near mid and fill within 1–2 executor cycles.
+
+3. **One-sided regimes on delta-neutral perp** (config):
+   - PHASE0_SPECS `down→sell_only`, `up→buy_only` accumulated runaway directional exposure.
+   - Fix: `regime_specs_override` sets all regimes to `one_sided: "off"` with `target_base_pct: "0.0"`.
+
+4. **max_base_pct 0.90 → 0.60**:
+   - Position was allowed to grow too large before derisk triggered.
+   - Reduced to 0.60 so derisk fires earlier.
+
+### Result (2026-02-26)
+| Metric | Before fix | After fix |
+|---|---|---|
+| State | soft_pause (12h stuck) | running |
+| Equity | 494.64 USDT | 499.58 USDT |
+| Today realized PnL | −5.32 USDT (−1.06%) | −0.38 USDT (−0.076%) |
+| Position | −0.00809 BTC short | −0.00353 BTC |
+| base_pct gross | 1.097 (above max) | 0.475 (within limits) |
+
+Derisk filled 10 buy orders at 16:30–16:31 UTC with **all positive `pnl_vs_mid`** (0.25–0.90 bps).
+
+### Files changed
+- `hbot/controllers/epp_v2_4.py` — derisk direction + spread logic
+- `hbot/data/bot1/conf/controllers/epp_v2_4_bot_a.yml` — `max_base_pct`, `derisk_spread_pct`, `regime_specs_override`
+
+### Next evaluation
+- Allow 6–12 hours of fresh running to measure realized PnL under corrected logic.
+- KPI focus: is daily PnL positive after fees? (target: ≥ 0 bps net).
+
+---
+
 ## Next candidate improvements (queued)
 1. **Fix `minute.csv` order-book staleness signal**: currently logs “stale since any unchanged book” rather than “stale >30s”, which confuses ops and diagnosis.
 2. If still negative after throttle: **increase min edge further** (15 → 20 bps) or widen L1 spreads again.

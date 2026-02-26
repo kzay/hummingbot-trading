@@ -162,6 +162,14 @@ class EppV24Config(MarketMakingControllerConfigBase):
     protective_stop_refresh_s: int = Field(default=60, ge=10, le=600, description="Seconds between protective stop updates")
     order_ack_timeout_s: int = Field(default=30, ge=5, le=120, description="Seconds before an unacked order is considered stuck")
     max_active_executors: int = Field(default=10, ge=1, le=50, description="Maximum concurrent active executors")
+    derisk_spread_pct: Decimal = Field(
+        default=Decimal("0.0003"),
+        description=(
+            "Spread used when placing de-risk-only orders (base_pct outside band). "
+            "Tight by design so the order fills quickly instead of waiting for a large adverse move. "
+            "0.0003 = 3 bps. Set to 0 to use the regime spread unchanged."
+        ),
+    )
     # Paper engine simulation params (only active when BOT_MODE=paper)
     internal_paper_enabled: bool = Field(default=False, description="DEPRECATED: use BOT_MODE env var. Kept for backward compat — overridden at runtime.")
     paper_equity_quote: Decimal = Field(default=Decimal("500"), description="Simulated equity budget in paper mode (USDT). Replaces the real connector balance.")
@@ -744,20 +752,40 @@ class EppV24Controller(MarketMakingControllerBase):
             self._runtime_levels.total_amount_quote = Decimal("0")
         elif derisk_only:
             # Only allow orders that reduce inventory imbalance.
+            # Use the SIGNED net exposure to determine direction:
+            #   net long  (base_pct_net >= 0) → reduce by selling
+            #   net short (base_pct_net <  0) → reduce by buying
+            # Use tight derisk_spread_pct so the order fills quickly rather than
+            # waiting for a large adverse price move.
+            tight = self.config.derisk_spread_pct
             if rr == {"base_pct_above_max"}:
-                # Too long: allow only SELLs.
-                self._runtime_levels.buy_spreads = []
-                self._runtime_levels.buy_amounts_pct = []
+                if base_pct_net >= _ZERO:
+                    # Net long: gross exposure too high → allow only SELLs.
+                    self._runtime_levels.buy_spreads = []
+                    self._runtime_levels.buy_amounts_pct = []
+                    active_side_count = max(1, len(self._runtime_levels.sell_spreads))
+                    if tight > _ZERO:
+                        self._runtime_levels.sell_spreads = [tight] * active_side_count
+                else:
+                    # Net short: gross exposure too high from short → allow only BUYs.
+                    self._runtime_levels.sell_spreads = []
+                    self._runtime_levels.sell_amounts_pct = []
+                    active_side_count = max(1, len(self._runtime_levels.buy_spreads))
+                    if tight > _ZERO:
+                        self._runtime_levels.buy_spreads = [tight] * active_side_count
                 # Clamp notional so unwind isn't accidentally sized like two-sided quoting.
                 if self.config.max_order_notional_quote > 0:
-                    max_total = self.config.max_order_notional_quote * Decimal(max(1, len(self._runtime_levels.sell_spreads)))
+                    max_total = self.config.max_order_notional_quote * Decimal(active_side_count)
                     self._runtime_levels.total_amount_quote = min(self._runtime_levels.total_amount_quote, max_total)
             elif rr == {"base_pct_below_min"}:
-                # Too short / too little base: allow only BUYs.
+                # Too short / too little base: allow only BUYs with tight spread.
                 self._runtime_levels.sell_spreads = []
                 self._runtime_levels.sell_amounts_pct = []
+                active_side_count = max(1, len(self._runtime_levels.buy_spreads))
+                if tight > _ZERO:
+                    self._runtime_levels.buy_spreads = [tight] * active_side_count
                 if self.config.max_order_notional_quote > 0:
-                    max_total = self.config.max_order_notional_quote * Decimal(max(1, len(self._runtime_levels.buy_spreads)))
+                    max_total = self.config.max_order_notional_quote * Decimal(active_side_count)
                     self._runtime_levels.total_amount_quote = min(self._runtime_levels.total_amount_quote, max_total)
 
         event_ts = datetime.fromtimestamp(now, tz=timezone.utc).isoformat()
