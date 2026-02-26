@@ -128,8 +128,15 @@ def make_fee_model(
 ) -> FeeModel:
     """Create a fee model by source name."""
     if source == "fee_profiles":
+        # Fee profiles are keyed by connector-style venue names (e.g. bitget_perpetual),
+        # while PaperDesk instrument_id.venue may be normalized (e.g. bitget).
+        # For perps, map to the *_perpetual profile without changing instrument IDs
+        # (avoids breaking persisted PaperDesk state keys).
+        venue = spec.instrument_id.venue
+        if spec.instrument_id.is_perp and not str(venue).endswith("_perpetual"):
+            venue = f"{venue}_perpetual"
         return TieredFeeModel(
-            venue=spec.instrument_id.venue,
+            venue=venue,
             profile=profile,
             profiles_path=profiles_path,
         )

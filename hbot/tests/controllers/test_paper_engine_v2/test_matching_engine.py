@@ -10,6 +10,7 @@ import pytest
 
 from controllers.paper_engine_v2.fee_models import MakerTakerFeeModel
 from controllers.paper_engine_v2.fill_models import QueuePositionFillModel, TopOfBookFillModel
+from controllers.paper_engine_v2.fill_models import QueuePositionConfig
 from controllers.paper_engine_v2.latency_model import NO_LATENCY, LatencyModel
 from controllers.paper_engine_v2.matching_engine import EngineConfig, OrderMatchingEngine
 from controllers.paper_engine_v2.portfolio import PaperPortfolio, PortfolioConfig
@@ -133,6 +134,32 @@ class TestFillLifecycle:
         engine.submit_order(order, _now())
         engine.tick(_now())
         assert len(engine.open_orders()) == 0
+
+    def test_reserve_shrinks_after_partial_fill(self):
+        """After a partial fill, the engine should not keep the full original reserve."""
+        fill_model = QueuePositionFillModel(QueuePositionConfig(
+            queue_participation=Decimal("0.5"),
+            min_partial_fill_ratio=Decimal("0.5"),
+            max_partial_fill_ratio=Decimal("0.5"),
+            prob_fill_on_limit=1.0,
+            prob_slippage=0.0,
+            seed=7,
+        ))
+        engine = make_engine(
+            balances={"USDT": Decimal("1000"), "BTC": Decimal("0")},
+            fill_model=fill_model,
+        )
+        # Small top-of-book depth forces partial taker fills.
+        engine.update_book(make_book(ask_price="100.00", ask_size="1.0"))
+        order = make_order("buy", "market", "100.00", "10.0")
+        event = engine.submit_order(order, _now())
+        assert isinstance(event, OrderAccepted)
+        reserved_initial = order._reserved_amount
+        assert reserved_initial == Decimal("1000.00") or reserved_initial == Decimal("1000")  # qty * price
+
+        engine.tick(_now())
+        assert order.fill_count >= 1
+        assert order._reserved_amount < reserved_initial
 
     def test_max_fills_per_order_respected(self):
         engine = make_engine(fill_model=QueuePositionFillModel(), max_fills=2)

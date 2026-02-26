@@ -12,6 +12,7 @@ from typing import Dict, List, Tuple
 from services.common.models import RedisSettings, ServiceSettings
 from services.contracts.stream_names import (
     AUDIT_STREAM,
+    BOT_TELEMETRY_STREAM,
     EXECUTION_INTENT_STREAM,
     MARKET_DATA_STREAM,
     ML_SIGNAL_STREAM,
@@ -29,6 +30,7 @@ STREAMS: Tuple[str, ...] = (
     RISK_DECISION_STREAM,
     EXECUTION_INTENT_STREAM,
     AUDIT_STREAM,
+    BOT_TELEMETRY_STREAM,   # paper + live fills, minute snapshots
 )
 
 STREAM_TO_EVENT_TYPE: Dict[str, str] = {
@@ -38,6 +40,7 @@ STREAM_TO_EVENT_TYPE: Dict[str, str] = {
     RISK_DECISION_STREAM: "risk_decision",
     EXECUTION_INTENT_STREAM: "execution_intent",
     AUDIT_STREAM: "audit",
+    BOT_TELEMETRY_STREAM: "bot_fill",      # default; per-event type in payload takes precedence
 }
 
 

@@ -1,0 +1,9 @@
+{
+  "total_events": 5,
+  "events_by_stream": {
+    "hb.audit.v1": 3,
+    "hb.execution_intent.v1": 2
+  },
+  "missing_correlation_count": 0,
+  "last_update_utc": "2026-02-26T01:51:08.052868+00:00"
+}

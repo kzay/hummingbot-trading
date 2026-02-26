@@ -1,0 +1,95 @@
+{
+  "version": 1,
+  "default_mode": "dry_run",
+  "rules": [
+    {
+      "name": "event_store_source_compare",
+      "glob": "reports/event_store/source_compare_*",
+      "keep_days": 1
+    },
+    {
+      "name": "event_store_events",
+      "glob": "reports/event_store/events_*",
+      "keep_days": 7
+    },
+    {
+      "name": "event_store_integrity",
+      "glob": "reports/event_store/integrity_*",
+      "keep_days": 7
+    },
+    {
+      "name": "reconciliation_runs",
+      "glob": "reports/reconciliation/reconciliation_*",
+      "keep_days": 3
+    },
+    {
+      "name": "parity_runs",
+      "glob": "reports/parity/*/parity_*",
+      "keep_days": 3
+    },
+    {
+      "name": "portfolio_risk_action_checks",
+      "glob": "reports/portfolio_risk/action_check_*",
+      "keep_days": 3
+    },
+    {
+      "name": "portfolio_risk_audits",
+      "glob": "reports/portfolio_risk/audit_*",
+      "keep_days": 3
+    },
+    {
+      "name": "soak_snapshots",
+      "glob": "reports/soak/soak_snapshot_*",
+      "keep_days": 3
+    },
+    {
+      "name": "dev_checks_runs",
+      "glob": "reports/dev_checks/dev_*",
+      "keep_days": 3
+    },
+    {
+      "name": "promotion_gates_runs",
+      "glob": "reports/promotion_gates/promotion_gates_*",
+      "keep_days": 14
+    },
+    {
+      "name": "replay_regression_runs",
+      "glob": "reports/replay_regression/replay_regression_*",
+      "keep_days": 14
+    },
+    {
+      "name": "replay_regression_multi_window_runs",
+      "glob": "reports/replay_regression_multi_window/replay_regression_multi_window_*",
+      "keep_days": 14
+    },
+    {
+      "name": "backtest_regression_runs",
+      "glob": "reports/backtest_regression/backtest_regression_*",
+      "keep_days": 14
+    },
+    {
+      "name": "test_runs",
+      "glob": "reports/tests/test_run_*",
+      "keep_days": 14
+    },
+    {
+      "name": "ops_retention_evidence",
+      "glob": "reports/ops_retention/artifact_retention_*",
+      "keep_days": 14
+    }
+  ],
+  "protect_latest": [
+    "reports/ops_retention/latest.json",
+    "reports/promotion_gates/latest.json",
+    "reports/replay_regression/latest.json",
+    "reports/replay_regression/latest.md",
+    "reports/reconciliation/latest.json",
+    "reports/parity/latest.json",
+    "reports/portfolio_risk/latest.json",
+    "reports/readiness/final_decision_latest.json",
+    "reports/soak/latest.json",
+    "reports/dev_checks/latest.json",
+    "reports/event_store/day2_gate_eval_latest.json"
+  ]
+}
+

@@ -325,16 +325,22 @@ def run(once: bool = False, synthetic_drift: bool = False) -> None:
                 )
 
             if bot_cfg.get("fill_parity_check_enabled", True):
-                fills_csv = _count_csv_rows(minute_file.parent / "fills.csv")
                 fills_events = _count_event_fills(event_file, bot)
-                if fills_csv > 0 and fills_events == 0:
+                # IMPORTANT: `fills.csv` is cumulative across days, while `event_file` is per-day.
+                # Only flag when the bot has activity *today* (per-minute snapshot) but no `order_filled`
+                # events were persisted for today.
+                today_day = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+                minute_ts = str(minute.get("ts", "")).strip()
+                minute_day = minute_ts.split("T", 1)[0] if "T" in minute_ts else ""
+                fills_today = int(_safe_float(minute.get("fills_count_today"), 0.0))
+                if minute_day == today_day and fills_today > 0 and fills_events == 0:
                     findings.append(
                         _severity(
                             "warning",
                             "fill_parity",
                             "fills_present_without_order_filled_events",
                             bot,
-                            {"fills_csv": fills_csv, "fills_events": fills_events},
+                            {"fills_today": fills_today, "fills_events": fills_events, "event_file": str(event_file)},
                         )
                     )
 

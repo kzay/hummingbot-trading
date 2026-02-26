@@ -51,6 +51,8 @@ class FillStats:
 class BotSnapshot:
     bot_name: str
     variant: str
+    bot_mode: str
+    accounting_source: str
     exchange: str
     trading_pair: str
     state: str
@@ -111,6 +113,8 @@ class BotMetricsExporter:
                 continue
             log_dir = minute_file.parent
             daily_state = self._read_daily_state_any(log_dir)
+            bot_mode = str(latest_minute.get("bot_mode", "") or "").strip().lower() or "unknown"
+            accounting_source = str(latest_minute.get("accounting_source", "") or "").strip().lower() or "minute_csv"
             fills_path = log_dir / "fills.csv"
             fills_total = self._count_csv_rows(fills_path)
             fill_stats = self._compute_fill_stats(fills_path)
@@ -120,13 +124,20 @@ class BotMetricsExporter:
 
             equity_now = _safe_float(latest_minute.get("equity_quote"))
             equity_open = _safe_float(daily_state.get("equity_open")) if daily_state else 0.0
-            live_pnl = equity_now - equity_open if equity_open > 0 else 0.0
             daily_fills = _safe_float(daily_state.get("fills_count")) if daily_state else 0.0
+            fills_today = _safe_float(latest_minute.get("fills_count_today"))
+            if fills_today > 0:
+                daily_fills = fills_today
+
+            live_pnl = equity_now - equity_open if equity_open > 0 else 0.0
+            realized_today = _safe_float(latest_minute.get("realized_pnl_today_quote"))
 
             snapshots.append(
                 BotSnapshot(
                     bot_name=bot_name,
                     variant=str(latest_minute.get("bot_variant", "")),
+                    bot_mode=bot_mode,
+                    accounting_source=accounting_source if accounting_source else "minute_csv",
                     exchange=str(latest_minute.get("exchange", "")),
                     trading_pair=str(latest_minute.get("trading_pair", "")),
                     state=str(latest_minute.get("state", "")),
@@ -161,7 +172,7 @@ class BotMetricsExporter:
                     position_drift_pct=_safe_float(latest_minute.get("position_drift_pct")),
                     margin_ratio=_safe_float(latest_minute.get("margin_ratio"), 1.0),
                     funding_rate=_safe_float(latest_minute.get("funding_rate")),
-                    realized_pnl_today_quote=_safe_float(latest_minute.get("realized_pnl_today_quote")),
+                    realized_pnl_today_quote=realized_today,
                     ws_reconnect_count=_safe_float(latest_minute.get("ws_reconnect_count")),
                     order_book_stale=1.0 if str(latest_minute.get("order_book_stale", "")).lower() == "true" else 0.0,
                     position_base=_safe_float(latest_minute.get("position_base")),
@@ -248,6 +259,8 @@ class BotMetricsExporter:
             base_labels = {
                 "bot": snapshot.bot_name,
                 "variant": snapshot.variant,
+                "mode": snapshot.bot_mode,
+                "accounting": snapshot.accounting_source,
                 "exchange": snapshot.exchange,
                 "pair": snapshot.trading_pair,
                 "regime": snapshot.regime,
@@ -323,6 +336,7 @@ class BotMetricsExporter:
             except Exception:
                 continue
         return None
+
 
     def _read_last_csv_row(self, path: Path) -> Optional[Dict[str, str]]:
         if not path.exists():

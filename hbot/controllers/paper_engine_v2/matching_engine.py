@@ -32,6 +32,7 @@ from controllers.paper_engine_v2.types import (
     PaperOrder,
     PaperOrderType,
     OrderBookSnapshot,
+    order_status_transition,
     _EPS,
     _ZERO,
     _uuid,
@@ -197,23 +198,25 @@ class OrderMatchingEngine:
         if reason:
             return self._reject(order, reason, now_ns)
 
-        # 6. Reserve
+        # 6. Max open orders check (before reserve to avoid leaking)
+        if len([o for o in self._orders.values() if o.is_open]) >= self._config.max_open_orders:
+            return self._reject(order, "max_open_orders_reached", now_ns)
+
+        # 7. Reserve (only after all pre-checks pass)
         self._portfolio.reserve(asset, amount)
         order._reserved_asset = asset
         order._reserved_amount = amount
 
-        # 7. Max open orders check
-        if len([o for o in self._orders.values() if o.is_open]) >= self._config.max_open_orders:
-            self._portfolio.release(asset, amount)
-            return self._reject(order, "max_open_orders_reached", now_ns)
-
-        # 8. Latency queue or direct accept
+        # 8. Latency queue or direct accept (state machine transition)
         if self._latency_model.total_insert_ns > 0:
-            order.status = OrderStatus.PENDING_SUBMIT
+            # Order starts as PENDING_SUBMIT (already set by caller/conftest).
+            # If it isn't, set it — this is an idempotent no-op for the state machine.
+            if order.status != OrderStatus.PENDING_SUBMIT:
+                order.status = order_status_transition(order.status, OrderStatus.PENDING_SUBMIT)
             due_ns = now_ns + self._latency_model.total_insert_ns
             self._inflight.append((due_ns, "accept", order))
         else:
-            order.status = OrderStatus.OPEN
+            order.status = order_status_transition(order.status, OrderStatus.OPEN)
             self._orders[order.order_id] = order
             self._order_sides[order.order_id] = order.side.value
 
@@ -232,9 +235,18 @@ class OrderMatchingEngine:
         if order.is_terminal:
             return None
 
-        order.status = OrderStatus.CANCELED
+        try:
+            order.status = order_status_transition(order.status, OrderStatus.CANCELED)
+        except ValueError:
+            # Non-cancellable terminal state — return None silently.
+            return None
         order.updated_at_ns = now_ns
-        self._portfolio.release(order._reserved_asset, order._reserved_amount)
+
+        # Reserve release — safety check to avoid double-release
+        if order._reserved_amount > _ZERO:
+            self._portfolio.release(order._reserved_asset, order._reserved_amount)
+            order._reserved_amount = _ZERO
+
         del self._orders[order_id]
         self._last_fill_ns.pop(order_id, None)
 
@@ -249,8 +261,16 @@ class OrderMatchingEngine:
         for (due_ns, action, order) in self._inflight:
             if due_ns <= now_ns:
                 if action == "accept":
-                    order.status = OrderStatus.OPEN
+                    try:
+                        order.status = order_status_transition(order.status, OrderStatus.OPEN)
+                    except ValueError:
+                        # Order was canceled while in latency queue; release reserve.
+                        if order._reserved_amount > _ZERO:
+                            self._portfolio.release(order._reserved_asset, order._reserved_amount)
+                            order._reserved_amount = _ZERO
+                        continue
                     self._orders[order.order_id] = order
+                    self._order_sides[order.order_id] = order.side.value
                     events.append(OrderAccepted(
                         event_id=_uuid(), timestamp_ns=now_ns, instrument_id=self._iid,
                         order_id=order.order_id, side=order.side.value,
@@ -320,6 +340,37 @@ class OrderMatchingEngine:
             order.updated_at_ns = now_ns
             self._last_fill_ns[order.order_id] = now_ns
 
+            # Resize reserve to remaining quantity (prevents over-reserving on partial fills).
+            try:
+                remaining = order.remaining_quantity
+                if remaining < _ZERO:
+                    remaining = _ZERO
+                # Compute what reserve should be for *remaining* order quantity.
+                tmp = PaperOrder(
+                    order_id=order.order_id,
+                    instrument_id=order.instrument_id,
+                    side=order.side,
+                    order_type=order.order_type,
+                    price=order.price,
+                    quantity=remaining,
+                    status=order.status,
+                    created_at_ns=order.created_at_ns,
+                    updated_at_ns=order.updated_at_ns,
+                    source_bot=order.source_bot,
+                )
+                new_asset, new_amt = self._compute_reserve(tmp)
+                if new_asset == order._reserved_asset:
+                    new_amt = max(_ZERO, new_amt)
+                    curr = max(_ZERO, order._reserved_amount)
+                    if new_amt > curr:
+                        self._portfolio.reserve(new_asset, new_amt - curr)
+                    elif new_amt < curr:
+                        self._portfolio.release(new_asset, curr - new_amt)
+                    order._reserved_amount = new_amt
+                # If asset mismatches (shouldn't happen), keep existing reserve.
+            except Exception:
+                pass
+
             from controllers.paper_engine_v2.types import OrderFilled
             events.append(OrderFilled(
                 event_id=_uuid(), timestamp_ns=now_ns, instrument_id=self._iid,
@@ -333,11 +384,14 @@ class OrderMatchingEngine:
             events.append(pos_event)
 
             if order.remaining_quantity <= self._spec.size_increment + _EPS:
-                order.status = OrderStatus.FILLED
-                self._portfolio.release(order._reserved_asset, order._reserved_amount)
+                order.status = order_status_transition(order.status, OrderStatus.FILLED)
+                # Final reserve release
+                if order._reserved_amount > _ZERO:
+                    self._portfolio.release(order._reserved_asset, order._reserved_amount)
+                    order._reserved_amount = _ZERO
                 del self._orders[order.order_id]
             else:
-                order.status = OrderStatus.PARTIALLY_FILLED
+                order.status = order_status_transition(order.status, OrderStatus.PARTIALLY_FILLED)
 
         return events
 

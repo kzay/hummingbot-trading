@@ -79,7 +79,11 @@ class _CsvBuffer:
 
         try:
             self._fp = self._path.open("a", newline="", encoding="utf-8")
-            self._writer = csv.DictWriter(self._fp, fieldnames=field_list)
+            # Never let extra fields crash the trading loop. When schemas evolve,
+            # we rotate the file on header mismatch, but be defensive in case a
+            # caller passes a superset dict (e.g. processed_data) to a narrower
+            # field list.
+            self._writer = csv.DictWriter(self._fp, fieldnames=field_list, extrasaction="ignore")
             if write_header:
                 self._writer.writeheader()
             self._last_flush_ts = time.monotonic()
@@ -224,6 +228,8 @@ class CsvSplitLogger:
         fields = (
             "ts",
             "bot_variant",
+            "bot_mode",
+            "accounting_source",
             "exchange",
             "trading_pair",
             "state",
@@ -287,11 +293,19 @@ class CsvSplitLogger:
             "trading_pair",
             "state",
             "equity_open_quote",
+            "equity_peak_quote",
             "equity_now_quote",
             "pnl_quote",
             "pnl_pct",
+            "drawdown_pct",
+            "max_drawdown_pct",
+            "max_drawdown_peak_ts",
+            "max_drawdown_trough_ts",
             "turnover_x",
             "fills_count",
+            "fees_paid_today_quote",
+            "funding_cost_today_quote",
+            "realized_pnl_today_quote",
             "ops_events",
         )
         self._append("daily", row, fields)

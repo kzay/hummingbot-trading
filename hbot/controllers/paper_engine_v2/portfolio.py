@@ -10,6 +10,9 @@ Key accounting rules (Nautilus-aligned):
 - Fee tracked separately in position.total_fees_paid
 - Spot: full notional reserve; Perp: margin-only reserve
 - Available balance clamped to zero (graceful degradation on transient over-margin)
+
+Position accounting is delegated to the standalone `accounting.py` core
+(Nautilus-inspired) so that the pure math is independently testable.
 """
 from __future__ import annotations
 
@@ -18,6 +21,17 @@ from dataclasses import dataclass, field
 from decimal import Decimal
 from typing import Any, Dict, List, Optional
 
+from controllers.paper_engine_v2.accounting import (
+    PositionState,
+    apply_fill as _apply_fill,
+    unrealized_pnl as _unrealized_pnl,
+)
+from controllers.paper_engine_v2.risk_engine import (
+    MarginLevel,
+    RiskConfig,
+    RiskEngine,
+    LiquidationAction,
+)
 from controllers.paper_engine_v2.types import (
     FundingApplied,
     InstrumentId,
@@ -166,10 +180,35 @@ class PaperPortfolio:
     ):
         self._ledger = MultiAssetLedger(initial_balances)
         self._positions: Dict[str, PaperPosition] = {}
+        # Per-instrument metadata for margin and mark-to-market.
+        # Stored opportunistically on fills / mtm ticks so PaperPortfolio can
+        # compute maintenance margin without holding a hard dependency on the
+        # desk/engine registry.
+        self._spec_by_key: Dict[str, InstrumentSpec] = {}
+        self._leverage_by_key: Dict[str, int] = {}
+        self._position_margin_reserved: Dict[str, Decimal] = {}  # key -> reserved quote
         self._peak_equity: Decimal = _ZERO
         self._daily_open_equity: Optional[Decimal] = None
         self.risk_guard = RiskGuard(config, self)
         self._config = config
+        # Promoted risk engine (parallel to legacy RiskGuard; gradually replaces it).
+        self._risk_engine = RiskEngine(RiskConfig(
+            max_drawdown_pct_hard=config.max_drawdown_pct_hard,
+            max_position_notional_per_instrument=config.max_position_notional_per_instrument,
+            max_net_exposure_quote=config.max_net_exposure_quote,
+            margin_ratio_warn=Decimal("3.0"),
+            margin_ratio_critical=Decimal("1.5"),
+            margin_ratio_liquidate=Decimal("1.1"),
+        ))
+        self._last_margin_level: MarginLevel = MarginLevel.SAFE
+
+    @property
+    def peak_equity(self) -> Decimal:
+        return self._peak_equity
+
+    @property
+    def daily_open_equity(self) -> Optional[Decimal]:
+        return self._daily_open_equity
 
     # -- Balance -----------------------------------------------------------
 
@@ -214,14 +253,63 @@ class PaperPortfolio:
         return dict(self._positions)
 
     def mark_to_market(self, prices: Dict[str, Decimal]) -> None:
-        """Update unrealized PnL on all positions."""
+        """Update unrealized PnL on all positions, and refresh maintenance margin reserves."""
         for key, pos in self._positions.items():
             price = prices.get(key)
             if price is None or price <= _ZERO or pos.quantity == _ZERO:
                 pos.unrealized_pnl = _ZERO
                 continue
-            direction = _ONE if pos.quantity > _ZERO else Decimal("-1")
-            pos.unrealized_pnl = (price - pos.avg_entry_price) * pos.abs_quantity * direction
+            pos.unrealized_pnl = _unrealized_pnl(pos.quantity, pos.avg_entry_price, price)
+        self._refresh_position_margin_reserves(prices)
+
+    def _refresh_position_margin_reserves(self, prices: Dict[str, Decimal]) -> None:
+        """Reserve/release maintenance margin for perp positions (Nautilus-style).
+
+        Order reserves are handled by the matching engine. This reserve bucket
+        models locked *position* margin so available quote balance is realistic
+        while positions are open.
+        """
+        for key, pos in self._positions.items():
+            if not pos.instrument_id.is_perp or pos.quantity == _ZERO:
+                self._set_position_margin_reserved(key, _ZERO, pos.instrument_id.quote_asset)
+                continue
+            spec = self._spec_by_key.get(key)
+            lev = int(self._leverage_by_key.get(key, 1) or 1)
+            px = prices.get(key)
+            if spec is None or px is None or px <= _ZERO:
+                # If we can't price the position, keep prior reserve to avoid
+                # oscillation. (Availability will still clamp to zero safely.)
+                continue
+            target = spec.compute_margin_maint(pos.abs_quantity, px, lev)
+            self._set_position_margin_reserved(key, target, pos.instrument_id.quote_asset)
+
+    def _set_position_margin_reserved(self, key: str, target: Decimal, quote_asset: str) -> None:
+        target = max(_ZERO, target)
+        current = self._position_margin_reserved.get(key, _ZERO)
+        if target == current:
+            return
+        if target > current:
+            self._ledger.reserve(quote_asset, target - current)
+        else:
+            self._ledger.release(quote_asset, current - target)
+        if target <= _ZERO:
+            self._position_margin_reserved.pop(key, None)
+        else:
+            self._position_margin_reserved[key] = target
+
+    def maintenance_margin_quote(self) -> Decimal:
+        """Total maintenance margin reserved across all perps (quote currency)."""
+        return sum(self._position_margin_reserved.values(), _ZERO)
+
+    def margin_ratio(self, prices: Optional[Dict[str, Decimal]] = None) -> Decimal:
+        """Equity / maintenance_margin (higher is safer)."""
+        eq = self.equity_quote(prices) if prices else self.equity_quote()
+        mm = self.maintenance_margin_quote()
+        if mm <= _ZERO:
+            return Decimal("999")
+        if eq <= _ZERO:
+            return _ZERO
+        return eq / mm
 
     def apply_funding(
         self, instrument_id: InstrumentId, charge: Decimal, now_ns: int
@@ -257,56 +345,50 @@ class PaperPortfolio:
     ) -> PositionChanged:
         """Settle a fill: update position and ledger.
 
+        Delegates position math to `accounting.apply_fill()` (Nautilus-inspired
+        deterministic accounting core). Ledger settlement (cash/margin flows)
+        and event emission remain here.
+
         Realized PnL = pure price PnL only.
         Fees debited separately (Nautilus convention).
         """
         pos = self._positions.get(instrument_id.key, PaperPosition.flat(instrument_id))
 
-        fill_signed = +quantity if side == OrderSide.BUY else -quantity
-        old_qty = pos.quantity
-        new_qty = old_qty + fill_signed
-        realized_pnl = _ZERO
+        # Cache per-instrument metadata for later mtm/margin refresh.
+        self._spec_by_key[instrument_id.key] = spec
+        self._leverage_by_key[instrument_id.key] = max(1, int(leverage))
 
-        is_closing = (old_qty > _ZERO and fill_signed < _ZERO) or (
-            old_qty < _ZERO and fill_signed > _ZERO
+        # ---- Pure accounting via dedicated core ----
+        old_state = PositionState(
+            quantity=pos.quantity,
+            avg_entry_price=pos.avg_entry_price,
+            realized_pnl=pos.realized_pnl,
+            opened_at_ns=pos.opened_at_ns,
         )
+        result = _apply_fill(
+            old=old_state,
+            fill_side=side.value,
+            fill_qty=quantity,
+            fill_price=price,
+            now_ns=now_ns,
+        )
+        new_state = result.new_state
+        realized_pnl = result.fill_realized_pnl
+        is_closing = result.is_closing
 
-        if is_closing and old_qty != _ZERO:
-            # min() avoids double-counting on flip (Nautilus pattern)
-            close_qty = min(abs(fill_signed), abs(old_qty))
-            direction = _ONE if old_qty > _ZERO else Decimal("-1")
-            realized_pnl = (price - pos.avg_entry_price) * close_qty * direction
-
-            # Flip: remaining qty opens in opposite direction at fill price
-            if new_qty != _ZERO and (new_qty > _ZERO) != (old_qty > _ZERO):
-                pos.avg_entry_price = price
-            # Partial close: avg_entry unchanged
-        else:
-            # Opening or adding to existing
-            if abs(old_qty) > _ZERO:
-                old_cost = abs(old_qty) * pos.avg_entry_price
-                new_cost = quantity * price
-                abs_new = abs(new_qty)
-                pos.avg_entry_price = (old_cost + new_cost) / abs_new if abs_new > _ZERO else price
-            else:
-                pos.avg_entry_price = price
-                pos.opened_at_ns = now_ns
-
-        pos.quantity = new_qty
-        pos.realized_pnl += realized_pnl
-        pos.total_fees_paid += fee     # fees separate from PnL
+        # ---- Update position fields ----
+        pos.quantity = new_state.quantity
+        pos.avg_entry_price = new_state.avg_entry_price
+        pos.realized_pnl = new_state.realized_pnl
+        pos.opened_at_ns = new_state.opened_at_ns
+        pos.total_fees_paid += fee           # fees separate from PnL (Nautilus)
         pos.last_fill_at_ns = now_ns
 
-        # Reset opening time when flipping from flat
-        if pos.opened_at_ns == 0 and new_qty != _ZERO:
-            pos.opened_at_ns = now_ns
-
-        # Clear position if flat
-        if abs(new_qty) <= _EPS:
-            pos.quantity = _ZERO
-
-        # --- Ledger settlement ---
-        self._settle_ledger(instrument_id, side, quantity, price, fee, spec, leverage, realized_pnl, is_closing)
+        # ---- Ledger settlement (cash/margin flows) ----
+        self._settle_ledger(
+            instrument_id, side, quantity, price, fee,
+            spec, leverage, realized_pnl, is_closing,
+        )
 
         # Update peak equity tracking
         eq = self.equity_quote()
@@ -316,6 +398,12 @@ class PaperPortfolio:
             self._daily_open_equity = eq
 
         self._positions[instrument_id.key] = pos
+
+        # Refresh maintenance margin reserve using fill price as a best-effort mark.
+        try:
+            self._refresh_position_margin_reserves({instrument_id.key: price})
+        except Exception:
+            pass
 
         return PositionChanged(
             event_id=_uuid(), timestamp_ns=now_ns,
@@ -378,6 +466,38 @@ class PaperPortfolio:
             return _ZERO
         return (self._peak_equity - eq) / self._peak_equity
 
+    # -- Risk Engine (promoted) -------------------------------------------
+
+    @property
+    def margin_level(self) -> MarginLevel:
+        """Current margin level (assessed at last mark-to-market or fill)."""
+        return self._last_margin_level
+
+    def evaluate_risk(
+        self, prices: Optional[Dict[str, Decimal]] = None
+    ) -> "tuple[MarginLevel, list[LiquidationAction]]":
+        """Evaluate portfolio-level risk via the promoted RiskEngine.
+
+        Returns (MarginLevel, [LiquidationAction]) where liquidation
+        actions are advisory — the desk should execute them as forced orders.
+        """
+        eq = self.equity_quote(prices)
+        mm = self.maintenance_margin_quote()
+        # Build position snapshot for the risk engine.
+        positions = {
+            key: (pos.quantity, pos.instrument_id)
+            for key, pos in self._positions.items()
+            if pos.quantity != _ZERO
+        }
+        level, actions = self._risk_engine.evaluate(eq, mm, positions)
+        self._last_margin_level = level
+        return level, actions
+
+    def risk_reasons(self, prices: Optional[Dict[str, Decimal]] = None) -> str:
+        """Return ops-compatible risk reason string for current margin level."""
+        level, _ = self.evaluate_risk(prices)
+        return self._risk_engine.margin_level_to_risk_reason(level)
+
     # -- Persistence -------------------------------------------------------
 
     def snapshot(self) -> Dict[str, Any]:
@@ -386,6 +506,8 @@ class PaperPortfolio:
             "positions": {k: v.to_dict() for k, v in self._positions.items()},
             "peak_equity": str(self._peak_equity),
             "daily_open_equity": str(self._daily_open_equity) if self._daily_open_equity else None,
+            "leverage_by_key": {k: int(v) for k, v in self._leverage_by_key.items()},
+            "position_margin_reserved": {k: str(v) for k, v in self._position_margin_reserved.items()},
         }
 
     def restore_from_snapshot(self, data: Dict[str, Any]) -> None:
@@ -403,3 +525,26 @@ class PaperPortfolio:
                     self._positions[key] = PaperPosition.from_dict(pd, iid)
                 except Exception as exc:
                     logger.warning("Could not restore position %s: %s", key, exc)
+        if "leverage_by_key" in data and isinstance(data["leverage_by_key"], dict):
+            try:
+                self._leverage_by_key = {k: int(v) for k, v in data["leverage_by_key"].items()}
+            except Exception:
+                pass
+        if "position_margin_reserved" in data and isinstance(data["position_margin_reserved"], dict):
+            try:
+                self._position_margin_reserved = {k: Decimal(str(v)) for k, v in data["position_margin_reserved"].items()}
+                # Apply reserves into ledger so available() reflects lock after restart.
+                for key, amt in self._position_margin_reserved.items():
+                    if amt > _ZERO:
+                        # Derive quote asset from the instrument key: venue:BASE-QUOTE:itype
+                        quote = "USDT"
+                        try:
+                            _, pair, _ = key.split(":", 2)
+                            parts = pair.split("-")
+                            if len(parts) > 1 and parts[1]:
+                                quote = parts[1]
+                        except Exception:
+                            pass
+                        self._ledger.reserve(quote, amt)
+            except Exception:
+                pass

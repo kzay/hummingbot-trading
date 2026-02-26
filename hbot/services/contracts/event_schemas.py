@@ -124,7 +124,13 @@ class BotMinuteSnapshotEvent(EventEnvelope):
 
 
 class BotFillEvent(EventEnvelope):
-    """Individual fill event for bot telemetry stream."""
+    """Individual fill event published to BOT_TELEMETRY_STREAM.
+
+    Emitted by both paper (accounting_source='paper_desk_v2') and live
+    (accounting_source='live_connector') paths so the event_store ingests
+    fills symmetrically regardless of mode.  Consumers can filter by
+    accounting_source to separate simulated from real fills.
+    """
     event_type: Literal["bot_fill"] = "bot_fill"
     instance_name: str
     controller_id: str
@@ -136,5 +142,9 @@ class BotFillEvent(EventEnvelope):
     notional_quote: float
     fee_quote: float
     order_id: str
+    accounting_source: str = "live_connector"   # "paper_desk_v2" | "live_connector"
+    is_maker: bool = False
+    realized_pnl_quote: float = 0.0
+    bot_state: str = ""                          # ops guard state at fill time
     metadata: Dict[str, str] = Field(default_factory=dict)
 

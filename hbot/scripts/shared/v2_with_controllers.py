@@ -308,6 +308,8 @@ class V2WithControllers(StrategyV2Base):
 
             connector_type = str(getattr(cfg, "resolved_connector_type", "spot"))
             instrument_type = "perp" if connector_type == "perp" else "spot"
+            # Keep legacy venue mapping stable to preserve PaperDesk state keys.
+            # Fee lookup is handled in paper_engine_v2 fee model selection.
             venue = connector_name.replace("_paper_trade", "").replace("_perpetual", "")
             iid = InstrumentId(venue=venue, trading_pair=trading_pair, instrument_type=instrument_type)
 

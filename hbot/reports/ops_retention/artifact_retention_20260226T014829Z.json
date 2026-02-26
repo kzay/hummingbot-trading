@@ -1,0 +1,131 @@
+{
+  "ts_utc": "2026-02-26T01:48:29.013270+00:00",
+  "mode": "dry_run",
+  "policy_path": "F:\\Environement\\git-repo\\hummingbot_custo\\hbot\\config\\agent_artifact_retention_policy.json",
+  "candidates": 6580,
+  "expired": 3026,
+  "deleted": 0,
+  "rules": [
+    {
+      "name": "event_store_source_compare",
+      "glob": "reports/event_store/source_compare_*",
+      "keep_days": 1,
+      "matched_files": 2266,
+      "expired_files": 1883,
+      "deleted_files": 0
+    },
+    {
+      "name": "event_store_events",
+      "glob": "reports/event_store/events_*",
+      "keep_days": 7,
+      "matched_files": 3,
+      "expired_files": 0,
+      "deleted_files": 0
+    },
+    {
+      "name": "event_store_integrity",
+      "glob": "reports/event_store/integrity_*",
+      "keep_days": 7,
+      "matched_files": 5,
+      "expired_files": 0,
+      "deleted_files": 0
+    },
+    {
+      "name": "reconciliation_runs",
+      "glob": "reports/reconciliation/reconciliation_*",
+      "keep_days": 3,
+      "matched_files": 1328,
+      "expired_files": 445,
+      "deleted_files": 0
+    },
+    {
+      "name": "parity_runs",
+      "glob": "reports/parity/*/parity_*",
+      "keep_days": 3,
+      "matched_files": 1305,
+      "expired_files": 422,
+      "deleted_files": 0
+    },
+    {
+      "name": "portfolio_risk_action_checks",
+      "glob": "reports/portfolio_risk/action_check_*",
+      "keep_days": 3,
+      "matched_files": 21,
+      "expired_files": 21,
+      "deleted_files": 0
+    },
+    {
+      "name": "portfolio_risk_audits",
+      "glob": "reports/portfolio_risk/audit_*",
+      "keep_days": 3,
+      "matched_files": 6,
+      "expired_files": 2,
+      "deleted_files": 0
+    },
+    {
+      "name": "soak_snapshots",
+      "glob": "reports/soak/soak_snapshot_*",
+      "keep_days": 3,
+      "matched_files": 1113,
+      "expired_files": 249,
+      "deleted_files": 0
+    },
+    {
+      "name": "dev_checks_runs",
+      "glob": "reports/dev_checks/dev_*",
+      "keep_days": 3,
+      "matched_files": 4,
+      "expired_files": 4,
+      "deleted_files": 0
+    },
+    {
+      "name": "promotion_gates_runs",
+      "glob": "reports/promotion_gates/promotion_gates_*",
+      "keep_days": 14,
+      "matched_files": 114,
+      "expired_files": 0,
+      "deleted_files": 0
+    },
+    {
+      "name": "replay_regression_runs",
+      "glob": "reports/replay_regression/replay_regression_*",
+      "keep_days": 14,
+      "matched_files": 134,
+      "expired_files": 0,
+      "deleted_files": 0
+    },
+    {
+      "name": "replay_regression_multi_window_runs",
+      "glob": "reports/replay_regression_multi_window/replay_regression_multi_window_*",
+      "keep_days": 14,
+      "matched_files": 22,
+      "expired_files": 0,
+      "deleted_files": 0
+    },
+    {
+      "name": "backtest_regression_runs",
+      "glob": "reports/backtest_regression/backtest_regression_*",
+      "keep_days": 14,
+      "matched_files": 183,
+      "expired_files": 0,
+      "deleted_files": 0
+    },
+    {
+      "name": "test_runs",
+      "glob": "reports/tests/test_run_*",
+      "keep_days": 14,
+      "matched_files": 74,
+      "expired_files": 0,
+      "deleted_files": 0
+    },
+    {
+      "name": "ops_retention_evidence",
+      "glob": "reports/ops_retention/artifact_retention_*",
+      "keep_days": 14,
+      "matched_files": 2,
+      "expired_files": 0,
+      "deleted_files": 0
+    }
+  ],
+  "deleted_paths_sample": []
+}

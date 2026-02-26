@@ -251,9 +251,37 @@ class PaperDesk:
         if current_prices:
             self._portfolio.mark_to_market(current_prices)
 
+        # Post-trade risk evaluation (advisory liquidation actions)
+        try:
+            margin_level, liq_actions = self._portfolio.evaluate_risk(current_prices)
+            if liq_actions:
+                logger.warning(
+                    "PaperDesk risk: %s level, %d liquidation actions required",
+                    margin_level.value, len(liq_actions),
+                )
+        except Exception:
+            pass
+
         # Persist state (throttled)
         now_ts = now_ns / 1e9
-        self._state_store.save(self.snapshot(), now_ts, force=False)
+        snap = self.snapshot()
+        self._state_store.save(snap, now_ts, force=False)
+
+        # Journal fill events for replay/postmortem
+        try:
+            from controllers.paper_engine_v2.types import OrderFilled
+            for ev in all_events:
+                if isinstance(ev, OrderFilled):
+                    self._state_store.journal_event("order_filled", {
+                        "instrument_id": ev.instrument_id.key,
+                        "order_id": ev.order_id,
+                        "fill_price": str(ev.fill_price),
+                        "fill_quantity": str(ev.fill_quantity),
+                        "fee": str(ev.fee),
+                        "is_maker": ev.is_maker,
+                    })
+        except Exception:
+            pass
 
         # Log events
         self._event_log.extend(all_events)
@@ -351,6 +379,7 @@ class PaperDesk:
             default_fill_model="queue_position",
             default_fee_source="fee_profiles",
             default_fee_profile="vip0",
+            fee_profiles_path="project_config/fee_profiles.json",
             default_latency_model="none",
             default_engine_config=engine_config,
             state_file_path=f"{log_dir}/epp_v24/{instance_name}_{variant}/paper_desk_v2.json",

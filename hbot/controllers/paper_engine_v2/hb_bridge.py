@@ -10,6 +10,15 @@ Replaces paper_engine.py (v1) entirely. Provides:
 4. HB event translation (OrderFilled, OrderCanceled, etc.)
 5. Balance reporting from PaperPortfolio to HB connector reads
 6. desk.tick() driving on each HB on_tick()
+7. EventSubscriber protocol for clean decoupled event routing (Phase 5).
+
+Phase 5 — EventSubscriber architecture:
+  The bridge now supports optional EventSubscribers that can receive desk events
+  without monkey-patching. This allows testing without HB and cleaner separation
+  between the desk domain and the HB framework domain.
+
+  When subscribers are registered, events are dispatched to them BEFORE the
+  legacy monkey-patch path, allowing gradual migration.
 """
 from __future__ import annotations
 
@@ -17,11 +26,12 @@ import logging
 import time
 from decimal import Decimal
 from types import MethodType, SimpleNamespace
-from typing import Any, Callable, Dict, Optional
+from typing import Any, Callable, Dict, List, Optional, Protocol
 
 from controllers.paper_engine_v2.data_feeds import HummingbotDataFeed
 from controllers.paper_engine_v2.desk import PaperDesk
 from controllers.paper_engine_v2.types import (
+    EngineEvent,
     InstrumentId,
     InstrumentSpec,
     OrderCanceled,
@@ -35,6 +45,60 @@ from controllers.paper_engine_v2.types import (
 logger = logging.getLogger(__name__)
 
 _CANONICAL_CACHE: Dict[str, str] = {}
+
+# ---------------------------------------------------------------------------
+# EventSubscriber protocol (Phase 5: clean decoupled event routing)
+# ---------------------------------------------------------------------------
+
+class EventSubscriber(Protocol):
+    """Adapter-style subscriber that receives desk engine events.
+
+    Implement this protocol to receive events from the bridge without
+    relying on HB monkey-patching. Useful for:
+    - Testing without HB (inject a TestSubscriber)
+    - Custom loggers / analytics subscribers
+    - Future non-HB connectors
+
+    The bridge calls on_fill / on_cancel / on_reject for each event.
+    Implementations should never raise; errors are caught and logged.
+    """
+
+    def on_fill(self, event: OrderFilled, connector_name: str) -> None: ...
+    def on_cancel(self, event: OrderCanceled, connector_name: str) -> None: ...
+    def on_reject(self, event: OrderRejected, connector_name: str) -> None: ...
+
+
+# Global subscriber registry — use register_event_subscriber() to add.
+_EVENT_SUBSCRIBERS: List[EventSubscriber] = []
+
+
+def register_event_subscriber(subscriber: EventSubscriber) -> None:
+    """Register a subscriber to receive desk events via clean protocol."""
+    _EVENT_SUBSCRIBERS.append(subscriber)
+
+
+def unregister_event_subscriber(subscriber: EventSubscriber) -> None:
+    """Remove a previously registered subscriber."""
+    try:
+        _EVENT_SUBSCRIBERS.remove(subscriber)
+    except ValueError:
+        pass
+
+
+def _dispatch_to_subscribers(event: EngineEvent, connector_name: str) -> None:
+    """Dispatch a desk event to all registered EventSubscribers."""
+    if not _EVENT_SUBSCRIBERS:
+        return
+    for sub in _EVENT_SUBSCRIBERS:
+        try:
+            if isinstance(event, OrderFilled):
+                sub.on_fill(event, connector_name)
+            elif isinstance(event, OrderCanceled):
+                sub.on_cancel(event, connector_name)
+            elif isinstance(event, OrderRejected):
+                sub.on_reject(event, connector_name)
+        except Exception as exc:
+            logger.warning("EventSubscriber %s error: %s", type(sub).__name__, exc)
 
 
 def _canonical_name(connector_name: str) -> str:
@@ -387,14 +451,92 @@ def _patch_connector_balances(connector: Any, desk: PaperDesk, iid: InstrumentId
     if getattr(connector, "_epp_v2_balance_patched", False):
         return
     try:
-        def _get_balance(asset: str) -> Decimal:
+        # Expose the active desk on the connector so controllers/exporters can
+        # read canonical paper accounting (position, avg entry, daily open equity).
+        if not hasattr(connector, "_paper_desk_v2"):
+            connector._paper_desk_v2 = desk
+        if not hasattr(connector, "_paper_desk_v2_instrument_id"):
+            connector._paper_desk_v2_instrument_id = iid
+
+        # Keep original methods for safety/fallback.
+        if not hasattr(connector, "_epp_v2_orig_get_balance") and hasattr(connector, "get_balance"):
+            connector._epp_v2_orig_get_balance = connector.get_balance
+        if not hasattr(connector, "_epp_v2_orig_get_available_balance") and hasattr(connector, "get_available_balance"):
+            connector._epp_v2_orig_get_available_balance = connector.get_available_balance
+        if not hasattr(connector, "_epp_v2_orig_ready") and hasattr(connector, "ready"):
+            connector._epp_v2_orig_ready = connector.ready
+        if not hasattr(connector, "_epp_v2_orig_get_position") and hasattr(connector, "get_position"):
+            connector._epp_v2_orig_get_position = connector.get_position
+        if not hasattr(connector, "_epp_v2_orig_account_positions") and hasattr(connector, "account_positions"):
+            connector._epp_v2_orig_account_positions = connector.account_positions
+
+        def _paper_balance(asset: str) -> Decimal:
             return desk.portfolio.balance(asset)
 
-        def _get_available_balance(asset: str) -> Decimal:
+        def _paper_available(asset: str) -> Decimal:
             return desk.portfolio.available(asset)
 
-        connector._paper_desk_v2_get_balance = _get_balance
-        connector._paper_desk_v2_get_available = _get_available_balance
+        def _patched_get_balance(self, asset: str) -> Decimal:
+            try:
+                return _paper_balance(asset)
+            except Exception:
+                orig = getattr(self, "_epp_v2_orig_get_balance", None)
+                return orig(asset) if callable(orig) else Decimal("0")
+
+        def _patched_get_available_balance(self, asset: str) -> Decimal:
+            try:
+                return _paper_available(asset)
+            except Exception:
+                orig = getattr(self, "_epp_v2_orig_get_available_balance", None)
+                return orig(asset) if callable(orig) else Decimal("0")
+
+        def _patched_ready(self) -> bool:
+            # In paper mode we route orders through PaperDesk, so connector readiness
+            # shouldn't block startup checks / ops guard.
+            return True
+
+        def _paper_position_obj():
+            pos = desk.portfolio.get_position(iid)
+            # Hummingbot connectors typically return a position-like object with `amount`.
+            return SimpleNamespace(
+                trading_pair=iid.trading_pair,
+                amount=pos.quantity,
+                entry_price=pos.avg_entry_price,
+            )
+
+        def _patched_get_position(self, trading_pair: Optional[str] = None, *args, **kwargs):
+            try:
+                if trading_pair and str(trading_pair) != str(iid.trading_pair):
+                    orig = getattr(self, "_epp_v2_orig_get_position", None)
+                    return orig(trading_pair, *args, **kwargs) if callable(orig) else None
+                return _paper_position_obj()
+            except Exception:
+                orig = getattr(self, "_epp_v2_orig_get_position", None)
+                return orig(trading_pair, *args, **kwargs) if callable(orig) else None
+
+        def _patched_account_positions(self, *args, **kwargs):
+            try:
+                # Some connectors expose account_positions as a dict-like structure.
+                return {iid.trading_pair: {"amount": desk.portfolio.get_position(iid).quantity}}
+            except Exception:
+                orig = getattr(self, "_epp_v2_orig_account_positions", None)
+                return orig(*args, **kwargs) if callable(orig) else {}
+
+        # Monkeypatch connector methods so the rest of the codebase (runtime adapter,
+        # minute logger, reconciliation services) sees PaperDesk equity/position.
+        if hasattr(connector, "get_balance"):
+            connector.get_balance = MethodType(_patched_get_balance, connector)
+        if hasattr(connector, "get_available_balance"):
+            connector.get_available_balance = MethodType(_patched_get_available_balance, connector)
+        if hasattr(connector, "ready"):
+            connector.ready = MethodType(_patched_ready, connector)
+        if hasattr(connector, "get_position"):
+            connector.get_position = MethodType(_patched_get_position, connector)
+        if hasattr(connector, "account_positions"):
+            connector.account_positions = MethodType(_patched_account_positions, connector)
+
+        connector._paper_desk_v2_get_balance = _paper_balance
+        connector._paper_desk_v2_get_available = _paper_available
         connector._epp_v2_balance_patched = True
         logger.debug("Connector balance reads patched for v2 portfolio")
     except Exception as exc:
@@ -432,9 +574,17 @@ def _fire_hb_events(strategy: Any, connector_name: str, event: Any) -> None:
     The controller's did_fill_order() writes to fills.csv and updates
     minute.csv — this is what Grafana reads. Without this, fills are
     invisible to the dashboard regardless of paper/live mode.
+
+    Phase 5: Dispatches to registered EventSubscribers FIRST (clean path),
+    then falls through to the legacy HB monkey-patch path.
     """
     if event is None:
         return
+
+    # Clean subscriber dispatch (non-raising)
+    _dispatch_to_subscribers(event, connector_name)
+
+    # Legacy HB monkey-patch path (preserved for full backward compat)
     try:
         if isinstance(event, OrderFilled):
             _fire_fill_event(strategy, connector_name, event)
@@ -527,6 +677,108 @@ def _fire_fill_event(strategy: Any, connector_name: str, fill_event: OrderFilled
                 controller.did_fill_order(hb_fill)
             except Exception as exc:
                 logger.warning("Controller did_fill_order failed: %s", exc, exc_info=True)
+
+        # Publish fill to hb.bot_telemetry.v1 via Redis so the event_store
+        # service ingests paper fills the same way it ingests live fills.
+        # Falls back to direct JSONL write when Redis is unavailable.
+        #
+        # NOTE: We use `redis` directly here rather than importing from
+        # services.* because `controllers/types.py` shadows stdlib `types`,
+        # which breaks any services import chain that passes through enum/json.
+        try:
+            instance_name = str(getattr(getattr(controller, "config", None), "instance_name", "") or "")
+            controller_id = str(getattr(controller, "id", "") or getattr(controller, "controller_id", "") or "")
+            is_maker_val = bool(getattr(fill_event, "is_maker", False))
+            side_str = "buy" if trade_type == TradeType.BUY else "sell"
+
+            from datetime import datetime, timezone as _tz
+            from pathlib import Path
+            import json as _json
+            import os as _os
+            import uuid as _uuid_mod
+
+            _redis_published = False
+            try:
+                import redis as _redis_lib  # available in hummingbot conda env (redis 7.1.0)
+                _redis_host = _os.environ.get("REDIS_HOST", "")
+                if _redis_host:
+                    _r = _redis_lib.Redis(
+                        host=_redis_host,
+                        port=int(_os.environ.get("REDIS_PORT", "6379")),
+                        db=int(_os.environ.get("REDIS_DB", "0")),
+                        password=_os.environ.get("REDIS_PASSWORD") or None,
+                        decode_responses=True,
+                        socket_connect_timeout=1,
+                    )
+                    _payload = {
+                        "event_id": str(_uuid_mod.uuid4()),
+                        "event_type": "bot_fill",
+                        "event_version": "v1",
+                        "schema_version": "1.0",
+                        "ts_utc": datetime.now(_tz.utc).isoformat(),
+                        "producer": "hb.paper_engine_v2",
+                        "instance_name": instance_name,
+                        "controller_id": controller_id,
+                        "connector_name": str(connector_name),
+                        "trading_pair": str(fill_event.instrument_id.trading_pair),
+                        "side": side_str,
+                        "price": float(fill_event.fill_price),
+                        "amount_base": float(fill_event.fill_quantity),
+                        "notional_quote": float(fill_event.fill_price * fill_event.fill_quantity),
+                        "fee_quote": float(fill_event.fee),
+                        "order_id": str(fill_event.order_id),
+                        "accounting_source": "paper_desk_v2",
+                        "is_maker": is_maker_val,
+                        "realized_pnl_quote": 0.0,
+                        "bot_state": "",
+                        "correlation_id": str(getattr(fill_event, "event_id", "") or ""),
+                    }
+                    _r.xadd(
+                        "hb.bot_telemetry.v1",
+                        {"payload": _json.dumps(_payload)},
+                        maxlen=100_000,
+                        approximate=True,
+                    )
+                    _redis_published = True
+            except Exception:
+                pass  # Redis not available or down — fall through to JSONL
+
+            if not _redis_published:
+                # Fallback: direct JSONL write (offline / Redis-off environments)
+                root = Path("/workspace/hbot") if Path("/.dockerenv").exists() else Path(__file__).resolve().parents[2]
+                out_dir = root / "reports" / "event_store"
+                out_dir.mkdir(parents=True, exist_ok=True)
+                out_path = out_dir / f"events_{datetime.now(_tz.utc).strftime('%Y%m%d')}.jsonl"
+                envelope = {
+                    "event_id": str(_uuid_mod.uuid4()),
+                    "event_type": "bot_fill",
+                    "event_version": "v1",
+                    "ts_utc": datetime.now(_tz.utc).isoformat(),
+                    "producer": "hb.paper_engine_v2",
+                    "instance_name": instance_name,
+                    "controller_id": controller_id,
+                    "connector_name": str(connector_name),
+                    "trading_pair": str(fill_event.instrument_id.trading_pair),
+                    "correlation_id": str(getattr(fill_event, "event_id", "") or ""),
+                    "stream": "local.paper_engine_v2.fallback",
+                    "stream_entry_id": "",
+                    "accounting_source": "paper_desk_v2",
+                    "payload": {
+                        "order_id": str(fill_event.order_id),
+                        "side": side_str,
+                        "price": float(fill_event.fill_price),
+                        "amount_base": float(fill_event.fill_quantity),
+                        "fee_quote": float(fill_event.fee),
+                        "is_maker": is_maker_val,
+                    },
+                    "ingest_ts_utc": datetime.now(_tz.utc).isoformat(),
+                    "schema_validation_status": "ok",
+                }
+                with out_path.open("a", encoding="utf-8") as f:
+                    f.write(_json.dumps(envelope, ensure_ascii=True) + "\n")
+        except Exception:
+            # Never let telemetry break trading.
+            pass
 
         # Also fire to the strategy (for V2 base class accounting)
         if hasattr(strategy, "did_fill_order"):

@@ -260,6 +260,34 @@ class OrderStatus(str, Enum):
     REJECTED = "rejected"    # terminal
 
 
+# Allowed state transitions (Nautilus-style explicit state machine).
+# Any transition not in this map is invalid.
+_ORDER_TRANSITIONS: Dict[OrderStatus, tuple] = {
+    OrderStatus.PENDING_SUBMIT: (OrderStatus.OPEN, OrderStatus.CANCELED, OrderStatus.REJECTED),
+    OrderStatus.OPEN: (OrderStatus.PARTIALLY_FILLED, OrderStatus.FILLED, OrderStatus.CANCELED, OrderStatus.REJECTED),
+    OrderStatus.PARTIALLY_FILLED: (OrderStatus.PARTIALLY_FILLED, OrderStatus.FILLED, OrderStatus.CANCELED),
+    # Terminal states: no outgoing transitions
+    OrderStatus.FILLED: (),
+    OrderStatus.CANCELED: (),
+    OrderStatus.REJECTED: (),
+}
+
+
+def order_status_transition(current: OrderStatus, next_status: OrderStatus) -> OrderStatus:
+    """Apply a validated state transition.
+
+    Raises ValueError on invalid transition; returns next_status if valid.
+    Callers that need defensive (non-raising) behavior should catch ValueError.
+    """
+    allowed = _ORDER_TRANSITIONS.get(current, ())
+    if next_status not in allowed:
+        raise ValueError(
+            f"Invalid order state transition: {current!r} -> {next_status!r}. "
+            f"Allowed: {[s.value for s in allowed]}"
+        )
+    return next_status
+
+
 @dataclass
 class PaperOrder:
     order_id: str

@@ -35,6 +35,7 @@ from controllers.price_buffer import MidPriceBuffer
 from services.common.exchange_profiles import resolve_profile
 from services.common.fee_provider import FeeResolver
 from services.common.utils import to_decimal
+from controllers.analytics.performance_metrics import max_drawdown_with_metadata
 
 _clip = clip
 
@@ -359,11 +360,13 @@ class EppV24Controller(MarketMakingControllerBase):
         self._resolved_specs = self._resolve_specs(config.regime_specs_override)
         self._bot_mode = config.bot_mode
         if self._bot_mode == "paper" and not config.connector_name.endswith("_paper_trade"):
-            logger.warning(
-                "BOT_MODE=paper but connector_name=%s does not end with '_paper_trade'. "
-                "Equity will use paper_equity_quote=%s but orders may route to a LIVE exchange. "
-                "Set connector to a paper_trade variant or confirm this is intentional.",
-                config.connector_name, config.paper_equity_quote,
+            # In Paper Engine v2 mode we often use the "real" connector name for market data,
+            # while execution is intercepted by the paper desk bridge. Keep this as an info
+            # breadcrumb (not a scary warning) so ops can sanity-check routing.
+            logger.info(
+                "BOT_MODE=paper with connector_name=%s (no '_paper_trade' suffix). "
+                "Ensure the PaperDesk bridge is installed and no live trading keys are at risk.",
+                config.connector_name,
             )
         if self._bot_mode == "live" and config.internal_paper_enabled:
             logger.warning(
@@ -393,6 +396,9 @@ class EppV24Controller(MarketMakingControllerBase):
         self._fills_count_today: int = 0
         self._daily_equity_open: Optional[Decimal] = None
         self._daily_key: Optional[str] = None
+        # One equity sample per logged minute (used for daily max drawdown).
+        self._equity_samples_today: List[Decimal] = []
+        self._equity_sample_ts_today: List[str] = []
         self._cancel_events_ts: List[float] = []
         self._cancel_fail_streak: int = 0
         self._soft_pause_edge: bool = False
@@ -415,6 +421,7 @@ class EppV24Controller(MarketMakingControllerBase):
         self._net_edge_gate: Decimal = _ZERO
         self._daily_equity_peak: Optional[Decimal] = None
         self._fees_paid_today_quote: Decimal = Decimal("0")
+        self._fee_rate_mismatch_warned_today: bool = False
         self._paper_fill_count: int = 0
         self._paper_reject_count: int = 0
         self._paper_avg_queue_delay_ms: Decimal = Decimal("0")
@@ -505,10 +512,14 @@ class EppV24Controller(MarketMakingControllerBase):
         mid = self._get_mid_price()
         if mid <= 0:
             return
+        # In Paper Engine v2, sync controller shadow accounting from PaperDesk
+        # so Grafana-facing minute snapshots remain canonical.
+        self._sync_from_paper_desk_v2(mid=mid)
         self._price_buffer.add_sample(now, mid)
         self._maybe_roll_day(now)
 
         equity_quote, base_pct_gross, base_pct_net = self._compute_equity_and_base_pcts(mid)
+        self._sync_from_paper_desk_v2(mid=mid, equity_quote=equity_quote)
         self._track_daily_equity(equity_quote)
 
         _t_ind_start = _time_mod.perf_counter()
@@ -665,6 +676,9 @@ class EppV24Controller(MarketMakingControllerBase):
                 risk_hard_stop=risk_hard_stop,
             )
         )
+        # Fail-closed on stale order book to avoid quoting off a frozen top-of-book.
+        if market.order_book_stale and state != GuardState.HARD_STOP:
+            state = GuardState.SOFT_PAUSE
         if not self.config.enabled or self.config.variant in {"b", "c"}:
             state = self._ops_guard.force_hard_stop("phase0_stub_disabled")
         if self.config.no_trade or self.config.variant == "d":
@@ -695,13 +709,23 @@ class EppV24Controller(MarketMakingControllerBase):
         projected_total_quote: Decimal, state: GuardState,
     ) -> None:
         """Build ProcessedState, blank levels on pause, and log the minute row."""
+        # In SOFT_PAUSE, the default behavior is fail-closed (no quoting).
+        # Exception: allow *de-risk-only* quoting when the only blocker is inventory
+        # outside the configured [min_base_pct, max_base_pct] band.
+        risk_reasons_for_log = list(risk_reasons)
+        derisk_only = False
+        rr = set(risk_reasons)
+        if state == GuardState.SOFT_PAUSE and not risk_hard_stop and rr in ({"base_pct_above_max"}, {"base_pct_below_min"}):
+            derisk_only = True
+            risk_reasons_for_log.append("derisk_only")
+
         base_bal, quote_bal = self._get_balances()
         self.processed_data = self._build_tick_output(
             mid=mid, regime_name=regime_name, target_base_pct=target_base_pct,
             base_pct=base_pct_gross, state=state, spread_state=spread_state,
             market=market, equity_quote=equity_quote,
             base_bal=base_bal, quote_bal=quote_bal,
-            risk_hard_stop=risk_hard_stop, risk_reasons=risk_reasons,
+            risk_hard_stop=risk_hard_stop, risk_reasons=risk_reasons_for_log,
             daily_loss_pct=daily_loss_pct, drawdown_pct=drawdown_pct,
             projected_total_quote=projected_total_quote,
         )
@@ -713,15 +737,32 @@ class EppV24Controller(MarketMakingControllerBase):
         self._tick_duration_ms = (_time_mod.perf_counter() - _t0) * 1000.0
         self.processed_data["_tick_duration_ms"] = self._tick_duration_ms
 
-        if state != GuardState.RUNNING:
+        if state != GuardState.RUNNING and not derisk_only:
             self._runtime_levels.buy_spreads = []
             self._runtime_levels.sell_spreads = []
             self._runtime_levels.buy_amounts_pct = []
             self._runtime_levels.sell_amounts_pct = []
             self._runtime_levels.total_amount_quote = Decimal("0")
+        elif derisk_only:
+            # Only allow orders that reduce inventory imbalance.
+            if rr == {"base_pct_above_max"}:
+                # Too long: allow only SELLs.
+                self._runtime_levels.buy_spreads = []
+                self._runtime_levels.buy_amounts_pct = []
+                # Clamp notional so unwind isn't accidentally sized like two-sided quoting.
+                if self.config.max_order_notional_quote > 0:
+                    max_total = self.config.max_order_notional_quote * Decimal(max(1, len(self._runtime_levels.sell_spreads)))
+                    self._runtime_levels.total_amount_quote = min(self._runtime_levels.total_amount_quote, max_total)
+            elif rr == {"base_pct_below_min"}:
+                # Too short / too little base: allow only BUYs.
+                self._runtime_levels.sell_spreads = []
+                self._runtime_levels.sell_amounts_pct = []
+                if self.config.max_order_notional_quote > 0:
+                    max_total = self.config.max_order_notional_quote * Decimal(max(1, len(self._runtime_levels.buy_spreads)))
+                    self._runtime_levels.total_amount_quote = min(self._runtime_levels.total_amount_quote, max_total)
 
         event_ts = datetime.fromtimestamp(now, tz=timezone.utc).isoformat()
-        self._log_minute(now, event_ts, self.processed_data, state, risk_reasons)
+        self._log_minute(now, event_ts, self.processed_data, state, risk_reasons_for_log)
 
     def get_executor_config(self, level_id: str, price: Decimal, amount: Decimal):
         side = self.get_trade_type_from_level_id(level_id)
@@ -755,6 +796,28 @@ class EppV24Controller(MarketMakingControllerBase):
             fee_quote = notional * self._taker_fee_pct
             logger.warning("Fee extraction failed for order %s, using estimate %.6f", event.order_id, fee_quote)
         self._fees_paid_today_quote += fee_quote
+
+        # Paper-trade skepticism: warn if effective fee rate deviates wildly from the
+        # configured fee schedule (usually indicates wrong venue key / profile lookup).
+        if (
+            self.config.is_paper
+            and not self._fee_rate_mismatch_warned_today
+            and self._fills_count_today >= 10
+            and self._traded_notional_today > _ZERO
+        ):
+            eff = self._fees_paid_today_quote / self._traded_notional_today
+            expected_hi = max(self._maker_fee_pct, self._taker_fee_pct)
+            # Allow a wide band (maker/taker mix, rounding, multi-venue quirks).
+            if expected_hi > _ZERO and eff > expected_hi * Decimal("2.5"):
+                logger.warning(
+                    "Effective fee_rate %.4fbps deviates from configured maker/taker %.4f/%.4fbps (source=%s). "
+                    "Paper stats may be misleading until fee model is reconciled.",
+                    float(eff * Decimal("10000")),
+                    float(self._maker_fee_pct * Decimal("10000")),
+                    float(self._taker_fee_pct * Decimal("10000")),
+                    self._fee_source,
+                )
+                self._fee_rate_mismatch_warned_today = True
         expected_spread = to_decimal(self.processed_data.get("spread_pct", Decimal("0")))
         mid_ref = to_decimal(self.processed_data.get("mid", event.price))
         adverse_ref = to_decimal(self.processed_data.get("adverse_drift_30s", Decimal("0")))
@@ -827,6 +890,53 @@ class EppV24Controller(MarketMakingControllerBase):
             },
             ts=event_ts,
         )
+
+        # Publish fill to hb.bot_telemetry.v1 so live and paper fills are
+        # ingested symmetrically by the event_store service.
+        # Paper fills publish from hb_bridge; this covers the live path.
+        # Uses `redis` directly to avoid controllers/types.py shadowing stdlib.
+        if not self.config.is_paper:
+            try:
+                import redis as _redis_lib
+                import json as _json_tel
+                import os as _os_tel
+                import uuid as _uuid_tel
+                _rhost = _os_tel.environ.get("REDIS_HOST", "")
+                if _rhost:
+                    _r = _redis_lib.Redis(
+                        host=_rhost,
+                        port=int(_os_tel.environ.get("REDIS_PORT", "6379")),
+                        db=int(_os_tel.environ.get("REDIS_DB", "0")),
+                        password=_os_tel.environ.get("REDIS_PASSWORD") or None,
+                        decode_responses=True,
+                        socket_connect_timeout=1,
+                    )
+                    _p = {
+                        "event_id": str(_uuid_tel.uuid4()),
+                        "event_type": "bot_fill",
+                        "event_version": "v1",
+                        "schema_version": "1.0",
+                        "ts_utc": event_ts,
+                        "producer": f"hb.epp_v2_4.{self.config.instance_name}",
+                        "instance_name": self.config.instance_name,
+                        "controller_id": str(getattr(self, "id", "") or ""),
+                        "connector_name": self.config.connector_name,
+                        "trading_pair": self.config.trading_pair,
+                        "side": event.trade_type.name.lower(),
+                        "price": float(event.price),
+                        "amount_base": float(event.amount),
+                        "notional_quote": float(notional),
+                        "fee_quote": float(fee_quote),
+                        "order_id": event.order_id,
+                        "accounting_source": "live_connector",
+                        "is_maker": bool(is_maker),
+                        "realized_pnl_quote": float(realized_pnl),
+                        "bot_state": self._ops_guard.state.value,
+                    }
+                    _r.xadd("hb.bot_telemetry.v1", {"payload": _json_tel.dumps(_p)}, maxlen=100_000, approximate=True)
+            except Exception:
+                pass  # Never block trading for telemetry
+
         self._save_daily_state()
 
     def did_cancel_order(self, cancelled_event: OrderCancelledEvent):
@@ -1046,6 +1156,60 @@ class EppV24Controller(MarketMakingControllerBase):
 
     def _connector(self):
         return self._runtime_adapter.get_connector()
+
+    def _sync_from_paper_desk_v2(self, *, mid: Decimal, equity_quote: Optional[Decimal] = None) -> None:
+        """In Paper Engine v2 mode, treat PaperDesk as the canonical accounting source.
+
+        This prevents `minute.csv` (Grafana source) from drifting away from PaperDesk's
+        position/avg entry/unrealized when fills are routed through the bridge.
+        """
+        if not self.config.is_paper:
+            return
+        connector = self._connector()
+        desk = getattr(connector, "_paper_desk_v2", None)
+        iid = getattr(connector, "_paper_desk_v2_instrument_id", None)
+        if desk is None or iid is None:
+            return
+        try:
+            portfolio = getattr(desk, "portfolio", None)
+            pos = portfolio.get_position(iid) if portfolio is not None else None
+            if pos is None:
+                return
+
+            qty = to_decimal(getattr(pos, "quantity", 0))
+            self._position_base = qty
+
+            entry_px = to_decimal(getattr(pos, "avg_entry_price", 0))
+            if entry_px > _ZERO:
+                self._avg_entry_price = entry_px
+
+            open_eq = None
+            if portfolio is not None:
+                open_eq = getattr(portfolio, "daily_open_equity", None)
+            open_eq_d = to_decimal(open_eq) if open_eq is not None else _ZERO
+            if open_eq_d > _ZERO:
+                self._daily_equity_open = open_eq_d
+
+            if equity_quote is not None and open_eq_d > _ZERO:
+                # In paper-perp mode, the "equity_quote" computed by the controller may be
+                # the cash ledger only (because connector.get_balance reports cash). Use
+                # PaperPortfolio.equity_quote(mark_prices=...) so realized attribution
+                # is consistent: realized = (equity - open) - unreal.
+                eq_used = to_decimal(equity_quote)
+                try:
+                    if portfolio is not None and hasattr(portfolio, "equity_quote"):
+                        quote_asset = getattr(iid, "quote_asset", "USDT")
+                        eq_portfolio = portfolio.equity_quote({iid.key: mid}, quote_asset=quote_asset)
+                        eq_portfolio_d = to_decimal(eq_portfolio)
+                        if eq_portfolio_d > _ZERO:
+                            eq_used = eq_portfolio_d
+                except Exception:
+                    pass
+                unreal = to_decimal(getattr(pos, "unrealized_pnl", 0))
+                self._realized_pnl_today = (eq_used - open_eq_d) - unreal
+        except Exception:
+            # Never block trading/ops on accounting sync.
+            return
 
     def _trading_rule(self):
         return self._runtime_adapter.get_trading_rule()
@@ -1437,6 +1601,20 @@ class EppV24Controller(MarketMakingControllerBase):
                     pos = pos_fn(self.config.trading_pair) if "trading_pair" in str(getattr(pos_fn, "__code__", "")) else pos_fn()
                     if hasattr(pos, "amount"):
                         exchange_pos = to_decimal(pos.amount)
+                        # If the connector exposes an entry price (live perp or PaperDesk v2),
+                        # adopt it so PnL/avg entry are consistent immediately after restart.
+                        try:
+                            entry_px = getattr(pos, "entry_price", None) or getattr(pos, "avg_entry_price", None)
+                            entry_px_d = to_decimal(entry_px) if entry_px is not None else _ZERO
+                            if entry_px_d > _ZERO:
+                                if self._avg_entry_price <= _ZERO:
+                                    self._avg_entry_price = entry_px_d
+                                else:
+                                    drift = abs(self._avg_entry_price - entry_px_d) / max(entry_px_d, _MIN_SPREAD)
+                                    if drift > Decimal("0.001"):  # >10 bps drift: trust connector
+                                        self._avg_entry_price = entry_px_d
+                        except Exception:
+                            pass
                     elif isinstance(pos, dict):
                         entry = pos.get(self.config.trading_pair, {})
                         exchange_pos = to_decimal(entry.get("amount", 0)) if isinstance(entry, dict) else None
@@ -1933,8 +2111,14 @@ class EppV24Controller(MarketMakingControllerBase):
             mid = self._get_mid_price()
             equity_now, _, _ = self._compute_equity_and_base_pcts(mid)
             equity_open = self._daily_equity_open or equity_now
+            equity_peak = self._daily_equity_peak or equity_now
             pnl = equity_now - equity_open
             pnl_pct = (pnl / equity_open) if equity_open > 0 else Decimal("0")
+            drawdown_pct = (equity_peak - equity_now) / equity_peak if equity_peak > 0 else Decimal("0")
+
+            dd_prices = self._equity_samples_today or [equity_open, equity_now]
+            dd_ts = self._equity_sample_ts_today if len(self._equity_sample_ts_today) == len(dd_prices) else None
+            dd_meta = max_drawdown_with_metadata(dd_prices, method="percent", timestamps=dd_ts)
             event_ts = datetime.fromtimestamp(now_ts, tz=timezone.utc).isoformat()
             self._csv.log_daily(
                 {
@@ -1943,11 +2127,19 @@ class EppV24Controller(MarketMakingControllerBase):
                     "trading_pair": self.config.trading_pair,
                     "state": self._ops_guard.state.value,
                     "equity_open_quote": str(equity_open),
+                    "equity_peak_quote": str(equity_peak),
                     "equity_now_quote": str(equity_now),
                     "pnl_quote": str(pnl),
                     "pnl_pct": str(pnl_pct),
+                    "drawdown_pct": str(drawdown_pct),
+                    "max_drawdown_pct": str(dd_meta.max_drawdown),
+                    "max_drawdown_peak_ts": str(dd_meta.peak_ts or ""),
+                    "max_drawdown_trough_ts": str(dd_meta.trough_ts or ""),
                     "turnover_x": str(self._traded_notional_today / equity_now) if equity_now > 0 else "0",
                     "fills_count": self._fills_count_today,
+                    "fees_paid_today_quote": str(self._fees_paid_today_quote),
+                    "funding_cost_today_quote": str(self._funding_cost_today_quote),
+                    "realized_pnl_today_quote": str(self._realized_pnl_today),
                     "ops_events": "|".join(self._ops_guard.reasons),
                 },
                 ts=event_ts,
@@ -1955,9 +2147,12 @@ class EppV24Controller(MarketMakingControllerBase):
             self._daily_key = day_key
             self._daily_equity_open = equity_now
             self._daily_equity_peak = equity_now
+            self._equity_samples_today = []
+            self._equity_sample_ts_today = []
             self._traded_notional_today = Decimal("0")
             self._fills_count_today = 0
             self._fees_paid_today_quote = Decimal("0")
+            self._fee_rate_mismatch_warned_today = False
             self._funding_cost_today_quote = _ZERO
             self._realized_pnl_today = _ZERO
             self._cancel_events_ts = []
@@ -2045,6 +2240,8 @@ class EppV24Controller(MarketMakingControllerBase):
         self._csv.log_minute(
             {
                 "bot_variant": self.config.variant,
+                "bot_mode": self.config.bot_mode,
+                "accounting_source": "paper_desk_v2" if self.config.is_paper else "live_connector",
                 "exchange": self.config.connector_name,
                 "trading_pair": self.config.trading_pair,
                 "state": state.value,
@@ -2075,7 +2272,8 @@ class EppV24Controller(MarketMakingControllerBase):
                 "best_ask_size": str(pd.get("best_ask_size", _ZERO)),
                 "turnover_today_x": str(pd.get("turnover_x", _ZERO)),
                 "cancel_per_min": self._cancel_per_min(now_ts),
-                "orders_active": len(self.executors_info),
+                # Count active executors only (history can be large).
+                "orders_active": sum(1 for ex in self.executors_info if getattr(ex, "is_active", False)),
                 "fills_count_today": self._fills_count_today,
                 "fees_paid_today_quote": str(self._fees_paid_today_quote),
                 "daily_loss_pct": str(pd.get("daily_loss_pct", _ZERO)),
@@ -2099,4 +2297,11 @@ class EppV24Controller(MarketMakingControllerBase):
             },
             ts=event_ts,
         )
+        try:
+            eq = pd.get("equity_quote", _ZERO)
+            eq = eq if isinstance(eq, Decimal) else to_decimal(eq)
+            self._equity_samples_today.append(eq)
+            self._equity_sample_ts_today.append(event_ts)
+        except Exception:
+            pass
         self._save_daily_state()

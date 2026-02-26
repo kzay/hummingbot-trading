@@ -155,6 +155,25 @@ class TestMarkToMarket:
         assert pos.unrealized_pnl > _ZERO  # short profits when price drops
 
 
+class TestPerpMaintenanceMargin:
+    def test_perp_maintenance_margin_reserved_on_mtm(self):
+        p = make_portfolio(usdt=Decimal("1000"), btc=Decimal("0"))
+        # Open perp long: ledger does NOT exchange notional (perp margin model)
+        settle(p, BTC_PERP, "buy", "1.0", "100", fee="0", leverage=10)
+        # Mark to market should lock maintenance margin on quote.
+        p.mark_to_market({BTC_PERP.key: Decimal("100")})
+        # maint = (notional / leverage) * margin_maint = (100 / 10) * 0.05 = 0.5
+        assert p.maintenance_margin_quote() == Decimal("0.5")
+        assert p.available("USDT") == Decimal("999.5")
+
+    def test_perp_maintenance_margin_updates_with_price(self):
+        p = make_portfolio(usdt=Decimal("1000"), btc=Decimal("0"))
+        settle(p, BTC_PERP, "buy", "1.0", "100", fee="0", leverage=10)
+        p.mark_to_market({BTC_PERP.key: Decimal("200")})
+        # maint = (200 / 10) * 0.05 = 1.0
+        assert p.maintenance_margin_quote() == Decimal("1.0")
+
+
 class TestRiskGuard:
     def test_drawdown_hard_stop(self):
         from controllers.paper_engine_v2.types import PaperOrder, PaperOrderType, OrderStatus

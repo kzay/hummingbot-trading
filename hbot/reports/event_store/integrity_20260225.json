@@ -1,9 +1,9 @@
 {
-  "total_events": 807,
+  "total_events": 1487,
   "events_by_stream": {
-    "hb.audit.v1": 475,
-    "hb.execution_intent.v1": 332
+    "hb.audit.v1": 883,
+    "hb.execution_intent.v1": 604
   },
   "missing_correlation_count": 0,
-  "last_update_utc": "2026-02-25T14:24:37.729741+00:00"
+  "last_update_utc": "2026-02-26T01:43:57.928953+00:00"
 }
