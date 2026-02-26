@@ -2317,7 +2317,7 @@ class EppV24Controller(MarketMakingControllerBase):
                 "margin_ratio": str(self._margin_ratio),
                 "position_drift_pct": str(self._position_drift_pct),
                 "ws_reconnect_count": str(self._ws_reconnect_count),
-                "order_book_stale": str(self._book_stale_since_ts > 0),
+                "order_book_stale": str(self._book_stale_since_ts > 0 and (float(self.market_data_provider.time()) - self._book_stale_since_ts) > 30.0),
                 "_tick_duration_ms": str(self._tick_duration_ms),
                 "_indicator_duration_ms": str(self._indicator_duration_ms),
                 "_connector_io_duration_ms": str(self._connector_io_duration_ms),
