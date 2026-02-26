@@ -459,6 +459,10 @@ and covers the full loop from `signal_service` → Redis → `hb_bridge` → `ap
 | Order book signals + Kelly sizing | 8.8 | Edge stable after sizing change |
 | 4-week testnet live | 9.0 | No safety incidents, execution close to paper |
 | TCA + incident playbooks + secrets hygiene | 9.3 | All checklist items signed off |
+| AI: regime classifier replaces EMA/ATR | 9.4 | Walk-forward Sharpe improves ≥ 0.3 |
+| AI: adverse selection classifier wired | 9.5 | Adverse fill rate drops ≥ 15% out-of-sample |
+| Second uncorrelated strategy | 9.5+ | Portfolio Sharpe > single-strategy Sharpe |
+| TCA + incident playbooks + secrets hygiene | 9.3 | All checklist items signed off |
 | Second uncorrelated strategy + portfolio allocation | 9.5 | Portfolio Sharpe > single-strategy Sharpe |
 
 ---
@@ -680,6 +684,182 @@ correlation ≈ 0.
 **Portfolio allocation rule**: allocate capital to each strategy proportional to its
 inverse variance: `alloc_i = (1/var_i) / sum(1/var_j)`. Rebalance weekly.
 Wire allocation through `hbot/config/multi_bot_policy_v1.json`.
+
+---
+
+### [ROAD-10] AI regime classifier — replace EMA/ATR with learned model `open`
+
+**Gate**: complete after ROAD-2 (walk-forward backtest) produces a labeled training dataset.
+
+**Why**: EMA crossover + ATR threshold is lagged and uses only 2 features. A gradient
+boosting classifier trained on 20+ microstructure features can predict regime transitions
+1–3 ticks before the price confirms them, giving the bot time to re-price quotes ahead
+of the move. This is the highest-ROI AI application for a market-maker.
+
+**What the ML pipeline already provides** (no new infrastructure needed):
+- `hbot/services/signal_service/feature_builder.py` — builds feature vectors from
+  `MarketSnapshotEvent`. The feature set already covers: mid returns, volume velocity,
+  bid-ask spread, order book imbalance, EMA distance, ATR, time-of-day encoding.
+- `hbot/services/signal_service/model_loader.py` — loads sklearn joblib, ONNX, or HTTP.
+- `hbot/services/signal_service/inference_engine.py` — runs inference, returns
+  `(predicted_return, confidence, latency_ms)`.
+- `hbot/services/signal_service/main.py` — already publishes `MlSignalEvent` to Redis.
+- `hbot/controllers/epp_v2_4.py:1015` — `apply_execution_intent` handles
+  `action="set_target_base_pct"` (already wired after P0-1).
+
+**Training data source**:
+- `hbot/data/bot1/logs/epp_v24/bot1_a/minute.csv` — each row has `regime` label + all
+  features needed (mid, band_pct, drift, imbalance).
+- Augment with the historical OHLCV dataset from ROAD-2 for volume.
+- Minimum: 10,000 labelled rows (≈ 7 days of 1-minute bars).
+
+**Implementation steps**:
+
+1. **Build training dataset** (`hbot/scripts/ml/build_regime_dataset.py`):
+   - Read `minute.csv`, extract feature columns + `regime` label.
+   - Encode `regime` as integer: `neutral_low_vol=0, neutral_high_vol=1, up=2, down=3, high_vol_shock=4`.
+   - Add lag features: returns at t-1, t-2, t-5 (autocorrelation matters).
+   - Output: `hbot/data/ml/regime_train_YYYYMMDD.parquet`.
+
+2. **Train and validate** (`hbot/scripts/ml/train_regime_classifier.py`):
+   ```python
+   from lightgbm import LGBMClassifier  # or XGBClassifier
+   model = LGBMClassifier(n_estimators=200, max_depth=6, learning_rate=0.05)
+   # Walk-forward cross-validation: fit on months 1-4, validate on month 5
+   # Repeat 3 times with different windows
+   # Keep model only if OOS accuracy > 55% AND OOS Sharpe improvement > 0.3
+   ```
+   Save with `joblib.dump(model, "hbot/data/ml/regime_classifier_v1.joblib")`.
+
+3. **Update `feature_builder.py`**: add lag features (t-1, t-2, t-5 returns) and
+   time-of-day sine/cosine encoding (`sin(2π * hour/24), cos(2π * hour/24)`).
+
+4. **Update `inference_engine.py`**: current signature returns `(predicted_return, confidence, ms)`.
+   Add a `predict_regime(model, features) -> (regime_str, confidence, ms)` function alongside
+   the existing one.
+
+5. **Update `signal_service/main.py`**: when `ML_ENABLED=true` and model is a regime
+   classifier (detect via `model.estimator_type == "classifier"`), publish `StrategySignalEvent`
+   with `signal_name="regime_override"` and `signal_value=predicted_regime_int`.
+
+6. **Update `hb_bridge.py` signal consumer** (P0-1): handle `signal_name="regime_override"` →
+   call `ctrl.apply_execution_intent({"action": "set_regime_override", "regime": regime_str})`.
+
+7. **Add `apply_execution_intent` action in `epp_v2_4.py`**:
+   ```python
+   if action == "set_regime_override":
+       regime = str(metadata.get("regime", "")).strip()
+       if regime in self._resolved_specs:
+           self._external_regime_override = regime
+           self._external_regime_override_expiry = now + 30.0  # expires after 30s
+   ```
+   In `_detect_regime`: return override if set and not expired, else run normal detection.
+
+8. **Add config**: `ml_regime_enabled: bool = False` in `EppV24Config`. Bridge only routes
+   regime overrides when this is True.
+
+9. **Set env vars** in compose for signal-service:
+   `ML_ENABLED=true`, `ML_RUNTIME=sklearn_joblib`,
+   `ML_MODEL_URI=file:///workspace/hbot/data/ml/regime_classifier_v1.joblib`.
+
+**Acceptance criteria**:
+- Walk-forward OOS accuracy ≥ 55% (random baseline = 40% for 4 classes weighted by frequency).
+- Walk-forward OOS Sharpe improves ≥ 0.3 vs baseline regime detection (run ROAD-2 with both).
+- `minute.csv` shows `regime_source: ml` when classifier is active.
+- Falls back to EMA/ATR within 1 tick if Redis or model is unavailable.
+- No extra latency > 5ms per tick (inference engine already has `ml_inference_timeout_ms`).
+
+**Do not**:
+- Do not deploy without walk-forward validation (OOS Sharpe improvement < 0.3 = worse than nothing).
+- Do not retrain on live fill data — training set is historical OHLCV only.
+- Do not use deep learning (LSTM, Transformer) on the first version — LightGBM generalizes
+  better with small datasets and is fully interpretable.
+
+**Skill reference**: `hbot/.cursor/skills/ml-for-trading-optional/SKILL.md`
+
+---
+
+### [ROAD-11] AI adverse selection classifier — reduce bad fills `open`
+
+**Gate**: complete after ROAD-10 is deployed and validated (regime classifier must be
+stable before adding another ML layer).
+
+**Why**: the largest single cost in the current strategy is adverse selection — fills
+that happen right before the market moves against the position. `fills.csv` shows
+`pos_edge_frac ≈ 0.43` meaning 57% of fills are adverse. Reducing this to 45% would
+improve daily PnL by approximately 30%.
+
+**Core idea**: train a binary classifier that predicts, at the moment a quote is placed,
+whether a fill on that quote is likely to be adverse (`pnl_vs_mid_pct < -cost_floor`).
+If `P(adverse) > threshold`, either (a) widen spread temporarily, or (b) skip quoting
+for one executor cycle.
+
+**Training data source**:
+- `hbot/data/bot1/logs/epp_v24/bot1_a/fills.csv` — each fill has `pnl_vs_mid_pct`.
+  Label: `adverse = 1 if pnl_vs_mid_pct < -0.0002 else 0` (< −2 bps = adverse).
+- Join with `minute.csv` on nearest timestamp to get market state features at fill time.
+- Minimum: 5,000 fills (≈ 20 days of current fill rate).
+
+**Features at order placement time** (all available from `minute.csv`):
+- `ob_imbalance` (from ROAD-3): primary signal — strong ask imbalance → BUY fills likely adverse
+- `adverse_drift_ewma_bps`: recent drift trend
+- `spread_multiplier`: current spread width
+- `regime`: one-hot encoded
+- `fills_in_last_60s`: fill burst rate
+- `time_of_day_sin/cos`: session pattern
+- `base_pct_net`: signed inventory (long positions → ask fills risky, short → bid fills risky)
+- `fill_edge_ewma_bps` (from P1-2): recent fill quality trend
+
+**Implementation steps**:
+
+1. **Build training dataset** (`hbot/scripts/ml/build_adverse_fill_dataset.py`):
+   - Read `fills.csv` and `minute.csv`, merge on nearest timestamp.
+   - Label each fill: `adverse = 1 if pnl_vs_mid_pct < -0.0002`.
+   - For class balance: adverse fills are ~57%, so no resampling needed initially.
+   - Output: `hbot/data/ml/adverse_fill_train_YYYYMMDD.parquet`.
+
+2. **Train and validate** (`hbot/scripts/ml/train_adverse_classifier.py`):
+   ```python
+   from lightgbm import LGBMClassifier
+   model = LGBMClassifier(n_estimators=100, max_depth=4, class_weight="balanced")
+   # Walk-forward: fit on fills 1-3000, validate on fills 3001-4000, test on 4001-5000
+   # Metric: precision@recall=0.7 (we want to be right when we flag adverse)
+   ```
+   Save: `hbot/data/ml/adverse_classifier_v1.joblib`.
+
+3. **Add inference to `hb_bridge.py`** (not `signal_service` — this needs sub-tick latency):
+   - Load model once at startup: `self._adverse_model = joblib.load(model_path) if path else None`.
+   - In the tick, before calling `_apply_runtime_spreads_and_sizing()`, compute features
+     from `processed_data` and call `model.predict_proba(features)[0][1]` → `p_adverse`.
+   - If `p_adverse > self.config.adverse_threshold` (default 0.70):
+     - Multiply active spreads by `1 + p_adverse * 0.5` (widen proportionally).
+     - Log `"adverse_prediction": p_adverse` to processed_data.
+   - If `p_adverse > 0.85`: skip quoting for this tick entirely (set spreads to []).
+
+4. **Add config fields** to `EppV24Config`:
+   ```python
+   adverse_classifier_enabled: bool = Field(default=False)
+   adverse_classifier_model_path: str = Field(default="")
+   adverse_threshold_widen: Decimal = Field(default=Decimal("0.70"))
+   adverse_threshold_skip: Decimal = Field(default=Decimal("0.85"))
+   ```
+
+5. **Add to `minute.csv` logging**: `"adverse_p": str(p_adverse)`, `"adverse_active": str(p_adverse > threshold)`.
+
+**Acceptance criteria**:
+- OOS precision ≥ 0.60 at recall = 0.70 on held-out fills.
+- Adverse fill rate drops ≥ 15% in paper simulation vs baseline (run 5 days with and without).
+- No increase in missed-fill rate > 10% (model should not over-suppress quoting).
+- Inference latency < 2ms per tick (LightGBM on 10 features is ~0.1ms).
+
+**Do not**:
+- Do not use `pnl_vs_mid_pct` from the SAME fill as a feature (data leakage).
+- Do not deploy if OOS precision < 0.55 — random baseline is 0.57 (adverse fill rate).
+  A model worse than coin-flip on adverse detection actively hurts performance.
+- Do not skip quoting for > 3 consecutive ticks — add a `max_consecutive_skip: int = 3` guard
+  to prevent the model from silencing the bot during high-opportunity periods.
+
+**Skill reference**: `hbot/.cursor/skills/ml-for-trading-optional/SKILL.md`
 
 ---
 

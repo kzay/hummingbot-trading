@@ -1,0 +1,37 @@
+---
+description: ML guardrails for the hbot trading system — prevents common ML-in-trading mistakes
+globs: hbot/services/signal_service/**/*.py,hbot/scripts/ml/**/*.py
+alwaysApply: false
+---
+
+# ML in Trading — Hard Rules
+
+## Never do these
+- **No price direction prediction** — crypto is too efficient at < 5-min horizons. Any apparent signal is overfitting.
+- **No LLM in execution path** — non-deterministic, not auditable, latency > 100ms.
+- **No online learning from live fills** — feedback loop that destabilizes the strategy.
+- **No deep RL** — requires millions of episodes, impractical without dedicated infra.
+- **No deployment without walk-forward OOS validation** — in-sample Sharpe means nothing.
+
+## Always do these
+- Walk-forward cross-validation: fit on months 1–N, test on month N+1. Repeat.
+- Keep baseline comparison: does the model beat EMA/ATR (ROAD-10) or coin-flip (ROAD-11)?
+- Check feature leakage: no future data in features at decision time.
+- Model must have a fallback: if Redis/model unavailable, revert to rule-based behavior in ≤ 1 tick.
+- Log `model_version` and `confidence` in `minute.csv` for every model-driven decision.
+
+## Model thresholds for deployment
+- Regime classifier (ROAD-10): OOS accuracy ≥ 55%, OOS Sharpe improvement ≥ 0.3
+- Adverse classifier (ROAD-11): OOS precision ≥ 0.60 @ recall=0.70, adverse fill rate drop ≥ 15%
+
+## Infrastructure wiring
+- Models are loaded by `signal_service` via `model_loader.py` (file://, s3://, or http://)
+- Signals go to Redis `hb.ml_signal.v1` → consumed by `hb_bridge.py` (P0-1)
+- Bridge calls `controller.apply_execution_intent()` — never modifies controller state directly
+- Model path set via `ML_MODEL_URI` env var — see `.env.example`
+
+## Preferred libraries
+- `lightgbm` or `xgboost` for tabular classification (not sklearn RandomForest — slower)
+- `joblib` for serialization (already in `model_loader.py`)
+- `optuna` for hyperparameter search (ROAD-4)
+- No PyTorch/TensorFlow for first ML models — unnecessary complexity
