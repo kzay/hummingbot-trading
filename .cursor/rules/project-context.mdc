@@ -44,3 +44,17 @@ hbot/
 1. Read `hbot/BACKLOG.md` for the full task spec including pre-answered design decisions
 2. Check if relevant tests exist in `hbot/tests/`
 3. After changes: compile + run `python -m pytest hbot/tests/ -x -q --ignore=hbot/tests/integration` from workspace root with `PYTHONPATH=hbot`
+
+## Model complexity guide
+Some tasks benefit significantly from a more capable model. Flag this to the user when relevant.
+
+| Use a capable model | A fast model is fine |
+|---|---|
+| Modifying `epp_v2_4.py` core logic (risk, edge, regime) | Config YAML edits |
+| Implementing any P0 backlog item | Checking bot status / reading logs |
+| ROAD-10 / ROAD-11 (ML pipeline) | Minor doc updates |
+| New service design or architecture decisions | Running analysis scripts |
+| Walk-forward backtest engine (ROAD-2) | Simple one-line fixes |
+
+When spawning subagents for exploration or file search, a fast model is appropriate.
+For implementation and reasoning about strategy correctness, use the best available model.
