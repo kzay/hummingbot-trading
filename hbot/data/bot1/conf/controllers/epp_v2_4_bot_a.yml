@@ -42,9 +42,11 @@ turnover_cap_x: 3.0
 turnover_penalty_step: 0.0005
 
 # ── Hard risk caps (paper experiment) ───────────────────────────────
-# Today's turnover already accumulated before the edge gate was enforced.
-# Raise the hard stop so the bot can continue under the corrected gating logic.
-max_daily_turnover_x_hard: 12.0
+# Paper mode: raise turnover cap to observe full-day natural behavior.
+# At ~0.27 fills/min × ~33 USDT notional, the bot generates ~26x/day.
+# Cap at 30x to allow a full 24h run while still blocking runaway churn.
+# For live trading, reduce to 6-8x.
+max_daily_turnover_x_hard: 30.0
 
 # ── Edge gate ──────────────────────────────────────────────────────
 # Raise minimum edge to avoid marginal churn (fees+drift).

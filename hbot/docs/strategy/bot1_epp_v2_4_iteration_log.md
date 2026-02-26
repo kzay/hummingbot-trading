@@ -124,15 +124,33 @@ _Note: first 16.5h were affected by the derisk bug (stuck soft_pause). Clean-run
 - Derisk direction + spread bugs fixed (2026-02-26)
 - `max_base_pct` tightened to 0.60 for earlier position limit enforcement
 
-### Next evaluation gate (2026-02-27 clean run)
-Pull `bot1_paper_day_summary.py --day 2026-02-27` at EOD.
+### 2026-02-26 — Final confirmed result
+
+| Metric | Value |
+|---|---|
+| Equity EOD | **508.07 USDT** (+8.11 USDT, **+1.37% net after fees**) |
+| Max drawdown | **0.006%** — effectively zero |
+| Fills | 191 today (100% maker), 0.27/min rate |
+| Turnover | 12.31× — hit `daily_turnover_hard_limit` at 19:04 UTC |
+| Config change | `max_daily_turnover_x_hard: 12 → 30` for full paper observation |
+
+_Note: clean trading was only 16:30–19:04 UTC (~2.5h). Full 24h data starts 2026-02-27._
+
+---
+
+### Next evaluation gate (2026-02-27 — first full clean-config day)
+
+```bash
+python hbot/scripts/analysis/bot1_paper_day_summary.py --day 2026-02-27 --exchange bitget_perpetual --pair BTC-USDT
+```
 
 **Pass criteria:**
-- `realized_pnl > 0` after fees
+- `realized_pnl_today_quote > 0` after fees
 - `drawdown_pct < 2%`
 - `position_base` stays within `|base_pct| < 0.60` at all times
+- Bot does not hit `hard_stop` before 18:00 UTC (turnover limit now 30×)
 
-**If pass:** extend soak to 3 consecutive days, then promote to Bitget testnet live.
+**If pass:** run 3 consecutive days, then assess Sharpe (ROAD-1 in backlog).
 **If fail:** raise `min_net_edge_bps` 15 → 20 bps, or diagnose adverse selection per regime.
 
 ### Queued improvements (priority order)
