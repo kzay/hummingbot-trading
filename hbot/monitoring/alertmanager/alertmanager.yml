@@ -1,22 +1,37 @@
 # ============================================
 # Alertmanager Configuration
 # ============================================
+# Alert delivery path:
+#   Prometheus → Alertmanager → alert-webhook-sink → Telegram push
+#
+# The webhook_sink (monitoring/alertmanager/webhook_sink.py) forwards
+# critical and key warning alerts to Telegram directly.
+# Set TELEGRAM_BOT_TOKEN and TELEGRAM_CHAT_ID in env/.env.
 
 global:
   resolve_timeout: 5m
 
 route:
   group_by: ["alertname", "severity"]
-  group_wait: 30s
+  group_wait: 15s
   group_interval: 5m
   repeat_interval: 4h
   receiver: "default"
 
   routes:
+    # Critical alerts — fast delivery, repeat every 30 min until resolved.
     - match:
         severity: critical
-      receiver: "critical"
-      repeat_interval: 1h
+      receiver: "webhook"
+      repeat_interval: 30m
+      group_wait: 10s
+
+    # Key warning alerts that indicate silent bot failure modes.
+    - match_re:
+        alertname: "DailyStateStale|BotFrozen|BotSoftPauseTooLong|OrderBookStale|WsReconnectSpike|ContainerRestartLoop|BotHardStopActive|KillSwitchTriggered"
+      receiver: "webhook"
+      repeat_interval: 15m
+      group_wait: 10s
 
 receivers:
   - name: "default"
@@ -24,25 +39,10 @@ receivers:
       - url: "http://alert-webhook-sink:19093/alert"
         send_resolved: true
 
-  - name: "critical"
+  - name: "webhook"
     webhook_configs:
       - url: "http://alert-webhook-sink:19093/alert"
         send_resolved: true
-    # Telegram alerts — set TELEGRAM_BOT_TOKEN and TELEGRAM_CHAT_ID in .env.
-    # To get these:
-    #   1. Message @BotFather on Telegram → /newbot → copy the token.
-    #   2. Add your bot to a group (or DM it), then visit
-    #      https://api.telegram.org/bot<TOKEN>/getUpdates to find the chat_id.
-    # Uncomment below once both env vars are set.
-    # telegram_configs:
-    #   - bot_token: "${TELEGRAM_BOT_TOKEN}"
-    #     chat_id: ${TELEGRAM_CHAT_ID}
-    #     parse_mode: "HTML"
-    #     message: |
-    #       <b>{{ .GroupLabels.alertname }}</b> [{{ .GroupLabels.severity }}]
-    #       {{ range .Alerts }}{{ .Annotations.description }}
-    #       {{ end }}
-    #     send_resolved: true
 
 inhibit_rules:
   - source_match:

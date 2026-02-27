@@ -1311,6 +1311,10 @@ services:
     command:
       - "--config.file=/etc/alertmanager/alertmanager.yml"
       - "--storage.path=/alertmanager"
+      - "--config.expand-env=true"
+    environment:
+      - TELEGRAM_BOT_TOKEN=${TELEGRAM_BOT_TOKEN:-}
+      - TELEGRAM_CHAT_ID=${TELEGRAM_CHAT_ID:-0}
     volumes:
       - ../monitoring/alertmanager/alertmanager.yml:/etc/alertmanager/alertmanager.yml:ro
     ports:
@@ -1332,6 +1336,9 @@ services:
     profiles:
       - alerts
     command: ["python", "/opt/webhook_sink.py"]
+    environment:
+      - TELEGRAM_BOT_TOKEN=${TELEGRAM_BOT_TOKEN:-}
+      - TELEGRAM_CHAT_ID=${TELEGRAM_CHAT_ID:-}
     volumes:
       - ../monitoring/alertmanager/webhook_sink.py:/opt/webhook_sink.py:ro
     ports:
@@ -1357,29 +1364,33 @@ services:
           cpus: "0.1"
 
   # ==========================================
-  # BOT WATCHDOG — restarts bot1 when minute.csv
-  # becomes stale (event-loop hang detector).
-  # Runs every 60s using docker socket.
+  # BOT WATCHDOG — monitors minute.csv freshness,
+  # auto-restarts frozen bots with circuit breaker
+  # and Telegram alerts. Replaces the shell watchdog.
   # ==========================================
   bot-watchdog:
-    image: docker:cli
+    <<: *control-plane-image
     container_name: hbot-bot-watchdog
     restart: unless-stopped
     volumes:
       - /var/run/docker.sock:/var/run/docker.sock
       - ..:/workspace/hbot:ro
-    entrypoint: >
-      /bin/sh -c "
-      while true; do
-        sleep 60;
-        LAST=$$(find /workspace/hbot/data -name 'minute.csv' -newer /tmp/sentinel 2>/dev/null | wc -l);
-        touch -d '-300 seconds' /tmp/sentinel;
-        STALE=$$(find /workspace/hbot/data -name 'minute.csv' ! -newer /tmp/sentinel 2>/dev/null | wc -l);
-        if [ \"$$STALE\" -gt 0 ]; then
-          echo \"[watchdog] minute.csv stale >5min — restarting hbot-bot1\";
-          docker restart hbot-bot1;
-        fi;
-      done
-      "
+    command: /bin/bash -lc "python /workspace/hbot/services/bot_watchdog/main.py"
+    environment:
+      - PYTHONPATH=/workspace/hbot
+      - HB_DATA_ROOT=/workspace/hbot/data
+      - WATCHDOG_BOTS=bot1
+      - WATCHDOG_STALE_THRESHOLD_S=300
+      - WATCHDOG_CHECK_INTERVAL_S=60
+      - WATCHDOG_MAX_RESTARTS=5
+      - WATCHDOG_WINDOW_S=3600
+      - WATCHDOG_CONTAINER_PREFIX=hbot-
+      - TELEGRAM_BOT_TOKEN=${TELEGRAM_BOT_TOKEN:-}
+      - TELEGRAM_CHAT_ID=${TELEGRAM_CHAT_ID:-}
     networks:
       - trading
+    deploy:
+      resources:
+        limits:
+          memory: 64M
+          cpus: "0.1"

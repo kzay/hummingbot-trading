@@ -358,6 +358,16 @@ groups:
           summary: "Connector I/O slow on {{ $labels.bot }}"
           description: "Connector I/O taking {{ $value }}s per tick on {{ $labels.bot }}."
 
+      - alert: BotFrozen
+        expr: |
+          hbot_bot_snapshot_age_seconds > 300
+        for: 2m
+        labels:
+          severity: critical
+        annotations:
+          summary: "⛔ Bot {{ $labels.bot }} is FROZEN"
+          description: "minute.csv not updated for {{ $value | humanizeDuration }}. Event loop may be hung. Watchdog will auto-restart."
+
       - alert: DailyStateStale
         expr: |
           hbot_bot_snapshot_age_seconds > 300
@@ -367,3 +377,13 @@ groups:
         annotations:
           summary: "Bot snapshot stale on {{ $labels.bot }}"
           description: "No minute.csv update for >5 minutes on {{ $labels.bot }}."
+
+      - alert: KillSwitchTriggered
+        expr: |
+          increase(hbot_bot_kill_switch_count[5m]) > 0
+        for: 0m
+        labels:
+          severity: critical
+        annotations:
+          summary: "🚨 Kill switch TRIGGERED on {{ $labels.bot }}"
+          description: "Kill switch fired on {{ $labels.bot }}. All orders should be canceled. Immediate review required."
