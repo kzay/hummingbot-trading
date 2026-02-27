@@ -38,6 +38,15 @@ class FillStats:
     sell_notional: float = 0.0
     total_fees: float = 0.0
     total_realized_pnl: float = 0.0
+    # Cumulative sums (for delta()/windowed averages in Grafana)
+    fill_slippage_bps_sum: float = 0.0
+    fill_slippage_bps_count: int = 0
+    expected_spread_bps_sum: float = 0.0
+    expected_spread_bps_count: int = 0
+    adverse_drift_30s_bps_sum: float = 0.0
+    adverse_drift_30s_bps_count: int = 0
+    fee_bps_sum: float = 0.0
+    fee_bps_count: int = 0
     avg_buy_price: float = 0.0
     avg_sell_price: float = 0.0
     last_fill_ts: str = ""
@@ -253,6 +262,22 @@ class BotMetricsExporter:
                 "# TYPE hbot_bot_position_base gauge",
                 "# HELP hbot_bot_avg_entry_price Average entry price of the current position.",
                 "# TYPE hbot_bot_avg_entry_price gauge",
+                "# HELP hbot_bot_fill_slippage_bps_sum Cumulative sum of fill price vs mid_ref in bps (positive = worse execution).",
+                "# TYPE hbot_bot_fill_slippage_bps_sum gauge",
+                "# HELP hbot_bot_fill_slippage_bps_count Count of fills contributing to hbot_bot_fill_slippage_bps_sum.",
+                "# TYPE hbot_bot_fill_slippage_bps_count gauge",
+                "# HELP hbot_bot_expected_spread_bps_sum Cumulative sum of expected spread in bps from fills.csv.",
+                "# TYPE hbot_bot_expected_spread_bps_sum gauge",
+                "# HELP hbot_bot_expected_spread_bps_count Count of fills contributing to hbot_bot_expected_spread_bps_sum.",
+                "# TYPE hbot_bot_expected_spread_bps_count gauge",
+                "# HELP hbot_bot_adverse_drift_30s_bps_sum Cumulative sum of adverse_drift_30s in bps from fills.csv.",
+                "# TYPE hbot_bot_adverse_drift_30s_bps_sum gauge",
+                "# HELP hbot_bot_adverse_drift_30s_bps_count Count of fills contributing to hbot_bot_adverse_drift_30s_bps_sum.",
+                "# TYPE hbot_bot_adverse_drift_30s_bps_count gauge",
+                "# HELP hbot_bot_fee_bps_sum Cumulative sum of per-fill fee rate in bps (fee_quote/notional_quote*1e4).",
+                "# TYPE hbot_bot_fee_bps_sum gauge",
+                "# HELP hbot_bot_fee_bps_count Count of fills contributing to hbot_bot_fee_bps_sum.",
+                "# TYPE hbot_bot_fee_bps_count gauge",
             ]
         )
         for snapshot in self.collect():
@@ -322,6 +347,14 @@ class BotMetricsExporter:
                 lines.append(f"hbot_bot_total_fees_quote{_fmt_labels(base_labels)} {fs.total_fees}")
                 lines.append(f"hbot_bot_avg_buy_price{_fmt_labels(base_labels)} {fs.avg_buy_price}")
                 lines.append(f"hbot_bot_avg_sell_price{_fmt_labels(base_labels)} {fs.avg_sell_price}")
+                lines.append(f"hbot_bot_fill_slippage_bps_sum{_fmt_labels(base_labels)} {fs.fill_slippage_bps_sum}")
+                lines.append(f"hbot_bot_fill_slippage_bps_count{_fmt_labels(base_labels)} {float(fs.fill_slippage_bps_count)}")
+                lines.append(f"hbot_bot_expected_spread_bps_sum{_fmt_labels(base_labels)} {fs.expected_spread_bps_sum}")
+                lines.append(f"hbot_bot_expected_spread_bps_count{_fmt_labels(base_labels)} {float(fs.expected_spread_bps_count)}")
+                lines.append(f"hbot_bot_adverse_drift_30s_bps_sum{_fmt_labels(base_labels)} {fs.adverse_drift_30s_bps_sum}")
+                lines.append(f"hbot_bot_adverse_drift_30s_bps_count{_fmt_labels(base_labels)} {float(fs.adverse_drift_30s_bps_count)}")
+                lines.append(f"hbot_bot_fee_bps_sum{_fmt_labels(base_labels)} {fs.fee_bps_sum}")
+                lines.append(f"hbot_bot_fee_bps_count{_fmt_labels(base_labels)} {float(fs.fee_bps_count)}")
         return "\n".join(lines) + "\n"
 
     def _read_daily_state_any(self, log_dir: Path) -> Optional[Dict[str, str]]:
@@ -367,6 +400,10 @@ class BotMetricsExporter:
                     amount = _safe_float(row.get("amount_base"))
                     pnl = _safe_float(row.get("realized_pnl_quote"))
                     is_maker = str(row.get("is_maker", "")).lower() == "true"
+                    mid_ref = _safe_float(row.get("mid_ref"))
+                    expected_spread_pct = _safe_float(row.get("expected_spread_pct"))
+                    adverse_drift_30s = _safe_float(row.get("adverse_drift_30s"))
+
                     stats.total_fees += fee
                     stats.total_realized_pnl += pnl
                     if is_maker:
@@ -386,6 +423,30 @@ class BotMetricsExporter:
                     stats.last_fill_price = price
                     stats.last_fill_amount = amount
                     stats.last_fill_pnl = pnl
+
+                    # Execution-quality proxies (bps) from fills.csv
+                    if mid_ref > 0 and price > 0:
+                        # Positive value means worse-than-mid execution for the bot:
+                        # - BUY: pay above mid => positive (worse); below mid => negative (better)
+                        # - SELL: sell below mid => positive (worse); above mid => negative (better)
+                        if side == "sell":
+                            slippage_bps = ((mid_ref - price) / mid_ref) * 10000.0
+                        else:
+                            slippage_bps = ((price - mid_ref) / mid_ref) * 10000.0
+                        stats.fill_slippage_bps_sum += slippage_bps
+                        stats.fill_slippage_bps_count += 1
+
+                    if expected_spread_pct != 0.0:
+                        stats.expected_spread_bps_sum += expected_spread_pct * 10000.0
+                        stats.expected_spread_bps_count += 1
+
+                    if adverse_drift_30s != 0.0:
+                        stats.adverse_drift_30s_bps_sum += adverse_drift_30s * 10000.0
+                        stats.adverse_drift_30s_bps_count += 1
+
+                    if notional > 0:
+                        stats.fee_bps_sum += (fee / notional) * 10000.0
+                        stats.fee_bps_count += 1
             if buy_prices:
                 stats.avg_buy_price = sum(buy_prices) / len(buy_prices)
             if sell_prices:

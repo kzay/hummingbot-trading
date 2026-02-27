@@ -14,6 +14,7 @@ global:
 # ---- Alert Rules ----
 rule_files:
   - "/etc/prometheus/alert_rules.yml"
+  - "/etc/prometheus/recording_rules.yml"
 
 # ---- Alertmanager ----
 alerting:
@@ -31,6 +32,11 @@ scrape_configs:
       - targets: ["localhost:9090"]
         labels:
           instance: "prometheus"
+    relabel_configs:
+      - target_label: cluster
+        replacement: "hbot-prod"
+      - target_label: environment
+        replacement: "production"
 
   # Node Exporter - host-level metrics (CPU, RAM, disk, network)
   - job_name: "node-exporter"
@@ -39,6 +45,11 @@ scrape_configs:
       - targets: ["node-exporter:9100"]
         labels:
           instance: "vps-host"
+    relabel_configs:
+      - target_label: cluster
+        replacement: "hbot-prod"
+      - target_label: environment
+        replacement: "production"
 
   # cAdvisor - container-level metrics
   - job_name: "cadvisor"
@@ -47,6 +58,11 @@ scrape_configs:
       - targets: ["cadvisor:8080"]
         labels:
           instance: "docker-containers"
+    relabel_configs:
+      - target_label: cluster
+        replacement: "hbot-prod"
+      - target_label: environment
+        replacement: "production"
 
   # Grafana self-monitoring
   - job_name: "grafana"
@@ -55,6 +71,11 @@ scrape_configs:
       - targets: ["grafana:3000"]
         labels:
           instance: "grafana"
+    relabel_configs:
+      - target_label: cluster
+        replacement: "hbot-prod"
+      - target_label: environment
+        replacement: "production"
 
   # Bot metrics exporter (strategy KPIs and bot runtime signals)
   - job_name: "bot-metrics"
@@ -63,6 +84,11 @@ scrape_configs:
       - targets: ["bot-metrics-exporter:9400"]
         labels:
           instance: "bot-metrics-exporter"
+    relabel_configs:
+      - target_label: cluster
+        replacement: "hbot-prod"
+      - target_label: environment
+        replacement: "production"
 
   # Control-plane metrics exporter (gate health + freshness)
   - job_name: "control-plane-metrics"
@@ -71,3 +97,8 @@ scrape_configs:
       - targets: ["control-plane-metrics-exporter:9401"]
         labels:
           instance: "control-plane-metrics-exporter"
+    relabel_configs:
+      - target_label: cluster
+        replacement: "hbot-prod"
+      - target_label: environment
+        replacement: "production"

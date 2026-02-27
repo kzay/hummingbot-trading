@@ -7,7 +7,6 @@ env/.env
 env/.env.*
 !env/.env.template
 .env
-!.env.example
 *.pem
 *.key
 *.crt
@@ -93,6 +92,7 @@ monitoring/prometheus/data/
 backups/*.tar.gz
 backups/*.zip
 backups/*.sql
+data/bot1/archive/
 
 # ---- Docker local override ----
 docker-compose.override.yml

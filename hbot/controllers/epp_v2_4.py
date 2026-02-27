@@ -142,6 +142,13 @@ class EppV24Config(MarketMakingControllerConfigBase):
     vol_penalty_multiplier: Decimal = Field(default=Decimal("0.5"), description="ATR-based volatility penalty on spread floor")
     regime_hold_ticks: int = Field(default=3, ge=1, le=30, description="Regime must be detected for N consecutive ticks before switching")
     funding_rate_refresh_s: int = Field(default=300, ge=30, le=3600, description="Seconds between funding rate queries (perps only)")
+    adverse_fill_spread_multiplier: Decimal = Field(
+        default=Decimal("1.3"),
+        description="Spread multiplier when realized fill edge EWMA is persistently negative",
+    )
+    adverse_fill_count_threshold: int = Field(default=20, ge=5, le=200)
+    close_position_at_rollover: bool = Field(default=True, description="Force position close at daily rollover (UTC midnight)")
+    min_close_notional_quote: Decimal = Field(default=Decimal("5.0"), description="Minimum notional to trigger EOD close")
 
     # Desk-style hard risk limits
     min_base_pct: Decimal = Field(default=Decimal("0.15"))
@@ -317,6 +324,18 @@ class EppV24Controller(MarketMakingControllerBase):
             one_sided="sell_only",
             fill_factor=Decimal("0.35"),
         ),
+        "neutral_high_vol": RegimeSpec(
+            spread_min=Decimal("0.0040"),
+            spread_max=Decimal("0.0080"),
+            levels_min=1,
+            levels_max=3,
+            refresh_s=100,
+            target_base_pct=Decimal("0.0"),
+            quote_size_pct_min=Decimal("0.0005"),
+            quote_size_pct_max=Decimal("0.0008"),
+            one_sided="off",
+            fill_factor=Decimal("0.35"),
+        ),
         "high_vol_shock": RegimeSpec(
             spread_min=Decimal("0.0080"),
             spread_max=Decimal("0.0200"),
@@ -437,8 +456,12 @@ class EppV24Controller(MarketMakingControllerBase):
         self._connector_io_duration_ms: float = 0.0
         self._active_regime: str = "neutral_low_vol"
         self._pending_regime: str = "neutral_low_vol"
+        self._regime_source: str = "price_buffer"
         self._regime_hold_counter: int = 0
         self._pending_stale_cancel_actions: List[Any] = []
+        self._fill_edge_ewma: Optional[Decimal] = None
+        self._adverse_fill_count: int = 0
+        self._pending_eod_close: bool = False
         self._funding_rate: Decimal = _ZERO
         self._funding_cost_today_quote: Decimal = _ZERO
         self._last_funding_rate_ts: float = 0.0
@@ -524,6 +547,8 @@ class EppV24Controller(MarketMakingControllerBase):
         self._sync_from_paper_desk_v2(mid=mid)
         self._price_buffer.add_sample(now, mid)
         self._maybe_roll_day(now)
+        if self._pending_eod_close and abs(self._position_base) < self._min_base_amount(mid):
+            self._pending_eod_close = False
 
         equity_quote, base_pct_gross, base_pct_net = self._compute_equity_and_base_pcts(mid)
         self._sync_from_paper_desk_v2(mid=mid, equity_quote=equity_quote)
@@ -661,6 +686,8 @@ class EppV24Controller(MarketMakingControllerBase):
             risk_reasons.append("position_drift_high")
         if market.order_book_stale:
             risk_reasons.append("order_book_stale")
+        if self._pending_eod_close:
+            risk_reasons.append("eod_close_pending")
         return risk_reasons, risk_hard_stop, daily_loss_pct, drawdown_pct
 
     def _resolve_guard_state(
@@ -722,7 +749,9 @@ class EppV24Controller(MarketMakingControllerBase):
         risk_reasons_for_log = list(risk_reasons)
         derisk_only = False
         rr = set(risk_reasons)
-        if state == GuardState.SOFT_PAUSE and not risk_hard_stop and rr in ({"base_pct_above_max"}, {"base_pct_below_min"}):
+        if state == GuardState.SOFT_PAUSE and not risk_hard_stop and rr in (
+            {"base_pct_above_max"}, {"base_pct_below_min"}, {"eod_close_pending"},
+        ):
             derisk_only = True
             risk_reasons_for_log.append("derisk_only")
 
@@ -784,6 +813,22 @@ class EppV24Controller(MarketMakingControllerBase):
                 active_side_count = max(1, len(self._runtime_levels.buy_spreads))
                 if tight > _ZERO:
                     self._runtime_levels.buy_spreads = [tight] * active_side_count
+                if self.config.max_order_notional_quote > 0:
+                    max_total = self.config.max_order_notional_quote * Decimal(active_side_count)
+                    self._runtime_levels.total_amount_quote = min(self._runtime_levels.total_amount_quote, max_total)
+            elif rr == {"eod_close_pending"}:
+                if base_pct_net >= _ZERO:
+                    self._runtime_levels.buy_spreads = []
+                    self._runtime_levels.buy_amounts_pct = []
+                    active_side_count = max(1, len(self._runtime_levels.sell_spreads))
+                    if tight > _ZERO:
+                        self._runtime_levels.sell_spreads = [tight] * active_side_count
+                else:
+                    self._runtime_levels.sell_spreads = []
+                    self._runtime_levels.sell_amounts_pct = []
+                    active_side_count = max(1, len(self._runtime_levels.buy_spreads))
+                    if tight > _ZERO:
+                        self._runtime_levels.buy_spreads = [tight] * active_side_count
                 if self.config.max_order_notional_quote > 0:
                     max_total = self.config.max_order_notional_quote * Decimal(active_side_count)
                     self._runtime_levels.total_amount_quote = min(self._runtime_levels.total_amount_quote, max_total)
@@ -888,6 +933,21 @@ class EppV24Controller(MarketMakingControllerBase):
                 self._avg_entry_price = (old_cost + new_cost) / abs(new_pos) if abs(new_pos) > _ZERO else fill_price
             self._position_base = new_pos
         self._realized_pnl_today += realized_pnl
+
+        # Fill-edge EWMA for auto-widen (P1-2).
+        if mid_ref > _ZERO:
+            side_sign = Decimal("-1") if event.trade_type.name.lower() == "buy" else _ONE
+            fill_edge_bps = (fill_price - mid_ref) * side_sign / mid_ref * _10K
+            _alpha = Decimal("0.05")
+            if self._fill_edge_ewma is None:
+                self._fill_edge_ewma = fill_edge_bps
+            else:
+                self._fill_edge_ewma = _alpha * fill_edge_bps + (_ONE - _alpha) * self._fill_edge_ewma
+            cost_floor_bps = (self._maker_fee_pct + self.config.slippage_est_pct) * _10K
+            if self._fill_edge_ewma < -cost_floor_bps:
+                self._adverse_fill_count += 1
+            elif self._fill_edge_ewma >= -cost_floor_bps * Decimal("0.5"):
+                self._adverse_fill_count = 0
 
         if mid_ref > _ZERO:
             price_deviation_pct = abs(fill_price - mid_ref) / mid_ref
@@ -1042,9 +1102,54 @@ class EppV24Controller(MarketMakingControllerBase):
                 return False, "invalid_target_base_pct"
         return False, "unsupported_action"
 
+    def _get_ohlcv_ema_and_atr(self) -> Tuple[Optional[Decimal], Optional[Decimal]]:
+        """Fetch 1m OHLCV candles and compute EMA/band_pct. Returns (None, None) on failure."""
+        connector = self.config.candles_connector
+        if not connector:
+            return None, None
+        pair = self.config.candles_trading_pair or self.config.trading_pair
+        needed = self.config.ema_period + 5
+        try:
+            df = self.market_data_provider.get_candles_df(connector, pair, "1m", needed)
+        except Exception:
+            return None, None
+        if df is None or df.empty or len(df) < self.config.ema_period:
+            return None, None
+        try:
+            closes = [to_decimal(c) for c in df["close"].values]
+            alpha = _TWO / Decimal(self.config.ema_period + 1)
+            ema_val = closes[0]
+            for c in closes[1:]:
+                ema_val = alpha * c + (_ONE - alpha) * ema_val
+            highs = [to_decimal(h) for h in df["high"].values]
+            lows = [to_decimal(lo) for lo in df["low"].values]
+            trs: List[Decimal] = []
+            for i in range(1, len(closes)):
+                tr = max(
+                    highs[i] - lows[i],
+                    abs(highs[i] - closes[i - 1]),
+                    abs(lows[i] - closes[i - 1]),
+                )
+                trs.append(tr)
+            atr_period = min(self.config.atr_period, len(trs))
+            if atr_period <= 0 or closes[-1] <= _ZERO:
+                return ema_val, None
+            atr_val = sum(trs[-atr_period:], _ZERO) / Decimal(atr_period)
+            band_pct = atr_val / closes[-1]
+            return ema_val, band_pct
+        except Exception:
+            return None, None
+
     def _detect_regime(self, mid: Decimal) -> Tuple[str, RegimeSpec]:
-        ema50 = self._price_buffer.ema(self.config.ema_period)
-        band_pct = self._price_buffer.band_pct(self.config.atr_period) or _ZERO
+        ohlcv_ema, ohlcv_band = self._get_ohlcv_ema_and_atr()
+        if ohlcv_ema is not None and ohlcv_band is not None:
+            ema50 = ohlcv_ema
+            band_pct = ohlcv_band
+            self._regime_source = "ohlcv"
+        else:
+            ema50 = self._price_buffer.ema(self.config.ema_period)
+            band_pct = self._price_buffer.band_pct(self.config.atr_period) or _ZERO
+            self._regime_source = "price_buffer"
         drift = self._price_buffer.adverse_drift_30s(float(self.market_data_provider.time()))
 
         vol_adaptive_shock = band_pct * self.config.shock_drift_atr_multiplier if band_pct > _ZERO else self.config.shock_drift_30s_pct
@@ -1059,6 +1164,10 @@ class EppV24Controller(MarketMakingControllerBase):
             raw_regime = "down"
         else:
             raw_regime = "neutral_low_vol"
+
+        high_vol_mid_threshold = self.config.high_vol_band_pct * Decimal("0.5")
+        if band_pct >= high_vol_mid_threshold and raw_regime == "neutral_low_vol":
+            raw_regime = "neutral_high_vol"
 
         if raw_regime == self._pending_regime:
             self._regime_hold_counter += 1
@@ -1908,27 +2017,34 @@ class EppV24Controller(MarketMakingControllerBase):
         min_edge_threshold = Decimal(self.config.min_net_edge_bps) / _10K
         edge_resume_threshold = Decimal(self.config.edge_resume_bps) / _10K
         fill_factor = _clip(regime_spec.fill_factor, _FILL_FACTOR_LO, _ONE)
-        funding_cost_est = _ZERO
+
+        # Sign-aware funding cost: positive funding + net short = extra cost,
+        # positive funding + net long = rebate (capped at 0 for conservatism).
+        funding_cost_bps = _ZERO
         if self._is_perp and self._funding_rate != _ZERO:
-            refresh_s = Decimal(max(30, int(self._runtime_levels.executor_refresh_time)))
-            funding_cost_est = abs(self._funding_rate) * refresh_s / Decimal("28800")
+            sign = _ONE if base_pct < _ZERO else Decimal("-1")
+            funding_cost_bps = max(_ZERO, sign * self._funding_rate * _10K)
+        funding_cost_pct = funding_cost_bps / _10K
+
         base_costs = (
             self._maker_fee_pct
             + self.config.slippage_est_pct
             + max(_ZERO, smooth_drift)
             + turnover_penalty
-            + funding_cost_est
+            + funding_cost_pct
         )
         self._spread_floor_pct = (base_costs + min_edge_threshold) / fill_factor + vol_penalty
-
-        funding_cost_est_edge = _ZERO
-        if self._is_perp and self._funding_rate != _ZERO:
-            refresh_s_edge = Decimal(max(30, int(self._runtime_levels.executor_refresh_time)))
-            funding_cost_est_edge = abs(self._funding_rate) * refresh_s_edge / Decimal("28800")
 
         spread_pct = self._pick_spread_pct(regime_spec, turnover_x)
         spread_pct = max(spread_pct, self._spread_floor_pct)
         spread_pct = spread_pct * drift_spread_mult
+
+        adverse_fill_active = (
+            self._adverse_fill_count >= self.config.adverse_fill_count_threshold
+            and self._fill_edge_ewma is not None
+        )
+        if adverse_fill_active:
+            spread_pct = spread_pct * self.config.adverse_fill_spread_multiplier
 
         net_edge = (
             fill_factor * spread_pct
@@ -1936,7 +2052,7 @@ class EppV24Controller(MarketMakingControllerBase):
             - self.config.slippage_est_pct
             - max(_ZERO, smooth_drift)
             - turnover_penalty
-            - funding_cost_est_edge
+            - funding_cost_pct
         )
         return SpreadEdgeState(
             band_pct=band_pct,
@@ -2029,7 +2145,10 @@ class EppV24Controller(MarketMakingControllerBase):
         return {
             "schema_version": PROCESSED_STATE_SCHEMA_VERSION,
             "reference_price": mid,
-            "spread_multiplier": Decimal("1"),
+            "spread_multiplier": self.config.adverse_fill_spread_multiplier if (
+                self._adverse_fill_count >= self.config.adverse_fill_count_threshold
+                and self._fill_edge_ewma is not None
+            ) else _ONE,
             "regime": regime_name,
             "target_base_pct": target_base_pct,
             "base_pct": base_pct,
@@ -2079,11 +2198,14 @@ class EppV24Controller(MarketMakingControllerBase):
             "funding_rate": self._funding_rate,
             "funding_cost_today_quote": self._funding_cost_today_quote,
             "margin_ratio": self._margin_ratio,
+            "regime_source": self._regime_source,
             "is_perpetual": self._is_perp,
             "realized_pnl_today_quote": self._realized_pnl_today,
             "avg_entry_price": self._avg_entry_price,
             "position_base": self._position_base,
             "position_drift_pct": self._position_drift_pct,
+            "fill_edge_ewma_bps": self._fill_edge_ewma if self._fill_edge_ewma is not None else _ZERO,
+            "adverse_fill_active": self._adverse_fill_count >= self.config.adverse_fill_count_threshold and self._fill_edge_ewma is not None,
             "order_book_stale": market.order_book_stale,
             "ws_reconnect_count": self._ws_reconnect_count,
             "connector_status": self._runtime_adapter.status_summary(),
@@ -2183,6 +2305,16 @@ class EppV24Controller(MarketMakingControllerBase):
             self._funding_cost_today_quote = _ZERO
             self._realized_pnl_today = _ZERO
             self._cancel_events_ts = []
+            if (
+                self.config.close_position_at_rollover
+                and mid > _ZERO
+                and abs(self._position_base) * mid > self.config.min_close_notional_quote
+            ):
+                self._pending_eod_close = True
+                logger.info(
+                    "EOD close triggered: position_base=%s mid=%s notional=%s",
+                    self._position_base, mid, abs(self._position_base) * mid,
+                )
             self._save_daily_state(force=True)
 
     def _daily_state_path(self) -> str:
@@ -2273,6 +2405,7 @@ class EppV24Controller(MarketMakingControllerBase):
                 "trading_pair": self.config.trading_pair,
                 "state": state.value,
                 "regime": pd.get("regime", ""),
+                "regime_source": pd.get("regime_source", "price_buffer"),
                 "mid": str(pd.get("mid", _ZERO)),
                 "equity_quote": str(pd.get("equity_quote", _ZERO)),
                 "base_pct": str(pd.get("base_pct", _ZERO)),
@@ -2312,7 +2445,10 @@ class EppV24Controller(MarketMakingControllerBase):
                 "realized_pnl_today_quote": str(self._realized_pnl_today),
                 "position_base": str(self._position_base),
                 "avg_entry_price": str(self._avg_entry_price),
+                "fill_edge_ewma_bps": str(self._fill_edge_ewma if self._fill_edge_ewma is not None else _ZERO),
+                "adverse_fill_active": str(self._adverse_fill_count >= self.config.adverse_fill_count_threshold and self._fill_edge_ewma is not None),
                 "funding_rate": str(self._funding_rate),
+                "funding_rate_bps": str(self._funding_rate * _10K),
                 "funding_cost_today_quote": str(self._funding_cost_today_quote),
                 "margin_ratio": str(self._margin_ratio),
                 "position_drift_pct": str(self._position_drift_pct),

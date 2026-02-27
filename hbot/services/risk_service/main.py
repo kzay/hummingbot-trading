@@ -1,11 +1,22 @@
 from __future__ import annotations
 
+import json
 import os
 import time
+from datetime import datetime, timezone
+from pathlib import Path
 
+from services.common.graceful_shutdown import ShutdownHandler
+from services.common.logging_config import configure_logging
 from services.common.models import RedisSettings, ServiceSettings
-from services.contracts.event_schemas import MlSignalEvent, RiskDecisionEvent, StrategySignalEvent
+from services.contracts.event_schemas import (
+    AuditEvent,
+    MlSignalEvent,
+    RiskDecisionEvent,
+    StrategySignalEvent,
+)
 from services.contracts.stream_names import (
+    AUDIT_STREAM,
     DEFAULT_CONSUMER_GROUP,
     ML_SIGNAL_STREAM,
     RISK_DECISION_STREAM,
@@ -13,6 +24,13 @@ from services.contracts.stream_names import (
     STREAM_RETENTION_MAXLEN,
 )
 from services.hb_bridge.redis_client import RedisStreamClient
+
+configure_logging()
+
+_REPORTS_DIR = Path(os.environ.get(
+    "REPORTS_ROOT",
+    str(Path(__file__).resolve().parents[2] / "reports" / "risk_service"),
+))
 
 
 def evaluate_ml_signal(
@@ -33,7 +51,14 @@ def evaluate_ml_signal(
     return approved, reason
 
 
+def _write_latest(report: dict) -> None:
+    _REPORTS_DIR.mkdir(parents=True, exist_ok=True)
+    latest = _REPORTS_DIR / "latest.json"
+    latest.write_text(json.dumps(report, indent=2, default=str), encoding="utf-8")
+
+
 def run() -> None:
+    shutdown = ShutdownHandler()
     redis_cfg = RedisSettings()
     svc_cfg = ServiceSettings()
     max_abs_signal = float(os.getenv("RISK_MAX_ABS_SIGNAL", "0.25"))
@@ -54,7 +79,12 @@ def run() -> None:
     source_stream = ML_SIGNAL_STREAM if ml_enabled else SIGNAL_STREAM
     client.create_group(source_stream, group)
 
-    while True:
+    decisions_total = 0
+    decisions_approved = 0
+    decisions_rejected = 0
+    last_decision_ts = ""
+
+    while not shutdown.requested:
         entries = client.read_group(
             stream=source_stream,
             group=group,
@@ -115,9 +145,44 @@ def run() -> None:
                 maxlen=STREAM_RETENTION_MAXLEN.get(RISK_DECISION_STREAM),
             )
             client.ack(source_stream, group, entry_id)
+
+            decisions_total += 1
+            if approved:
+                decisions_approved += 1
+            else:
+                decisions_rejected += 1
+            last_decision_ts = datetime.now(timezone.utc).isoformat()
+
+            if not approved:
+                audit = AuditEvent(
+                    producer=svc_cfg.producer_name,
+                    instance_name=decision.instance_name,
+                    severity="warning",
+                    category="risk_decision",
+                    message=f"Signal rejected: {reason}",
+                    metadata=decision.metadata,
+                )
+                client.xadd(
+                    AUDIT_STREAM,
+                    audit.model_dump(),
+                    maxlen=STREAM_RETENTION_MAXLEN.get(AUDIT_STREAM),
+                )
+
+        _write_latest({
+            "service": "risk_service",
+            "ts_utc": datetime.now(timezone.utc).isoformat(),
+            "ml_enabled": ml_enabled,
+            "source_stream": source_stream,
+            "decisions_total": decisions_total,
+            "decisions_approved": decisions_approved,
+            "decisions_rejected": decisions_rejected,
+            "last_decision_ts": last_decision_ts,
+            "redis_connected": client.enabled,
+        })
         time.sleep(0.05)
+
+    shutdown.log_exit()
 
 
 if __name__ == "__main__":
     run()
-

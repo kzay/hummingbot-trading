@@ -28,8 +28,8 @@ volumes:
     driver: local
   postgres-data:
     driver: local
-  clickhouse-data:
-    driver: local
+  # clickhouse-data:
+  #   driver: local
 
 # ---- Logging anchor ----
 x-logging: &default-logging
@@ -72,7 +72,6 @@ x-hbot-base: &hbot-base
 # Services
 # ============================================
 services:
-
   # ==========================================
   # BOT 1
   # ==========================================
@@ -260,7 +259,11 @@ services:
     volumes:
       - ../config/mosquitto:/mosquitto/config:ro
     healthcheck:
-      test: ["CMD-SHELL", "mosquitto_sub -t '$$SYS/broker/uptime' -C 1 -W 3 || exit 1"]
+      test:
+        [
+          "CMD-SHELL",
+          "mosquitto_sub -t '$$SYS/broker/uptime' -C 1 -W 3 || exit 1",
+        ]
       interval: 10s
       timeout: 5s
       retries: 5
@@ -305,7 +308,11 @@ services:
     networks:
       - trading
     healthcheck:
-      test: ["CMD-SHELL", "python -c \"import os,redis,sys; c=redis.Redis(host=os.getenv('REDIS_HOST','redis'),port=int(os.getenv('REDIS_PORT','6379')),db=int(os.getenv('REDIS_DB','0')),password=os.getenv('REDIS_PASSWORD') or None,socket_timeout=2); sys.exit(0 if c.ping() else 1)\""]
+      test:
+        [
+          "CMD-SHELL",
+          'python -c "import os,redis,sys; c=redis.Redis(host=os.getenv(''REDIS_HOST'',''redis''),port=int(os.getenv(''REDIS_PORT'',''6379'')),db=int(os.getenv(''REDIS_DB'',''0'')),password=os.getenv(''REDIS_PASSWORD'') or None,socket_timeout=2); sys.exit(0 if c.ping() else 1)"',
+        ]
       interval: 30s
       timeout: 10s
       retries: 3
@@ -343,7 +350,11 @@ services:
     networks:
       - trading
     healthcheck:
-      test: ["CMD-SHELL", "python -c \"import os,redis,sys; c=redis.Redis(host=os.getenv('REDIS_HOST','redis'),port=int(os.getenv('REDIS_PORT','6379')),db=int(os.getenv('REDIS_DB','0')),password=os.getenv('REDIS_PASSWORD') or None,socket_timeout=2); sys.exit(0 if c.ping() else 1)\""]
+      test:
+        [
+          "CMD-SHELL",
+          'python -c "import os,redis,sys; c=redis.Redis(host=os.getenv(''REDIS_HOST'',''redis''),port=int(os.getenv(''REDIS_PORT'',''6379'')),db=int(os.getenv(''REDIS_DB'',''0'')),password=os.getenv(''REDIS_PASSWORD'') or None,socket_timeout=2); sys.exit(0 if c.ping() else 1)"',
+        ]
       interval: 30s
       timeout: 10s
       retries: 3
@@ -384,7 +395,11 @@ services:
     networks:
       - trading
     healthcheck:
-      test: ["CMD-SHELL", "python -c \"import os,time,sys; from pathlib import Path; p=Path(os.getenv('COORD_HEALTH_PATH','/workspace/hbot/reports/coordination/latest.json')); sys.exit(0 if p.exists() and (time.time()-p.stat().st_mtime)<=float(os.getenv('COORD_HEALTH_MAX_SEC','600')) else 1)\""]
+      test:
+        [
+          "CMD-SHELL",
+          'python -c "import os,time,sys; from pathlib import Path; p=Path(os.getenv(''COORD_HEALTH_PATH'',''/workspace/hbot/reports/coordination/latest.json'')); sys.exit(0 if p.exists() and (time.time()-p.stat().st_mtime)<=float(os.getenv(''COORD_HEALTH_MAX_SEC'',''600'')) else 1)"',
+        ]
       interval: 30s
       timeout: 10s
       retries: 3
@@ -419,7 +434,11 @@ services:
     networks:
       - trading
     healthcheck:
-      test: ["CMD-SHELL", "python -c \"import os,time,sys; from pathlib import Path; p=Path('/workspace/hbot/reports/event_store'); fs=sorted(p.glob('events_*.jsonl')); sys.exit(0 if fs and (time.time()-fs[-1].stat().st_mtime)<=float(os.getenv('EVENT_STORE_HEALTH_MAX_SEC','900')) else 1)\""]
+      test:
+        [
+          "CMD-SHELL",
+          'python -c "import os,time,sys; from pathlib import Path; p=Path(''/workspace/hbot/reports/event_store''); fs=sorted(p.glob(''events_*.jsonl'')); sys.exit(0 if fs and (time.time()-fs[-1].stat().st_mtime)<=float(os.getenv(''EVENT_STORE_HEALTH_MAX_SEC'',''900'')) else 1)"',
+        ]
       interval: 30s
       timeout: 10s
       retries: 3
@@ -451,7 +470,11 @@ services:
     networks:
       - trading
     healthcheck:
-      test: ["CMD-SHELL", "python -c \"import os,time,sys; from pathlib import Path; p=Path('/workspace/hbot/reports/event_store'); fs=sorted(p.glob('integrity_*.json')); sys.exit(0 if fs and (time.time()-fs[-1].stat().st_mtime)<=float(os.getenv('EVENT_STORE_MONITOR_HEALTH_MAX_SEC','1800')) else 1)\""]
+      test:
+        [
+          "CMD-SHELL",
+          'python -c "import os,time,sys; from pathlib import Path; p=Path(''/workspace/hbot/reports/event_store''); fs=sorted(p.glob(''integrity_*.json'')); sys.exit(0 if fs and (time.time()-fs[-1].stat().st_mtime)<=float(os.getenv(''EVENT_STORE_MONITOR_HEALTH_MAX_SEC'',''1800'')) else 1)"',
+        ]
       interval: 60s
       timeout: 10s
       retries: 3
@@ -487,7 +510,11 @@ services:
     networks:
       - trading
     healthcheck:
-      test: ["CMD-SHELL", "python -c \"import os,time,sys; from pathlib import Path; p=Path('/workspace/hbot/reports/event_store/day2_gate_eval_latest.json'); sys.exit(0 if p.exists() and (time.time()-p.stat().st_mtime)<=float(os.getenv('DAY2_GATE_HEALTH_MAX_SEC','900')) else 1)\""]
+      test:
+        [
+          "CMD-SHELL",
+          'python -c "import os,time,sys; from pathlib import Path; p=Path(''/workspace/hbot/reports/event_store/day2_gate_eval_latest.json''); sys.exit(0 if p.exists() and (time.time()-p.stat().st_mtime)<=float(os.getenv(''DAY2_GATE_HEALTH_MAX_SEC'',''900'')) else 1)"',
+        ]
       interval: 60s
       timeout: 10s
       retries: 3
@@ -523,7 +550,11 @@ services:
     networks:
       - trading
     healthcheck:
-      test: ["CMD-SHELL", "python -c \"import os,time,sys; from pathlib import Path; p=Path('/workspace/hbot/reports/reconciliation/latest.json'); sys.exit(0 if p.exists() and (time.time()-p.stat().st_mtime)<=float(os.getenv('RECON_HEALTH_MAX_SEC','900')) else 1)\""]
+      test:
+        [
+          "CMD-SHELL",
+          'python -c "import os,time,sys; from pathlib import Path; p=Path(''/workspace/hbot/reports/reconciliation/latest.json''); sys.exit(0 if p.exists() and (time.time()-p.stat().st_mtime)<=float(os.getenv(''RECON_HEALTH_MAX_SEC'',''900'')) else 1)"',
+        ]
       interval: 30s
       timeout: 10s
       retries: 3
@@ -560,7 +591,11 @@ services:
     networks:
       - trading
     healthcheck:
-      test: ["CMD-SHELL", "python -c \"import os,time,sys; from pathlib import Path; p=Path('/workspace/hbot/reports/exchange_snapshots/latest.json'); sys.exit(0 if p.exists() and (time.time()-p.stat().st_mtime)<=float(os.getenv('EXCHANGE_SNAPSHOT_HEALTH_MAX_SEC','600')) else 1)\""]
+      test:
+        [
+          "CMD-SHELL",
+          'python -c "import os,time,sys; from pathlib import Path; p=Path(''/workspace/hbot/reports/exchange_snapshots/latest.json''); sys.exit(0 if p.exists() and (time.time()-p.stat().st_mtime)<=float(os.getenv(''EXCHANGE_SNAPSHOT_HEALTH_MAX_SEC'',''600'')) else 1)"',
+        ]
       interval: 30s
       timeout: 10s
       retries: 3
@@ -591,7 +626,11 @@ services:
     networks:
       - trading
     healthcheck:
-      test: ["CMD-SHELL", "python -c \"import os,time,sys; from pathlib import Path; p=Path('/workspace/hbot/reports/parity/latest.json'); sys.exit(0 if p.exists() and (time.time()-p.stat().st_mtime)<=float(os.getenv('PARITY_HEALTH_MAX_SEC','900')) else 1)\""]
+      test:
+        [
+          "CMD-SHELL",
+          'python -c "import os,time,sys; from pathlib import Path; p=Path(''/workspace/hbot/reports/parity/latest.json''); sys.exit(0 if p.exists() and (time.time()-p.stat().st_mtime)<=float(os.getenv(''PARITY_HEALTH_MAX_SEC'',''900'')) else 1)"',
+        ]
       interval: 30s
       timeout: 10s
       retries: 3
@@ -630,7 +669,11 @@ services:
     networks:
       - trading
     healthcheck:
-      test: ["CMD-SHELL", "python -c \"import os,time,sys; from pathlib import Path; p=Path('/workspace/hbot/reports/portfolio_risk/latest.json'); sys.exit(0 if p.exists() and (time.time()-p.stat().st_mtime)<=float(os.getenv('PORTFOLIO_RISK_HEALTH_MAX_SEC','900')) else 1)\""]
+      test:
+        [
+          "CMD-SHELL",
+          'python -c "import os,time,sys; from pathlib import Path; p=Path(''/workspace/hbot/reports/portfolio_risk/latest.json''); sys.exit(0 if p.exists() and (time.time()-p.stat().st_mtime)<=float(os.getenv(''PORTFOLIO_RISK_HEALTH_MAX_SEC'',''900'')) else 1)"',
+        ]
       interval: 30s
       timeout: 10s
       retries: 3
@@ -663,7 +706,11 @@ services:
     networks:
       - trading
     healthcheck:
-      test: ["CMD-SHELL", "python -c \"import os,time,sys; from pathlib import Path; p=Path('/workspace/hbot/reports/soak/latest.json'); sys.exit(0 if p.exists() and (time.time()-p.stat().st_mtime)<=float(os.getenv('SOAK_MONITOR_HEALTH_MAX_SEC','1200')) else 1)\""]
+      test:
+        [
+          "CMD-SHELL",
+          'python -c "import os,time,sys; from pathlib import Path; p=Path(''/workspace/hbot/reports/soak/latest.json''); sys.exit(0 if p.exists() and (time.time()-p.stat().st_mtime)<=float(os.getenv(''SOAK_MONITOR_HEALTH_MAX_SEC'',''1200'')) else 1)"',
+        ]
       interval: 60s
       timeout: 10s
       retries: 3
@@ -691,11 +738,39 @@ services:
     networks:
       - trading
     healthcheck:
-      test: ["CMD-SHELL", "python -c \"import os,time,sys; from pathlib import Path; p=Path('/workspace/hbot/docs/ops'); fs=sorted(p.glob('daily_ops_report_*.md')); sys.exit(0 if fs and (time.time()-fs[-1].stat().st_mtime)<=float(os.getenv('DAILY_OPS_REPORT_HEALTH_MAX_SEC','3600')) else 1)\""]
+      test:
+        [
+          "CMD-SHELL",
+          'python -c "import os,time,sys; from pathlib import Path; p=Path(''/workspace/hbot/docs/ops''); fs=sorted(p.glob(''daily_ops_report_*.md'')); sys.exit(0 if fs and (time.time()-fs[-1].stat().st_mtime)<=float(os.getenv(''DAILY_OPS_REPORT_HEALTH_MAX_SEC'',''3600'')) else 1)"',
+        ]
       interval: 60s
       timeout: 10s
       retries: 3
       start_period: 30s
+
+  telegram-bot:
+    <<: *control-plane-image
+    container_name: hbot-telegram-bot
+    profiles:
+      - external
+    restart: unless-stopped
+    logging: *default-logging
+    command: >
+      /bin/sh -lc "pip install -q 'python-telegram-bot>=20.0' && python /workspace/hbot/services/telegram_bot/main.py"
+    environment:
+      - PYTHONPATH=/workspace/hbot
+      - TELEGRAM_BOT_TOKEN=${TELEGRAM_BOT_TOKEN}
+      - TELEGRAM_CHAT_ID=${TELEGRAM_CHAT_ID}
+      - HB_DATA_ROOT=/workspace/hbot/data
+    volumes:
+      - ..:/workspace/hbot:ro
+    networks:
+      - trading
+    deploy:
+      resources:
+        limits:
+          memory: 128M
+          cpus: "0.25"
 
   kill-switch:
     <<: *control-plane-image
@@ -730,7 +805,11 @@ services:
     networks:
       - trading
     healthcheck:
-      test: ["CMD-SHELL", "python -c \"import urllib.request; urllib.request.urlopen('http://localhost:9900/health')\" 2>/dev/null || exit 1"]
+      test:
+        [
+          "CMD-SHELL",
+          'python -c "import urllib.request; urllib.request.urlopen(''http://localhost:9900/health'')" 2>/dev/null || exit 1',
+        ]
       interval: 15s
       timeout: 5s
       retries: 3
@@ -764,7 +843,11 @@ services:
       - trading
       - monitoring
     healthcheck:
-      test: ["CMD-SHELL", "python -c \"import os,time,sys; from pathlib import Path; p=Path('/workspace/hbot/reports/ops_db_writer/latest.json'); sys.exit(0 if p.exists() and (time.time()-p.stat().st_mtime)<=float(os.getenv('OPS_DB_WRITER_HEALTH_MAX_SEC','900')) else 1)\""]
+      test:
+        [
+          "CMD-SHELL",
+          'python -c "import os,time,sys; from pathlib import Path; p=Path(''/workspace/hbot/reports/ops_db_writer/latest.json''); sys.exit(0 if p.exists() and (time.time()-p.stat().st_mtime)<=float(os.getenv(''OPS_DB_WRITER_HEALTH_MAX_SEC'',''900'')) else 1)"',
+        ]
       interval: 60s
       timeout: 10s
       retries: 3
@@ -793,7 +876,13 @@ services:
     networks:
       - monitoring
     healthcheck:
-      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:9400/metrics')"]
+      test:
+        [
+          "CMD",
+          "python",
+          "-c",
+          "import urllib.request; urllib.request.urlopen('http://localhost:9400/metrics')",
+        ]
       interval: 30s
       timeout: 10s
       retries: 3
@@ -823,7 +912,13 @@ services:
     networks:
       - monitoring
     healthcheck:
-      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:9401/metrics')"]
+      test:
+        [
+          "CMD",
+          "python",
+          "-c",
+          "import urllib.request; urllib.request.urlopen('http://localhost:9401/metrics')",
+        ]
       interval: 30s
       timeout: 10s
       retries: 3
@@ -834,67 +929,75 @@ services:
           memory: 128M
           cpus: "0.25"
 
-  # ---- PostgreSQL Operational Store (Day 25) ----
-  clickhouse:
-    image: clickhouse/clickhouse-server:24.8
-    container_name: hbot-clickhouse
-    profiles:
-      - ops
-    restart: unless-stopped
-    logging: *default-logging
-    environment:
-      - CLICKHOUSE_DB=${CH_DB:-hbot_events}
-      - CLICKHOUSE_USER=${CH_USER:-default}
-      - CLICKHOUSE_PASSWORD=${CH_PASSWORD:-}
-      - CLICKHOUSE_DEFAULT_ACCESS_MANAGEMENT=1
-    ports:
-      - "${CH_BIND_IP:-127.0.0.1}:${CH_HTTP_PORT:-8123}:8123"
-      - "${CH_BIND_IP:-127.0.0.1}:${CH_NATIVE_PORT:-9000}:9000"
-    volumes:
-      - clickhouse-data:/var/lib/clickhouse
-    networks:
-      - monitoring
-      - trading
-    healthcheck:
-      test: ["CMD-SHELL", "wget -qO- http://localhost:8123/ping | grep -q Ok."]
-      interval: 15s
-      timeout: 5s
-      retries: 10
-
-  clickhouse-ingest:
-    <<: *control-plane-image
-    container_name: hbot-clickhouse-ingest
-    profiles:
-      - ops
-    restart: unless-stopped
-    logging: *default-logging
-    command: >
-      /bin/sh -lc "python /workspace/hbot/services/clickhouse_ingest/main.py"
-    environment:
-      - HB_REPORTS_ROOT=/workspace/hbot/reports
-      - CH_HOST=${CH_HOST:-clickhouse}
-      - CH_HTTP_PORT=${CH_HTTP_PORT:-8123}
-      - CH_DB=${CH_DB:-hbot_events}
-      - CH_TABLE=${CH_TABLE:-event_store_raw_v1}
-      - CH_USER=${CH_USER:-default}
-      - CH_PASSWORD=${CH_PASSWORD:-}
-      - CH_INGEST_BATCH_SIZE=${CH_INGEST_BATCH_SIZE:-2000}
-      - CH_INGEST_INTERVAL_SEC=${CH_INGEST_INTERVAL_SEC:-120}
-      - CH_INGEST_HEALTH_MAX_SEC=${CH_INGEST_HEALTH_MAX_SEC:-900}
-    volumes:
-      - ..:/workspace/hbot
-    depends_on:
-      clickhouse:
-        condition: service_healthy
-    networks:
-      - monitoring
-      - trading
-    healthcheck:
-      test: ["CMD-SHELL", "python -c \"import os,time,sys; from pathlib import Path; p=Path('/workspace/hbot/reports/clickhouse_ingest/latest.json'); sys.exit(0 if p.exists() and (time.time()-p.stat().st_mtime)<=float(os.getenv('CH_INGEST_HEALTH_MAX_SEC','900')) else 1)\""]
-      interval: 60s
-      timeout: 10s
-      retries: 3
-      start_period: 30s
+  # ---- ClickHouse (disabled) ----
+  # To enable: see clickhouse_ingest/README.md
+  # Uncomment the clickhouse + clickhouse-ingest services below and
+  # the clickhouse-data volume at the top of this file.
+  #
+  # clickhouse:
+  #   image: clickhouse/clickhouse-server:24.8
+  #   container_name: hbot-clickhouse
+  #   profiles:
+  #     - ops
+  #   restart: unless-stopped
+  #   logging: *default-logging
+  #   environment:
+  #     - CLICKHOUSE_DB=${CH_DB:-hbot_events}
+  #     - CLICKHOUSE_USER=${CH_USER:-default}
+  #     - CLICKHOUSE_PASSWORD=${CH_PASSWORD:-}
+  #     - CLICKHOUSE_DEFAULT_ACCESS_MANAGEMENT=1
+  #   ports:
+  #     - "${CH_BIND_IP:-127.0.0.1}:${CH_HTTP_PORT:-8123}:8123"
+  #     - "${CH_BIND_IP:-127.0.0.1}:${CH_NATIVE_PORT:-9000}:9000"
+  #   volumes:
+  #     - clickhouse-data:/var/lib/clickhouse
+  #   networks:
+  #     - monitoring
+  #     - trading
+  #   healthcheck:
+  #     test: ["CMD-SHELL", "wget -qO- http://localhost:8123/ping | grep -q Ok."]
+  #     interval: 15s
+  #     timeout: 5s
+  #     retries: 10
+  #
+  # clickhouse-ingest:
+  #   <<: *control-plane-image
+  #   container_name: hbot-clickhouse-ingest
+  #   profiles:
+  #     - ops
+  #   restart: unless-stopped
+  #   logging: *default-logging
+  #   command: >
+  #     /bin/sh -lc "python /workspace/hbot/services/clickhouse_ingest/main.py"
+  #   environment:
+  #     - HB_REPORTS_ROOT=/workspace/hbot/reports
+  #     - CH_HOST=${CH_HOST:-clickhouse}
+  #     - CH_HTTP_PORT=${CH_HTTP_PORT:-8123}
+  #     - CH_DB=${CH_DB:-hbot_events}
+  #     - CH_TABLE=${CH_TABLE:-event_store_raw_v1}
+  #     - CH_USER=${CH_USER:-default}
+  #     - CH_PASSWORD=${CH_PASSWORD:-}
+  #     - CH_INGEST_BATCH_SIZE=${CH_INGEST_BATCH_SIZE:-2000}
+  #     - CH_INGEST_INTERVAL_SEC=${CH_INGEST_INTERVAL_SEC:-120}
+  #     - CH_INGEST_HEALTH_MAX_SEC=${CH_INGEST_HEALTH_MAX_SEC:-900}
+  #   volumes:
+  #     - ..:/workspace/hbot
+  #   depends_on:
+  #     clickhouse:
+  #       condition: service_healthy
+  #   networks:
+  #     - monitoring
+  #     - trading
+  #   healthcheck:
+  #     test:
+  #       [
+  #         "CMD-SHELL",
+  #         'python -c "import os,time,sys; from pathlib import Path; p=Path(''/workspace/hbot/reports/clickhouse_ingest/latest.json''); sys.exit(0 if p.exists() and (time.time()-p.stat().st_mtime)<=float(os.getenv(''CH_INGEST_HEALTH_MAX_SEC'',''900'')) else 1)"',
+  #       ]
+  #     interval: 60s
+  #     timeout: 10s
+  #     retries: 3
+  #     start_period: 30s
 
   # ---- PostgreSQL Operational Store (Day 25) ----
   postgres:
@@ -917,7 +1020,11 @@ services:
       - monitoring
       - trading
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U ${OPS_DB_USER:-hbot} -d ${OPS_DB_NAME:-hbot_ops}"]
+      test:
+        [
+          "CMD-SHELL",
+          "pg_isready -U ${OPS_DB_USER:-hbot} -d ${OPS_DB_NAME:-hbot_ops}",
+        ]
       interval: 10s
       timeout: 5s
       retries: 10
@@ -963,13 +1070,22 @@ services:
     volumes:
       - ../monitoring/prometheus/prometheus.yml:/etc/prometheus/prometheus.yml:ro
       - ../monitoring/prometheus/alert_rules.yml:/etc/prometheus/alert_rules.yml:ro
+      - ../monitoring/prometheus/recording_rules.yml:/etc/prometheus/recording_rules.yml:ro
       - prometheus-data:/prometheus
     ports:
       - "${MONITORING_BIND_IP:-127.0.0.1}:9090:9090"
     networks:
       - monitoring
     healthcheck:
-      test: ["CMD", "wget", "--quiet", "--tries=1", "--spider", "http://localhost:9090/-/healthy"]
+      test:
+        [
+          "CMD",
+          "wget",
+          "--quiet",
+          "--tries=1",
+          "--spider",
+          "http://localhost:9090/-/healthy",
+        ]
       interval: 30s
       timeout: 10s
       retries: 3
@@ -1020,7 +1136,15 @@ services:
       loki:
         condition: service_healthy
     healthcheck:
-      test: ["CMD", "wget", "--quiet", "--tries=1", "--spider", "http://localhost:3000/api/health"]
+      test:
+        [
+          "CMD",
+          "wget",
+          "--quiet",
+          "--tries=1",
+          "--spider",
+          "http://localhost:3000/api/health",
+        ]
       interval: 30s
       timeout: 10s
       retries: 3
@@ -1052,7 +1176,15 @@ services:
       - monitoring
     pid: host
     healthcheck:
-      test: ["CMD", "wget", "--quiet", "--tries=1", "--spider", "http://localhost:9100/metrics"]
+      test:
+        [
+          "CMD",
+          "wget",
+          "--quiet",
+          "--tries=1",
+          "--spider",
+          "http://localhost:9100/metrics",
+        ]
       interval: 30s
       timeout: 10s
       retries: 3
@@ -1082,7 +1214,15 @@ services:
     devices:
       - /dev/kmsg:/dev/kmsg
     healthcheck:
-      test: ["CMD", "wget", "--quiet", "--tries=1", "--spider", "http://localhost:8080/healthz"]
+      test:
+        [
+          "CMD",
+          "wget",
+          "--quiet",
+          "--tries=1",
+          "--spider",
+          "http://localhost:8080/healthz",
+        ]
       interval: 30s
       timeout: 10s
       retries: 3
@@ -1107,7 +1247,15 @@ services:
     networks:
       - monitoring
     healthcheck:
-      test: ["CMD", "wget", "--quiet", "--tries=1", "--spider", "http://localhost:3100/ready"]
+      test:
+        [
+          "CMD",
+          "wget",
+          "--quiet",
+          "--tries=1",
+          "--spider",
+          "http://localhost:3100/ready",
+        ]
       interval: 30s
       timeout: 10s
       retries: 3
@@ -1178,7 +1326,13 @@ services:
     networks:
       - monitoring
     healthcheck:
-      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:19093/healthz')"]
+      test:
+        [
+          "CMD",
+          "python",
+          "-c",
+          "import urllib.request; urllib.request.urlopen('http://localhost:19093/healthz')",
+        ]
       interval: 30s
       timeout: 10s
       retries: 3
@@ -1188,6 +1342,3 @@ services:
         limits:
           memory: 64M
           cpus: "0.1"
-
-
-

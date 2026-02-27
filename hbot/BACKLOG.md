@@ -59,7 +59,7 @@ events to `apply_execution_intent()` calls.
 
 ---
 
-### [P0-2] HARD_STOP must publish a kill-switch execution intent `open`
+### [P0-2] HARD_STOP must publish a kill-switch execution intent `done (2026-02-26)`
 
 **Why it matters**: When the controller hits max-loss / drawdown / cancel-budget breach,
 `force_hard_stop()` stops new orders but **open exchange orders remain live**.
@@ -122,10 +122,10 @@ when env vars are absent. Inventory drift vs real exchange is never detected.
   `RECON_EXCHANGE_SOURCE_ENABLED` env var. When false, skips exchange balance fetch.
 - `hbot/services/exchange_snapshot_service/main.py:47` — tries ccxt, returns
   `{"status": "missing_credentials"}` when `BITGET_API_KEY` is blank.
-- `hbot/.env.example` — shows which vars to set.
+- `hbot/env/.env.template` — shows which vars to set.
 
 **Action (config only — no code)**:
-1. Copy `hbot/.env.example` → `hbot/.env`.
+1. Ensure `hbot/env/.env` has the required vars (see `hbot/env/.env.template`).
 2. Fill in `BITGET_API_KEY`, `BITGET_SECRET`, `BITGET_PASSPHRASE`.
 3. Set `RECON_EXCHANGE_SOURCE_ENABLED=true`.
 4. `docker-compose up -d --no-deps reconciliation-service exchange-snapshot-service`.
@@ -161,7 +161,7 @@ any live capital is deployed.
 
 ---
 
-### [P1-1] Add funding rate to the spread floor cost model `open`
+### [P1-1] Add funding rate to the spread floor cost model `done (2026-02-26)`
 
 **What exists now**:
 - `hbot/controllers/epp_v2_4.py:1487` — `_refresh_funding_rate()` fetches funding rate
@@ -197,7 +197,7 @@ positive funding + net long = slight rebate (cap at 0 for conservative estimate)
 
 ---
 
-### [P1-2] Realized-edge tracker with auto-widen `open`
+### [P1-2] Realized-edge tracker with auto-widen `done (2026-02-26)`
 
 **What exists now**:
 - `hbot/controllers/epp_v2_4.py:786` — `did_fill_order(event)` processes each fill.
@@ -234,7 +234,7 @@ Reset adverse count when EWMA recovers above `-cost_floor_bps * 0.5`.
 
 ---
 
-### [P1-3] EOD position close at daily rollover `open`
+### [P1-3] EOD position close at daily rollover `done (2026-02-26)`
 
 **What exists now**:
 - `hbot/controllers/epp_v2_4.py:2103` — `_maybe_roll_day(now_ts)` detects day boundary,
@@ -269,7 +269,7 @@ Clear the flag once `abs(position_base) < min_base_amount`.
 
 ---
 
-### [P1-4] OHLCV candles for regime EMA/ATR `open`
+### [P1-4] OHLCV candles for regime EMA/ATR `done (2026-02-26)`
 
 **What exists now**:
 - `hbot/controllers/epp_v2_4.py:86` — `candles_connector` config field with validator.
@@ -307,7 +307,7 @@ The logged value was `_book_stale_since_ts > 0` (fires immediately) instead of t
 
 ---
 
-### [P1-6] Add `neutral_high_vol` regime `open`
+### [P1-6] Add `neutral_high_vol` regime `done (2026-02-26)`
 
 **What exists now**:
 - `hbot/controllers/epp_v2_4.py:275` — `PHASE0_SPECS` dict with 4 regimes:
@@ -342,7 +342,7 @@ AND regime is not `up` or `down` (price near EMA). Spreads: mid-point between th
 
 ---
 
-### [P1-7] Automated daily paper-state backup `open`
+### [P1-7] Automated daily paper-state backup `done (2026-02-26)`
 
 **What exists now**:
 - `hbot/scripts/ops/artifact_retention.py` — runs artifact cleanup.
@@ -366,7 +366,7 @@ keyed by UTC date.
 
 ---
 
-### [P1-8] Audit `risk_service` for completeness `open`
+### [P1-8] Audit `risk_service` for completeness `done (2026-02-26)`
 
 **What exists**: `hbot/services/risk_service/main.py` — 112 lines. Compare to
 `portfolio_risk_service/main.py` (335 lines) and `reconciliation_service/main.py` (465 lines).
@@ -380,7 +380,7 @@ If any are missing, implement. If it's intentionally a thin wrapper, add a comme
 
 ---
 
-### [P1-9] Decide on ClickHouse: wire or disable `open`
+### [P1-9] Decide on ClickHouse: wire or disable `done (2026-02-26)`
 
 **What exists**: `hbot/services/clickhouse_ingest/main.py` (232 lines) is in compose
 but no `clickhouse` server service exists in `docker-compose.yml`. Ingest events are dropped.
@@ -396,7 +396,7 @@ For now, recommended action: **comment it out** in compose with a note, and add 
 
 ---
 
-### [P2-1] Add tests for critical untested modules `open`
+### [P2-1] Add tests for critical untested modules `done (2026-02-26)`
 
 **Priority order for test files to create**:
 
@@ -412,7 +412,7 @@ for paper engine tests. Mock Redis with `unittest.mock.patch`.
 
 ---
 
-### [P2-2] Validate Grafana alert rules with synthetic breach `open`
+### [P2-2] Validate Grafana alert rules with synthetic breach `done (2026-02-26)`
 
 **What exists**: `hbot/monitoring/prometheus/alert_rules.yml` — defines rules.
 No validation script exists.
@@ -425,16 +425,20 @@ No validation script exists.
 
 ---
 
-### [P2-3] Configure Slack alerting `open`
+### [P2-3] Configure Telegram alerting `done (2026-02-26)`
 
-**Action**: Set `SLACK_WEBHOOK_URL` in `.env`, uncomment `slack_configs` block in
-`hbot/monitoring/alertmanager/alertmanager.yml`, restart alertmanager.
-**File**: `hbot/monitoring/alertmanager/alertmanager.yml` (the commented block is already there).
-**Effort**: 10 min.
+Replaced Slack with Telegram (native Alertmanager receiver — no webhook proxy needed).
+
+**To activate** (config-only, 5 min):
+1. Message `@BotFather` on Telegram → `/newbot` → copy the token.
+2. Add bot to a group or DM it, visit `https://api.telegram.org/bot<TOKEN>/getUpdates` for `chat_id`.
+3. Set `TELEGRAM_BOT_TOKEN` and `TELEGRAM_CHAT_ID` in `.env`.
+4. Uncomment `telegram_configs` in `monitoring/alertmanager/alertmanager.yml`.
+5. `docker compose restart alertmanager`.
 
 ---
 
-### [P2-4] Document signal → controller data flow `open`
+### [P2-4] Document signal → controller data flow `done (2026-02-26)`
 
 **File**: `hbot/docs/architecture/data_flow_signal_risk_execution.md` — check if it exists
 and covers the full loop from `signal_service` → Redis → `hb_bridge` → `apply_execution_intent`
@@ -868,7 +872,7 @@ for one executor cycle.
 | Item | Description | Commit | Date |
 |---|---|---|---|
 | P1-5 | `order_book_stale` log uses 30s-gated value | `9fef542` | 2026-02-26 |
-| — | Add `BACKLOG.md` + `.env.example` | `9fef542` | 2026-02-26 |
+| — | Add `BACKLOG.md` + env template | `9fef542` | 2026-02-26 |
 | — | Alertmanager empty SLACK_WEBHOOK_URL crash | `6c5faef` | 2026-02-26 |
 | — | Kill-switch healthcheck curl → python | `6c5faef` | 2026-02-26 |
 | — | Day-2 gate auto-refresh integrity | `6c5faef` | 2026-02-26 |

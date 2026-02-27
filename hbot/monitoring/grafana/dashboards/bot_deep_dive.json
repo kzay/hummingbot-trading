@@ -1,62 +1,28 @@
 {
-  "annotations": {
-    "list": [
-      {
-        "builtIn": 1,
-        "datasource": {"type": "grafana", "uid": "-- Grafana --"},
-        "enable": true,
-        "hide": true,
-        "iconColor": "rgba(0, 211, 255, 1)",
-        "name": "Annotations & Alerts",
-        "type": "dashboard"
-      },
-      {
-        "datasource": {"type": "loki", "uid": "loki"},
-        "enable": true,
-        "expr": "{job=\"bot_logs\"} |= \"kill_switch\"",
-        "hide": false,
-        "iconColor": "red",
-        "name": "Kill Switch Events",
-        "step": "60s"
-      },
-      {
-        "datasource": {"type": "prometheus", "uid": "prometheus"},
-        "enable": true,
-        "expr": "changes(hbot_bot_snapshot_timestamp_seconds{bot=~\"$bot\"}[2m]) > 0",
-        "hide": false,
-        "iconColor": "orange",
-        "name": "Bot Restart",
-        "step": "60s",
-        "titleFormat": "Restart"
-      },
-      {
-        "datasource": {"type": "prometheus", "uid": "prometheus"},
-        "enable": true,
-        "expr": "changes(hbot_bot_soft_pause_edge{bot=~\"$bot\"}[2m]) != 0",
-        "hide": false,
-        "iconColor": "yellow",
-        "name": "Edge Gate Toggle",
-        "step": "60s",
-        "titleFormat": "Edge Gate Changed"
-      }
-    ]
-  },
+  "uid": "hbot-bot-deep-dive",
+  "title": "Bot Deep Dive",
+  "tags": ["hummingbot", "trading", "deep-dive"],
+  "timezone": "utc",
+  "schemaVersion": 39,
+  "version": 3,
+  "style": "dark",
   "editable": true,
-  "fiscalYearStartMonth": 0,
   "graphTooltip": 1,
-  "id": null,
+  "liveNow": false,
+  "refresh": "30s",
+  "time": { "from": "now-12h", "to": "now" },
   "links": [
     {
       "title": "Back to Trading Desk",
       "type": "link",
       "url": "/d/hbot-trading-overview",
       "keepTime": true,
-      "includeVars": false,
+      "includeVars": true,
       "targetBlank": false,
       "icon": "arrow-left"
     },
     {
-      "title": "Ops & Infra",
+      "title": "Ops & Infrastructure",
       "type": "link",
       "url": "/d/hbot-cp-health",
       "keepTime": true,
@@ -65,594 +31,461 @@
       "icon": "external link"
     }
   ],
-  "liveNow": false,
-  "panels": [
-    {
-      "id": 1,
-      "title": "Active Alerts",
-      "type": "alertlist",
-      "gridPos": {"h": 3, "w": 20, "x": 0, "y": 0},
-      "options": {
-        "alertInstanceLabelFilter": "",
-        "alertName": "",
-        "dashboardAlerts": false,
-        "groupBy": [],
-        "groupMode": "default",
-        "maxItems": 20,
-        "sortOrder": 1,
-        "stateFilter": {"error": true, "firing": true, "noData": false, "normal": false, "pending": true},
-        "viewMode": "list"
+  "annotations": {
+    "list": [
+      {
+        "builtIn": 1,
+        "datasource": { "type": "grafana", "uid": "-- Grafana --" },
+        "enable": true,
+        "hide": true,
+        "iconColor": "rgba(0, 211, 255, 1)",
+        "name": "Annotations & Alerts",
+        "type": "dashboard"
       },
-      "targets": []
-    },
-    {
-      "id": 2,
-      "title": "Last Refresh",
-      "type": "stat",
-      "gridPos": {"h": 3, "w": 4, "x": 20, "y": 0},
-      "datasource": {"type": "prometheus", "uid": "prometheus"},
-      "targets": [{"expr": "time()", "refId": "A", "legendFormat": ""}],
-      "fieldConfig": {
-        "defaults": {"unit": "dateTimeAsLocal", "color": {"mode": "fixed", "fixedColor": "text"}},
-        "overrides": []
+      {
+        "datasource": { "type": "loki", "uid": "loki" },
+        "enable": true,
+        "expr": "{job=\"bot_logs\"} |= \"kill_switch\"",
+        "hide": false,
+        "iconColor": "red",
+        "name": "Kill Switch Events",
+        "step": "60s"
       },
-      "options": {
-        "reduceOptions": {"values": false, "calcs": ["lastNotNull"], "fields": ""},
-        "orientation": "auto",
-        "textMode": "value",
-        "colorMode": "none",
-        "graphMode": "none",
-        "justifyMode": "center"
+      {
+        "datasource": { "type": "prometheus", "uid": "prometheus" },
+        "enable": true,
+        "expr": "increase(container_restart_count{name=~\"hbot-$bot\"}[15m]) > 0",
+        "hide": false,
+        "iconColor": "orange",
+        "name": "Container Restart",
+        "step": "60s",
+        "titleFormat": "Restart"
       }
-    },
-    {
-      "id": 3,
-      "title": "— Status —",
-      "type": "row",
-      "gridPos": {"h": 1, "w": 24, "x": 0, "y": 3},
-      "collapsed": false,
-      "panels": []
-    },
-    {
-      "id": 4,
-      "title": "Bot State",
-      "description": "Current execution state. RUNNING = actively placing orders, SOFT_PAUSE = edge or risk gate blocking, HARD_STOP = emergency halt.",
-      "type": "stat",
-      "gridPos": {"h": 5, "w": 6, "x": 0, "y": 4},
-      "datasource": {"type": "prometheus", "uid": "prometheus"},
-      "targets": [
-        {
-          "expr": "hbot_bot_state{bot=~\"$bot\", exchange=~\"$exchange\", state=\"running\"} * 1 + hbot_bot_state{bot=~\"$bot\", exchange=~\"$exchange\", state=\"soft_pause\"} * 2 + hbot_bot_state{bot=~\"$bot\", exchange=~\"$exchange\", state=\"hard_stop\"} * 3",
-          "legendFormat": "state",
-          "refId": "A",
-          "instant": true
-        }
-      ],
-      "fieldConfig": {
-        "defaults": {
-          "unit": "none",
-          "color": {"mode": "thresholds"},
-          "mappings": [
-            {"type": "value", "options": {
-              "1": {"text": "RUNNING", "color": "green", "index": 0},
-              "2": {"text": "SOFT PAUSE", "color": "orange", "index": 1},
-              "3": {"text": "HARD STOP", "color": "red", "index": 2}
-            }}
-          ],
-          "thresholds": {
-            "mode": "absolute",
-            "steps": [
-              {"color": "green", "value": null},
-              {"color": "orange", "value": 2},
-              {"color": "red", "value": 3}
-            ]
-          }
-        },
-        "overrides": []
-      },
-      "options": {
-        "reduceOptions": {"values": false, "calcs": ["lastNotNull"], "fields": ""},
-        "orientation": "auto",
-        "textMode": "value",
-        "colorMode": "background",
-        "graphMode": "none",
-        "justifyMode": "center"
-      }
-    },
-    {
-      "id": 5,
-      "title": "Regime",
-      "description": "Current market regime detected by RegimeDetector (EMA/ATR-based).",
-      "type": "stat",
-      "gridPos": {"h": 5, "w": 6, "x": 6, "y": 4},
-      "datasource": {"type": "prometheus", "uid": "prometheus"},
-      "targets": [
-        {
-          "expr": "hbot_bot_snapshot_age_seconds{bot=~\"$bot\", exchange=~\"$exchange\"}",
-          "legendFormat": "{{regime}}",
-          "refId": "A",
-          "instant": true
-        }
-      ],
-      "fieldConfig": {
-        "defaults": {
-          "unit": "none",
-          "color": {"mode": "fixed", "fixedColor": "light-blue"},
-          "thresholds": {"mode": "absolute", "steps": [{"color": "light-blue", "value": null}]}
-        },
-        "overrides": []
-      },
-      "options": {
-        "reduceOptions": {"values": false, "calcs": ["lastNotNull"], "fields": ""},
-        "orientation": "auto",
-        "textMode": "name",
-        "colorMode": "background",
-        "graphMode": "none",
-        "justifyMode": "center"
-      }
-    },
-    {
-      "id": 6,
-      "title": "Snapshot Age",
-      "description": "Age of last minute.csv snapshot. Green < 60s = healthy. Red > 300s = bot may be stuck.",
-      "type": "stat",
-      "gridPos": {"h": 5, "w": 6, "x": 12, "y": 4},
-      "datasource": {"type": "prometheus", "uid": "prometheus"},
-      "targets": [
-        {
-          "expr": "hbot_bot_snapshot_age_seconds{bot=~\"$bot\", exchange=~\"$exchange\"}",
-          "legendFormat": "snapshot age",
-          "refId": "A"
-        }
-      ],
-      "fieldConfig": {
-        "defaults": {
-          "unit": "s",
-          "color": {"mode": "thresholds"},
-          "thresholds": {
-            "mode": "absolute",
-            "steps": [
-              {"color": "green", "value": null},
-              {"color": "yellow", "value": 60},
-              {"color": "red", "value": 300}
-            ]
-          }
-        },
-        "overrides": []
-      },
-      "options": {
-        "reduceOptions": {"values": false, "calcs": ["lastNotNull"], "fields": ""},
-        "orientation": "auto",
-        "textMode": "value_and_name",
-        "colorMode": "background",
-        "graphMode": "area",
-        "justifyMode": "center"
-      }
-    },
-    {
-      "id": 7,
-      "title": "Edge Gate",
-      "description": "Whether the edge gate is blocking order placement. BLOCKED = net edge below min_net_edge_bps threshold.",
-      "type": "stat",
-      "gridPos": {"h": 5, "w": 6, "x": 18, "y": 4},
-      "datasource": {"type": "prometheus", "uid": "prometheus"},
-      "targets": [
-        {
-          "expr": "hbot_bot_soft_pause_edge{bot=~\"$bot\", exchange=~\"$exchange\"}",
-          "legendFormat": "edge gate",
-          "refId": "A"
-        }
-      ],
-      "fieldConfig": {
-        "defaults": {
-          "unit": "none",
-          "color": {"mode": "thresholds"},
-          "mappings": [
-            {"type": "value", "options": {
-              "0": {"text": "OK", "color": "green", "index": 0},
-              "1": {"text": "BLOCKED", "color": "red", "index": 1}
-            }}
-          ],
-          "thresholds": {
-            "mode": "absolute",
-            "steps": [
-              {"color": "green", "value": null},
-              {"color": "red", "value": 1}
-            ]
-          }
-        },
-        "overrides": []
-      },
-      "options": {
-        "reduceOptions": {"values": false, "calcs": ["lastNotNull"], "fields": ""},
-        "orientation": "auto",
-        "textMode": "value",
-        "colorMode": "background",
-        "graphMode": "none",
-        "justifyMode": "center"
-      }
-    },
-    {
-      "id": 8,
-      "title": "— Strategy Metrics —",
-      "type": "row",
-      "gridPos": {"h": 1, "w": 24, "x": 0, "y": 9},
-      "collapsed": false,
-      "panels": []
-    },
-    {
-      "id": 9,
-      "title": "Net Edge (bps)",
-      "description": "Net edge after fees, slippage, and adverse selection. Positive = profitable at current spread. Below 0 → edge gate will block.",
-      "type": "timeseries",
-      "gridPos": {"h": 9, "w": 8, "x": 0, "y": 10},
-      "datasource": {"type": "prometheus", "uid": "prometheus"},
-      "targets": [
-        {
-          "expr": "hbot_bot_net_edge_pct{bot=~\"$bot\", exchange=~\"$exchange\", pair=~\"$pair\"} * 10000",
-          "legendFormat": "net edge bps",
-          "refId": "A"
-        }
-      ],
-      "fieldConfig": {
-        "defaults": {
-          "unit": "none",
-          "decimals": 2,
-          "custom": {"lineWidth": 2, "fillOpacity": 10},
-          "thresholds": {
-            "mode": "absolute",
-            "steps": [
-              {"color": "red", "value": null},
-              {"color": "green", "value": 0}
-            ]
-          }
-        },
-        "overrides": []
-      },
-      "options": {
-        "tooltip": {"mode": "single", "sort": "none"},
-        "legend": {"displayMode": "table", "placement": "bottom", "calcs": ["last", "mean", "min"]},
-        "thresholds": {"mode": "line"},
-        "thresholdsStyle": {"mode": "line+area"}
-      }
-    },
-    {
-      "id": 10,
-      "title": "Spread vs Spread Floor (bps)",
-      "description": "Active spread vs minimum spread floor. If spread = floor, strategy is at minimum viable spread. MM spread is the half-spread around mid price.",
-      "type": "timeseries",
-      "gridPos": {"h": 9, "w": 8, "x": 8, "y": 10},
-      "datasource": {"type": "prometheus", "uid": "prometheus"},
-      "targets": [
-        {
-          "expr": "hbot_bot_spread_pct{bot=~\"$bot\", exchange=~\"$exchange\", pair=~\"$pair\"} * 10000",
-          "legendFormat": "spread (bps)",
-          "refId": "A"
-        },
-        {
-          "expr": "hbot_bot_spread_floor_pct{bot=~\"$bot\", exchange=~\"$exchange\", pair=~\"$pair\"} * 10000",
-          "legendFormat": "floor (bps)",
-          "refId": "B"
-        }
-      ],
-      "fieldConfig": {
-        "defaults": {
-          "unit": "none",
-          "decimals": 2
-        },
-        "overrides": [
-          {
-            "matcher": {"id": "byName", "options": "floor (bps)"},
-            "properties": [{"id": "custom.lineStyle", "value": {"fill": "dash", "dash": [6, 3]}}]
-          }
-        ]
-      },
-      "options": {
-        "tooltip": {"mode": "multi", "sort": "none"},
-        "legend": {"displayMode": "table", "placement": "bottom", "calcs": ["last", "mean"]},
-        "thresholds": {"mode": "off"}
-      }
-    },
-    {
-      "id": 11,
-      "title": "Active Orders",
-      "description": "Number of open executor orders. Each executor manages one price level. Zero = no orders placed (edge blocked or no_trade mode).",
-      "type": "timeseries",
-      "gridPos": {"h": 9, "w": 8, "x": 16, "y": 10},
-      "datasource": {"type": "prometheus", "uid": "prometheus"},
-      "targets": [
-        {
-          "expr": "hbot_bot_orders_active{bot=~\"$bot\", exchange=~\"$exchange\"}",
-          "legendFormat": "active orders",
-          "refId": "A"
-        }
-      ],
-      "fieldConfig": {
-        "defaults": {
-          "unit": "short",
-          "custom": {"fillOpacity": 15},
-          "color": {"mode": "fixed", "fixedColor": "light-purple"},
-          "thresholds": {
-            "mode": "absolute",
-            "steps": [
-              {"color": "red", "value": null},
-              {"color": "green", "value": 1}
-            ]
-          }
-        },
-        "overrides": []
-      },
-      "options": {
-        "tooltip": {"mode": "single", "sort": "none"},
-        "legend": {"displayMode": "table", "placement": "bottom", "calcs": ["last", "min", "max"]},
-        "thresholds": {"mode": "off"}
-      }
-    },
-    {
-      "id": 12,
-      "title": "— Risk & Fees —",
-      "type": "row",
-      "gridPos": {"h": 1, "w": 24, "x": 0, "y": 19},
-      "collapsed": false,
-      "panels": []
-    },
-    {
-      "id": 13,
-      "title": "Drawdown & Daily Loss %",
-      "description": "Both risk metrics on one chart. Drawdown = % below equity peak. Daily loss % = today's loss as % of equity.",
-      "type": "timeseries",
-      "gridPos": {"h": 8, "w": 8, "x": 0, "y": 20},
-      "datasource": {"type": "prometheus", "uid": "prometheus"},
-      "targets": [
-        {
-          "expr": "hbot_bot_drawdown_pct{bot=~\"$bot\", exchange=~\"$exchange\"} * 100",
-          "legendFormat": "drawdown %",
-          "refId": "A"
-        },
-        {
-          "expr": "hbot_bot_daily_loss_pct{bot=~\"$bot\", exchange=~\"$exchange\"} * 100",
-          "legendFormat": "daily loss %",
-          "refId": "B"
-        }
-      ],
-      "fieldConfig": {
-        "defaults": {"unit": "percent", "decimals": 3},
-        "overrides": []
-      },
-      "options": {
-        "tooltip": {"mode": "multi", "sort": "none"},
-        "legend": {"displayMode": "table", "placement": "bottom", "calcs": ["last", "max"]},
-        "thresholds": {"mode": "off"}
-      }
-    },
-    {
-      "id": 14,
-      "title": "Maker / Taker Fee (bps)",
-      "description": "Effective maker and taker fee from the resolved fee profile. 1 bps = 0.01%.",
-      "type": "timeseries",
-      "gridPos": {"h": 8, "w": 8, "x": 8, "y": 20},
-      "datasource": {"type": "prometheus", "uid": "prometheus"},
-      "targets": [
-        {
-          "expr": "hbot_bot_maker_fee_pct{bot=~\"$bot\", exchange=~\"$exchange\"} * 10000",
-          "legendFormat": "maker fee (bps)",
-          "refId": "A"
-        },
-        {
-          "expr": "hbot_bot_taker_fee_pct{bot=~\"$bot\", exchange=~\"$exchange\"} * 10000",
-          "legendFormat": "taker fee (bps)",
-          "refId": "B"
-        }
-      ],
-      "fieldConfig": {
-        "defaults": {"unit": "none", "decimals": 2},
-        "overrides": []
-      },
-      "options": {
-        "tooltip": {"mode": "multi", "sort": "none"},
-        "legend": {"displayMode": "table", "placement": "bottom", "calcs": ["last"]},
-        "thresholds": {"mode": "off"}
-      }
-    },
-    {
-      "id": 15,
-      "title": "Risk Reasons",
-      "description": "Active risk reasons reported by the controller. 'none' = no risk gates blocking. Multiple reasons = multiple gates firing.",
-      "type": "stat",
-      "gridPos": {"h": 8, "w": 8, "x": 16, "y": 20},
-      "datasource": {"type": "prometheus", "uid": "prometheus"},
-      "targets": [
-        {
-          "expr": "hbot_bot_risk_reasons_info{bot=~\"$bot\", exchange=~\"$exchange\"}",
-          "legendFormat": "{{reasons}}",
-          "refId": "A",
-          "instant": true
-        }
-      ],
-      "fieldConfig": {
-        "defaults": {
-          "unit": "none",
-          "color": {"mode": "thresholds"},
-          "mappings": [
-            {"type": "value", "options": {"1": {"text": "—"}}}
-          ],
-          "thresholds": {"mode": "absolute", "steps": [{"color": "green", "value": null}]}
-        },
-        "overrides": []
-      },
-      "options": {
-        "reduceOptions": {"values": false, "calcs": ["lastNotNull"], "fields": ""},
-        "orientation": "auto",
-        "textMode": "name",
-        "colorMode": "none",
-        "graphMode": "none",
-        "justifyMode": "center"
-      }
-    },
-    {
-      "id": 16,
-      "title": "— Fill Analysis —",
-      "type": "row",
-      "gridPos": {"h": 1, "w": 24, "x": 0, "y": 28},
-      "collapsed": false,
-      "panels": []
-    },
-    {
-      "id": 17,
-      "title": "Cumulative Fills",
-      "description": "Running total of fills recorded in fills.csv. Counter resets on bot restart.",
-      "type": "timeseries",
-      "gridPos": {"h": 8, "w": 12, "x": 0, "y": 29},
-      "datasource": {"type": "prometheus", "uid": "prometheus"},
-      "targets": [
-        {
-          "expr": "hbot_bot_fills_total{bot=~\"$bot\", exchange=~\"$exchange\"}",
-          "legendFormat": "cumulative fills",
-          "refId": "A"
-        }
-      ],
-      "fieldConfig": {
-        "defaults": {
-          "unit": "short",
-          "custom": {"fillOpacity": 20}
-        },
-        "overrides": []
-      },
-      "options": {
-        "tooltip": {"mode": "single", "sort": "none"},
-        "legend": {"displayMode": "table", "placement": "bottom", "calcs": ["last", "diff"]},
-        "thresholds": {"mode": "off"}
-      }
-    },
-    {
-      "id": 18,
-      "title": "Cancel Rate (cancels / min)",
-      "description": "Order cancel rate per minute. High cancel rate = orders not filling (spread too tight or market moving away).",
-      "type": "timeseries",
-      "gridPos": {"h": 8, "w": 12, "x": 12, "y": 29},
-      "datasource": {"type": "prometheus", "uid": "prometheus"},
-      "targets": [
-        {
-          "expr": "hbot_bot_cancel_per_min{bot=~\"$bot\", exchange=~\"$exchange\"}",
-          "legendFormat": "cancel rate",
-          "refId": "A"
-        }
-      ],
-      "fieldConfig": {
-        "defaults": {
-          "unit": "short",
-          "decimals": 2,
-          "custom": {"fillOpacity": 10},
-          "thresholds": {
-            "mode": "absolute",
-            "steps": [
-              {"color": "green", "value": null},
-              {"color": "yellow", "value": 10},
-              {"color": "red", "value": 30}
-            ]
-          }
-        },
-        "overrides": []
-      },
-      "options": {
-        "tooltip": {"mode": "single", "sort": "none"},
-        "legend": {"displayMode": "table", "placement": "bottom", "calcs": ["last", "max", "mean"]},
-        "thresholds": {"mode": "off"}
-      }
-    },
-    {
-      "id": 19,
-      "title": "— Logs —",
-      "type": "row",
-      "gridPos": {"h": 1, "w": 24, "x": 0, "y": 37},
-      "collapsed": false,
-      "panels": []
-    },
-    {
-      "id": 20,
-      "title": "Bot Logs (ERROR & WARNING)",
-      "description": "Error and warning log lines from the selected bot. Filter by log level using the search bar.",
-      "type": "logs",
-      "gridPos": {"h": 10, "w": 24, "x": 0, "y": 38},
-      "datasource": {"type": "loki", "uid": "loki"},
-      "targets": [
-        {
-          "expr": "{job=\"bot_logs\", bot=~\"$bot\"} |~ \"ERROR|WARNING|CRITICAL\"",
-          "refId": "A"
-        }
-      ],
-      "options": {
-        "showTime": true,
-        "showLabels": false,
-        "showCommonLabels": false,
-        "wrapLogMessage": true,
-        "prettifyLogMessage": false,
-        "enableLogDetails": true,
-        "sortOrder": "Descending",
-        "dedupStrategy": "none"
-      }
-    }
-  ],
-  "refresh": "15s",
-  "schemaVersion": 39,
-  "style": "dark",
-  "tags": ["hummingbot", "trading", "deep-dive"],
+    ]
+  },
   "templating": {
     "list": [
+      {
+        "name": "cluster",
+        "label": "Cluster",
+        "type": "query",
+        "datasource": { "type": "prometheus", "uid": "prometheus" },
+        "query": "label_values(hbot_bot_state, cluster)",
+        "includeAll": true,
+        "multi": true,
+        "allValue": ".+",
+        "refresh": 2,
+        "sort": 1,
+        "current": { "text": "All", "value": ["$__all"] }
+      },
+      {
+        "name": "environment",
+        "label": "Environment",
+        "type": "query",
+        "datasource": { "type": "prometheus", "uid": "prometheus" },
+        "query": "label_values(hbot_bot_state{cluster=~\"$cluster\"}, environment)",
+        "includeAll": true,
+        "multi": true,
+        "allValue": ".+",
+        "refresh": 2,
+        "sort": 1,
+        "current": { "text": "All", "value": ["$__all"] }
+      },
       {
         "name": "bot",
         "label": "Bot",
         "type": "query",
-        "datasource": {"type": "prometheus", "uid": "prometheus"},
-        "query": "label_values(hbot_bot_state, bot)",
+        "datasource": { "type": "prometheus", "uid": "prometheus" },
+        "query": "label_values(hbot_bot_state{cluster=~\"$cluster\",environment=~\"$environment\"}, bot)",
         "includeAll": false,
         "multi": false,
         "refresh": 2,
         "sort": 1,
-        "current": {"text": "bot1", "value": "bot1"}
+        "current": { "text": "bot1", "value": "bot1" }
       },
       {
         "name": "exchange",
         "label": "Exchange",
         "type": "query",
-        "datasource": {"type": "prometheus", "uid": "prometheus"},
-        "query": "label_values(hbot_bot_state{bot=~\"$bot\"}, exchange)",
+        "datasource": { "type": "prometheus", "uid": "prometheus" },
+        "query": "label_values(hbot_bot_state{cluster=~\"$cluster\",environment=~\"$environment\",bot=~\"$bot\"}, exchange)",
         "includeAll": true,
         "multi": false,
         "allValue": ".+",
         "refresh": 2,
         "sort": 1,
-        "current": {"text": "All", "value": "$__all"}
+        "current": { "text": "All", "value": "$__all" }
       },
       {
-        "name": "pair",
-        "label": "Pair",
+        "name": "symbol",
+        "label": "Symbol",
         "type": "query",
-        "datasource": {"type": "prometheus", "uid": "prometheus"},
-        "query": "label_values(hbot_bot_state{bot=~\"$bot\", exchange=~\"$exchange\"}, pair)",
+        "datasource": { "type": "prometheus", "uid": "prometheus" },
+        "query": "label_values(hbot_bot_state{cluster=~\"$cluster\",environment=~\"$environment\",bot=~\"$bot\",exchange=~\"$exchange\"}, pair)",
         "includeAll": true,
         "multi": false,
         "allValue": ".+",
         "refresh": 2,
         "sort": 1,
-        "current": {"text": "All", "value": "$__all"}
+        "current": { "text": "All", "value": "$__all" }
+      },
+      {
+        "name": "strategy",
+        "label": "Strategy",
+        "description": "Maps to Prometheus label `variant`.",
+        "type": "query",
+        "datasource": { "type": "prometheus", "uid": "prometheus" },
+        "query": "label_values(hbot_bot_state{cluster=~\"$cluster\",environment=~\"$environment\",bot=~\"$bot\",exchange=~\"$exchange\",pair=~\"$symbol\"}, variant)",
+        "includeAll": true,
+        "multi": false,
+        "allValue": ".+",
+        "refresh": 2,
+        "sort": 1,
+        "current": { "text": "All", "value": "$__all" }
+      },
+      {
+        "name": "venue",
+        "label": "Venue",
+        "description": "Maps to Prometheus label `mode` (paper/live).",
+        "type": "query",
+        "datasource": { "type": "prometheus", "uid": "prometheus" },
+        "query": "label_values(hbot_bot_state{cluster=~\"$cluster\",environment=~\"$environment\",bot=~\"$bot\",exchange=~\"$exchange\",pair=~\"$symbol\",variant=~\"$strategy\"}, mode)",
+        "includeAll": true,
+        "multi": false,
+        "allValue": ".+",
+        "refresh": 2,
+        "sort": 1,
+        "current": { "text": "All", "value": "$__all" }
+      },
+      {
+        "name": "regime",
+        "label": "Regime",
+        "type": "query",
+        "datasource": { "type": "prometheus", "uid": "prometheus" },
+        "query": "label_values(hbot_bot_state{cluster=~\"$cluster\",environment=~\"$environment\",bot=~\"$bot\",exchange=~\"$exchange\",pair=~\"$symbol\",variant=~\"$strategy\",mode=~\"$venue\"}, regime)",
+        "includeAll": true,
+        "multi": false,
+        "allValue": ".+",
+        "refresh": 2,
+        "sort": 1,
+        "current": { "text": "All", "value": "$__all" }
+      },
+      {
+        "name": "timeframe",
+        "label": "Timeframe",
+        "type": "custom",
+        "query": "5m,15m,1h",
+        "current": { "text": "15m", "value": "15m" }
       }
     ]
   },
-  "time": {"from": "now-6h", "to": "now"},
-  "timepicker": {
-    "hidden": false,
-    "quick_ranges": [
-      {"display": "Last 15 minutes", "from": "now-15m", "to": "now"},
-      {"display": "Last 1 hour", "from": "now-1h", "to": "now"},
-      {"display": "Last 6 hours", "from": "now-6h", "to": "now"},
-      {"display": "Last 12 hours", "from": "now-12h", "to": "now"},
-      {"display": "Last 24 hours", "from": "now-24h", "to": "now"},
-      {"display": "Last 7 days", "from": "now-7d", "to": "now"}
-    ]
-  },
-  "timezone": "utc",
-  "title": "Bot Deep Dive",
-  "uid": "hbot-bot-deep-dive",
-  "version": 2
+  "panels": [
+    {
+      "id": 100,
+      "type": "row",
+      "title": "Status",
+      "collapsed": false,
+      "gridPos": { "h": 1, "w": 24, "x": 0, "y": 0 }
+    },
+    {
+      "id": 1,
+      "type": "stat",
+      "title": "Bot State",
+      "description": "RUNNING = placing orders; SOFT PAUSE = edge/risk gate blocking; HARD STOP = emergency halt.",
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "gridPos": { "h": 4, "w": 6, "x": 0, "y": 1 },
+      "targets": [
+        {
+          "expr": "hbot_bot_state{cluster=~\"$cluster\",environment=~\"$environment\",bot=~\"$bot\",exchange=~\"$exchange\",pair=~\"$symbol\",variant=~\"$strategy\",mode=~\"$venue\",regime=~\"$regime\",state=\"running\"} * 1 + hbot_bot_state{cluster=~\"$cluster\",environment=~\"$environment\",bot=~\"$bot\",exchange=~\"$exchange\",pair=~\"$symbol\",variant=~\"$strategy\",mode=~\"$venue\",regime=~\"$regime\",state=\"soft_pause\"} * 2 + hbot_bot_state{cluster=~\"$cluster\",environment=~\"$environment\",bot=~\"$bot\",exchange=~\"$exchange\",pair=~\"$symbol\",variant=~\"$strategy\",mode=~\"$venue\",regime=~\"$regime\",state=\"hard_stop\"} * 3",
+          "refId": "A",
+          "instant": true
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "none",
+          "color": { "mode": "thresholds" },
+          "mappings": [
+            {
+              "type": "value",
+              "options": {
+                "1": { "text": "RUNNING", "color": "green", "index": 0 },
+                "2": { "text": "SOFT PAUSE", "color": "orange", "index": 1 },
+                "3": { "text": "HARD STOP", "color": "red", "index": 2 }
+              }
+            }
+          ],
+          "thresholds": { "mode": "absolute", "steps": [{ "color": "green", "value": null }, { "color": "orange", "value": 2 }, { "color": "red", "value": 3 }] }
+        },
+        "overrides": []
+      },
+      "options": { "reduceOptions": { "values": false, "calcs": ["lastNotNull"] }, "textMode": "value", "colorMode": "background", "graphMode": "none", "justifyMode": "center" }
+    },
+    {
+      "id": 2,
+      "type": "stat",
+      "title": "Snapshot Age",
+      "description": "Age of latest minute.csv snapshot. Green < 60s. Red > 300s (bot stuck / exporter reading stale file).",
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "gridPos": { "h": 4, "w": 6, "x": 6, "y": 1 },
+      "targets": [
+        { "expr": "hbot_bot_snapshot_age_seconds{cluster=~\"$cluster\",environment=~\"$environment\",bot=~\"$bot\",exchange=~\"$exchange\",pair=~\"$symbol\",variant=~\"$strategy\",mode=~\"$venue\",regime=~\"$regime\"}", "refId": "A" }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "s",
+          "decimals": 0,
+          "color": { "mode": "thresholds" },
+          "thresholds": { "mode": "absolute", "steps": [{ "color": "green", "value": null }, { "color": "yellow", "value": 60 }, { "color": "red", "value": 300 }] }
+        },
+        "overrides": []
+      },
+      "options": { "reduceOptions": { "values": false, "calcs": ["lastNotNull"] }, "textMode": "value_and_name", "colorMode": "value", "graphMode": "area", "justifyMode": "center" }
+    },
+    {
+      "id": 3,
+      "type": "stat",
+      "title": "Net Edge",
+      "description": "Net edge after fees & adverse selection (proxy). Positive is required for profitable MM at current spread.",
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "gridPos": { "h": 4, "w": 6, "x": 12, "y": 1 },
+      "targets": [
+        { "expr": "hbot_bot_net_edge_pct{cluster=~\"$cluster\",environment=~\"$environment\",bot=~\"$bot\",exchange=~\"$exchange\",pair=~\"$symbol\",variant=~\"$strategy\",mode=~\"$venue\",regime=~\"$regime\"} * 10000", "refId": "A" }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "none",
+          "decimals": 1,
+          "color": { "mode": "thresholds" },
+          "thresholds": { "mode": "absolute", "steps": [{ "color": "red", "value": null }, { "color": "yellow", "value": 0 }, { "color": "green", "value": 1 }] }
+        },
+        "overrides": []
+      },
+      "options": { "reduceOptions": { "values": false, "calcs": ["lastNotNull"] }, "textMode": "value_and_name", "colorMode": "value", "graphMode": "none", "justifyMode": "center" }
+    },
+    {
+      "id": 4,
+      "type": "stat",
+      "title": "Equity / PnL Today",
+      "description": "Equity quote + today's mark-to-market PnL (derived).",
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "gridPos": { "h": 4, "w": 6, "x": 18, "y": 1 },
+      "targets": [
+        { "expr": "hbot_bot_equity_quote{cluster=~\"$cluster\",environment=~\"$environment\",bot=~\"$bot\",exchange=~\"$exchange\",pair=~\"$symbol\",variant=~\"$strategy\",mode=~\"$venue\",regime=~\"$regime\"}", "refId": "A", "instant": true },
+        { "expr": "hbot_bot_daily_pnl_quote{cluster=~\"$cluster\",environment=~\"$environment\",bot=~\"$bot\",exchange=~\"$exchange\",pair=~\"$symbol\",variant=~\"$strategy\",mode=~\"$venue\",regime=~\"$regime\"}", "refId": "B", "instant": true }
+      ],
+      "fieldConfig": { "defaults": { "unit": "currencyUSD", "decimals": 2 }, "overrides": [] },
+      "options": { "reduceOptions": { "calcs": ["lastNotNull"] }, "orientation": "horizontal", "textMode": "value_and_name", "colorMode": "value", "graphMode": "none", "justifyMode": "center" }
+    },
+    {
+      "id": 110,
+      "type": "row",
+      "title": "Performance",
+      "collapsed": false,
+      "gridPos": { "h": 1, "w": 24, "x": 0, "y": 5 }
+    },
+    {
+      "id": 111,
+      "type": "timeseries",
+      "title": "Equity",
+      "description": "Equity quote over time (exported from minute.csv).",
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "gridPos": { "h": 7, "w": 12, "x": 0, "y": 6 },
+      "targets": [
+        {
+          "expr": "hbot_bot_equity_quote{cluster=~\"$cluster\",environment=~\"$environment\",bot=~\"$bot\",exchange=~\"$exchange\",pair=~\"$symbol\",variant=~\"$strategy\",mode=~\"$venue\",regime=~\"$regime\"}",
+          "legendFormat": "equity",
+          "refId": "A"
+        }
+      ],
+      "fieldConfig": { "defaults": { "unit": "currencyUSD", "decimals": 2, "custom": { "lineWidth": 2, "fillOpacity": 10, "showPoints": "never" }, "color": { "mode": "fixed", "fixedColor": "blue" } }, "overrides": [] },
+      "options": { "tooltip": { "mode": "single" }, "legend": { "displayMode": "list", "placement": "bottom", "calcs": ["last", "max"] } }
+    },
+    {
+      "id": 112,
+      "type": "timeseries",
+      "title": "PnL Today (MTM) + Realized",
+      "description": "MTM PnL derived from equity open→now (exporter) vs realized PnL from fills.",
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "gridPos": { "h": 7, "w": 12, "x": 12, "y": 6 },
+      "targets": [
+        {
+          "expr": "hbot_bot_daily_pnl_quote{cluster=~\"$cluster\",environment=~\"$environment\",bot=~\"$bot\",exchange=~\"$exchange\",pair=~\"$symbol\",variant=~\"$strategy\",mode=~\"$venue\",regime=~\"$regime\"}",
+          "legendFormat": "mtm",
+          "refId": "A"
+        },
+        {
+          "expr": "hbot_bot_realized_pnl_today_quote{cluster=~\"$cluster\",environment=~\"$environment\",bot=~\"$bot\",exchange=~\"$exchange\",pair=~\"$symbol\",variant=~\"$strategy\",mode=~\"$venue\",regime=~\"$regime\"}",
+          "legendFormat": "realized",
+          "refId": "B"
+        }
+      ],
+      "fieldConfig": { "defaults": { "unit": "currencyUSD", "decimals": 2, "custom": { "lineWidth": 2, "fillOpacity": 10, "showPoints": "never" } }, "overrides": [] },
+      "options": { "tooltip": { "mode": "multi", "sort": "desc" }, "legend": { "displayMode": "list", "placement": "bottom", "calcs": ["last"] } }
+    },
+    {
+      "id": 120,
+      "type": "row",
+      "title": "Risk",
+      "collapsed": false,
+      "gridPos": { "h": 1, "w": 24, "x": 0, "y": 13 }
+    },
+    {
+      "id": 121,
+      "type": "stat",
+      "title": "Position (base)",
+      "description": "Signed base position. >0 long, <0 short.",
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "gridPos": { "h": 4, "w": 6, "x": 0, "y": 14 },
+      "targets": [
+        { "expr": "hbot_bot_position_base{cluster=~\"$cluster\",environment=~\"$environment\",bot=~\"$bot\",exchange=~\"$exchange\",pair=~\"$symbol\",variant=~\"$strategy\",mode=~\"$venue\",regime=~\"$regime\"}", "refId": "A" }
+      ],
+      "fieldConfig": { "defaults": { "unit": "none", "decimals": 6 }, "overrides": [] },
+      "options": { "reduceOptions": { "calcs": ["lastNotNull"] }, "textMode": "value", "colorMode": "value", "graphMode": "none", "justifyMode": "center" }
+    },
+    {
+      "id": 122,
+      "type": "stat",
+      "title": "Avg Entry",
+      "description": "Average entry price of current position.",
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "gridPos": { "h": 4, "w": 6, "x": 6, "y": 14 },
+      "targets": [
+        { "expr": "hbot_bot_avg_entry_price{cluster=~\"$cluster\",environment=~\"$environment\",bot=~\"$bot\",exchange=~\"$exchange\",pair=~\"$symbol\",variant=~\"$strategy\",mode=~\"$venue\",regime=~\"$regime\"}", "refId": "A" }
+      ],
+      "fieldConfig": { "defaults": { "unit": "currencyUSD", "decimals": 2 }, "overrides": [] },
+      "options": { "reduceOptions": { "calcs": ["lastNotNull"] }, "textMode": "value", "colorMode": "value", "graphMode": "none", "justifyMode": "center" }
+    },
+    {
+      "id": 123,
+      "type": "stat",
+      "title": "Margin Ratio",
+      "description": "Futures/perps only. Lower = closer to liquidation.",
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "gridPos": { "h": 4, "w": 6, "x": 12, "y": 14 },
+      "targets": [
+        { "expr": "hbot_bot_margin_ratio{cluster=~\"$cluster\",environment=~\"$environment\",bot=~\"$bot\",exchange=~\"$exchange\",pair=~\"$symbol\",variant=~\"$strategy\",mode=~\"$venue\",regime=~\"$regime\"}", "refId": "A" }
+      ],
+      "fieldConfig": { "defaults": { "unit": "none", "decimals": 3, "min": 0, "color": { "mode": "thresholds" }, "thresholds": { "mode": "absolute", "steps": [{ "color": "red", "value": null }, { "color": "yellow", "value": 0.15 }, { "color": "green", "value": 0.3 }] } }, "overrides": [] },
+      "options": { "reduceOptions": { "calcs": ["lastNotNull"] }, "textMode": "value", "colorMode": "value", "graphMode": "none", "justifyMode": "center" }
+    },
+    {
+      "id": 124,
+      "type": "stat",
+      "title": "Risk Reasons",
+      "description": "Controller-reported active risk flags (label `reasons`).",
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "gridPos": { "h": 4, "w": 6, "x": 18, "y": 14 },
+      "targets": [
+        { "expr": "hbot_bot_risk_reasons_info{cluster=~\"$cluster\",environment=~\"$environment\",bot=~\"$bot\",exchange=~\"$exchange\",pair=~\"$symbol\",variant=~\"$strategy\",mode=~\"$venue\",regime=~\"$regime\"}", "legendFormat": "{{reasons}}", "refId": "A", "instant": true }
+      ],
+      "fieldConfig": { "defaults": { "unit": "none", "color": { "mode": "fixed", "fixedColor": "text" } }, "overrides": [] },
+      "options": { "reduceOptions": { "calcs": ["lastNotNull"] }, "textMode": "name", "colorMode": "none", "graphMode": "none", "justifyMode": "center" }
+    },
+    {
+      "id": 130,
+      "type": "row",
+      "title": "Execution Quality",
+      "collapsed": false,
+      "gridPos": { "h": 1, "w": 24, "x": 0, "y": 18 }
+    },
+    {
+      "id": 131,
+      "type": "stat",
+      "title": "Fills (Δ $timeframe)",
+      "description": "New fills over selected window (delta of fills row count; clamped at 0 to ignore restarts).",
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "gridPos": { "h": 4, "w": 6, "x": 0, "y": 19 },
+      "targets": [
+        { "expr": "sum(clamp_min(delta(hbot_bot_fills_total{cluster=~\"$cluster\",environment=~\"$environment\",bot=~\"$bot\",exchange=~\"$exchange\",pair=~\"$symbol\",variant=~\"$strategy\",mode=~\"$venue\",regime=~\"$regime\"}[$timeframe]), 0))", "refId": "A" }
+      ],
+      "fieldConfig": { "defaults": { "unit": "short", "decimals": 0 }, "overrides": [] },
+      "options": { "reduceOptions": { "calcs": ["lastNotNull"] }, "textMode": "value", "colorMode": "value", "graphMode": "none", "justifyMode": "center" }
+    },
+    {
+      "id": 132,
+      "type": "stat",
+      "title": "Cancel Rate (per min)",
+      "description": "Cancel-per-minute snapshot. Spikes often indicate spread too tight or market moving away.",
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "gridPos": { "h": 4, "w": 6, "x": 6, "y": 19 },
+      "targets": [
+        { "expr": "hbot_bot_cancel_per_min{cluster=~\"$cluster\",environment=~\"$environment\",bot=~\"$bot\",exchange=~\"$exchange\",pair=~\"$symbol\",variant=~\"$strategy\",mode=~\"$venue\",regime=~\"$regime\"}", "refId": "A" }
+      ],
+      "fieldConfig": { "defaults": { "unit": "short", "decimals": 2 }, "overrides": [] },
+      "options": { "reduceOptions": { "calcs": ["lastNotNull"] }, "textMode": "value", "colorMode": "value", "graphMode": "none", "justifyMode": "center" }
+    },
+    {
+      "id": 133,
+      "type": "stat",
+      "title": "Tick Duration",
+      "description": "End-to-end tick wall time.",
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "gridPos": { "h": 4, "w": 6, "x": 12, "y": 19 },
+      "targets": [
+        { "expr": "1000 * hbot_bot_tick_duration_seconds{cluster=~\"$cluster\",environment=~\"$environment\",bot=~\"$bot\",exchange=~\"$exchange\",pair=~\"$symbol\",variant=~\"$strategy\",mode=~\"$venue\",regime=~\"$regime\"}", "refId": "A" }
+      ],
+      "fieldConfig": { "defaults": { "unit": "ms", "decimals": 0 }, "overrides": [] },
+      "options": { "reduceOptions": { "calcs": ["lastNotNull"] }, "textMode": "value_and_name", "colorMode": "value", "graphMode": "none", "justifyMode": "center" }
+    },
+    {
+      "id": 134,
+      "type": "stat",
+      "title": "WS Reconnects (Δ $timeframe)",
+      "description": "Connectivity stability proxy: delta of reconnect count gauge (clamped at 0).",
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "gridPos": { "h": 4, "w": 6, "x": 18, "y": 19 },
+      "targets": [
+        { "expr": "clamp_min(delta(hbot_bot_ws_reconnect_total{cluster=~\"$cluster\",environment=~\"$environment\",bot=~\"$bot\",exchange=~\"$exchange\",pair=~\"$symbol\",variant=~\"$strategy\",mode=~\"$venue\",regime=~\"$regime\"}[$timeframe]), 0)", "refId": "A" }
+      ],
+      "fieldConfig": { "defaults": { "unit": "short", "decimals": 0 }, "overrides": [] },
+      "options": { "reduceOptions": { "calcs": ["lastNotNull"] }, "textMode": "value_and_name", "colorMode": "value", "graphMode": "none", "justifyMode": "center" }
+    },
+    {
+      "id": 135,
+      "type": "timeseries",
+      "title": "Tick Breakdown (Indicator vs Connector I/O)",
+      "description": "If total tick time increases, this isolates whether the slowdown is in indicator compute or connector I/O.",
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "gridPos": { "h": 7, "w": 24, "x": 0, "y": 23 },
+      "targets": [
+        { "expr": "1000 * hbot_bot_tick_indicator_seconds{cluster=~\"$cluster\",environment=~\"$environment\",bot=~\"$bot\",exchange=~\"$exchange\",pair=~\"$symbol\",variant=~\"$strategy\",mode=~\"$venue\",regime=~\"$regime\"}", "legendFormat": "indicator", "refId": "A" },
+        { "expr": "1000 * hbot_bot_tick_connector_io_seconds{cluster=~\"$cluster\",environment=~\"$environment\",bot=~\"$bot\",exchange=~\"$exchange\",pair=~\"$symbol\",variant=~\"$strategy\",mode=~\"$venue\",regime=~\"$regime\"}", "legendFormat": "connector_io", "refId": "B" }
+      ],
+      "fieldConfig": { "defaults": { "unit": "ms", "decimals": 0, "custom": { "lineWidth": 2, "fillOpacity": 10, "showPoints": "never" } }, "overrides": [] },
+      "options": { "tooltip": { "mode": "multi", "sort": "desc" }, "legend": { "displayMode": "list", "placement": "bottom", "calcs": ["last", "max"] } }
+    },
+    {
+      "id": 900,
+      "type": "row",
+      "title": "Investigate (Logs + CSV)",
+      "collapsed": false,
+      "gridPos": { "h": 1, "w": 24, "x": 0, "y": 30 }
+    },
+    {
+      "id": 901,
+      "type": "logs",
+      "title": "Bot Logs (WARN/ERROR)",
+      "description": "Runtime bot logs from Loki (promtail scraping `data/<bot>/logs/*.log`).",
+      "datasource": { "type": "loki", "uid": "loki" },
+      "gridPos": { "h": 9, "w": 24, "x": 0, "y": 31 },
+      "targets": [
+        { "expr": "{job=\"bot_logs\", bot=~\"$bot\"} |~ \"ERROR|WARNING|CRITICAL\"", "refId": "A" }
+      ],
+      "options": { "showTime": true, "showLabels": false, "wrapLogMessage": true, "enableLogDetails": true, "sortOrder": "Descending", "dedupStrategy": "none" }
+    },
+    {
+      "id": 902,
+      "type": "logs",
+      "title": "Recent Fills (CSV stream)",
+      "description": "Raw `fills.csv` lines shipped to Loki by promtail (`job=epp_csv`). Useful when Postgres ops store is disabled.",
+      "datasource": { "type": "loki", "uid": "loki" },
+      "gridPos": { "h": 9, "w": 24, "x": 0, "y": 40 },
+      "targets": [
+        { "expr": "{job=\"epp_csv\", bot=~\"$bot\", filename=~\".*fills\\\\.csv\"}", "refId": "A" }
+      ],
+      "options": { "showTime": true, "showLabels": false, "wrapLogMessage": true, "enableLogDetails": true, "sortOrder": "Descending", "dedupStrategy": "none" }
+    }
+  ]
 }
+

@@ -24,13 +24,13 @@ hbot/
   data/bot1/          # Bot state, fills, minute logs, conf
   docs/               # Strategy specs, ops runbooks
   BACKLOG.md          # All known gaps with AI-executable specs — CHECK THIS FIRST
-  .env.example        # All required env vars
+  env/.env.template   # All required env vars
 ```
 
 ## Non-negotiables before touching production
 - All changes must compile: `python -m py_compile hbot/controllers/epp_v2_4.py`
 - Promotion gates must pass: `cd hbot && python scripts/release/run_strict_promotion_cycle.py`
-- Never commit `.env` (only `.env.example`)
+- Never commit `.env` (only `env/.env.template`)
 - Bot1 is paper-only. `BOT_MODE=paper` in compose. Do not change connector to `bitget` without completing go-live checklist.
 
 ## Key files
