@@ -103,6 +103,19 @@ services:
       BOT_POLICY_ROLE: live_microcap_primary
       BOT_POLICY_MODE: live
       BOT_POLICY_VERSION: multi_bot_policy_v1
+    labels:
+      - "autoheal=true"
+    healthcheck:
+      # Restart if minute.csv hasn't been written for >5 min (WS event-loop hang detector).
+      test:
+        [
+          "CMD-SHELL",
+          "python -c \"import sys,time; from pathlib import Path; files=list(Path('/home/hummingbot/logs/epp_v24').rglob('minute.csv')); newest=max((f.stat().st_mtime for f in files), default=0); sys.exit(0 if files and (time.time()-newest)<300 else 1)\""
+        ]
+      interval: 60s
+      timeout: 10s
+      retries: 3
+      start_period: 120s
     deploy:
       resources:
         limits:
@@ -1342,3 +1355,31 @@ services:
         limits:
           memory: 64M
           cpus: "0.1"
+
+  # ==========================================
+  # BOT WATCHDOG — restarts bot1 when minute.csv
+  # becomes stale (event-loop hang detector).
+  # Runs every 60s using docker socket.
+  # ==========================================
+  bot-watchdog:
+    image: docker:cli
+    container_name: hbot-bot-watchdog
+    restart: unless-stopped
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+      - ..:/workspace/hbot:ro
+    entrypoint: >
+      /bin/sh -c "
+      while true; do
+        sleep 60;
+        LAST=$$(find /workspace/hbot/data -name 'minute.csv' -newer /tmp/sentinel 2>/dev/null | wc -l);
+        touch -d '-300 seconds' /tmp/sentinel;
+        STALE=$$(find /workspace/hbot/data -name 'minute.csv' ! -newer /tmp/sentinel 2>/dev/null | wc -l);
+        if [ \"$$STALE\" -gt 0 ]; then
+          echo \"[watchdog] minute.csv stale >5min — restarting hbot-bot1\";
+          docker restart hbot-bot1;
+        fi;
+      done
+      "
+    networks:
+      - trading
