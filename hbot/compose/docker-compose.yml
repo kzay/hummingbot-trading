@@ -28,8 +28,6 @@ volumes:
     driver: local
   postgres-data:
     driver: local
-  # clickhouse-data:
-  #   driver: local
 
 # ---- Logging anchor ----
 x-logging: &default-logging
@@ -48,7 +46,8 @@ x-control-plane-image: &control-plane-image
 # ---- Shared Hummingbot env ----
 x-hbot-env: &hbot-env
   TZ: ${TZ:-UTC}
-  EXT_SIGNAL_RISK_ENABLED: ${EXT_SIGNAL_RISK_ENABLED:-false}
+  PYTHONPYCACHEPREFIX: /tmp/pycache
+  EXT_SIGNAL_RISK_ENABLED: ${EXT_SIGNAL_RISK_ENABLED:-true}
   BUS_SOFT_PAUSE_ON_OUTAGE: ${BUS_SOFT_PAUSE_ON_OUTAGE:-true}
   REDIS_HOST: ${REDIS_HOST:-redis}
   REDIS_PORT: ${REDIS_PORT:-6379}
@@ -62,6 +61,8 @@ x-hbot-base: &hbot-base
   image: ${HUMMINGBOT_IMAGE:-hummingbot/hummingbot:version-2.12.0}
   restart: unless-stopped
   logging: *default-logging
+  labels:
+    - "autoheal=true"
   networks:
     - trading
   environment: *hbot-env
@@ -72,6 +73,25 @@ x-hbot-base: &hbot-base
 # Services
 # ============================================
 services:
+  autoheal:
+    image: willfarrell/autoheal:latest
+    container_name: hbot-autoheal
+    profiles:
+      - external
+      - monitoring
+    restart: unless-stopped
+    logging: *default-logging
+    environment:
+      - AUTOHEAL_CONTAINER_LABEL=autoheal
+      - AUTOHEAL_INTERVAL=30
+      - AUTOHEAL_START_PERIOD=180
+      - AUTOHEAL_DEFAULT_STOP_TIMEOUT=30
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+    networks:
+      - trading
+      - monitoring
+
   # ==========================================
   # BOT 1
   # ==========================================
@@ -89,12 +109,12 @@ services:
       - ../data/bot1/pmm_scripts:/home/hummingbot/pmm_scripts
       # ---- Shared controllers mount (Day 30) ----
       - ../controllers:/home/hummingbot/controllers:ro
-      - ../controllers:/home/hummingbot/controllers/market_making:ro
       - ../config:/home/hummingbot/project_config:ro
       - ../services:/home/hummingbot/services:ro
     command: /bin/bash -lc "conda activate hummingbot && python ./bin/headless_start.py 2>> ./logs/errors.log"
     environment:
       <<: *hbot-env
+      EXT_SIGNAL_RISK_ENABLED: "true"
       CONFIG_PASSWORD: ${BOT1_PASSWORD:-}
       CONFIG_FILE_NAME: v2_with_controllers.py
       SCRIPT_CONFIG: v2_epp_v2_4_bot_a.yml
@@ -103,14 +123,12 @@ services:
       BOT_POLICY_ROLE: live_microcap_primary
       BOT_POLICY_MODE: live
       BOT_POLICY_VERSION: multi_bot_policy_v1
-    labels:
-      - "autoheal=true"
     healthcheck:
       # Restart if minute.csv hasn't been written for >5 min (WS event-loop hang detector).
       test:
         [
           "CMD-SHELL",
-          "python -c \"import sys,time; from pathlib import Path; files=list(Path('/home/hummingbot/logs/epp_v24').rglob('minute.csv')); newest=max((f.stat().st_mtime for f in files), default=0); sys.exit(0 if files and (time.time()-newest)<300 else 1)\""
+          "python -c \"import sys,time; from pathlib import Path; files=list(Path('/home/hummingbot/logs/epp_v24').rglob('minute.csv')); newest=max((f.stat().st_mtime for f in files), default=0); hb=Path('/home/hummingbot/logs/heartbeat/strategy_heartbeat.json'); hb_ok=hb.exists() and (time.time()-hb.stat().st_mtime)<300; minute_ok=bool(files) and (time.time()-newest)<300; sys.exit(0 if minute_ok and hb_ok else 1)\""
         ]
       interval: 60s
       timeout: 10s
@@ -144,7 +162,6 @@ services:
       - ../data/bot2/pmm_scripts:/home/hummingbot/pmm_scripts
       # ---- Shared controllers mount (Day 30) ----
       - ../controllers:/home/hummingbot/controllers:ro
-      - ../controllers:/home/hummingbot/controllers/market_making:ro
       - ../config:/home/hummingbot/project_config:ro
       - ../services:/home/hummingbot/services:ro
     environment:
@@ -180,7 +197,6 @@ services:
       - ../data/bot3/pmm_scripts:/home/hummingbot/pmm_scripts
       # ---- Shared controllers mount (Day 30) ----
       - ../controllers:/home/hummingbot/controllers
-      - ../controllers:/home/hummingbot/controllers/market_making:ro
       - ../config:/home/hummingbot/project_config:ro
       - ../services:/home/hummingbot/services:ro
       # Mount test script into the scripts dir so `start --script` finds it
@@ -219,7 +235,6 @@ services:
       - ../scripts/shared/v2_with_controllers.py:/home/hummingbot/custom_scripts/v2_with_controllers.py:ro
       # ---- Shared controllers mount (Day 30) ----
       - ../controllers:/home/hummingbot/controllers:ro
-      - ../controllers:/home/hummingbot/controllers/market_making:ro
       - ../config:/home/hummingbot/project_config:ro
       - ../services:/home/hummingbot/services:ro
     environment:
@@ -357,6 +372,7 @@ services:
       - EVENT_PRODUCER_NAME=risk_service
     volumes:
       - ..:/workspace/hbot:ro
+      - ../reports:/workspace/hbot/reports
     depends_on:
       redis:
         condition: service_healthy
@@ -450,7 +466,7 @@ services:
       test:
         [
           "CMD-SHELL",
-          'python -c "import os,time,sys; from pathlib import Path; p=Path(''/workspace/hbot/reports/event_store''); fs=sorted(p.glob(''events_*.jsonl'')); sys.exit(0 if fs and (time.time()-fs[-1].stat().st_mtime)<=float(os.getenv(''EVENT_STORE_HEALTH_MAX_SEC'',''900'')) else 1)"',
+          'python -c "import os,time,sys; from pathlib import Path; p=Path(''/workspace/hbot/reports/event_store''); fs=sorted(p.glob(''integrity_*.json'')); sys.exit(0 if fs and (time.time()-fs[-1].stat().st_mtime)<=float(os.getenv(''EVENT_STORE_HEALTH_MAX_SEC'',''900'')) else 1)"',
         ]
       interval: 30s
       timeout: 10s
@@ -549,7 +565,7 @@ services:
       - RECON_INVENTORY_DRIFT_CRITICAL=${RECON_INVENTORY_DRIFT_CRITICAL:-0.45}
       - RECON_ALERT_WEBHOOK_URL=${RECON_ALERT_WEBHOOK_URL:-http://alert-webhook-sink:19093/alert}
       - RECON_ALERT_MIN_SEVERITY=${RECON_ALERT_MIN_SEVERITY:-critical}
-      - RECON_EXCHANGE_SOURCE_ENABLED=${RECON_EXCHANGE_SOURCE_ENABLED:-false}
+      - RECON_EXCHANGE_SOURCE_ENABLED=${RECON_EXCHANGE_SOURCE_ENABLED:-true}
       - RECON_EXCHANGE_SNAPSHOT_PATH=${RECON_EXCHANGE_SNAPSHOT_PATH:-/workspace/hbot/reports/exchange_snapshots/latest.json}
       - RECON_THRESHOLDS_PATH=${RECON_THRESHOLDS_PATH:-/workspace/hbot/config/reconciliation_thresholds.json}
       - RECON_HEALTH_MAX_SEC=${RECON_HEALTH_MAX_SEC:-900}
@@ -586,7 +602,7 @@ services:
       - HB_DATA_ROOT=/workspace/hbot/data
       - EXCHANGE_SNAPSHOT_OUT_PATH=/workspace/hbot/reports/exchange_snapshots/latest.json
       - EXCHANGE_SNAPSHOT_INTERVAL_SEC=${EXCHANGE_SNAPSHOT_INTERVAL_SEC:-120}
-      - EXCHANGE_SNAPSHOT_MODE=${EXCHANGE_SNAPSHOT_MODE:-proxy_local}
+      - EXCHANGE_SNAPSHOT_MODE=${EXCHANGE_SNAPSHOT_MODE:-bitget_ccxt_private}
       - EXCHANGE_SNAPSHOT_ASSETS=${EXCHANGE_SNAPSHOT_ASSETS:-BTC,USDT}
       - EXCHANGE_ACCOUNT_MAP_PATH=${EXCHANGE_ACCOUNT_MAP_PATH:-/workspace/hbot/config/exchange_account_map.json}
       - BITGET_API_KEY=${BOT1_BITGET_API_KEY:-}
@@ -692,6 +708,46 @@ services:
       retries: 3
       start_period: 30s
 
+  portfolio-allocator-service:
+    <<: *control-plane-image
+    container_name: hbot-portfolio-allocator-service
+    profiles:
+      - external
+    restart: unless-stopped
+    logging: *default-logging
+    command: >
+      /bin/sh -lc "python /workspace/hbot/services/portfolio_allocator/main.py"
+    environment:
+      - MULTI_BOT_POLICY_PATH=${MULTI_BOT_POLICY_PATH:-/workspace/hbot/config/multi_bot_policy_v1.json}
+      - EXCHANGE_SNAPSHOT_PATH=${EXCHANGE_SNAPSHOT_PATH:-/workspace/hbot/reports/exchange_snapshots/latest.json}
+      - PORTFOLIO_ALLOCATOR_REPORT_PATH=${PORTFOLIO_ALLOCATOR_REPORT_PATH:-/workspace/hbot/reports/policy/portfolio_allocator_latest.json}
+      - PORTFOLIO_ALLOCATOR_INTERVAL_SEC=${PORTFOLIO_ALLOCATOR_INTERVAL_SEC:-300}
+      - PORTFOLIO_ALLOCATOR_PUBLISH_INTENTS=${PORTFOLIO_ALLOCATOR_PUBLISH_INTENTS:-false}
+      - REDIS_HOST=${REDIS_HOST:-redis}
+      - REDIS_PORT=${REDIS_PORT:-6379}
+      - REDIS_DB=${REDIS_DB:-0}
+      - REDIS_PASSWORD=${REDIS_PASSWORD:-}
+      - PORTFOLIO_ALLOCATOR_HEALTH_MAX_SEC=${PORTFOLIO_ALLOCATOR_HEALTH_MAX_SEC:-900}
+    volumes:
+      - ..:/workspace/hbot
+    depends_on:
+      redis:
+        condition: service_healthy
+      exchange-snapshot-service:
+        condition: service_started
+    networks:
+      - trading
+    healthcheck:
+      test:
+        [
+          "CMD-SHELL",
+          'python -c "import os,time,sys; from pathlib import Path; p=Path(''/workspace/hbot/reports/policy/portfolio_allocator_latest.json''); sys.exit(0 if p.exists() and (time.time()-p.stat().st_mtime)<=float(os.getenv(''PORTFOLIO_ALLOCATOR_HEALTH_MAX_SEC'',''900'')) else 1)"',
+        ]
+      interval: 60s
+      timeout: 10s
+      retries: 3
+      start_period: 30s
+
   soak-monitor:
     <<: *control-plane-image
     container_name: hbot-soak-monitor
@@ -769,9 +825,10 @@ services:
     restart: unless-stopped
     logging: *default-logging
     command: >
-      /bin/sh -lc "pip install -q 'python-telegram-bot>=20.0' && python /workspace/hbot/services/telegram_bot/main.py"
+      /bin/sh -lc "python /workspace/hbot/services/telegram_bot/main.py"
     environment:
       - PYTHONPATH=/workspace/hbot
+      - PYTHONPYCACHEPREFIX=/tmp/pycache
       - TELEGRAM_BOT_TOKEN=${TELEGRAM_BOT_TOKEN}
       - TELEGRAM_CHAT_ID=${TELEGRAM_CHAT_ID}
       - HB_DATA_ROOT=/workspace/hbot/data
@@ -831,8 +888,6 @@ services:
   ops-db-writer:
     <<: *control-plane-image
     container_name: hbot-ops-db-writer
-    profiles:
-      - ops
     restart: unless-stopped
     logging: *default-logging
     command: >
@@ -880,6 +935,7 @@ services:
       /bin/sh -lc "python /workspace/hbot/services/monitoring/bot_metrics_exporter.py"
     environment:
       - PYTHONPATH=/workspace/hbot
+      - PYTHONPYCACHEPREFIX=/tmp/pycache
       - HB_DATA_ROOT=/workspace/hbot/data
       - METRICS_PORT=9400
       - METRICS_PATH=/metrics
@@ -942,82 +998,10 @@ services:
           memory: 128M
           cpus: "0.25"
 
-  # ---- ClickHouse (disabled) ----
-  # To enable: see clickhouse_ingest/README.md
-  # Uncomment the clickhouse + clickhouse-ingest services below and
-  # the clickhouse-data volume at the top of this file.
-  #
-  # clickhouse:
-  #   image: clickhouse/clickhouse-server:24.8
-  #   container_name: hbot-clickhouse
-  #   profiles:
-  #     - ops
-  #   restart: unless-stopped
-  #   logging: *default-logging
-  #   environment:
-  #     - CLICKHOUSE_DB=${CH_DB:-hbot_events}
-  #     - CLICKHOUSE_USER=${CH_USER:-default}
-  #     - CLICKHOUSE_PASSWORD=${CH_PASSWORD:-}
-  #     - CLICKHOUSE_DEFAULT_ACCESS_MANAGEMENT=1
-  #   ports:
-  #     - "${CH_BIND_IP:-127.0.0.1}:${CH_HTTP_PORT:-8123}:8123"
-  #     - "${CH_BIND_IP:-127.0.0.1}:${CH_NATIVE_PORT:-9000}:9000"
-  #   volumes:
-  #     - clickhouse-data:/var/lib/clickhouse
-  #   networks:
-  #     - monitoring
-  #     - trading
-  #   healthcheck:
-  #     test: ["CMD-SHELL", "wget -qO- http://localhost:8123/ping | grep -q Ok."]
-  #     interval: 15s
-  #     timeout: 5s
-  #     retries: 10
-  #
-  # clickhouse-ingest:
-  #   <<: *control-plane-image
-  #   container_name: hbot-clickhouse-ingest
-  #   profiles:
-  #     - ops
-  #   restart: unless-stopped
-  #   logging: *default-logging
-  #   command: >
-  #     /bin/sh -lc "python /workspace/hbot/services/clickhouse_ingest/main.py"
-  #   environment:
-  #     - HB_REPORTS_ROOT=/workspace/hbot/reports
-  #     - CH_HOST=${CH_HOST:-clickhouse}
-  #     - CH_HTTP_PORT=${CH_HTTP_PORT:-8123}
-  #     - CH_DB=${CH_DB:-hbot_events}
-  #     - CH_TABLE=${CH_TABLE:-event_store_raw_v1}
-  #     - CH_USER=${CH_USER:-default}
-  #     - CH_PASSWORD=${CH_PASSWORD:-}
-  #     - CH_INGEST_BATCH_SIZE=${CH_INGEST_BATCH_SIZE:-2000}
-  #     - CH_INGEST_INTERVAL_SEC=${CH_INGEST_INTERVAL_SEC:-120}
-  #     - CH_INGEST_HEALTH_MAX_SEC=${CH_INGEST_HEALTH_MAX_SEC:-900}
-  #   volumes:
-  #     - ..:/workspace/hbot
-  #   depends_on:
-  #     clickhouse:
-  #       condition: service_healthy
-  #   networks:
-  #     - monitoring
-  #     - trading
-  #   healthcheck:
-  #     test:
-  #       [
-  #         "CMD-SHELL",
-  #         'python -c "import os,time,sys; from pathlib import Path; p=Path(''/workspace/hbot/reports/clickhouse_ingest/latest.json''); sys.exit(0 if p.exists() and (time.time()-p.stat().st_mtime)<=float(os.getenv(''CH_INGEST_HEALTH_MAX_SEC'',''900'')) else 1)"',
-  #       ]
-  #     interval: 60s
-  #     timeout: 10s
-  #     retries: 3
-  #     start_period: 30s
-
   # ---- PostgreSQL Operational Store (Day 25) ----
   postgres:
     image: postgres:16-alpine
     container_name: hbot-postgres
-    profiles:
-      - ops
     restart: unless-stopped
     logging: *default-logging
     environment:
@@ -1124,17 +1108,12 @@ services:
       - GF_USERS_ALLOW_ORG_CREATE=false
       - GF_AUTH_ANONYMOUS_ENABLED=false
       - GF_LOG_LEVEL=warn
-      - GF_INSTALL_PLUGINS=${GF_INSTALL_PLUGINS:-grafana-clock-panel,grafana-clickhouse-datasource}
+      - GF_INSTALL_PLUGINS=${GF_INSTALL_PLUGINS:-grafana-clock-panel}
       - OPS_DB_HOST=${OPS_DB_HOST:-postgres}
       - OPS_DB_PORT=${OPS_DB_PORT:-5432}
       - OPS_DB_NAME=${OPS_DB_NAME:-hbot_ops}
       - OPS_DB_USER=${OPS_DB_USER:-hbot}
       - OPS_DB_PASSWORD=${OPS_DB_PASSWORD:-hbot_dev_password}
-      - CH_HOST=${CH_HOST:-clickhouse}
-      - CH_HTTP_PORT=${CH_HTTP_PORT:-8123}
-      - CH_DB=${CH_DB:-hbot_events}
-      - CH_USER=${CH_USER:-default}
-      - CH_PASSWORD=${CH_PASSWORD:-}
     volumes:
       - grafana-data:/var/lib/grafana
       - ../monitoring/grafana/provisioning:/etc/grafana/provisioning:ro
@@ -1364,6 +1343,35 @@ services:
           cpus: "0.1"
 
   # ==========================================
+  # DESK SNAPSHOT SERVICE (INFRA-5)
+  # Canonical read model: materializes one JSON
+  # snapshot per bot from minute.csv, fills.csv,
+  # open_orders, daily_state, and gate reports.
+  # Telegram bot and Grafana exporter read from here.
+  # ==========================================
+  desk-snapshot-service:
+    <<: *control-plane-image
+    container_name: hbot-desk-snapshot
+    restart: unless-stopped
+    volumes:
+      - ..:/workspace/hbot:ro
+      - ../reports:/workspace/hbot/reports
+    command: /bin/bash -lc "python /workspace/hbot/services/desk_snapshot_service/main.py"
+    environment:
+      - PYTHONPATH=/workspace/hbot
+      - PYTHONPYCACHEPREFIX=/tmp/pycache
+      - HB_DATA_ROOT=/workspace/hbot/data
+      - HB_REPORTS_ROOT=/workspace/hbot/reports
+      - SNAPSHOT_POLL_INTERVAL_S=30
+    networks:
+      - trading
+    deploy:
+      resources:
+        limits:
+          memory: 64M
+          cpus: "0.05"
+
+  # ==========================================
   # BOT WATCHDOG — monitors minute.csv freshness,
   # auto-restarts frozen bots with circuit breaker
   # and Telegram alerts. Replaces the shell watchdog.
@@ -1378,13 +1386,22 @@ services:
     command: /bin/bash -lc "python /workspace/hbot/services/bot_watchdog/main.py"
     environment:
       - PYTHONPATH=/workspace/hbot
+      - PYTHONPYCACHEPREFIX=/tmp/pycache
       - HB_DATA_ROOT=/workspace/hbot/data
       - WATCHDOG_BOTS=bot1
       - WATCHDOG_STALE_THRESHOLD_S=300
       - WATCHDOG_CHECK_INTERVAL_S=60
+      - WATCHDOG_PAUSE_BEFORE_RESTART_S=120
       - WATCHDOG_MAX_RESTARTS=5
       - WATCHDOG_WINDOW_S=3600
+      - WATCHDOG_SERVICE_RECOVERY_ENABLED=${WATCHDOG_SERVICE_RECOVERY_ENABLED:-false}
+      - WATCHDOG_SERVICE_RECOVERY_INTERVAL_CHECKS=5
+      - REDIS_HOST=${REDIS_HOST:-redis}
+      - REDIS_PORT=${REDIS_PORT:-6379}
+      - REDIS_PASSWORD=${REDIS_PASSWORD:-}
+      - EXT_SIGNAL_RISK_ENABLED=${EXT_SIGNAL_RISK_ENABLED:-false}
       - WATCHDOG_CONTAINER_PREFIX=hbot-
+      - WATCHDOG_STATE_FILE=/tmp/watchdog_state.json
       - TELEGRAM_BOT_TOKEN=${TELEGRAM_BOT_TOKEN:-}
       - TELEGRAM_CHAT_ID=${TELEGRAM_CHAT_ID:-}
     networks:
