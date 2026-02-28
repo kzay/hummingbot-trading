@@ -55,22 +55,50 @@ def _recompute(jsonl_path: Path) -> dict:
     }
 
 
+def _count_non_empty_lines(path: Path) -> int:
+    count = 0
+    try:
+        with path.open("r", encoding="utf-8", errors="ignore") as fh:
+            for raw in fh:
+                if raw.strip():
+                    count += 1
+    except Exception:
+        return 0
+    return count
+
+
 def run(root: Path) -> dict:
     today = _today()
     event_store_dir = root / "reports" / "event_store"
     jsonl_path = event_store_dir / f"events_{today}.jsonl"
 
+    candidates = sorted(event_store_dir.glob("events_*.jsonl"))
+    if not candidates:
+        return {
+            "status": "fail",
+            "error": f"no events JSONL found in {event_store_dir}",
+            "integrity_path": "",
+        }
+
     if not jsonl_path.exists():
-        # Fall back to the most recent JSONL file if today's isn't present yet.
-        candidates = sorted(event_store_dir.glob("events_*.jsonl"))
-        if not candidates:
-            return {
-                "status": "fail",
-                "error": f"no events JSONL found in {event_store_dir}",
-                "integrity_path": "",
-            }
+        # Fall back to latest when today's file is absent.
         jsonl_path = candidates[-1]
         print(f"[integrity-local] today JSONL missing; using {jsonl_path.name}")
+    else:
+        # If today's file is only sparse backfill rows, keep the most recent rich stream snapshot.
+        today_rows = _count_non_empty_lines(jsonl_path)
+        latest_other = candidates[-1]
+        for fp in reversed(candidates):
+            if fp.name != jsonl_path.name:
+                latest_other = fp
+                break
+        other_rows = _count_non_empty_lines(latest_other) if latest_other != jsonl_path else 0
+        if latest_other != jsonl_path and today_rows < 1000 and other_rows > today_rows:
+            print(
+                f"[integrity-local] today JSONL sparse ({today_rows}); using richer snapshot "
+                f"{latest_other.name} ({other_rows})"
+            )
+            jsonl_path = latest_other
 
     stats = _recompute(jsonl_path)
     integrity_path = event_store_dir / f"integrity_{today}.json"

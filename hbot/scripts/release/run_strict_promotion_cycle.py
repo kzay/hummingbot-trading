@@ -24,6 +24,12 @@ def main() -> int:
     parser = argparse.ArgumentParser(description="Run strict promotion cycle with parity refresh.")
     parser.add_argument("--max-report-age-min", type=int, default=20, help="Max freshness window in minutes.")
     parser.add_argument(
+        "--day2-max-delta",
+        type=int,
+        default=6,
+        help="Absolute per-stream lag tolerance for day2 gate.",
+    )
+    parser.add_argument(
         "--append-incident-on-fail",
         action="store_true",
         help="Append a short incident note to docs/ops/incidents.md when strict gate fails.",
@@ -36,7 +42,19 @@ def main() -> int:
         str(root / "scripts" / "release" / "run_promotion_gates.py"),
         "--ci",
         "--require-day2-go",
+        "--require-day2-fresh",
+        "--require-day2-lag-within-tolerance",
+        "--day2-max-delta",
+        str(args.day2_max_delta),
+        "--attempt-day2-catchup",
+        "--day2-catchup-cycles",
+        "2",
+        "--require-parity-informative-core",
         "--refresh-parity-once",
+        "--check-bot-preflight",
+        "--check-recon-exchange-preflight",
+        "--collect-go-live-evidence",
+        "--check-telegram-validation",
         "--max-report-age-min",
         str(args.max_report_age_min),
     ]

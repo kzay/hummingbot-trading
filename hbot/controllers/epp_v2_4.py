@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import logging
 import os
 import time as _time_mod
@@ -171,6 +172,46 @@ class EppV24Config(MarketMakingControllerConfigBase):
     adaptive_vol_spread_widen_max: Decimal = Field(
         default=Decimal("0.35"),
         description="Max additional spread widening in high volatility (0.35 = +35%).",
+    )
+    pnl_governor_enabled: bool = Field(
+        default=False,
+        description="Enable daily PnL target governor to relax edge gate when behind schedule.",
+    )
+    daily_pnl_target_pct: Decimal = Field(
+        default=Decimal("0"),
+        description="Daily PnL target as pct of opening equity (e.g. 1.0 = +1%). Takes priority over quote target.",
+    )
+    daily_pnl_target_quote: Decimal = Field(
+        default=Decimal("0"),
+        description="Legacy daily net PnL quote target. Used only when daily_pnl_target_pct <= 0.",
+    )
+    pnl_governor_activation_buffer_pct: Decimal = Field(
+        default=Decimal("0.05"),
+        description="Required relative deficit buffer before governor activates (0.05 = 5% of target).",
+    )
+    pnl_governor_max_edge_bps_cut: Decimal = Field(
+        default=Decimal("5"),
+        description="Maximum bps reduction of effective min edge when materially behind PnL target.",
+    )
+    pnl_governor_max_size_boost_pct: Decimal = Field(
+        default=Decimal("0"),
+        description="Maximum sizing boost pct when behind target (e.g. 0.30 = +30%).",
+    )
+    pnl_governor_size_activation_deficit_pct: Decimal = Field(
+        default=Decimal("0.10"),
+        description="Minimum normalized deficit before dynamic sizing boost activates.",
+    )
+    pnl_governor_turnover_soft_cap_x: Decimal = Field(
+        default=Decimal("4.0"),
+        description="Disable size boost when turnover exceeds this soft cap.",
+    )
+    pnl_governor_drawdown_soft_cap_pct: Decimal = Field(
+        default=Decimal("0.02"),
+        description="Disable size boost when drawdown exceeds this soft cap.",
+    )
+    max_quote_to_market_spread_mult: Decimal = Field(
+        default=Decimal("0"),
+        description="Cap quote spread as multiple of observed market spread. 0 disables.",
     )
     min_market_spread_bps: int = Field(default=0, ge=0, le=100)
     max_clock_skew_s: float = Field(default=5.0, description="Maximum allowed clock skew tolerance for order book staleness detection")
@@ -646,6 +687,7 @@ class EppV24Controller(MarketMakingControllerBase):
         self._external_regime_override: Optional[str] = None
         self._external_regime_override_expiry: float = 0.0
         self._adverse_skip_count: int = 0
+        self._derisk_runtime_recovery_count: int = 0
         self._last_fill_ts: float = 0.0
         self._market_spread_bps_ewma: Decimal = _ZERO
         self._band_pct_ewma: Decimal = _ZERO
@@ -653,6 +695,27 @@ class EppV24Controller(MarketMakingControllerBase):
         self._adaptive_fill_age_s: Decimal = _ZERO
         self._adaptive_market_floor_pct: Decimal = _ZERO
         self._adaptive_vol_ratio: Decimal = _ZERO
+        self._pnl_governor_active: bool = False
+        self._pnl_governor_day_progress: Decimal = _ZERO
+        self._pnl_governor_target_pnl_pct: Decimal = _ZERO
+        self._pnl_governor_target_pnl_quote: Decimal = _ZERO
+        self._pnl_governor_expected_pnl_quote: Decimal = _ZERO
+        self._pnl_governor_actual_pnl_quote: Decimal = _ZERO
+        self._pnl_governor_deficit_ratio: Decimal = _ZERO
+        self._pnl_governor_edge_relax_bps: Decimal = _ZERO
+        self._pnl_governor_size_mult: Decimal = _ONE
+        self._pnl_governor_size_boost_active: bool = False
+        self._pnl_governor_target_mode: str = "disabled"
+        self._pnl_governor_target_source: str = "none"
+        self._pnl_governor_target_equity_open_quote: Decimal = _ZERO
+        self._pnl_governor_target_effective_pct: Decimal = _ZERO
+        self._pnl_governor_activation_reason: str = "disabled"
+        self._pnl_governor_size_boost_reason: str = "governor_disabled"
+        self._pnl_governor_activation_reason_counts: Dict[str, int] = {}
+        self._pnl_governor_size_boost_reason_counts: Dict[str, int] = {}
+        self._runtime_size_mult_applied: Decimal = _ONE
+        self._spread_competitiveness_cap_active: bool = False
+        self._spread_competitiveness_cap_side_pct: Decimal = _ZERO
         self._funding_rate: Decimal = _ZERO
         self._funding_cost_today_quote: Decimal = _ZERO
         self._last_funding_rate_ts: float = 0.0
@@ -769,7 +832,7 @@ class EppV24Controller(MarketMakingControllerBase):
 
         market = self._evaluate_market_conditions(now_ts=now, band_pct=spread_state.band_pct)
         self._update_adaptive_history(market_spread_pct=market.market_spread_pct)
-        buy_spreads, sell_spreads, projected_total_quote = self._compute_levels_and_sizing(
+        buy_spreads, sell_spreads, projected_total_quote, size_mult = self._compute_levels_and_sizing(
             regime_spec, spread_state, equity_quote, mid, market,
         )
         risk_reasons, risk_hard_stop, daily_loss_pct, drawdown_pct = self._evaluate_all_risk(
@@ -783,6 +846,7 @@ class EppV24Controller(MarketMakingControllerBase):
             levels=max(len(buy_spreads), len(sell_spreads)),
             equity_quote=equity_quote, mid=mid,
             quote_size_pct=regime_spec.quote_size_pct,
+            size_mult=size_mult,
         )
         self._emit_tick_output(
             _t0, now, mid, regime_name, target_base_pct, target_net_base_pct,
@@ -857,7 +921,7 @@ class EppV24Controller(MarketMakingControllerBase):
     def _compute_levels_and_sizing(
         self, regime_spec: RegimeSpec, spread_state: SpreadEdgeState,
         equity_quote: Decimal, mid: Decimal, market: MarketConditions,
-    ) -> Tuple[List[Decimal], List[Decimal], Decimal]:
+    ) -> Tuple[List[Decimal], List[Decimal], Decimal, Decimal]:
         """Pick levels, build per-side spreads, and project total notional."""
         levels = self._pick_levels(regime_spec, spread_state.turnover_x)
         self._runtime_levels.executor_refresh_time = int(regime_spec.refresh_s)
@@ -865,12 +929,101 @@ class EppV24Controller(MarketMakingControllerBase):
             spread_state.spread_pct, spread_state.skew,
             levels, regime_spec.one_sided, market.side_spread_floor,
         )
+        buy_spreads, sell_spreads = self._apply_spread_competitiveness_cap(
+            buy_spreads=buy_spreads,
+            sell_spreads=sell_spreads,
+            market=market,
+        )
+        size_mult = self._compute_pnl_governor_size_mult(
+            equity_quote=equity_quote,
+            turnover_x=spread_state.turnover_x,
+        )
         projected_total_quote = self._project_total_amount_quote(
             equity_quote=equity_quote, mid=mid,
             quote_size_pct=regime_spec.quote_size_pct,
             total_levels=max(1, len(buy_spreads) + len(sell_spreads)),
+            size_mult=size_mult,
         )
-        return buy_spreads, sell_spreads, projected_total_quote
+        return buy_spreads, sell_spreads, projected_total_quote, size_mult
+
+    def _apply_spread_competitiveness_cap(
+        self,
+        buy_spreads: List[Decimal],
+        sell_spreads: List[Decimal],
+        market: MarketConditions,
+    ) -> Tuple[List[Decimal], List[Decimal]]:
+        cap_mult = max(_ZERO, to_decimal(self.config.max_quote_to_market_spread_mult))
+        market_spread = max(_ZERO, to_decimal(market.market_spread_pct))
+        if cap_mult <= _ZERO or market_spread <= _ZERO:
+            self._spread_competitiveness_cap_active = False
+            self._spread_competitiveness_cap_side_pct = _ZERO
+            return buy_spreads, sell_spreads
+        cap_side = max(to_decimal(market.side_spread_floor), (market_spread * cap_mult) / _TWO)
+        buy = [min(max(to_decimal(v), to_decimal(market.side_spread_floor)), cap_side) for v in buy_spreads]
+        sell = [min(max(to_decimal(v), to_decimal(market.side_spread_floor)), cap_side) for v in sell_spreads]
+        self._spread_competitiveness_cap_side_pct = cap_side
+        self._spread_competitiveness_cap_active = (buy != buy_spreads) or (sell != sell_spreads)
+        return buy, sell
+
+    def _increment_governor_reason_count(self, attr_name: str, reason: str) -> None:
+        """Keep governor counters robust when tests use lightweight controller stubs."""
+        counts = getattr(self, attr_name, None)
+        if not isinstance(counts, dict):
+            counts = {}
+            setattr(self, attr_name, counts)
+        key = str(reason or "unknown")
+        counts[key] = int(counts.get(key, 0)) + 1
+
+    def _compute_pnl_governor_size_mult(self, equity_quote: Decimal, turnover_x: Decimal) -> Decimal:
+        """Return dynamic sizing multiplier derived from PnL deficit with safety clamps."""
+        self._pnl_governor_size_mult = _ONE
+        self._pnl_governor_size_boost_active = False
+        reason = "governor_disabled"
+        if not self.config.pnl_governor_enabled:
+            self._pnl_governor_size_boost_reason = reason
+            EppV24Controller._increment_governor_reason_count(self, "_pnl_governor_size_boost_reason_counts", reason)
+            return _ONE
+        max_boost_pct = max(_ZERO, to_decimal(self.config.pnl_governor_max_size_boost_pct))
+        if max_boost_pct <= _ZERO:
+            reason = "max_boost_zero"
+            self._pnl_governor_size_boost_reason = reason
+            EppV24Controller._increment_governor_reason_count(self, "_pnl_governor_size_boost_reason_counts", reason)
+            return _ONE
+        deficit_ratio = _clip(self._pnl_governor_deficit_ratio, _ZERO, _ONE)
+        activation = _clip(to_decimal(self.config.pnl_governor_size_activation_deficit_pct), _ZERO, _ONE)
+        if deficit_ratio <= activation:
+            reason = "deficit_below_activation"
+            self._pnl_governor_size_boost_reason = reason
+            EppV24Controller._increment_governor_reason_count(self, "_pnl_governor_size_boost_reason_counts", reason)
+            return _ONE
+        turnover_soft_cap = max(_ZERO, to_decimal(self.config.pnl_governor_turnover_soft_cap_x))
+        if turnover_soft_cap > _ZERO and turnover_x >= turnover_soft_cap:
+            reason = "turnover_soft_cap"
+            self._pnl_governor_size_boost_reason = reason
+            EppV24Controller._increment_governor_reason_count(self, "_pnl_governor_size_boost_reason_counts", reason)
+            return _ONE
+        _, drawdown_pct = self._risk_loss_metrics(equity_quote)
+        drawdown_soft_cap = max(_ZERO, to_decimal(self.config.pnl_governor_drawdown_soft_cap_pct))
+        if drawdown_soft_cap > _ZERO and drawdown_pct >= drawdown_soft_cap:
+            reason = "drawdown_soft_cap"
+            self._pnl_governor_size_boost_reason = reason
+            EppV24Controller._increment_governor_reason_count(self, "_pnl_governor_size_boost_reason_counts", reason)
+            return _ONE
+        margin_soft_floor = max(_ZERO, to_decimal(self.config.margin_ratio_soft_pause_pct))
+        if margin_soft_floor > _ZERO and self._margin_ratio <= margin_soft_floor:
+            reason = "margin_soft_floor"
+            self._pnl_governor_size_boost_reason = reason
+            EppV24Controller._increment_governor_reason_count(self, "_pnl_governor_size_boost_reason_counts", reason)
+            return _ONE
+        normalized = _clip((deficit_ratio - activation) / max(Decimal("0.0001"), (_ONE - activation)), _ZERO, _ONE)
+        size_mult = _ONE + (normalized * max_boost_pct)
+        size_mult = _clip(size_mult, _ONE, _ONE + max_boost_pct)
+        self._pnl_governor_size_mult = size_mult
+        self._pnl_governor_size_boost_active = size_mult > _ONE
+        reason = "active" if self._pnl_governor_size_boost_active else "inactive"
+        self._pnl_governor_size_boost_reason = reason
+        EppV24Controller._increment_governor_reason_count(self, "_pnl_governor_size_boost_reason_counts", reason)
+        return size_mult
 
     def _evaluate_all_risk(
         self, spread_state: SpreadEdgeState, base_pct_gross: Decimal,
@@ -954,6 +1107,7 @@ class EppV24Controller(MarketMakingControllerBase):
         """Build ProcessedState, blank levels on pause, and log the minute row."""
         risk_reasons_for_log = list(risk_reasons)
         derisk_only = False
+        derisk_runtime_recovered = False
         rr = set(risk_reasons)
         if state == GuardState.SOFT_PAUSE and not risk_hard_stop and rr in (
             {"base_pct_above_max"}, {"base_pct_below_min"}, {"eod_close_pending"},
@@ -982,6 +1136,20 @@ class EppV24Controller(MarketMakingControllerBase):
         self.processed_data["adaptive_band_pct_ewma"] = snapshot["adaptive_band_pct_ewma"]
         self.processed_data["adaptive_market_floor_pct"] = snapshot["adaptive_market_floor_pct"]
         self.processed_data["adaptive_vol_ratio"] = snapshot["adaptive_vol_ratio"]
+        self.processed_data["pnl_governor_active"] = snapshot["pnl_governor_active"]
+        self.processed_data["pnl_governor_day_progress"] = snapshot["pnl_governor_day_progress"]
+        self.processed_data["pnl_governor_target_pnl_pct"] = snapshot["pnl_governor_target_pnl_pct"]
+        self.processed_data["pnl_governor_target_pnl_quote"] = snapshot["pnl_governor_target_pnl_quote"]
+        self.processed_data["pnl_governor_expected_pnl_quote"] = snapshot["pnl_governor_expected_pnl_quote"]
+        self.processed_data["pnl_governor_actual_pnl_quote"] = snapshot["pnl_governor_actual_pnl_quote"]
+        self.processed_data["pnl_governor_deficit_ratio"] = snapshot["pnl_governor_deficit_ratio"]
+        self.processed_data["pnl_governor_edge_relax_bps"] = snapshot["pnl_governor_edge_relax_bps"]
+        self.processed_data["pnl_governor_size_mult"] = snapshot["pnl_governor_size_mult"]
+        self.processed_data["pnl_governor_size_boost_active"] = snapshot["pnl_governor_size_boost_active"]
+        self.processed_data["pnl_governor_activation_reason"] = snapshot["pnl_governor_activation_reason"]
+        self.processed_data["pnl_governor_size_boost_reason"] = snapshot["pnl_governor_size_boost_reason"]
+        self.processed_data["pnl_governor_activation_reason_counts"] = snapshot["pnl_governor_activation_reason_counts"]
+        self.processed_data["pnl_governor_size_boost_reason_counts"] = snapshot["pnl_governor_size_boost_reason_counts"]
 
         self._tick_duration_ms = (_time_mod.perf_counter() - _t0) * 1000.0
         self.processed_data["_tick_duration_ms"] = self._tick_duration_ms
@@ -1001,12 +1169,23 @@ class EppV24Controller(MarketMakingControllerBase):
                     active_side_count = max(1, len(self._runtime_levels.sell_spreads))
                     if tight > _ZERO:
                         self._runtime_levels.sell_spreads = [tight] * active_side_count
+                    if not self._runtime_levels.sell_amounts_pct:
+                        per_level = Decimal("100") / Decimal(active_side_count)
+                        self._runtime_levels.sell_amounts_pct = [per_level] * active_side_count
                 else:
                     self._runtime_levels.sell_spreads = []
                     self._runtime_levels.sell_amounts_pct = []
                     active_side_count = max(1, len(self._runtime_levels.buy_spreads))
                     if tight > _ZERO:
                         self._runtime_levels.buy_spreads = [tight] * active_side_count
+                    if not self._runtime_levels.buy_amounts_pct:
+                        per_level = Decimal("100") / Decimal(active_side_count)
+                        self._runtime_levels.buy_amounts_pct = [per_level] * active_side_count
+                # Recover notional after a temporary non-derisk soft-pause path
+                # that zeroed runtime sizing (e.g. order_book_stale).
+                if self._runtime_levels.total_amount_quote <= _ZERO:
+                    self._runtime_levels.total_amount_quote = self.config.total_amount_quote
+                    derisk_runtime_recovered = True
                 if self.config.max_order_notional_quote > 0:
                     max_total = self.config.max_order_notional_quote * Decimal(active_side_count)
                     self._runtime_levels.total_amount_quote = min(self._runtime_levels.total_amount_quote, max_total)
@@ -1016,6 +1195,12 @@ class EppV24Controller(MarketMakingControllerBase):
                 active_side_count = max(1, len(self._runtime_levels.buy_spreads))
                 if tight > _ZERO:
                     self._runtime_levels.buy_spreads = [tight] * active_side_count
+                if not self._runtime_levels.buy_amounts_pct:
+                    per_level = Decimal("100") / Decimal(active_side_count)
+                    self._runtime_levels.buy_amounts_pct = [per_level] * active_side_count
+                if self._runtime_levels.total_amount_quote <= _ZERO:
+                    self._runtime_levels.total_amount_quote = self.config.total_amount_quote
+                    derisk_runtime_recovered = True
                 if self.config.max_order_notional_quote > 0:
                     max_total = self.config.max_order_notional_quote * Decimal(active_side_count)
                     self._runtime_levels.total_amount_quote = min(self._runtime_levels.total_amount_quote, max_total)
@@ -1035,6 +1220,18 @@ class EppV24Controller(MarketMakingControllerBase):
                 if self.config.max_order_notional_quote > 0:
                     max_total = self.config.max_order_notional_quote * Decimal(active_side_count)
                     self._runtime_levels.total_amount_quote = min(self._runtime_levels.total_amount_quote, max_total)
+
+        if derisk_runtime_recovered:
+            self._derisk_runtime_recovery_count += 1
+            risk_reasons_for_log.append("derisk_runtime_recovered")
+            logger.warning(
+                "Recovered derisk runtime sizing after soft-pause zeroing; "
+                "recovery_count=%s total_amount_quote=%s",
+                self._derisk_runtime_recovery_count,
+                self._runtime_levels.total_amount_quote,
+            )
+        self.processed_data["derisk_runtime_recovered"] = derisk_runtime_recovered
+        self.processed_data["derisk_runtime_recovery_count"] = self._derisk_runtime_recovery_count
 
         event_ts = datetime.fromtimestamp(now, tz=timezone.utc).isoformat()
         snapshot["tick_duration_ms"] = self._tick_duration_ms
@@ -1088,6 +1285,8 @@ class EppV24Controller(MarketMakingControllerBase):
                 password=os.environ.get("REDIS_PASSWORD") or None,
                 decode_responses=True,
                 socket_connect_timeout=2,
+                socket_timeout=2,
+                socket_keepalive=True,
             )
         except Exception:
             logger.debug("Telemetry Redis init failed", exc_info=True)
@@ -1554,7 +1753,10 @@ class EppV24Controller(MarketMakingControllerBase):
         equity_quote: Decimal,
         mid: Decimal,
         quote_size_pct: Decimal,
+        size_mult: Decimal = _ONE,
     ) -> None:
+        safe_mult = max(_ONE, to_decimal(size_mult))
+        self._runtime_size_mult_applied = safe_mult
         self._spread_engine.apply_runtime_spreads_and_sizing(
             runtime_levels=self._runtime_levels,
             buy_spreads=buy_spreads,
@@ -1562,9 +1764,11 @@ class EppV24Controller(MarketMakingControllerBase):
             equity_quote=equity_quote,
             mid=mid,
             quote_size_pct=quote_size_pct,
+            size_mult=safe_mult,
             kelly_order_quote=self._get_kelly_order_quote(equity_quote),
             min_notional_quote=self._min_notional_quote(),
             min_base_amount=self._min_base_amount(mid),
+            max_order_notional_quote=self.config.max_order_notional_quote,
             max_total_notional_quote=self.config.max_total_notional_quote,
             cooldown_time=int(self.config.cooldown_time),
             no_trade=self.config.no_trade,
@@ -2047,6 +2251,14 @@ class EppV24Controller(MarketMakingControllerBase):
             self._startup_position_sync_done = True
             logger.info("Startup position sync disabled by config")
             return
+        is_paper_mode = bool(getattr(self.config, "is_paper", False))
+        if not is_paper_mode:
+            bot_mode = str(getattr(self.config, "bot_mode", "") or "").strip().lower()
+            is_paper_mode = bot_mode == "paper"
+        if is_paper_mode:
+            self._startup_position_sync_done = True
+            logger.info("Startup position sync auto-skipped in paper mode")
+            return
         now_ts = float(self.market_data_provider.time()) if hasattr(self, "market_data_provider") else _time_mod.time()
         if self._startup_sync_first_ts <= 0:
             self._startup_sync_first_ts = now_ts
@@ -2288,8 +2500,10 @@ class EppV24Controller(MarketMakingControllerBase):
         mid: Decimal,
         quote_size_pct: Decimal,
         total_levels: int,
+        size_mult: Decimal = _ONE,
     ) -> Decimal:
-        per_order_quote = max(self._min_notional_quote(), equity_quote * quote_size_pct)
+        safe_mult = max(_ONE, to_decimal(size_mult))
+        per_order_quote = max(self._min_notional_quote(), equity_quote * quote_size_pct * safe_mult)
         if self.config.max_order_notional_quote > 0:
             per_order_quote = min(per_order_quote, self.config.max_order_notional_quote)
         projected = per_order_quote * Decimal(max(1, total_levels))
@@ -2350,7 +2564,9 @@ class EppV24Controller(MarketMakingControllerBase):
         raw_drift = self._price_buffer.adverse_drift_30s(now_ts)
         drift_alpha = _clip(to_decimal(self.config.adverse_drift_ewma_alpha), Decimal("0.05"), Decimal("0.95"))
         smooth_drift = self._price_buffer.adverse_drift_smooth(now_ts, drift_alpha)
-        adaptive_min_edge_pct, adaptive_market_floor_pct, adaptive_vol_ratio = self._compute_adaptive_spread_knobs(now_ts)
+        adaptive_min_edge_pct, adaptive_market_floor_pct, adaptive_vol_ratio = self._compute_adaptive_spread_knobs(
+            now_ts, equity_quote
+        )
 
         state, floor = self._spread_engine.compute_spread_and_edge(
             regime_name=regime_name,
@@ -2401,7 +2617,7 @@ class EppV24Controller(MarketMakingControllerBase):
                 self._market_spread_bps_ewma = alpha_spread * spread_bps + (_ONE - alpha_spread) * self._market_spread_bps_ewma
 
     def _compute_adaptive_spread_knobs(
-        self, now_ts: float
+        self, now_ts: float, equity_quote: Decimal
     ) -> Tuple[Optional[Decimal], Optional[Decimal], Optional[Decimal]]:
         """Compute adaptive edge floor and spread knobs with strict safety bounds."""
         if not self.config.adaptive_params_enabled:
@@ -2410,6 +2626,28 @@ class EppV24Controller(MarketMakingControllerBase):
             self._adaptive_fill_age_s = _ZERO
             self._adaptive_market_floor_pct = _ZERO
             self._adaptive_vol_ratio = _ZERO
+            self._pnl_governor_active = False
+            self._pnl_governor_day_progress = _ZERO
+            self._pnl_governor_target_pnl_pct = _ZERO
+            self._pnl_governor_target_pnl_quote = _ZERO
+            self._pnl_governor_expected_pnl_quote = _ZERO
+            self._pnl_governor_actual_pnl_quote = _ZERO
+            self._pnl_governor_deficit_ratio = _ZERO
+            self._pnl_governor_edge_relax_bps = _ZERO
+            self._pnl_governor_size_mult = _ONE
+            self._pnl_governor_size_boost_active = False
+            self._pnl_governor_target_mode = "disabled"
+            self._pnl_governor_target_source = "none"
+            self._pnl_governor_target_equity_open_quote = _ZERO
+            self._pnl_governor_target_effective_pct = _ZERO
+            self._pnl_governor_activation_reason = "adaptive_params_disabled"
+            self._pnl_governor_size_boost_reason = "adaptive_params_disabled"
+            EppV24Controller._increment_governor_reason_count(
+                self, "_pnl_governor_activation_reason_counts", "adaptive_params_disabled"
+            )
+            EppV24Controller._increment_governor_reason_count(
+                self, "_pnl_governor_size_boost_reason_counts", "adaptive_params_disabled"
+            )
             return None, None, None
 
         target_age_s = Decimal(max(60, int(self.config.adaptive_fill_target_age_s)))
@@ -2435,6 +2673,57 @@ class EppV24Controller(MarketMakingControllerBase):
 
         base_min_edge_bps = Decimal(self.config.min_net_edge_bps)
         effective_min_edge_bps = base_min_edge_bps + market_edge_bonus_bps + vol_edge_bonus_bps + edge_tighten_bps - edge_relax_bps
+
+        # Daily PnL governor: when behind target by more than a buffer, relax min-edge
+        # threshold to increase fill probability while preserving bounded risk controls.
+        governor_active = False
+        governor_day_progress = _ZERO
+        governor_target_pct = max(_ZERO, to_decimal(self.config.daily_pnl_target_pct))
+        open_equity = self._daily_equity_open if self._daily_equity_open is not None else equity_quote
+        open_equity = max(_ZERO, to_decimal(open_equity))
+        governor_target_quote = (
+            open_equity * (governor_target_pct / Decimal("100"))
+            if governor_target_pct > _ZERO and open_equity > _ZERO
+            else max(_ZERO, to_decimal(self.config.daily_pnl_target_quote))
+        )
+        governor_expected_quote = _ZERO
+        governor_actual_quote = equity_quote - open_equity
+        governor_deficit_ratio = _ZERO
+        governor_edge_relax_bps = _ZERO
+        governor_target_mode = "disabled"
+        governor_target_source = "none"
+        governor_target_effective_pct = _ZERO
+        governor_activation_reason = "governor_disabled"
+        if governor_target_pct > _ZERO:
+            governor_target_mode = "pct_equity"
+            governor_target_source = "daily_pnl_target_pct"
+            governor_target_effective_pct = governor_target_pct
+        elif governor_target_quote > _ZERO and open_equity > _ZERO:
+            governor_target_mode = "quote_legacy"
+            governor_target_source = "daily_pnl_target_quote"
+            governor_target_effective_pct = (governor_target_quote / open_equity) * Decimal("100")
+        if self.config.pnl_governor_enabled and governor_target_quote > _ZERO:
+            dt = datetime.fromtimestamp(now_ts, tz=timezone.utc)
+            seconds_today = Decimal(dt.hour * 3600 + dt.minute * 60 + dt.second)
+            governor_day_progress = _clip(seconds_today / Decimal(86400), _ZERO, _ONE)
+            governor_expected_quote = governor_target_quote * governor_day_progress
+            deficit_quote = governor_expected_quote - governor_actual_quote
+            activation_buffer_quote = governor_target_quote * _clip(
+                to_decimal(self.config.pnl_governor_activation_buffer_pct), _ZERO, Decimal("0.50")
+            )
+            if deficit_quote > activation_buffer_quote:
+                governor_active = True
+                governor_activation_reason = "active"
+                governor_deficit_ratio = _clip(deficit_quote / governor_target_quote, _ZERO, _ONE)
+                governor_edge_relax_bps = governor_deficit_ratio * max(
+                    _ZERO, to_decimal(self.config.pnl_governor_max_edge_bps_cut)
+                )
+                effective_min_edge_bps -= governor_edge_relax_bps
+            else:
+                governor_activation_reason = "within_activation_buffer"
+        elif self.config.pnl_governor_enabled:
+            governor_activation_reason = "no_target"
+
         effective_min_edge_bps = _clip(
             effective_min_edge_bps,
             to_decimal(self.config.adaptive_min_edge_bps_floor),
@@ -2449,6 +2738,22 @@ class EppV24Controller(MarketMakingControllerBase):
         self._adaptive_fill_age_s = fill_age_s
         self._adaptive_market_floor_pct = market_floor_pct
         self._adaptive_vol_ratio = vol_ratio
+        self._pnl_governor_active = governor_active
+        self._pnl_governor_day_progress = governor_day_progress
+        self._pnl_governor_target_pnl_pct = governor_target_pct
+        self._pnl_governor_target_pnl_quote = governor_target_quote
+        self._pnl_governor_expected_pnl_quote = governor_expected_quote
+        self._pnl_governor_actual_pnl_quote = governor_actual_quote
+        self._pnl_governor_deficit_ratio = governor_deficit_ratio
+        self._pnl_governor_edge_relax_bps = governor_edge_relax_bps
+        self._pnl_governor_target_mode = governor_target_mode
+        self._pnl_governor_target_source = governor_target_source
+        self._pnl_governor_target_equity_open_quote = open_equity
+        self._pnl_governor_target_effective_pct = governor_target_effective_pct
+        self._pnl_governor_activation_reason = governor_activation_reason
+        EppV24Controller._increment_governor_reason_count(
+            self, "_pnl_governor_activation_reason_counts", governor_activation_reason
+        )
         return effective_min_edge_pct, market_floor_pct, vol_ratio
 
     def _evaluate_market_conditions(self, now_ts: float, band_pct: Decimal) -> MarketConditions:
@@ -2523,6 +2828,31 @@ class EppV24Controller(MarketMakingControllerBase):
             "adaptive_band_pct_ewma": self._band_pct_ewma,
             "adaptive_market_floor_pct": self._adaptive_market_floor_pct,
             "adaptive_vol_ratio": self._adaptive_vol_ratio,
+            "pnl_governor_active": self._pnl_governor_active,
+            "pnl_governor_day_progress": self._pnl_governor_day_progress,
+            "pnl_governor_target_pnl_pct": self._pnl_governor_target_pnl_pct,
+            "pnl_governor_target_pnl_quote": self._pnl_governor_target_pnl_quote,
+            "pnl_governor_expected_pnl_quote": self._pnl_governor_expected_pnl_quote,
+            "pnl_governor_actual_pnl_quote": self._pnl_governor_actual_pnl_quote,
+            "pnl_governor_deficit_ratio": self._pnl_governor_deficit_ratio,
+            "pnl_governor_edge_relax_bps": self._pnl_governor_edge_relax_bps,
+            "pnl_governor_size_mult": self._pnl_governor_size_mult,
+            "pnl_governor_size_boost_active": self._pnl_governor_size_boost_active,
+            "pnl_governor_activation_reason": self._pnl_governor_activation_reason,
+            "pnl_governor_size_boost_reason": self._pnl_governor_size_boost_reason,
+            "pnl_governor_activation_reason_counts": json.dumps(
+                self._pnl_governor_activation_reason_counts, sort_keys=True
+            ),
+            "pnl_governor_size_boost_reason_counts": json.dumps(
+                self._pnl_governor_size_boost_reason_counts, sort_keys=True
+            ),
+            "pnl_governor_target_mode": self._pnl_governor_target_mode,
+            "pnl_governor_target_source": self._pnl_governor_target_source,
+            "pnl_governor_target_equity_open_quote": self._pnl_governor_target_equity_open_quote,
+            "pnl_governor_target_effective_pct": self._pnl_governor_target_effective_pct,
+            "pnl_governor_size_mult_applied": self._runtime_size_mult_applied,
+            "spread_competitiveness_cap_active": self._spread_competitiveness_cap_active,
+            "spread_competitiveness_cap_side_pct": self._spread_competitiveness_cap_side_pct,
             "soft_pause_edge": self._soft_pause_edge,
             "edge_gate_blocked": self._edge_gate_blocked,
             "fills_count_today": self._fills_count_today,

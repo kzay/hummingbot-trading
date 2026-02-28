@@ -3,6 +3,7 @@ from __future__ import annotations
 import argparse
 import hashlib
 import json
+import os
 import subprocess
 import sys
 from datetime import datetime, timezone
@@ -52,6 +53,103 @@ def _check(cond: bool, name: str, severity: str, reason: str, evidence: List[str
         "reason": reason,
         "evidence_paths": evidence,
     }
+
+
+def _metric_insufficient(metric_entry: Dict[str, object]) -> bool:
+    """Return True when a parity metric carries insufficient-data semantics."""
+    if not isinstance(metric_entry, dict):
+        return True
+    note = str(metric_entry.get("note", "")).strip().lower()
+    if note == "insufficient_data":
+        return True
+    return metric_entry.get("value") is None and metric_entry.get("delta") is None
+
+
+def _parity_core_insufficient_active_bots(parity: Dict[str, object]) -> Tuple[List[str], List[str]]:
+    """Return (insufficient_active_bots, active_bots).
+
+    Active bot scope is inferred from parity summary activity counters and/or
+    non-null equity markers.
+    """
+    bots = parity.get("bots", [])
+    if not isinstance(bots, list):
+        return [], []
+    active_bots: List[str] = []
+    insufficient_bots: List[str] = []
+    core_metrics = ("fill_ratio_delta", "slippage_delta_bps", "reject_rate_delta")
+    for idx, bot_entry in enumerate(bots):
+        if not isinstance(bot_entry, dict):
+            continue
+        bot_name = str(bot_entry.get("bot", "")).strip() or f"bot_{idx}"
+        summary = bot_entry.get("summary", {})
+        summary = summary if isinstance(summary, dict) else {}
+        active = False
+        for key in ("intents_total", "actionable_intents", "fills_total", "order_failed_total", "risk_denied_total"):
+            try:
+                if float(summary.get(key, 0) or 0) > 0:
+                    active = True
+                    break
+            except Exception:
+                continue
+        if summary.get("equity_first") is not None or summary.get("equity_last") is not None:
+            active = True
+        if not active:
+            continue
+        active_bots.append(bot_name)
+        metrics = bot_entry.get("metrics", [])
+        metric_map: Dict[str, Dict[str, object]] = {}
+        if isinstance(metrics, list):
+            for m in metrics:
+                if isinstance(m, dict):
+                    metric_map[str(m.get("metric", "")).strip()] = m
+        core_insufficient = [_metric_insufficient(metric_map.get(metric_name, {})) for metric_name in core_metrics]
+        if core_insufficient and all(core_insufficient):
+            insufficient_bots.append(bot_name)
+    return insufficient_bots, active_bots
+
+
+def _day2_freshness(day2: Dict[str, object], day2_path: Path, max_report_age_min: float) -> Tuple[bool, float]:
+    """Return (is_fresh, age_minutes) for day2 gate artifact."""
+    day2_ts = str(day2.get("ts_utc", "")).strip()
+    age_min = _minutes_since(day2_ts) if day2_ts else _minutes_since_file_mtime(day2_path)
+    return age_min <= max_report_age_min, age_min
+
+
+def _day2_lag_within_tolerance(
+    day2: Dict[str, object], reports_event_store: Path, max_allowed_delta: int
+) -> Tuple[bool, Dict[str, object]]:
+    """Return (pass, diagnostics) for produced-vs-ingested lag tolerance."""
+    source_compare_path_raw = str(day2.get("source_compare_file", "")).strip()
+    source_compare_path = Path(source_compare_path_raw) if source_compare_path_raw else None
+    if source_compare_path is None or not source_compare_path.exists():
+        candidates = sorted(reports_event_store.glob("source_compare_*.json"))
+        source_compare_path = candidates[-1] if candidates else None
+
+    source_compare = _read_json(source_compare_path, {}) if source_compare_path else {}
+    delta_map_raw = source_compare.get("delta_produced_minus_ingested_since_baseline", {})
+    delta_map_raw = delta_map_raw if isinstance(delta_map_raw, dict) else {}
+
+    lag_by_stream: Dict[str, int] = {}
+    for stream, value in delta_map_raw.items():
+        try:
+            lag_by_stream[str(stream)] = abs(int(value))
+        except Exception:
+            lag_by_stream[str(stream)] = 0
+
+    max_delta_observed = max(lag_by_stream.values()) if lag_by_stream else 0
+    worst_stream = ""
+    if lag_by_stream:
+        worst_stream = max(sorted(lag_by_stream.keys()), key=lambda k: lag_by_stream.get(k, 0))
+    offending_streams = {k: v for k, v in lag_by_stream.items() if v > int(max_allowed_delta)}
+    diagnostics = {
+        "source_compare_path": str(source_compare_path) if source_compare_path else "",
+        "lag_by_stream": lag_by_stream,
+        "max_delta_observed": int(max_delta_observed),
+        "max_allowed_delta": int(max_allowed_delta),
+        "worst_stream": worst_stream,
+        "offending_streams": offending_streams,
+    }
+    return int(max_delta_observed) <= int(max_allowed_delta), diagnostics
 
 
 def _sha256_file(path: Path) -> str:
@@ -115,6 +213,17 @@ def _write_markdown_summary(path: Path, summary: Dict[str, object]) -> None:
     path.write_text("\n".join(lines) + "\n", encoding="utf-8")
 
 
+def _build_subprocess_env(root: Path) -> Dict[str, str]:
+    env = os.environ.copy()
+    root_str = str(root)
+    current = env.get("PYTHONPATH", "")
+    parts = [p for p in current.split(os.pathsep) if p]
+    if root_str not in parts:
+        parts.insert(0, root_str)
+    env["PYTHONPATH"] = os.pathsep.join(parts)
+    return env
+
+
 def _run_regression(root: Path) -> Tuple[int, str]:
     cmd = [sys.executable, str(root / "scripts" / "release" / "run_backtest_regression.py"), "--min-events", "1000"]
     try:
@@ -128,7 +237,22 @@ def _run_regression(root: Path) -> Tuple[int, str]:
 def _refresh_parity_once(root: Path) -> Tuple[int, str]:
     cmd = [sys.executable, str(root / "services" / "shadow_execution" / "main.py"), "--once"]
     try:
-        proc = subprocess.run(cmd, cwd=str(root), capture_output=True, text=True, check=False)
+        proc = subprocess.run(
+            cmd, cwd=str(root), capture_output=True, text=True, check=False, env=_build_subprocess_env(root)
+        )
+        msg = (proc.stdout or "") + ("\n" + proc.stderr if proc.stderr else "")
+        return int(proc.returncode), msg.strip()
+    except Exception as e:
+        return 2, str(e)
+
+
+def _refresh_reconciliation_exchange_once(root: Path) -> Tuple[int, str]:
+    cmd = [sys.executable, str(root / "services" / "reconciliation_service" / "main.py"), "--once"]
+    try:
+        env = _build_subprocess_env(root)
+        env.setdefault("RECON_EXCHANGE_SOURCE_ENABLED", "true")
+        env.setdefault("RECON_EXCHANGE_SNAPSHOT_PATH", str(root / "reports" / "exchange_snapshots" / "latest.json"))
+        proc = subprocess.run(cmd, cwd=str(root), capture_output=True, text=True, check=False, env=env)
         msg = (proc.stdout or "") + ("\n" + proc.stderr if proc.stderr else "")
         return int(proc.returncode), msg.strip()
     except Exception as e:
@@ -144,6 +268,93 @@ def _refresh_event_store_integrity_once(root: Path) -> Tuple[int, str]:
         return int(proc.returncode), msg.strip()
     except Exception as e:
         return 2, str(e)
+
+
+def _run_event_store_once(root: Path) -> Tuple[int, str]:
+    cmd = [sys.executable, str(root / "services" / "event_store" / "main.py"), "--once"]
+    try:
+        proc = subprocess.run(
+            cmd, cwd=str(root), capture_output=True, text=True, check=False, env=_build_subprocess_env(root)
+        )
+        msg = (proc.stdout or "") + ("\n" + proc.stderr if proc.stderr else "")
+        return int(proc.returncode), msg.strip()
+    except Exception as e:
+        return 2, str(e)
+
+
+def _run_event_store_count_check_once(root: Path) -> Tuple[int, str]:
+    cmd = [sys.executable, str(root / "scripts" / "utils" / "event_store_count_check.py")]
+    try:
+        proc = subprocess.run(cmd, cwd=str(root), capture_output=True, text=True, check=False)
+        msg = (proc.stdout or "") + ("\n" + proc.stderr if proc.stderr else "")
+        return int(proc.returncode), msg.strip()
+    except Exception as e:
+        return 2, str(e)
+
+
+def _refresh_day2_gate_once(
+    root: Path,
+    day2_min_hours_override: float = -1.0,
+    day2_max_delta_override: int = -1,
+) -> Tuple[int, str]:
+    cmd = [sys.executable, str(root / "scripts" / "utils" / "day2_gate_evaluator.py")]
+    try:
+        env = _build_subprocess_env(root)
+        if day2_min_hours_override >= 0:
+            env["DAY2_GATE_MIN_HOURS"] = str(day2_min_hours_override)
+        if day2_max_delta_override >= 0:
+            env["DAY2_GATE_MAX_DELTA"] = str(day2_max_delta_override)
+        proc = subprocess.run(cmd, cwd=str(root), capture_output=True, text=True, check=False, env=env)
+        msg = (proc.stdout or "") + ("\n" + proc.stderr if proc.stderr else "")
+        return int(proc.returncode), msg.strip()
+    except Exception as e:
+        return 2, str(e)
+
+
+def _run_fill_event_backfill_once(root: Path, day_utc: str) -> Tuple[int, str]:
+    cmd = [
+        sys.executable,
+        str(root / "scripts" / "utils" / "backfill_order_filled_events_from_fills_csv.py"),
+        "--day",
+        day_utc.replace("-", ""),
+    ]
+    try:
+        proc = subprocess.run(
+            cmd, cwd=str(root), capture_output=True, text=True, check=False, env=_build_subprocess_env(root)
+        )
+        msg = (proc.stdout or "") + ("\n" + proc.stderr if proc.stderr else "")
+        return int(proc.returncode), msg.strip()
+    except Exception as e:
+        return 2, str(e)
+
+
+def _attempt_day2_catchup(
+    root: Path,
+    cycles: int,
+    day2_min_hours_override: float = -1.0,
+    day2_max_delta_override: int = -1,
+) -> Tuple[int, str]:
+    logs: List[str] = []
+    worst_rc = 0
+    for i in range(max(1, int(cycles))):
+        rc_ingest, msg_ingest = _run_event_store_once(root)
+        rc_count, msg_count = _run_event_store_count_check_once(root)
+        logs.append(f"cycle={i + 1} event_store_once_rc={rc_ingest} count_check_rc={rc_count}")
+        if msg_ingest:
+            logs.append(f"cycle={i + 1} event_store_once_out={msg_ingest[:400]}")
+        if msg_count:
+            logs.append(f"cycle={i + 1} count_check_out={msg_count[:400]}")
+        worst_rc = max(worst_rc, rc_ingest, rc_count)
+    rc_day2, msg_day2 = _refresh_day2_gate_once(
+        root,
+        day2_min_hours_override=day2_min_hours_override,
+        day2_max_delta_override=day2_max_delta_override,
+    )
+    logs.append(f"refresh_day2_gate_rc={rc_day2}")
+    if msg_day2:
+        logs.append(f"refresh_day2_gate_out={msg_day2[:400]}")
+    worst_rc = max(worst_rc, rc_day2)
+    return worst_rc, " | ".join(logs)
 
 
 def _run_multi_bot_policy_check(root: Path) -> Tuple[int, str]:
@@ -267,10 +478,145 @@ def _run_alerting_health_check(root: Path) -> Tuple[int, str]:
         return 2, str(e)
 
 
+def _run_bot_preflight_check(root: Path, require_container: bool = False) -> Tuple[int, str]:
+    """Run preflight_startup.py to verify env file and CONFIG_PASSWORD in bot container."""
+    cmd = [sys.executable, str(root / "scripts" / "ops" / "preflight_startup.py")]
+    if require_container:
+        cmd.append("--require-bot-container")
+    try:
+        proc = subprocess.run(cmd, cwd=str(root), capture_output=True, text=True, check=False)
+        msg = (proc.stdout or "") + ("\n" + proc.stderr if proc.stderr else "")
+        return int(proc.returncode), msg.strip()
+    except Exception as e:
+        return 2, str(e)
+
+
+def _run_recon_exchange_preflight_check(root: Path) -> Tuple[int, str]:
+    cmd = [
+        sys.executable,
+        str(root / "scripts" / "ops" / "preflight_startup.py"),
+        "--require-recon-exchange",
+    ]
+    try:
+        proc = subprocess.run(cmd, cwd=str(root), capture_output=True, text=True, check=False)
+        msg = (proc.stdout or "") + ("\n" + proc.stderr if proc.stderr else "")
+        return int(proc.returncode), msg.strip()
+    except Exception as e:
+        return 2, str(e)
+
+
+def _run_checklist_evidence_collector(root: Path) -> Tuple[int, str]:
+    cmd = [sys.executable, str(root / "scripts" / "ops" / "checklist_evidence_collector.py")]
+    try:
+        proc = subprocess.run(cmd, cwd=str(root), capture_output=True, text=True, check=False)
+        msg = (proc.stdout or "") + ("\n" + proc.stderr if proc.stderr else "")
+        return int(proc.returncode), msg.strip()
+    except Exception as e:
+        return 2, str(e)
+
+
+def _run_telegram_validation(root: Path, strict: bool = False) -> Tuple[int, str]:
+    cmd = [sys.executable, str(root / "scripts" / "ops" / "validate_telegram_alerting.py")]
+    if strict:
+        cmd.append("--strict")
+    try:
+        proc = subprocess.run(cmd, cwd=str(root), capture_output=True, text=True, check=False)
+        msg = (proc.stdout or "") + ("\n" + proc.stderr if proc.stderr else "")
+        return int(proc.returncode), msg.strip()
+    except Exception as e:
+        return 2, str(e)
+
+
+def _run_data_plane_consistency_check(root: Path) -> Tuple[int, str]:
+    cmd = [
+        sys.executable,
+        str(root / "scripts" / "release" / "validate_data_plane_consistency.py"),
+        "--data", str(root / "data"),
+        "--reports", str(root / "reports"),
+        "--skip-inactive-h", "6",
+    ]
+    try:
+        proc = subprocess.run(cmd, cwd=str(root), capture_output=True, text=True, check=False, timeout=30)
+        msg = (proc.stdout or "") + ("\n" + proc.stderr if proc.stderr else "")
+        return int(proc.returncode), msg.strip()
+    except Exception as e:
+        return 2, str(e)
+
+
+def _run_testnet_readiness_gate(root: Path, strict: bool = False) -> Tuple[int, str]:
+    cmd = [sys.executable, str(root / "scripts" / "release" / "testnet_readiness_gate.py")]
+    if strict:
+        cmd.append("--strict")
+    try:
+        proc = subprocess.run(cmd, cwd=str(root), capture_output=True, text=True, check=False)
+        msg = (proc.stdout or "") + ("\n" + proc.stderr if proc.stderr else "")
+        return int(proc.returncode), msg.strip()
+    except Exception as e:
+        return 2, str(e)
+
+
+def _run_testnet_daily_scorecard(root: Path, day_utc: str) -> Tuple[int, str]:
+    cmd = [
+        sys.executable,
+        str(root / "scripts" / "analysis" / "testnet_daily_scorecard.py"),
+        "--day",
+        day_utc,
+    ]
+    try:
+        proc = subprocess.run(cmd, cwd=str(root), capture_output=True, text=True, check=False)
+        msg = (proc.stdout or "") + ("\n" + proc.stderr if proc.stderr else "")
+        return int(proc.returncode), msg.strip()
+    except Exception as e:
+        return 2, str(e)
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description="Run promotion gate contract checks.")
     parser.add_argument("--max-report-age-min", type=int, default=20, help="Max allowed age for fresh reports.")
     parser.add_argument("--require-day2-go", action="store_true", help="Require Day2 gate GO before promotion PASS.")
+    parser.add_argument(
+        "--require-day2-fresh",
+        action="store_true",
+        help="Require Day2 gate artifact freshness within --max-report-age-min.",
+    )
+    parser.add_argument(
+        "--require-parity-informative-core",
+        action="store_true",
+        help="Require parity core metrics (fill/slippage/reject deltas) to be informative for active bots.",
+    )
+    parser.add_argument(
+        "--require-day2-lag-within-tolerance",
+        action="store_true",
+        help="Require day2 produced-vs-ingested lag to remain within --day2-max-delta.",
+    )
+    parser.add_argument(
+        "--day2-max-delta",
+        type=int,
+        default=int(os.getenv("DAY2_GATE_MAX_DELTA", "5")),
+        help="Max allowed produced-vs-ingested delta for day2 lag checks.",
+    )
+    parser.add_argument(
+        "--attempt-day2-catchup",
+        action="store_true",
+        help="Run deterministic event-store catch-up steps before evaluating day2 lag gate.",
+    )
+    parser.add_argument(
+        "--attempt-fill-event-backfill",
+        action="store_true",
+        help="Backfill order_filled events from fills.csv for the current UTC day before replay/parity checks.",
+    )
+    parser.add_argument(
+        "--day2-catchup-cycles",
+        type=int,
+        default=2,
+        help="Number of event-store catch-up cycles when --attempt-day2-catchup is enabled.",
+    )
+    parser.add_argument(
+        "--day2-min-hours",
+        type=float,
+        default=-1.0,
+        help="Optional override for DAY2_GATE_MIN_HOURS when refreshing day2 gate (-1 keeps environment/default).",
+    )
     parser.add_argument(
         "--refresh-parity-once",
         action="store_true",
@@ -310,6 +656,41 @@ def main() -> int:
         dest="check_alerting_health",
         help="Skip alerting health probe (use existing last_webhook_sent.json).",
     )
+    parser.add_argument(
+        "--check-bot-preflight",
+        action="store_true",
+        help="Run bot startup preflight (env file + CONFIG_PASSWORD in container).",
+    )
+    parser.add_argument(
+        "--check-recon-exchange-preflight",
+        action="store_true",
+        help="Run reconciliation exchange-source readiness preflight.",
+    )
+    parser.add_argument(
+        "--collect-go-live-evidence",
+        action="store_true",
+        help="Run go-live checklist evidence collector and enforce artifact gate.",
+    )
+    parser.add_argument(
+        "--check-telegram-validation",
+        action="store_true",
+        help="Run Telegram alerting validator and enforce diagnosis gate.",
+    )
+    parser.add_argument(
+        "--check-testnet-readiness",
+        action="store_true",
+        help="Run ROAD-5 testnet readiness gate.",
+    )
+    parser.add_argument(
+        "--check-testnet-daily-scorecard",
+        action="store_true",
+        help="Run ROAD-5 daily scorecard for UTC today.",
+    )
+    parser.add_argument(
+        "--check-data-plane-consistency",
+        action="store_true",
+        help="Run INFRA-5 data-plane consistency gate (requires desk_snapshot_service running).",
+    )
     args = parser.parse_args()
 
     root = Path("/workspace/hbot") if Path("/.dockerenv").exists() else Path(__file__).resolve().parents[2]
@@ -323,6 +704,22 @@ def main() -> int:
     integrity_refresh_msg = ""
     alerting_health_rc = 0
     alerting_health_msg = ""
+    recon_preflight_rc = 0
+    recon_preflight_msg = ""
+    checklist_evidence_rc = 0
+    checklist_evidence_msg = ""
+    telegram_validation_rc = 0
+    telegram_validation_msg = ""
+    testnet_readiness_rc = 0
+    testnet_readiness_msg = ""
+    testnet_scorecard_rc = 0
+    testnet_scorecard_msg = ""
+    day2_catchup_rc = 0
+    day2_catchup_msg = ""
+    fill_backfill_rc = 0
+    fill_backfill_msg = ""
+    recon_refresh_rc = 0
+    recon_refresh_msg = ""
 
     max_report_age_min = float(args.max_report_age_min)
     refresh_parity_once = bool(args.refresh_parity_once or args.ci)
@@ -335,6 +732,27 @@ def main() -> int:
 
     if refresh_event_integrity_once:
         integrity_refresh_rc, integrity_refresh_msg = _refresh_event_store_integrity_once(root)
+
+    attempt_fill_event_backfill = bool(args.attempt_fill_event_backfill or args.ci)
+    if attempt_fill_event_backfill:
+        fill_backfill_rc, fill_backfill_msg = _run_fill_event_backfill_once(
+            root, day_utc=datetime.now(timezone.utc).date().isoformat()
+        )
+
+    day2_min_hours_override = float(args.day2_min_hours)
+    if day2_min_hours_override < 0 and args.ci:
+        day2_min_hours_override = 0.0
+
+    if args.attempt_day2_catchup:
+        day2_catchup_rc, day2_catchup_msg = _attempt_day2_catchup(
+            root,
+            cycles=int(args.day2_catchup_cycles),
+            day2_min_hours_override=day2_min_hours_override,
+            day2_max_delta_override=int(args.day2_max_delta),
+        )
+
+    if args.check_recon_exchange_preflight:
+        recon_refresh_rc, recon_refresh_msg = _refresh_reconciliation_exchange_once(root)
 
     if args.check_alerting_health:
         alerting_health_rc, alerting_health_msg = _run_alerting_health_check(root)
@@ -357,6 +775,11 @@ def main() -> int:
         root / "scripts" / "release" / "check_accounting_integrity_v2.py",
         root / "scripts" / "release" / "check_market_data_freshness.py",
         root / "scripts" / "release" / "check_alerting_health.py",
+        root / "scripts" / "ops" / "preflight_startup.py",
+        root / "scripts" / "ops" / "checklist_evidence_collector.py",
+        root / "scripts" / "ops" / "validate_telegram_alerting.py",
+        root / "scripts" / "release" / "testnet_readiness_gate.py",
+        root / "scripts" / "analysis" / "testnet_daily_scorecard.py",
         root / "scripts" / "utils" / "refresh_event_store_integrity_local.py",
         root / "config" / "coordination_policy_v1.json",
         root / "config" / "ml_governance_policy_v1.json",
@@ -372,6 +795,134 @@ def main() -> int:
             [str(p) for p in required_files],
         )
     )
+
+    # 1b) Bot startup preflight (env + CONFIG_PASSWORD) — when --check-bot-preflight
+    if args.check_bot_preflight:
+        preflight_rc, preflight_msg = _run_bot_preflight_check(root, require_container=args.ci)
+        preflight_ok = preflight_rc == 0
+        checks.append(
+            _check(
+                preflight_ok,
+                "bot_startup_preflight",
+                "critical",
+                "env file + CONFIG_PASSWORD in bot container OK" if preflight_ok else f"preflight failed: {preflight_msg[:200]}",
+                [str(root / "scripts" / "ops" / "preflight_startup.py")],
+            )
+        )
+        if not preflight_ok:
+            critical_failures.append("bot_startup_preflight")
+
+    # 1c) Reconciliation exchange-source readiness
+    if args.check_recon_exchange_preflight:
+        recon_preflight_rc, recon_preflight_msg = _run_recon_exchange_preflight_check(root)
+        recon_preflight_ok = recon_preflight_rc == 0
+        checks.append(
+            _check(
+                recon_preflight_ok,
+                "recon_exchange_live_gate",
+                "critical",
+                "reconciliation exchange-source readiness PASS"
+                if recon_preflight_ok
+                else f"reconciliation exchange-source preflight failed (rc={recon_preflight_rc})",
+                [str(root / "reports" / "ops" / "preflight_recon_latest.json")],
+            )
+        )
+        if not recon_preflight_ok:
+            critical_failures.append("recon_exchange_live_gate")
+
+    # 1d) Go-live checklist evidence collector
+    if args.collect_go_live_evidence:
+        checklist_evidence_rc, checklist_evidence_msg = _run_checklist_evidence_collector(root)
+        evidence_path = root / "reports" / "ops" / "go_live_checklist_evidence_latest.json"
+        evidence_report = _read_json(evidence_path, {})
+        evidence_status = str(evidence_report.get("overall_status", "fail"))
+        evidence_ok = checklist_evidence_rc == 0 and evidence_status in {"pass", "in_progress"}
+        checks.append(
+            _check(
+                evidence_ok,
+                "go_live_checklist_evidence_gate",
+                "critical",
+                f"go-live checklist evidence collected (status={evidence_status})"
+                if evidence_ok
+                else f"go-live checklist evidence failed (rc={checklist_evidence_rc}, status={evidence_status})",
+                [str(evidence_path), str(root / "docs" / "ops" / "go_live_hardening_checklist.md")],
+            )
+        )
+        if not evidence_ok:
+            critical_failures.append("go_live_checklist_evidence_gate")
+
+    # 1e) Telegram validation evidence
+    if args.check_telegram_validation:
+        telegram_validation_rc, telegram_validation_msg = _run_telegram_validation(root, strict=bool(args.ci))
+        telegram_path = root / "reports" / "ops" / "telegram_validation_latest.json"
+        telegram_report = _read_json(telegram_path, {})
+        telegram_ok = telegram_validation_rc == 0 and str(telegram_report.get("status", "error")) == "ok"
+        checks.append(
+            _check(
+                telegram_ok,
+                "telegram_alerting_gate",
+                "critical",
+                "telegram alerting validation PASS"
+                if telegram_ok
+                else f"telegram alerting validation failed (rc={telegram_validation_rc}, diagnosis={telegram_report.get('diagnosis', 'unknown')})",
+                [str(telegram_path)],
+            )
+        )
+        if not telegram_ok:
+            critical_failures.append("telegram_alerting_gate")
+
+    # 1f) ROAD-5 testnet readiness gate
+    if args.check_testnet_readiness:
+        testnet_readiness_rc, testnet_readiness_msg = _run_testnet_readiness_gate(root, strict=bool(args.ci))
+        testnet_ready_path = root / "reports" / "ops" / "testnet_readiness_latest.json"
+        testnet_ready = _read_json(testnet_ready_path, {})
+        testnet_ready_ok = testnet_readiness_rc == 0 and str(testnet_ready.get("status", "fail")) == "pass"
+        checks.append(
+            _check(
+                testnet_ready_ok,
+                "testnet_readiness_gate",
+                "warning",
+                "testnet readiness PASS" if testnet_ready_ok else "testnet readiness not yet pass",
+                [str(testnet_ready_path)],
+            )
+        )
+
+    # 1g) ROAD-5 daily scorecard
+    if args.check_testnet_daily_scorecard:
+        day_utc = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+        testnet_scorecard_rc, testnet_scorecard_msg = _run_testnet_daily_scorecard(root, day_utc=day_utc)
+        testnet_score_path = root / "reports" / "strategy" / "testnet_daily_scorecard_latest.json"
+        testnet_score = _read_json(testnet_score_path, {})
+        testnet_score_ok = testnet_scorecard_rc == 0 and str(testnet_score.get("status", "fail")) == "pass"
+        checks.append(
+            _check(
+                testnet_score_ok,
+                "testnet_daily_scorecard",
+                "warning",
+                f"testnet daily scorecard PASS ({day_utc})"
+                if testnet_score_ok
+                else f"testnet daily scorecard not pass ({day_utc})",
+                [str(testnet_score_path)],
+            )
+        )
+
+    # 1h) INFRA-5 data-plane consistency gate
+    if args.check_data_plane_consistency:
+        dp_rc, dp_msg = _run_data_plane_consistency_check(root)
+        dp_path = reports / "data_plane_consistency" / "latest.json"
+        dp_report = _read_json(dp_path, {})
+        dp_ok = dp_rc == 0 and str(dp_report.get("status", "FAIL")) == "PASS"
+        checks.append(
+            _check(
+                dp_ok,
+                "data_plane_consistency",
+                "warning",
+                "data-plane consistency PASS (snapshot fresh + complete for all bots)"
+                if dp_ok
+                else f"data-plane consistency check failed (rc={dp_rc}): {dp_msg[:200]}",
+                [str(dp_path)],
+            )
+        )
 
     # 2) Multi-bot policy consistency check
     policy_check_path = reports / "policy" / "latest.json"
@@ -572,12 +1123,23 @@ def main() -> int:
     parity = _read_json(parity_path, {})
     parity_ok = str(parity.get("status", "fail")) == "pass"
     parity_fresh = _minutes_since(str(parity.get("ts_utc", ""))) <= max_report_age_min
+    parity_insufficient_bots, parity_active_bots = _parity_core_insufficient_active_bots(parity)
+    parity_informative_ok = (not args.require_parity_informative_core) or (len(parity_insufficient_bots) == 0)
+    if parity_ok and parity_fresh and parity_informative_ok:
+        parity_reason = "parity pass, fresh, and informative"
+    elif parity_ok and parity_fresh and not parity_informative_ok:
+        parity_reason = (
+            "parity core metrics insufficient_data for active bots: "
+            + ",".join(parity_insufficient_bots)
+        )
+    else:
+        parity_reason = "parity fail or stale"
     checks.append(
         _check(
-            parity_ok and parity_fresh,
+            parity_ok and parity_fresh and parity_informative_ok,
             "parity_thresholds",
             "critical",
-            "parity pass and fresh" if (parity_ok and parity_fresh) else "parity fail or stale",
+            parity_reason,
             [str(parity_path)],
         )
     )
@@ -663,7 +1225,61 @@ def main() -> int:
         )
     )
 
-    # 18) Market data freshness
+    # 18) Event stream coverage (desk-grade tracking requirement)
+    required_streams = [
+        "hb.market_data.v1",
+        "hb.signal.v1",
+        "hb.risk_decision.v1",
+        "hb.execution_intent.v1",
+        "hb.audit.v1",
+        "hb.bot_telemetry.v1",
+    ]
+    events_by_stream = integrity.get("events_by_stream", {})
+    stream_coverage_ok = isinstance(events_by_stream, dict) and all(
+        float(events_by_stream.get(stream, 0) or 0) > 0 for stream in required_streams
+    )
+    checks.append(
+        _check(
+            stream_coverage_ok,
+            "event_stream_coverage",
+            "critical",
+            "all required streams present in event_store integrity artifact"
+            if stream_coverage_ok
+            else "one or more required streams missing/zero in event_store integrity artifact",
+            [str(integrity_path)],
+        )
+    )
+
+    # 19) Ops DB writer freshness + non-empty ingestion
+    ops_db_writer_path = reports / "ops_db_writer" / "latest.json"
+    ops_db_writer = _read_json(ops_db_writer_path, {})
+    ops_db_writer_fresh = (
+        ops_db_writer_path.exists()
+        and _minutes_since(str(ops_db_writer.get("ts_utc", ""))) <= max_report_age_min
+    )
+    ops_counts = ops_db_writer.get("counts", {})
+    ops_non_empty = isinstance(ops_counts, dict) and (
+        float(ops_counts.get("bot_snapshot_minute", 0) or 0) > 0
+        and float(ops_counts.get("exchange_snapshot", 0) or 0) > 0
+    )
+    ops_db_writer_ok = (
+        str(ops_db_writer.get("status", "fail")).lower() == "pass"
+        and ops_db_writer_fresh
+        and ops_non_empty
+    )
+    checks.append(
+        _check(
+            ops_db_writer_ok,
+            "ops_db_writer_freshness",
+            "critical",
+            "ops_db_writer latest.json is pass/fresh with non-empty counts"
+            if ops_db_writer_ok
+            else "ops_db_writer missing/stale/failing or ingestion counts are empty",
+            [str(ops_db_writer_path)],
+        )
+    )
+
+    # 20) Market data freshness
     md_path = reports / "market_data" / "latest.json"
     md_rc, md_msg = _run_market_data_freshness_check(root, max_report_age_min)
     md_report = _read_json(md_path, {})
@@ -680,21 +1296,52 @@ def main() -> int:
         )
     )
 
-    # 19) Optional strict day2 gate dependency
+    # 21) Optional strict day2 gate dependency
     day2_path = reports / "event_store" / "day2_gate_eval_latest.json"
     day2 = _read_json(day2_path, {})
     day2_go = bool(day2.get("go", False))
+    day2_fresh, day2_age_min = _day2_freshness(day2, day2_path, max_report_age_min)
+    day2_lag_ok, day2_lag_diag = _day2_lag_within_tolerance(
+        day2=day2,
+        reports_event_store=reports / "event_store",
+        max_allowed_delta=int(args.day2_max_delta),
+    )
+    day2_go_ok = day2_go if args.require_day2_go else True
+    day2_fresh_ok = day2_fresh if args.require_day2_fresh else True
+    day2_lag_gate_ok = day2_lag_ok if args.require_day2_lag_within_tolerance else True
+    day2_ok = day2_go_ok and day2_fresh_ok and day2_lag_gate_ok
+    if day2_ok:
+        day2_reason = (
+            "day2 gate GO/fresh with lag in tolerance "
+            f"(age_min={day2_age_min:.1f} max_delta={int(day2_lag_diag.get('max_delta_observed', 0))})"
+        )
+    else:
+        day2_reason = (
+            f"day2 gate status: go={day2_go} age_min={day2_age_min:.1f} "
+            f"max_delta={int(day2_lag_diag.get('max_delta_observed', 0))}/"
+            f"{int(day2_lag_diag.get('max_allowed_delta', int(args.day2_max_delta)))} "
+            f"worst_stream={str(day2_lag_diag.get('worst_stream', ''))} "
+            f"(require_go={bool(args.require_day2_go)} "
+            f"require_fresh={bool(args.require_day2_fresh)} "
+            f"require_lag_tolerance={bool(args.require_day2_lag_within_tolerance)}). "
+            "Remediation: run scripts/release/run_bus_recovery_check.py with --enforce-absolute-delta "
+            "and ensure event_store consumer catches up before strict cycle."
+        )
+    day2_evidence = [str(day2_path)]
+    source_compare_path = str(day2_lag_diag.get("source_compare_path", "")).strip()
+    if source_compare_path:
+        day2_evidence.append(source_compare_path)
     checks.append(
         _check(
-            (day2_go if args.require_day2_go else True),
+            day2_ok,
             "day2_event_store_gate",
             "critical",
-            "day2 gate GO" if day2_go else "day2 gate not yet GO",
-            [str(day2_path)],
+            day2_reason,
+            day2_evidence,
         )
     )
 
-    # 20) Validation ladder: paper soak (Level 3) required for live promotion
+    # 22) Validation ladder: paper soak (Level 3) required for live promotion
     paper_soak_path = reports / "paper_soak" / "latest.json"
     paper_soak = _read_json(paper_soak_path, {})
     paper_soak_pass = str(paper_soak.get("status", "")).upper() == "PASS"
@@ -711,7 +1358,7 @@ def main() -> int:
         )
     )
 
-    # 21) Validation ladder: post-trade validation (Level 6) — informational
+    # 23) Validation ladder: post-trade validation (Level 6) — informational
     ptv_path = reports / "analysis" / "post_trade_validation.json"
     ptv = _read_json(ptv_path, {})
     ptv_status = str(ptv.get("status", "")).upper()
@@ -743,6 +1390,9 @@ def main() -> int:
     for c in checks:
         if c["severity"] == "critical" and not c["pass"]:
             critical_failures.append(str(c["name"]))
+
+    # Preserve order while removing duplicates from mixed direct/check-derived appends.
+    critical_failures = list(dict.fromkeys(critical_failures))
 
     status = "PASS" if not critical_failures else "FAIL"
     manifest_path = root / "docs" / "ops" / "release_manifest_20260221.md"
@@ -790,12 +1440,40 @@ def main() -> int:
             "max_report_age_min": max_report_age_min,
             "parity_refresh_rc": parity_refresh_rc,
             "parity_refresh_output": parity_refresh_msg[:2000],
+            "require_day2_fresh": bool(args.require_day2_fresh),
+            "require_day2_lag_within_tolerance": bool(args.require_day2_lag_within_tolerance),
+            "day2_max_delta": int(args.day2_max_delta),
+            "require_parity_informative_core": bool(args.require_parity_informative_core),
+            "parity_active_bots": parity_active_bots,
+            "parity_insufficient_active_bots": parity_insufficient_bots,
+            "day2_lag_ok": bool(day2_lag_ok),
+            "day2_lag_diagnostics": day2_lag_diag,
+            "day2_catchup_attempted": bool(args.attempt_day2_catchup),
+            "day2_catchup_cycles": int(args.day2_catchup_cycles),
+            "day2_min_hours_override": day2_min_hours_override,
+            "day2_catchup_rc": int(day2_catchup_rc),
+            "day2_catchup_output": day2_catchup_msg[:2000],
+            "fill_event_backfill_attempted": bool(attempt_fill_event_backfill),
+            "fill_event_backfill_rc": int(fill_backfill_rc),
+            "fill_event_backfill_output": fill_backfill_msg[:2000],
+            "reconciliation_refresh_rc": int(recon_refresh_rc),
+            "reconciliation_refresh_output": recon_refresh_msg[:2000],
             "integrity_refresh_rc": integrity_refresh_rc,
             "integrity_refresh_output": integrity_refresh_msg[:2000],
             "accounting_integrity_runner_output": accounting_msg[:2000],
             "market_data_freshness_runner_output": md_msg[:2000],
             "alerting_health_runner_output": alerting_health_msg[:2000],
             "alerting_health_rc": alerting_health_rc,
+            "recon_exchange_preflight_output": recon_preflight_msg[:2000],
+            "recon_exchange_preflight_rc": recon_preflight_rc,
+            "go_live_checklist_evidence_output": checklist_evidence_msg[:2000],
+            "go_live_checklist_evidence_rc": checklist_evidence_rc,
+            "telegram_validation_output": telegram_validation_msg[:2000],
+            "telegram_validation_rc": telegram_validation_rc,
+            "testnet_readiness_output": testnet_readiness_msg[:2000],
+            "testnet_readiness_rc": testnet_readiness_rc,
+            "testnet_scorecard_output": testnet_scorecard_msg[:2000],
+            "testnet_scorecard_rc": testnet_scorecard_rc,
         },
     }
 

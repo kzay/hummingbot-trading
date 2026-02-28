@@ -33,6 +33,9 @@ def _build_subprocess_env(root: Path) -> Dict[str, str]:
     if root_str not in parts:
         parts.insert(0, root_str)
     env["PYTHONPATH"] = os.pathsep.join(parts)
+    # Keep replay-generated reconciliation artifacts aligned with strict preflight expectations.
+    env.setdefault("RECON_EXCHANGE_SOURCE_ENABLED", "true")
+    env.setdefault("RECON_EXCHANGE_SNAPSHOT_PATH", str(root / "reports" / "exchange_snapshots" / "latest.json"))
     return env
 
 
