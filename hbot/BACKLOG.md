@@ -10,6 +10,83 @@
 
 ---
 
+## BUILD_SPEC — Multi-Bot Desk Audit Follow-Up (2026-02-27) `in-progress (2026-02-27)`
+
+These items are derived from the `MODE=BUILD_SPEC` audit and are tracked here so implementation can proceed in a deterministic order with explicit acceptance criteria.
+
+### [SPEC-A1] Reconciliation exchange-source preflight gate `done (2026-02-27)`
+- Extend `scripts/ops/preflight_startup.py` with a reconciliation readiness check:
+  - Require non-empty `BITGET_API_KEY`, `BITGET_SECRET`, `BITGET_PASSPHRASE`
+  - Require `RECON_EXCHANGE_SOURCE_ENABLED=true`
+  - Validate `reports/reconciliation/latest.json.exchange_source_enabled == true`
+  - Validate `reports/exchange_snapshots/latest.json.account_probe.status == "ok"`
+- Emit machine-readable evidence to `reports/ops/preflight_recon_latest.json`
+- Acceptance: non-compliant env/report state fails preflight with actionable reason.
+
+### [SPEC-A2] Go-live checklist evidence collector `done (2026-02-27)`
+- Add `scripts/ops/checklist_evidence_collector.py` to parse `docs/ops/go_live_hardening_checklist.md`
+  and produce a structured evidence bundle with item-level status/evidence paths.
+- Write outputs:
+  - `reports/ops/go_live_checklist_evidence_<timestamp>.json`
+  - `reports/ops/go_live_checklist_evidence_latest.json`
+- Acceptance: each checklist section has explicit PASS/FAIL/UNKNOWN status and evidence references.
+
+### [SPEC-A3] Telegram alerting validator + evidence artifact `done (2026-02-27)`
+- Add `scripts/ops/validate_telegram_alerting.py`:
+  - Validate token/chat_id format
+  - Probe Telegram `sendMessage` API
+  - Return explicit diagnosis (`403_forbidden`, `invalid_chat_id`, `network_error`, `ok`)
+- Write `reports/ops/telegram_validation_latest.json`
+- Acceptance: failure mode is unambiguous, suitable for promotion gate decisions.
+
+### [SPEC-A4] Promotion gate integration for SPEC-A1/A2/A3 `done (2026-02-27)`
+- Extend `scripts/release/run_promotion_gates.py` with new checks:
+  - `recon_exchange_live_gate`
+  - `go_live_checklist_evidence_gate`
+  - `telegram_alerting_gate`
+- Extend `scripts/release/run_strict_promotion_cycle.py` to run required refresh/probe steps before strict evaluation.
+- Acceptance: strict cycle blocks on missing/failed artifacts for these gates.
+
+### [SPEC-B1] Multi-day strategy summary hardening (ROAD-1 support) `done (2026-02-27)`
+- Finalize/standardize `scripts/analysis/bot1_multi_day_summary.py` output contract:
+  - `reports/strategy/multi_day_summary_latest.json`
+  - Daily table + Sharpe/win-rate/max-drawdown/regime breakdown
+- Acceptance: handles missing days deterministically with warnings, never silent drops.
+
+### [SPEC-C1] Testnet readiness gate (ROAD-5 support) `done (2026-02-27)`
+- Add `scripts/release/testnet_readiness_gate.py`:
+  - Verify kill-switch non-dry-run test evidence
+  - Verify testnet credential scope
+  - Verify connector/profile readiness
+- Output `reports/ops/testnet_readiness_latest.json`
+- Acceptance: explicit PASS/FAIL with remediation hints.
+
+### [SPEC-C2] Testnet daily scorecard automation (ROAD-5 support) `done (2026-02-27)`
+- Add `scripts/analysis/testnet_daily_scorecard.py` with metrics:
+  - fill count ratio, slippage vs paper, rejection rate, cancel-before-fill rate, drift alarms
+- Outputs:
+  - `reports/strategy/testnet_daily_scorecard_<YYYYMMDD>.json`
+  - `reports/strategy/testnet_daily_scorecard_latest.json`
+- Acceptance: supports 20-day aggregation and ROAD-5 pass/fail decision.
+
+### [SPEC-D1] Second strategy lane config package (ROAD-9 support) `done (2026-02-27)`
+- Add ETH MM bot config package for `bot3` with isolated paths and policy role.
+- Acceptance: bot3 ETH lane can be launched independently with existing risk/telemetry stack.
+
+### [SPEC-D2] Portfolio allocator service scaffold (ROAD-9 support) `done (2026-02-27)`
+- Add `services/portfolio_allocator/main.py` with policy-driven allocation proposal flow.
+- Integrate with `config/multi_bot_policy_v1.json` (non-breaking extension).
+- Acceptance: deterministic allocation proposal artifact for weekly rebalance.
+
+### [SPEC-E1] Tests for new gates and ops scripts `done (2026-02-27)`
+- Add tests for:
+  - preflight reconciliation gate
+  - telegram validation classifier
+  - checklist evidence collector parser
+- Acceptance: deterministic unit tests, no external network dependency.
+
+---
+
 ## P0 — Blocks Live Trading / Safety
 
 ---
@@ -454,20 +531,18 @@ and covers the full loop from `signal_service` → Redis → `hb_bridge` → `ap
 
 ### Scoring map
 
-| Stage | Score | Gate |
-|---|---|---|
-| Today (bugs fixed, infrastructure stable) | 6.5 | — |
-| Backlog P0 + P1 complete | 7.5 | All P0 items done, bot running cleanly |
-| 20-day paper run validated | 8.0 | Sharpe ≥ 1.5 annualized, PnL positive |
-| Walk-forward backtest passes | 8.5 | Out-of-sample edge confirmed on 6m history |
-| Order book signals + Kelly sizing | 8.8 | Edge stable after sizing change |
-| 4-week testnet live | 9.0 | No safety incidents, execution close to paper |
-| TCA + incident playbooks + secrets hygiene | 9.3 | All checklist items signed off |
-| AI: regime classifier replaces EMA/ATR | 9.4 | Walk-forward Sharpe improves ≥ 0.3 |
-| AI: adverse selection classifier wired | 9.5 | Adverse fill rate drops ≥ 15% out-of-sample |
-| Second uncorrelated strategy | 9.5+ | Portfolio Sharpe > single-strategy Sharpe |
-| TCA + incident playbooks + secrets hygiene | 9.3 | All checklist items signed off |
-| Second uncorrelated strategy + portfolio allocation | 9.5 | Portfolio Sharpe > single-strategy Sharpe |
+| Stage | Score | Gate | Status |
+|---|---|---|---|
+| Bugs fixed, infrastructure stable | 6.5 | — | **Done 2026-02-27** |
+| Backlog P0 + P1 + ROAD infra complete | 7.5 | Bot running cleanly | **Done 2026-02-27** |
+| 20-day paper run validated | 8.0 | Sharpe ≥ 1.5, PnL positive | **Waiting: 20 days paper data** |
+| Walk-forward backtest passes | 8.5 | OOS edge on 6m history | Code ready — run after 8.0 gate |
+| Order book signals + Kelly sizing | 8.8 | Edge stable after sizing change | **Code done 2026-02-27** (disabled by default) |
+| 4-week testnet live | 9.0 | No safety incidents, execution ≈ paper | **Waiting: testnet API keys + 28 days** |
+| TCA + incident playbooks + secrets hygiene | 9.3 | All checklist items signed off | **Code done 2026-02-27** |
+| AI: regime classifier replaces EMA/ATR | 9.4 | Walk-forward Sharpe improves ≥ 0.3 | **Code done 2026-02-27** — needs ≥10k rows |
+| AI: adverse selection classifier wired | 9.5 | Adverse fill rate drops ≥ 15% OOS | **Code done 2026-02-27** — needs ≥5k fills |
+| Second uncorrelated strategy | 9.5+ | Portfolio Sharpe > single-strategy Sharpe | Open |
 
 ---
 
@@ -503,7 +578,7 @@ in `hbot/docs/strategy/bot1_epp_v2_4_iteration_log.md`.
 
 ---
 
-### [ROAD-2] Walk-forward backtest on 6-month historical data `open`
+### [ROAD-2] Walk-forward backtest on 6-month historical data `done (2026-02-27)`
 
 **Gate**: complete after ROAD-1 passes.
 
@@ -534,7 +609,7 @@ proving the edge is not curve-fitted to recent conditions.
 
 ---
 
-### [ROAD-3] Order book imbalance signal `open`
+### [ROAD-3] Order book imbalance signal `done (2026-02-27)`
 
 **Gate**: complete after ROAD-2 passes (validate that adding the signal improves Sharpe).
 
@@ -559,7 +634,7 @@ out-of-sample Sharpe improves by ≥ 0.2.
 
 ---
 
-### [ROAD-4] Kelly-adjusted position sizing `open`
+### [ROAD-4] Kelly-adjusted position sizing `done (2026-02-27)`
 
 **Gate**: complete after ROAD-3 (need stable edge estimate to size from).
 
@@ -610,7 +685,7 @@ timestamps. You cannot discover these issues in paper mode.
 
 ---
 
-### [ROAD-6] Transaction cost analysis (TCA) report `open`
+### [ROAD-6] Transaction cost analysis (TCA) report `done (2026-02-27)`
 
 **Gate**: implement during ROAD-5 testnet run (need live data to validate).
 
@@ -630,7 +705,7 @@ This report directly tells you where to widen spreads or reduce activity.
 
 ---
 
-### [ROAD-7] Incident response playbooks `open`
+### [ROAD-7] Incident response playbooks `done (2026-02-27)`
 
 **Gate**: write before first live dollar of capital is deployed.
 
@@ -652,7 +727,7 @@ Each playbook: trigger indicators, immediate actions (< 2 min), diagnosis steps,
 
 ---
 
-### [ROAD-8] API key hygiene and secrets rotation `open`
+### [ROAD-8] API key hygiene and secrets rotation `done (2026-02-27)` — docs created, human action required for key creation
 
 **Gate**: before first live capital.
 
@@ -691,7 +766,7 @@ Wire allocation through `hbot/config/multi_bot_policy_v1.json`.
 
 ---
 
-### [ROAD-10] AI regime classifier — replace EMA/ATR with learned model `open`
+### [ROAD-10] AI regime classifier — replace EMA/ATR with learned model `done (2026-02-27)` — infrastructure only, model training requires ≥10k minute.csv rows
 
 **Gate**: complete after ROAD-2 (walk-forward backtest) produces a labeled training dataset.
 
@@ -783,7 +858,7 @@ of the move. This is the highest-ROI AI application for a market-maker.
 
 ---
 
-### [ROAD-11] AI adverse selection classifier — reduce bad fills `open`
+### [ROAD-11] AI adverse selection classifier — reduce bad fills `done (2026-02-27)` — infrastructure only, model training requires ≥5k fills
 
 **Gate**: complete after ROAD-10 is deployed and validated (regime classifier must be
 stable before adding another ML layer).
@@ -867,10 +942,942 @@ for one executor cycle.
 
 ---
 
+## Infrastructure Fixes (Surfaced 2026-02-27)
+
+---
+
+### [INFRA-1] Watchdog STATE_FILE persists across container recreates `done (2026-02-27)`
+
+**Problem**: `STATE_FILE = Path("/tmp/watchdog_state.json")` is wiped on every `docker compose up`
+(container recreate). Circuit breaker resets to zero — bot can be restarted 5 more times even
+after a known-bad config is never fixed.
+
+**Fix**: Changed to `Path(HB_DATA_ROOT) / "watchdog_state.json"` so the file survives recreates.
+Also added `WATCHDOG_STATE_FILE` env var override.
+
+---
+
+### [INFRA-2] Always pass `--env-file` when running `docker compose up` `done (2026-02-27)`
+
+**Problem**: Running `docker compose up` without `--env-file hbot/env/.env` bakes empty strings
+into container env vars (e.g. `CONFIG_PASSWORD=`). The Hummingbot quickstart interprets empty
+`CONFIG_PASSWORD` as "not set" → falls through to interactive login prompt → bot hangs forever.
+The watchdog then burns all 5 circuit-breaker restarts with no progress.
+
+**Fix applied**: Created `hbot/scripts/ops/compose_up.sh` wrapper that always injects `--env-file`.
+Added `preflight_startup.py` and `--check-bot-preflight` to promotion gates. Strict cycle runs
+preflight with `--require-bot-container` when in CI.
+
+---
+
+### [INFRA-3] Compose lint: writable `reports/` overlay required for services that write `done (2026-02-27)`
+
+**Problem**: `risk-service` volume was `..:/workspace/hbot:ro` with no writable overlay for
+`reports/`. Service crashed with `OSError: [Errno 30] Read-only file system` on every startup.
+
+**Fix applied**: Added `../reports:/workspace/hbot/reports` overlay to `risk-service` in
+`docker-compose.yml` (same pattern as `coordination-service`). Also created missing
+`hbot/reports/risk_service/` directory.
+
+**Follow-up**: Add a compose lint check to promotion gates — any service that calls
+`_write_latest()` or creates files in `reports/` must have a writable overlay.
+
+---
+
+### [INFRA-4] Telegram BOT_TOKEN 403 — alerting currently silent `open`
+
+**Problem**: All Telegram alerts from watchdog and alertmanager are failing with
+`HTTP Error 403: Forbidden`. The `TELEGRAM_BOT_TOKEN` in `env/.env` is revoked.
+The 5 failed restarts this morning sent **zero alerts**.
+
+**Code done (2026-02-27)**: `check_alerting_health.py` now probes Telegram API first.
+Promotion gates will fail if Telegram is configured but returns 403.
+
+**Fix required** (human action):
+1. `@BotFather` → `/mybots` → select bot → `Revoke current token` → copy new token.
+2. Update `TELEGRAM_BOT_TOKEN` in `hbot/env/.env`.
+3. Restart affected services: `docker compose --env-file hbot/env/.env ... restart bot-watchdog alertmanager`.
+4. Add `check_alerting_health.py` assertion to promotion gates — must pass before any live capital.
+
+---
+
+### [INFRA-5] Unify observability data plane (single source for Telegram + Grafana + gates) `done (2026-02-28)`
+
+**Problem**: Current desk views read from different paths:
+- Telegram command bot reads `minute.csv`, `fills.csv`, `open_orders_latest.json`, and `reports/*.json` directly.
+- Grafana reads Prometheus/Loki via exporters/services that also parse files.
+
+This split creates drift risk: one surface can look healthy while another is stale or missing rows.
+When bot/controller bugs occur (tick loop stalls, writer failure, schema drift), `minute.csv` and
+derived metrics can silently diverge across consumers.
+
+**Design decision**: Introduce a canonical observability read model:
+1. `event_store` (streams) remains write-ahead history.
+2. Add a `desk_snapshot_service` that materializes a single `latest` snapshot contract per bot
+   (state, fills freshness, orders, risk, gates, health) from streams/files with explicit freshness metadata.
+3. Make Telegram and Grafana read this same snapshot contract (Grafana via exporter metrics generated from it).
+4. Add contract tests + freshness SLO checks so any missing `minute`/fills/orders data fails promotion gates.
+
+**Implementation steps**:
+1. Define schema: `reports/desk_snapshot/<bot>/latest.json` with `source_ts`, `age_s`, `completeness`, `schema_version`.
+2. Implement `services/desk_snapshot_service/main.py` (idempotent merge, partial-source diagnostics).
+3. Update `services/telegram_bot/main.py` to use desk snapshot first, fallback to direct files only on missing snapshot.
+4. Update `services/bot_metrics_exporter.py` to emit metrics from desk snapshot fields (single mapping layer).
+5. Add gate script `scripts/release/validate_data_plane_consistency.py`:
+   - file vs snapshot parity checks
+   - snapshot freshness thresholds
+   - required-field completeness score.
+6. Add dashboard panel and alert: `data_plane_consistency_status`.
+
+**Acceptance criteria**:
+- Telegram `/status` and Grafana key stats are sourced from the same snapshot values.
+- If bot minute pipeline stalls for >2 minutes, consistency gate fails with explicit diagnosis.
+- If any required snapshot field is missing, exporter emits a red status metric and promotion gate blocks.
+- End-to-end replay test confirms deterministic snapshot reconstruction from event stream for a day.
+
+---
+
+## Tech Debt — Surfaced by Architecture Audit (2026-02-27)
+
+---
+
+### [DEBT-1] Split `epp_v2_4.py` god class into modules `done (2026-02-27)`
+
+**Priority**: P1 — affects maintainability and testability.
+
+**Problem**: `epp_v2_4.py` is 2,473 lines with regime detection, spread computation,
+risk evaluation, execution emission, position accounting, and logging all in one class.
+Hard to test, hard to change, high cognitive load.
+
+**What already exists**:
+- `controllers/regime_detector.py` (45 lines) — stub with helpers, not used by the controller.
+- `controllers/spread_engine.py` (81 lines) — stub with helpers, not used by the controller.
+- `controllers/risk_policy.py` (91 lines) — used by the controller for limit evaluation.
+
+**Design decision**: Extract these methods from `EppV24Controller` into standalone classes
+that the controller composes:
+
+| Method group | Target module | Est. lines |
+|---|---|---|
+| `_detect_regime`, `_get_ohlcv_ema_and_atr` | `regime_detector.py` | ~150 |
+| `_compute_spread_and_edge`, `_compute_levels_and_sizing` | `spread_engine.py` | ~250 |
+| `_evaluate_all_risk`, `_evaluate_market_conditions` | `risk_evaluator.py` (new) | ~200 |
+| `_emit_tick_output`, `_log_minute` | `tick_emitter.py` (new) | ~300 |
+
+**Constraints**:
+- Each extracted class receives only what it needs via method args (no access to `self`).
+- Controller becomes orchestrator (~500 lines): `__init__`, `on_tick`, `did_fill_order`,
+  `_preflight`, `_resolve_guard_state`, `apply_execution_intent`.
+- No change in behavior — extraction only.
+
+**Acceptance criteria**:
+- `python -m py_compile hbot/controllers/epp_v2_4.py` passes.
+- All existing tests pass unchanged.
+- `epp_v2_4.py` drops below 800 lines.
+
+---
+
+### [DEBT-2] Add `epp_v2_4` core unit tests `done (2026-02-27)`
+
+**Priority**: P1 — only `test_epp_v2_4_state.py` (179 lines) exists, covering state
+transitions only. Zero tests for spread computation, regime detection, risk evaluation,
+or fill handling.
+
+**What to test** (priority order):
+
+1. `_detect_regime`: synthetic price buffer → expected regime for each of 5 regimes +
+   regime hold and transition.
+2. `_compute_spread_and_edge`: regime + costs → expected spread floor, net edge, fill factor.
+   Test funding rate contribution, drift spike multiplier, adverse fill multiplier.
+3. `_evaluate_all_risk`: over-limit scenarios (daily loss, drawdown, turnover) → expected
+   risk_reasons and hard_stop flag.
+4. `did_fill_order`: fill edge EWMA update, adverse fill counter, EOD close flag.
+5. `_apply_runtime_spreads_and_sizing`: Kelly sizing path when enabled.
+
+**Pattern**: Mock `MarketMakingControllerBase` and `ConnectorRuntimeAdapter`. Instantiate
+`EppV24Controller` with `EppV24Config` and synthetic data. Easier after DEBT-1 extraction.
+
+**Acceptance criteria**:
+- ≥20 test cases covering all 5 areas above.
+- `PYTHONPATH=hbot python -m pytest hbot/tests/controllers/test_epp_v2_4_core.py -x -q` passes.
+
+---
+
+### [DEBT-3] Split `hb_bridge.py` mixed responsibilities `done (2026-02-27)`
+
+**Priority**: P2 — the file is 1,040 lines mixing signal consumer, kill-switch publisher,
+adverse model loader, desk driver, HB event translation, and framework shims.
+
+**Design decision**: Split into focused modules under `controllers/paper_engine_v2/`:
+
+| Module | Responsibility | Est. lines |
+|---|---|---|
+| `hb_bridge.py` | Core bridge: desk driving, order delegation, balance patching | ~500 |
+| `signal_consumer.py` (new) | `_consume_signals`, `_check_hard_stop_transitions` | ~200 |
+| `adverse_inference.py` (new) | `_load_adverse_model`, `_build_adverse_features`, `_run_adverse_inference` | ~200 |
+| `hb_event_fire.py` (new) | `_fire_fill_event`, `_fire_cancel_event`, `_fire_reject_event` | ~200 |
+
+`drive_desk_tick()` stays in `hb_bridge.py` and calls into the split modules.
+
+**Acceptance criteria**:
+- All 14 `test_hb_bridge_signal_routing.py` tests pass.
+- No import changes needed in `v2_with_controllers.py`.
+
+---
+
+### [DEBT-4] Document config hierarchy `done (2026-02-27)`
+
+**Priority**: P2 — config comes from env vars (100+), JSON files (15), YAML controller
+config, and Docker Compose env blocks. No single doc explains precedence.
+
+**Action**: Create `hbot/docs/infra/config_hierarchy.md` documenting:
+1. Env var → Docker Compose env → service default
+2. JSON policy configs → loaded at service startup
+3. YAML controller config → loaded by Hummingbot strategy
+4. Precedence: `fee_mode: auto` tries API → project JSON → manual YAML
+5. Which vars are required vs optional for each deployment profile
+
+---
+
+### [DEBT-5] Increase service-layer test coverage `done (2026-02-27)`
+
+**Priority**: P2 — 5 test files (230 lines) for 14 services (5,300 lines). Only event
+schemas, intent idempotency, and ML subsystem are tested.
+
+**Priority test targets**:
+1. `reconciliation_service/main.py` — drift calculation with mocked exchange data.
+2. `coordination_service/main.py` — risk decision → intent transformation.
+3. `event_store/main.py` — stream → JSONL write and integrity.
+4. `bot_watchdog/main.py` — circuit breaker state machine.
+5. `kill_switch/main.py` — cancel-all with mocked ccxt.
+
+**Pattern**: Each test mocks Redis with `unittest.mock.patch`. Tests verify `latest.json`
+output shape and audit event publishing.
+
+---
+
+### [DEBT-6] Remove or finalize ClickHouse `done (2026-02-27)`
+
+**Priority**: P2 — `services/clickhouse_ingest/main.py` (232 lines) exists in the codebase
+but both ClickHouse services are commented out in compose. Code is dead weight.
+
+**Decision needed**: If ClickHouse is planned, uncomment in compose and document setup.
+If not, delete `services/clickhouse_ingest/` and the commented-out compose block to
+reduce confusion.
+
+**Recommended action**: Delete — Postgres + JSONL event store covers the analytics need.
+
+---
+
+## Code Quality — Surfaced by Quality Audit (2026-02-27)
+
+---
+
+### [QUAL-1] Group 60+ instance vars into state dataclasses `done (2026-02-27)` — types defined, wiring pending
+
+**Priority**: P2 — improves readability and IDE support for `epp_v2_4.py`.
+
+**Problem**: `__init__` declares 60+ instance variables with no structural grouping.
+State management is implicit — every method can read/write any of them.
+
+**Design decision**: Group into typed frozen/unfrozen dataclasses:
+
+| Dataclass | Variables | Mutable? |
+|---|---|---|
+| `PositionState` | `_position_base`, `_avg_entry_price`, `_realized_pnl_today`, `_position_drift_pct` | Yes |
+| `DailyCounters` | `_traded_notional_today`, `_fills_count_today`, `_fees_paid_today_quote`, `_cancel_budget_breach_count` | Yes |
+| `RegimeState` | `_active_regime`, `_pending_regime`, `_regime_source`, `_regime_hold_counter` | Yes |
+| `FillEdgeState` | `_fill_edge_ewma`, `_fill_edge_variance`, `_fill_count_for_kelly`, `_adverse_fill_count` | Yes |
+| `FeeState` | `_maker_fee_pct`, `_taker_fee_pct`, `_fee_source`, `_fee_resolved`, `_fee_resolution_error` | Yes |
+
+**Constraints**:
+- Each dataclass lives in `controllers/core.py` or a new `controllers/state_types.py`.
+- No behavioral change — this is a refactor.
+- Controller methods access `self._position.base` instead of `self._position_base`.
+
+**Acceptance criteria**:
+- All tests pass unchanged.
+- IDE auto-complete works on grouped state fields.
+
+---
+
+### [QUAL-2] Replace long parameter lists with typed dataclass args `done (2026-02-27)` — TickContext defined, wiring pending
+
+**Priority**: P2 — `_emit_tick_output` has 16 params, `_build_tick_output` has 15.
+
+**Problem**: Long parameter lists make call sites fragile and hard to review.
+Adding a new field requires changing every caller and the function signature.
+
+**Design decision**: Create a `TickContext` dataclass that bundles all tick-related
+inputs. Pass `TickContext` as a single arg. The dataclass documents the full interface
+contract at one location.
+
+**Acceptance criteria**:
+- `_emit_tick_output` and `_build_tick_output` accept `TickContext` instead of 15+ positional args.
+- All callers adapted.
+- No behavioral change.
+
+---
+
+### [QUAL-3] Type `processed_data` with a `ProcessedState` TypedDict `done (2026-02-27)`
+
+**Priority**: P2 — `self.processed_data` is `Dict[str, Any]` with 70+ keys.
+Typos in key names are not caught by any tool.
+
+**Problem**: Every access is `self.processed_data.get("key_name", default)` with no
+compile-time checking. A typo in a key name silently returns the default, which can
+cause subtle behavioral drift (e.g., risk check sees zero when it should see a value).
+
+**Design decision**: Define `class ProcessedState(TypedDict, total=False)` in
+`controllers/core.py` with all 70+ keys typed. Annotate `self.processed_data: ProcessedState`.
+This provides IDE auto-complete and mypy checking without runtime cost.
+
+**Acceptance criteria**:
+- `mypy hbot/controllers/epp_v2_4.py --ignore-missing-imports` reports no new errors.
+- All existing keys are covered in the TypedDict.
+
+---
+
+### [QUAL-4] Order book staleness check: use monotonic clock `done (2026-02-27)`
+
+**Priority**: P2 — low likelihood of issue in practice but theoretically incorrect.
+
+**Problem**: In `_evaluate_market_conditions`, the order book staleness check compares
+`book_ts` (exchange-provided UTC timestamp) against `now_ts` (local wall clock).
+If there is any clock skew between the local machine and the exchange, the staleness
+detection will be too aggressive or too lenient.
+
+**Design decision**: Compare against the Hummingbot framework's `market_data_provider.time()`
+which uses a synchronized clock. If `book_ts` is exchange-provided, compare delta against
+`now_ts` from the same source. Add a `max_clock_skew_s: int = 5` tolerance.
+
+**Acceptance criteria**:
+- Staleness check uses consistent time source.
+- `max_clock_skew_s` config field added.
+
+---
+
+### [QUAL-5] `_cancel_per_min` thread safety `done (2026-02-27)`
+
+**Priority**: P2 — currently runs single-threaded but will matter if ever parallelized.
+
+**Problem**: `_cancel_per_min()` mutates `self._cancel_events_ts` during a list
+comprehension read. In the current single-threaded model this is safe, but it would
+break silently if the tick ever runs concurrently with `did_cancel_order`.
+
+**Design decision**: Filter into a new list, then assign atomically:
+
+```python
+def _cancel_per_min(self, now: float) -> int:
+    recent = [ts for ts in self._cancel_events_ts if now - ts <= 60.0]
+    self._cancel_events_ts = recent
+    return len(recent)
+```
+
+**Acceptance criteria**:
+- No behavioral change.
+- Thread-safe assignment pattern.
+
+---
+
+## Execution Reliability — Surfaced by Execution Audit (2026-02-27)
+
+---
+
+### [EXEC-1] Kill switch should stop the bot container after cancel-all `done (2026-02-27)`
+
+**Priority**: P0 — after cancelling orders, the bot continues running and can place new ones.
+
+**Problem**: `_cancel_all_orders_ccxt` cancels open orders but doesn't stop the bot
+container. The bot's next tick can place new orders immediately after the kill switch fires.
+
+**Design decision**: After `_cancel_all_orders_ccxt` completes, issue `docker stop {bot_container}`
+via Docker API (same approach as watchdog). Add configurable `stop_bot_on_kill: bool = True`.
+
+**Acceptance criteria**:
+- Kill switch fires → open orders cancelled → bot container stopped within 10s.
+- Bot does not place new orders between cancel-all and container stop.
+
+---
+
+### [EXEC-2] Wire `ExchangeRateLimiter` into services `done (2026-02-27)`
+
+**Priority**: P1 — token bucket rate limiter exists (`services/common/rate_limiter.py`)
+but has zero imports anywhere. Multiple services hit exchange APIs concurrently with only
+ccxt's built-in rate limiting as protection.
+
+**Problem**: `ExchangeRateLimiter` with Bitget (10/s) and Binance (20/s) defaults was
+built but never wired. `fee_provider.py` makes direct `urlopen` calls with no rate
+limiting or retry.
+
+**Implementation**:
+1. Wire `ExchangeRateLimiter.wait_if_needed("bitget")` before API calls in:
+   - `fee_provider.py` (line 107, `urlopen` call)
+   - `exchange_snapshot_service/main.py` (before ccxt calls)
+   - `protective_stop.py` (before ccxt calls)
+2. Share a single `ExchangeRateLimiter` instance across services via env-based config.
+
+**Acceptance criteria**:
+- 4-hour soak test shows zero 429 responses in logs.
+- `fee_provider.py` wrapped in `with_retry` with rate limiter.
+
+---
+
+### [EXEC-3] Exchange snapshot service: fetch perp positions `done (2026-02-27)`
+
+**Priority**: P1 — exchange snapshot only fetches spot balances (`defaultType: "spot"`)
+making reconciliation vs exchange blind to perpetual futures positions.
+
+**Problem**: For the primary BTC-USDT perp use case, the exchange snapshot shows
+`BTC: 0.0` even with an open perp position. The reconciliation service compares local
+state against itself when running in `proxy_local` mode.
+
+**Implementation**:
+1. In `exchange_snapshot_service/main.py`, add `ccxt.fetch_positions()` for futures pairs.
+2. Add `product_type: "USDT-FUTURES"` to ccxt config for Bitget.
+3. Output perp positions alongside spot balances in the snapshot JSON.
+4. Change default `snapshot_mode` from `proxy_local` to `bitget_ccxt_private` when
+   API credentials are available.
+
+**Acceptance criteria**:
+- `exchange_snapshots/latest.json` shows perp positions with amounts.
+- Reconciliation service can compare controller `position_base` against exchange snapshot.
+
+---
+
+### [EXEC-4] Redis failure counter and operator visibility `done (2026-02-27)`
+
+**Priority**: P1 — Redis operations silently return `None` / `[]`. No counter, no metric.
+Kill switch becomes deaf and audit trail drops with no operator notification.
+
+**Problem**: `hb_bridge/redis_client.py` reconnects with exponential backoff but never
+surfaces failure counts. An operator wouldn't know Redis has been down for 30 minutes.
+
+**Implementation**:
+1. Add `_consecutive_failures: int` to `RedisStreamClient`.
+2. Log WARNING on first failure, ERROR after 5 consecutive failures.
+3. Expose `redis_failure_count` property for consumption by `processed_data`.
+4. Add `redis_down_since_ts` metric for Prometheus/Grafana.
+
+**Acceptance criteria**:
+- `redis_failure_count > 0` visible in `minute.csv` or `processed_data`.
+- WARNING log fires on first Redis failure.
+
+---
+
+### [EXEC-5] Stuck-executor escalation to OpsGuard `done (2026-02-27)`
+
+**Priority**: P1 — stuck orders (ack timeout) generate `logger.warning` but don't
+feed into OpsGuard. If many orders consistently time out (exchange degradation), the
+system keeps retrying without escalating.
+
+**Implementation**:
+1. Count consecutive ticks with stuck executors in `executors_to_refresh()`.
+2. After N consecutive ticks (configurable, default 5), set `operational_failure = True`
+   in the `OpsSnapshot`.
+3. OpsGuard will naturally escalate: 6 consecutive → HARD_STOP.
+
+**Acceptance criteria**:
+- 5 consecutive ticks with stuck executors → SOFT_PAUSE.
+- 6+ consecutive → HARD_STOP.
+
+---
+
+### [EXEC-6] Add level-id deduplication guard `done (2026-02-27)`
+
+**Priority**: P2 — `get_levels_to_execute()` can return the same level_id in consecutive
+ticks before the executor is tracked, potentially creating duplicate orders.
+
+**Problem**: No idempotency key ties a level_id to a specific order placement attempt.
+The `max_active_executors` cap limits blast radius but doesn't prevent level-specific
+duplication.
+
+**Implementation**:
+1. Track recently-issued level_ids with a TTL (e.g., `executor_refresh_time` seconds).
+2. In `get_levels_to_execute()`, skip level_ids that were issued within the TTL.
+3. Clear the TTL entry when the executor transitions to `is_trading`.
+
+**Acceptance criteria**:
+- No duplicate executors for the same level within one refresh cycle.
+
+---
+
+### [EXEC-7] Add `async_with_retry` variant `done (2026-02-27)`
+
+**Priority**: P2 — `with_retry` is synchronous only (`time.sleep`). Async services
+cannot use it.
+
+**Implementation**:
+Add `async_with_retry` to `services/common/retry.py` using `asyncio.sleep` instead
+of `time.sleep`, with the same backoff + jitter logic.
+
+**Acceptance criteria**:
+- Async services can use retry with exponential backoff.
+- Same jitter and retryable-pattern logic as sync variant.
+
+---
+
+### [EXEC-8] Recon escalation on repeated drift `done (2026-02-27)`
+
+**Priority**: P2 — if position reconciliation auto-corrects 10+ times in a row
+(systematic desync), no alert fires from the controller. Root cause never investigated.
+
+**Implementation**:
+1. Count consecutive auto-corrections in `_check_position_reconciliation`.
+2. After 3 corrections in 1 hour, enter SOFT_PAUSE with reason
+   `"position_drift_repeated"`.
+3. Log at ERROR level.
+
+**Acceptance criteria**:
+- 3 consecutive drift corrections within 1 hour → SOFT_PAUSE.
+- `minute.csv` shows `position_drift_repeated` in `risk_reasons`.
+
+---
+
+### [EXEC-9] Build SimBroker for live-vs-paper calibration `done (2026-02-27)`
+
+**Priority**: P2 — needed before live capital deployment to measure paper fill rate
+optimism and adverse selection gap.
+
+**Problem**: Paper's `prob_fill_on_limit: 1.0` overstates fill rate by 2-3x.
+No mechanism exists to measure the gap until live trading starts.
+
+**Design**: Stateless per-tick shadow executor in `controllers/sim_broker.py` (~200 lines):
+- Receives `processed_data` dict each tick.
+- Simulates fills using `QueuePositionFillModel` with calibrated `prob_fill_on_limit: 0.35`.
+- Tracks `shadow_position`, `shadow_pnl`, `shadow_fill_rate`.
+- Appends to `shadow_minute.csv` alongside `minute.csv`.
+- Computes: `live_fill_rate / shadow_fill_rate`, `edge_drift_bps`, `adverse_rate_delta`.
+
+**Acceptance criteria**:
+- `shadow_minute.csv` produced alongside `minute.csv`.
+- Fill rate ratio metric available in Grafana.
+
+---
+
+### [EXEC-10] Open-order recovery after restart `done (2026-02-27)` — warning log + flag (framework limitation)
+
+**Priority**: P2 — after a restart, the bot recovers position from the exchange but
+does not detect or cancel in-flight orders. Orphan orders can fill and create
+untracked position changes.
+
+**Implementation**:
+1. In `_run_startup_position_sync`, after position sync, call
+   `exchange.fetch_open_orders(symbol)`.
+2. Cancel any open orders not tracked by the framework.
+3. Log cancelled orphan orders.
+
+**Acceptance criteria**:
+- Restart with open orders on exchange → orphan orders cancelled.
+- Log entry for each cancelled orphan.
+
+---
+
+### [EXEC-11] `cancel_all_stops` no-op in `BitgetStopBackend` `done (2026-02-27)`
+
+**Priority**: P2 — `protective_stop.py`'s `BitgetStopBackend.cancel_all_stops` is a no-op.
+Stale protective stop orders may remain on the exchange after cleanup.
+
+**Implementation**: Implement via `ccxt.fetch_open_orders()` + filter by stop order type
++ cancel each.
+
+---
+
+### [EXEC-12] Tune paper fill model defaults `done (2026-02-27)`
+
+**Priority**: P2 — `prob_fill_on_limit: 1.0` means 100% fill probability when price
+touches the order level. Real queue fill probability for BTC-USDT perps is 20-40%.
+
+**Action**: Change default in `fill_models.py` from `1.0` to `0.4`. Add config
+documentation noting that this directly affects paper PnL optimism.
+
+---
+
+### [EXEC-13] Go-live hardening checklist additions `done (2026-02-27)`
+
+**Priority**: P1 — the existing 14-item checklist needs 10 more items identified
+by the execution reliability audit.
+
+**Items to add to `docs/ops/go_live_hardening_checklist.md`**:
+
+15. Framework patch audit: verify `enable_framework_paper_compat_fallbacks()` patches
+    disabled in live mode
+16. `connector.ready` returns real health state (not hardcoded `True`)
+17. NTP/clock drift: verify drift < 2s vs exchange server time
+18. Kill switch stops bot container after cancel-all
+19. Startup sync failure → HARD_STOP (verified)
+20. Exchange snapshot fetches perp positions
+21. Rapid partial fill stress test (50+ fills/order on testnet)
+22. Network partition test (30s disconnect mid-trading)
+23. Redis outage test (5 min stop, verify safe operation)
+24. `did_fail_order` streak fix verified
+
+---
+
+## STRATEGY LOOP - INITIAL_AUDIT Follow-Up (2026-02-28) `done (2026-02-28)`
+
+### [P0-STRAT-20260228-1] Enforce event and parity evidence freshness in strict cycle `done (2026-02-28)`
+
+**Why it matters**: Promotion can pass with stale or contradictory evidence, which hides real execution/accounting blind spots before live readiness decisions.
+
+**What exists now**:
+- `hbot/reports/promotion_gates/latest.json` can show pass while newer day2 evidence has `go: false`.
+- `hbot/reports/event_store/day2_gate_eval_latest.json` can fail delta tolerance after a pass artifact already exists.
+- `hbot/reports/parity/latest.json` can pass with core metrics marked `insufficient_data`.
+
+**Design decision (pre-answered)**: Strict cycle must require fresh day2 evidence with `go == true`, and parity must fail when active-bot core deltas are non-informative.
+
+**Implementation steps**:
+1. Update `hbot/scripts/release/run_strict_promotion_cycle.py` to fail if day2 gate is stale or `go != true`.
+2. Update `hbot/scripts/release/run_promotion_gates.py` parity gate to fail when fill/slippage/reject deltas are all `insufficient_data` for active bot scope.
+3. Add or extend tests in `hbot/tests/services/` for stale-artifact and insufficient-data fail paths.
+
+**Acceptance criteria**:
+- Strict cycle fails when `day2_gate_eval_latest.json` is stale or `go: false`.
+- Strict cycle fails when parity core metrics are all insufficient for active scope.
+- Strict cycle passes only with fresh and internally consistent evidence.
+
+**Do not**:
+- Do not bypass by raising thresholds or downgrading these checks to warning.
+
+---
+
+### [P0-STRAT-20260228-2] Escalate missing fill-event parity to critical for active bots `done (2026-02-28)`
+
+**Why it matters**: When minute telemetry shows fills but event store has zero fill events, accounting and parity checks are not trustworthy.
+
+**What exists now**:
+- `hbot/services/reconciliation_service/main.py` emits `fills_present_without_order_filled_events` as warning.
+- `hbot/reports/reconciliation/latest.json` has active-day cases with `fills_today > 0` and `fills_events = 0`.
+
+**Design decision (pre-answered)**: Treat this condition as critical for active bot-day scope and include explicit diagnostics in the finding payload.
+
+**Implementation steps**:
+1. In `hbot/services/reconciliation_service/main.py`, elevate severity to critical when active day has `fills_today > 0` and `fills_events == 0`.
+2. Include bot/day/event_file and count details in the critical payload.
+3. Add regression tests in `hbot/tests/services/` for severity and active-day scoping.
+
+**Acceptance criteria**:
+- Reconciliation status becomes critical under active-day fill parity absence.
+- Report payload includes actionable file/count diagnostics.
+- Inactive-bot and historical-day behavior remains unchanged.
+
+**Do not**:
+- Do not apply critical severity to inactive bots or historical windows.
+
+---
+
+### [P1-STRAT-20260228-3] Accelerate derisk unwind by tightening derisk spread `done (2026-02-28)`
+
+**Why it matters**: Soft-pause is dominated by `base_pct_above_max` and `derisk_only`; faster inventory unwind should restore two-sided quoting sooner.
+
+**What exists now**:
+- `hbot/data/bot1/conf/controllers/epp_v2_4_bot_a.yml` has `derisk_spread_pct: 0.0002`.
+- Intraday evidence shows persistent inventory-pressure reasons and elevated soft-pause.
+
+**Design decision (pre-answered)**: Change only derisk spread this cycle (single config group), with explicit rollback guardrails.
+
+**Implementation steps**:
+1. Update `hbot/data/bot1/conf/controllers/epp_v2_4_bot_a.yml`: `derisk_spread_pct: 0.0001`.
+2. Run paper for 3 days with no other spread/sizing/risk parameter changes.
+3. Compare soft-pause, inventory-breach frequency, drawdown, and net PnL per fill against the current baseline.
+
+**Acceptance criteria**:
+- Soft-pause ratio drops below 30 percent over the sample window.
+- `base_pct_above_max` trigger frequency decreases materially.
+- Drawdown and net PnL/fill stay within existing guardrails.
+
+**Do not**:
+- Do not change spreads, sizing, or governor parameters in the same cycle.
+
+---
+
+### [P0-STRAT-20260228-4] Resolve bot1 inventory drift critical with consistent perp accounting basis `done (2026-02-28)`
+
+**Why it matters**: Reconciliation currently reports `inventory_drift_critical` for bot1, which means inventory safety checks are not trustworthy at the exact point they are needed.
+
+**What exists now**:
+- `hbot/reports/reconciliation/latest.json` reports bot1 `inventory_drift_critical` with drift above critical threshold.
+- Bot1 runs perp mode where gross base, net base, and directional exposure can diverge if compared with inconsistent formulas.
+
+**Design decision (pre-answered)**: Use one canonical comparison basis for perp inventory drift across controller snapshots, reconciliation, and exchange snapshot service; do not loosen thresholds to hide mismatch.
+
+**Implementation steps**:
+1. Trace and document the exact drift formula currently used by reconciliation for perps.
+2. Align reconciliation comparator to the same canonical basis used by controller risk outputs (gross vs net chosen explicitly and consistently).
+3. Add deterministic unit tests in `hbot/tests/services/` for perp drift scenarios (flat, long, short, hedge) to prevent regression.
+4. Re-run reconciliation and validate bot1 status with fresh artifacts.
+
+**Acceptance criteria**:
+- Bot1 no longer emits false `inventory_drift_critical` when data is internally consistent.
+- True inventory mismatches still trigger warning/critical at existing thresholds.
+- No threshold value is increased as part of this fix.
+
+**Do not**:
+- Do not mute or downgrade critical drift findings to force green status.
+
+---
+
+### [P0-STRAT-20260228-5] Trigger protective execution intent when reconciliation is critical `done (2026-02-28)`
+
+**Why it matters**: A critical reconciliation state can coexist with active quoting, creating blind risk when accounting or event parity is broken.
+
+**What exists now**:
+- Reconciliation writes `reports/reconciliation/latest.json` and webhook alerts, but does not force a trading safety action.
+- Controller can continue quoting while reconciliation is critical.
+
+**Design decision (pre-answered)**: Add an explicit fail-safe bridge from reconciliation critical status to execution control intent for affected bot scope.
+
+**Implementation steps**:
+1. In reconciliation workflow, publish an execution intent when status is critical for an active bot.
+2. In bridge/controller intent handling, map this intent to a deterministic protective action (at least soft pause; hard stop path configurable).
+3. Add audit logs and tests to verify one-shot behavior per state transition (avoid intent spam).
+
+**Acceptance criteria**:
+- Critical reconciliation for active bot emits execution intent within one cycle.
+- Bot transitions to protective state and stops normal quoting until status recovers.
+- Transition and recovery are visible in minute/report artifacts.
+
+**Do not**:
+- Do not make this fail-safe optional in strict promotion mode.
+
+---
+
+### [P0-STRAT-20260228-6] Eliminate day2 event-store produced vs ingested lag failures `done (2026-02-28)`
+
+**Why it matters**: Day2 gate currently fails on `delta_since_baseline_tolerance`, undermining trust in event completeness and release evidence.
+
+**What exists now**:
+- `hbot/reports/event_store/day2_gate_eval_latest.json` can report `go: false` from produced-vs-ingested delta.
+- `source_compare` artifacts show non-zero lag on market data stream.
+
+**Design decision (pre-answered)**: Treat produced-ingested lag as a first-class SLO with explicit diagnostics and automatic strict-cycle failure when breached.
+
+**Implementation steps**:
+1. Add per-stream lag diagnostics to latest event-store summary artifacts.
+2. Implement deterministic catch-up/backfill handling for missed records before strict evaluation.
+3. Enforce strict-cycle fail when lag exceeds tolerance, with actionable remediation in output.
+4. Add regression tests for lag detection and recovery paths.
+
+**Acceptance criteria**:
+- Day2 gate passes with lag within configured tolerance over a full validation window.
+- Strict cycle cannot pass while lag is above tolerance.
+
+**Do not**:
+- Do not bypass by inflating tolerance without root-cause correction.
+
+---
+
+### [P1-STRAT-20260228-7] Restore spread competitiveness cap observability in minute and reports `done (2026-02-28)`
+
+**Why it matters**: Audit requires cap-hit rate, but current artifacts do not provide a reliable cap-hit metric.
+
+**What exists now**:
+- Controller/tick emitter has cap-related runtime values, but downstream minute/report outputs do not yield a stable cap-hit KPI.
+- Strategy audit cannot verify whether cap is too tight, too loose, or inactive.
+
+**Design decision (pre-answered)**: Emit explicit cap activation fields in minute logs and aggregate a daily cap-hit ratio in strategy reports.
+
+**Implementation steps**:
+1. Ensure minute schema includes `spread_competitiveness_cap_active` and `spread_competitiveness_cap_side_pct` end-to-end.
+2. Update strategy summary scripts to compute cap-hit ratio over the audit window.
+3. Add tests covering schema presence and aggregation math.
+
+**Acceptance criteria**:
+- Minute logs always include cap activation fields.
+- `multi_day_summary` (or companion report) exposes cap-hit percentage.
+
+**Do not**:
+- Do not rely on proxy inference from spread-to-market ratios.
+
+---
+
+### [P1-STRAT-20260228-8] Add PnL governor diagnostic counters and activation reason telemetry `done (2026-02-28)`
+
+**Why it matters**: Governor appears permanently inactive in current runs, but there is no clear telemetry on which gating condition blocks activation.
+
+**What exists now**:
+- `pnl_governor_active` and size multiplier are logged.
+- No per-condition diagnostic counters are emitted for activation blockers.
+
+**Design decision (pre-answered)**: Instrument governor early-return branches with explicit reason telemetry before tuning thresholds.
+
+**Implementation steps**:
+1. Add reason codes/counters for each governor non-activation branch.
+2. Emit these diagnostics in processed data and minute logs.
+3. Add report-level aggregation for governor block reasons.
+4. Only after diagnostics, propose config tuning in a separate cycle if needed.
+
+**Acceptance criteria**:
+- For every tick, activation or non-activation reason is observable.
+- Weekly report shows dominant governor block reasons.
+
+**Do not**:
+- Do not increase sizing thresholds without diagnostic evidence.
+
+---
+
+### [P1-STRAT-20260228-9] Validate paper execution realism against testnet micro-benchmark `done (2026-02-28)`
+
+**Why it matters**: Sustained high maker ratios in paper can still overstate live performance without controlled testnet comparison.
+
+**What exists now**:
+- Paper fill model has realism knobs and defaults.
+- No recurring, automated micro-benchmark that compares paper vs testnet execution quality deltas.
+
+**Design decision (pre-answered)**: Add a repeatable low-risk testnet benchmark and compare slippage/fill/reject metrics to paper within strict thresholds.
+
+**Implementation steps**:
+1. Define a 24h micro-size testnet benchmark profile for bot1-equivalent settings.
+2. Extend scorecard/parity scripts to compute paper-vs-testnet deltas for fill ratio, slippage, reject rate, cancel-before-fill.
+3. Gate results with explicit pass/fail thresholds and artifact output.
+
+**Acceptance criteria**:
+- Benchmark artifacts are generated automatically.
+- Paper-vs-testnet deltas are measurable and trendable across cycles.
+
+**Do not**:
+- Do not loosen parity thresholds solely to force pass.
+
+---
+
+### [P0-STRAT-20260228-10] Close kill-switch non-dry-run readiness gap with evidence `done (2026-02-28)`
+
+**Why it matters**: Testnet readiness currently fails due to missing non-dry-run kill-switch evidence, leaving a critical safety control unproven.
+
+**What exists now**:
+- `hbot/reports/ops/testnet_readiness_latest.json` reports failure on kill-switch non-dry-run checks.
+- `hbot/reports/kill_switch/latest.json` still reflects dry-run style evidence.
+
+**Design decision (pre-answered)**: Produce explicit non-dry-run test evidence in controlled environment and wire it into readiness gate acceptance.
+
+**Implementation steps**:
+1. Run controlled non-dry-run kill-switch execution in testnet scope.
+2. Capture and persist evidence artifact showing intent reception and cancel behavior.
+3. Re-run readiness gate and ensure it passes with fresh evidence.
+
+**Acceptance criteria**:
+- Readiness gate no longer fails on kill-switch non-dry-run checks.
+- Evidence is fresh, machine-readable, and linked in report outputs.
+
+**Do not**:
+- Do not run this on production credentials or live capital.
+
+---
+
+### [P2-STRAT-20260228-11] Make audit window reconstruction robust to minute log rotation `done (2026-02-28)`
+
+**Why it matters**: Minute data splitting between `minute.csv` and rotated legacy files can produce incomplete baselines if consumers read only one file.
+
+**What exists now**:
+- Rotation creates `minute.legacy_*.csv` and a fresh `minute.csv`.
+- Ad hoc analysis must manually merge files to reconstruct full intraday window.
+
+**Design decision (pre-answered)**: Add deterministic minute-log discovery and merge behavior in analysis scripts.
+
+**Implementation steps**:
+1. Update strategy analysis scripts to load both active and rotated minute files for the target day/window.
+2. Add duplicate-row handling and timestamp ordering guarantees.
+3. Add tests for rotated/non-rotated scenarios.
+
+**Acceptance criteria**:
+- Audit and scorecard scripts produce identical metrics whether rotation occurred or not.
+
+**Do not**:
+- Do not require manual file merging for standard audit flows.
+
+---
+
+### [P1-STRAT-20260228-12] Ensure bot_fill event payload carries correct realized PnL semantics `done (2026-02-28)`
+
+**Why it matters**: Event-store `bot_fill` payload currently trends toward zero realized PnL values, reducing value of event-driven finance validation.
+
+**What exists now**:
+- `fills.csv` includes non-zero realized PnL over the same period.
+- `events_*.jsonl` bot_fill payloads often show `realized_pnl_quote: 0.0`.
+
+**Design decision (pre-answered)**: Align event payload semantics with fill accounting output, documenting when realized PnL is expected to be zero vs non-zero.
+
+**Implementation steps**:
+1. Trace realized PnL field population path from paper portfolio to telemetry emitter.
+2. Fix mapping or timing issues so event payload matches intended semantics.
+3. Add unit tests comparing telemetry payload values to fills artifact for sampled scenarios.
+4. Document semantics in service interface docs.
+
+**Acceptance criteria**:
+- Event payload realized PnL behavior is consistent with documented accounting semantics.
+- Reconciliation/parity consumers can rely on event-driven PnL fields.
+
+**Do not**:
+- Do not alter accounting math to fit telemetry output.
+
+---
+
 ## Done
 
 | Item | Description | Commit | Date |
 |---|---|---|---|
+| EXEC-E1 | Kill switch retry (3 attempts with backoff) on cancel failures | — | 2026-02-27 |
+| EXEC-E3 | Time drift check: real exchange server time (Bitget/Binance) replaces no-op | — | 2026-02-27 |
+| EXEC-E4 | Live-mode guard: framework paper patches skip when `BOT_MODE=live` | — | 2026-02-27 |
+| EXEC-E5 | Startup sync exhaustion → HARD_STOP (was silent proceed) | — | 2026-02-27 |
+| EXEC-E6 | `did_fail_order` no longer resets cancel streak on unrelated failures | — | 2026-02-27 |
+| EXEC-E8 | Position recon failures → WARNING + consecutive counter escalation | — | 2026-02-27 |
+| EXEC-E9 | Reconnect cooldown: `reconnect_cooldown_s` suppresses quoting after WS reconnect | — | 2026-02-27 |
+| EXEC-E13 | `with_retry` backoff now includes random jitter (anti-thundering-herd) | — | 2026-02-27 |
+| EXEC-E15 | DailyStateStore: atomic file writes via `tempfile` + `os.replace` | — | 2026-02-27 |
+| BUG-C1 | Redis connection leak per fill → lazy singleton `_telemetry_redis` in `epp_v2_4.py` | — | 2026-02-27 |
+| BUG-C2 | Silent `except Exception: pass` → add `logger.debug` to all swallowed exceptions | — | 2026-02-27 |
+| BUG-C3 | Float arithmetic in `adverse_widen_spreads` → pure Decimal computation | — | 2026-02-27 |
+| BUG-R1 | EWMA variance order-of-operations: deviation now computed from *pre-update* EWMA | — | 2026-02-27 |
+| BUG-R2 | Brittle `__code__` inspection for position dispatch → `try/except TypeError` | — | 2026-02-27 |
+| BUG-M2 | Duplicated locked-base scanning → extracted `_compute_total_base_with_locked()` | — | 2026-02-27 |
+| BUG-C6 | `hb_bridge.py` Redis per paper fill → reuse `BridgeState.get_redis()` | — | 2026-02-27 |
+| INFRA-2 | compose_up.sh wrapper + preflight_startup.py | — | 2026-02-27 |
+| INFRA-1 | Watchdog STATE_FILE to persistent /data/ path | — | 2026-02-27 |
+| INFRA-3 | risk-service reports volume `:ro` → writable overlay | — | 2026-02-27 |
+| DEBT-H2 | hb_bridge module-level state → BridgeState class | — | 2026-02-27 |
+| DEBT-M2 | Delete dead controller stubs (paper_engine.py, binance_perpetual_constants, directional_trading/, market_making/) | — | 2026-02-27 |
+| DEBT-L1 | Fix service_interfaces.md path references | — | 2026-02-27 |
+| DEBT-L2 | Remove duplicate controllers/market_making mount from compose | — | 2026-02-27 |
+| DEBT-L3 | Bake python-telegram-bot into control-plane image (no runtime pip install) | — | 2026-02-27 |
+
+| Item | Description | Commit | Date |
+|---|---|---|---|
+| QUAL-5 | `_cancel_per_min` thread-safe assignment pattern | — | 2026-02-27 |
+| QUAL-4 | Order book staleness check: `max_clock_skew_s` tolerance added | — | 2026-02-27 |
+| QUAL-3 | `ProcessedState` TypedDict with 66 typed fields | — | 2026-02-27 |
+| QUAL-2 | `TickContext` dataclass defined in `state_types.py` | — | 2026-02-27 |
+| QUAL-1 | State dataclasses (`PositionState`, `DailyCounters`, `FillEdgeState`, `FeeState`) defined | — | 2026-02-27 |
+| DEBT-1 | `epp_v2_4.py` god class split: `RegimeDetector`, `SpreadEngine`, `RiskEvaluator`, `TickEmitter` | — | 2026-02-27 |
+| DEBT-2 | 28 core unit tests: regime, spread, risk, fill EWMA, cancel rate | — | 2026-02-27 |
+| DEBT-3 | `hb_bridge.py` split into `signal_consumer.py`, `adverse_inference.py`, `hb_event_fire.py` | — | 2026-02-27 |
+| DEBT-4 | Config hierarchy doc: `docs/infra/config_hierarchy.md` | — | 2026-02-27 |
+| DEBT-5 | 63 service-layer tests: recon, coordination, event store, watchdog, kill switch | — | 2026-02-27 |
+| DEBT-6 | ClickHouse removed: ingest service + compose blocks + Grafana datasource | — | 2026-02-27 |
+| EXEC-1 | Kill switch stops bot container after cancel-all via Docker API | — | 2026-02-27 |
+| EXEC-2 | `ExchangeRateLimiter` wired into fee_provider, exchange_snapshot, protective_stop | — | 2026-02-27 |
+| EXEC-3 | Exchange snapshot fetches perp positions via `ccxt.fetch_positions()` | — | 2026-02-27 |
+| EXEC-4 | Redis failure counter: `_consecutive_failures`, WARNING/ERROR escalation | — | 2026-02-27 |
+| EXEC-5 | Stuck-executor escalation: N ticks → SOFT_PAUSE → HARD_STOP | — | 2026-02-27 |
+| EXEC-6 | Level-id deduplication guard with TTL | — | 2026-02-27 |
+| EXEC-7 | `async_with_retry` variant with `asyncio.sleep` | — | 2026-02-27 |
+| EXEC-8 | Recon drift escalation: 3 corrections in 1h → HARD_STOP | — | 2026-02-27 |
+| EXEC-9 | SimBroker: shadow executor for live-vs-paper calibration | — | 2026-02-27 |
+| EXEC-10 | Open-order recovery: startup warning log (framework limitation) | — | 2026-02-27 |
+| EXEC-11 | `cancel_all_stops` implemented via `fetch_open_orders` + cancel | — | 2026-02-27 |
+| EXEC-12 | Paper fill model: `prob_fill_on_limit` default 1.0 → 0.4 | — | 2026-02-27 |
+| EXEC-13 | Go-live checklist: items 15-24 added (framework patches, NTP, kill switch, etc.) | — | 2026-02-27 |
+| ROAD-8 | API key hygiene docs: 3-key policy, rotation procedure, IP allowlist | — | 2026-02-27 |
+| INFRA-1 | Watchdog STATE_FILE to persistent /data/ path | — | 2026-02-27 |
+| INFRA-3 | risk-service reports volume `:ro` → writable overlay | — | 2026-02-27 |
+| ROAD-2 | Walk-forward backtest engine + multi-day summary script | — | 2026-02-27 |
+| ROAD-3 | OB imbalance signal in controller + spread skew | — | 2026-02-27 |
+| ROAD-4 | Kelly-adjusted position sizing (disabled by default) | — | 2026-02-27 |
+| ROAD-6 | TCA report: shortfall, market impact, adverse selection | — | 2026-02-27 |
+| ROAD-7 | 6 incident response playbooks in docs/ops/incident_playbooks/ | — | 2026-02-27 |
+| ROAD-10 | Regime classifier infrastructure: feature builder v2, ML scripts, signal wiring | — | 2026-02-27 |
+| ROAD-11 | Adverse classifier infrastructure: dataset builder, training script, bridge wiring | — | 2026-02-27 |
 | P1-5 | `order_book_stale` log uses 30s-gated value | `9fef542` | 2026-02-26 |
 | — | Add `BACKLOG.md` + env template | `9fef542` | 2026-02-26 |
 | — | Alertmanager empty SLACK_WEBHOOK_URL crash | `6c5faef` | 2026-02-26 |

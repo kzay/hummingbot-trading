@@ -55,6 +55,7 @@ def main() -> int:
         "--check-recon-exchange-preflight",
         "--collect-go-live-evidence",
         "--check-telegram-validation",
+        "--check-portfolio-diversification",
         "--max-report-age-min",
         str(args.max_report_age_min),
     ]

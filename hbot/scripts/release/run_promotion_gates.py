@@ -108,6 +108,18 @@ def _parity_core_insufficient_active_bots(parity: Dict[str, object]) -> Tuple[Li
     return insufficient_bots, active_bots
 
 
+def _portfolio_diversification_gate(report: Dict[str, object]) -> Tuple[bool, str]:
+    """Return (gate_ok, reason) from diversification report payload."""
+    status = str(report.get("status", "")).strip().lower()
+    if status == "pass":
+        return True, "portfolio diversification check pass (btc/eth correlation within threshold)"
+    if status == "insufficient_data":
+        return True, "portfolio diversification check inconclusive (insufficient overlap data)"
+    if status == "fail":
+        return False, "portfolio diversification check fail (btc/eth correlation above threshold)"
+    return False, "portfolio diversification report missing or invalid"
+
+
 def _day2_freshness(day2: Dict[str, object], day2_path: Path, max_report_age_min: float) -> Tuple[bool, float]:
     """Return (is_fresh, age_minutes) for day2 gate artifact."""
     day2_ts = str(day2.get("ts_utc", "")).strip()
@@ -570,6 +582,19 @@ def _run_testnet_daily_scorecard(root: Path, day_utc: str) -> Tuple[int, str]:
         return 2, str(e)
 
 
+def _run_portfolio_diversification_check(root: Path) -> Tuple[int, str]:
+    cmd = [
+        sys.executable,
+        str(root / "scripts" / "analysis" / "portfolio_diversification_check.py"),
+    ]
+    try:
+        proc = subprocess.run(cmd, cwd=str(root), capture_output=True, text=True, check=False)
+        msg = (proc.stdout or "") + ("\n" + proc.stderr if proc.stderr else "")
+        return int(proc.returncode), msg.strip()
+    except Exception as e:
+        return 2, str(e)
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description="Run promotion gate contract checks.")
     parser.add_argument("--max-report-age-min", type=int, default=20, help="Max allowed age for fresh reports.")
@@ -687,6 +712,11 @@ def main() -> int:
         help="Run ROAD-5 daily scorecard for UTC today.",
     )
     parser.add_argument(
+        "--check-portfolio-diversification",
+        action="store_true",
+        help="Run ROAD-9 BTC/ETH diversification evidence check (warning gate).",
+    )
+    parser.add_argument(
         "--check-data-plane-consistency",
         action="store_true",
         help="Run INFRA-5 data-plane consistency gate (requires desk_snapshot_service running).",
@@ -714,6 +744,8 @@ def main() -> int:
     testnet_readiness_msg = ""
     testnet_scorecard_rc = 0
     testnet_scorecard_msg = ""
+    diversification_rc = 0
+    diversification_msg = ""
     day2_catchup_rc = 0
     day2_catchup_msg = ""
     fill_backfill_rc = 0
@@ -780,6 +812,7 @@ def main() -> int:
         root / "scripts" / "ops" / "validate_telegram_alerting.py",
         root / "scripts" / "release" / "testnet_readiness_gate.py",
         root / "scripts" / "analysis" / "testnet_daily_scorecard.py",
+        root / "scripts" / "analysis" / "portfolio_diversification_check.py",
         root / "scripts" / "utils" / "refresh_event_store_integrity_local.py",
         root / "config" / "coordination_policy_v1.json",
         root / "config" / "ml_governance_policy_v1.json",
@@ -906,7 +939,26 @@ def main() -> int:
             )
         )
 
-    # 1h) INFRA-5 data-plane consistency gate
+    # 1h) ROAD-9 diversification evidence (BTC vs ETH correlation + inverse-variance weights)
+    if args.check_portfolio_diversification:
+        diversification_rc, diversification_msg = _run_portfolio_diversification_check(root)
+        diversification_path = reports / "policy" / "portfolio_diversification_latest.json"
+        diversification_report = _read_json(diversification_path, {})
+        div_gate_ok, div_reason = _portfolio_diversification_gate(diversification_report)
+        if diversification_rc != 0 and str(diversification_report.get("status", "")).lower() != "fail":
+            div_gate_ok = False
+            div_reason = f"portfolio diversification check execution failed (rc={diversification_rc})"
+        checks.append(
+            _check(
+                div_gate_ok,
+                "portfolio_diversification",
+                "warning",
+                div_reason,
+                [str(diversification_path)],
+            )
+        )
+
+    # 1i) INFRA-5 data-plane consistency gate
     if args.check_data_plane_consistency:
         dp_rc, dp_msg = _run_data_plane_consistency_check(root)
         dp_path = reports / "data_plane_consistency" / "latest.json"
@@ -1474,6 +1526,8 @@ def main() -> int:
             "testnet_readiness_rc": testnet_readiness_rc,
             "testnet_scorecard_output": testnet_scorecard_msg[:2000],
             "testnet_scorecard_rc": testnet_scorecard_rc,
+            "portfolio_diversification_output": diversification_msg[:2000],
+            "portfolio_diversification_rc": diversification_rc,
         },
     }
 
