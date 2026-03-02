@@ -8,7 +8,7 @@ import time
 import uuid
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Dict, List, Tuple
+from typing import Dict, List, Optional, Tuple
 
 from services.common.utils import safe_bool as _safe_bool, safe_float as _safe_float
 from services.contracts.stream_names import EXECUTION_INTENT_STREAM, STREAM_RETENTION_MAXLEN
@@ -410,6 +410,37 @@ def _publish_daily_goal_intent(
     )
 
 
+def _daily_goal_intent_signature(
+    daily_pnl_target_pct: float,
+    daily_pnl_target_quote: float,
+    desk_target_pct_total_equity: float,
+    desk_target_quote_total_equity: float,
+) -> str:
+    return "|".join(
+        (
+            f"{daily_pnl_target_pct:.6f}",
+            f"{daily_pnl_target_quote:.6f}",
+            f"{desk_target_pct_total_equity:.6f}",
+            f"{desk_target_quote_total_equity:.6f}",
+        )
+    )
+
+
+def _should_publish_daily_goal_intent(
+    *,
+    now_ts: float,
+    signature: str,
+    last_state: Optional[Tuple[float, str]],
+    republish_after_s: float,
+) -> bool:
+    if last_state is None:
+        return True
+    last_ts, last_signature = last_state
+    if signature != last_signature:
+        return True
+    return (now_ts - last_ts) >= max(0.0, republish_after_s)
+
+
 def run(once: bool = False) -> None:
     root = Path("/workspace/hbot") if Path("/.dockerenv").exists() else Path(__file__).resolve().parents[2]
     policy_path = Path(os.getenv("MULTI_BOT_POLICY_PATH", str(root / "config" / "multi_bot_policy_v1.json")))
@@ -428,6 +459,9 @@ def run(once: bool = False) -> None:
     interval_sec = int(os.getenv("PORTFOLIO_ALLOCATOR_INTERVAL_SEC", "300"))
     emit_intents = _safe_bool(os.getenv("PORTFOLIO_ALLOCATOR_PUBLISH_INTENTS", "false"), False)
     enforce_diversification = _safe_bool(os.getenv("PORTFOLIO_ALLOCATOR_ENFORCE_DIVERSIFICATION", "false"), False)
+    daily_goal_intent_republish_s = max(
+        0.0, float(os.getenv("PORTFOLIO_ALLOCATOR_DAILY_GOAL_INTENT_REPUBLISH_SEC", "1800"))
+    )
     redis_client = RedisStreamClient(
         host=os.getenv("REDIS_HOST", "redis"),
         port=int(os.getenv("REDIS_PORT", "6379")),
@@ -435,6 +469,7 @@ def run(once: bool = False) -> None:
         password=os.getenv("REDIS_PASSWORD", "") or None,
         enabled=emit_intents,
     )
+    last_daily_goal_intent_state: Dict[str, Tuple[float, str]] = {}
 
     while True:
         policy = _load_policy(policy_path)
@@ -480,6 +515,8 @@ def run(once: bool = False) -> None:
             status = "blocked"
             reasons.append("diversification_correlation_exceeds_threshold")
 
+        daily_goal_intents_published = 0
+        daily_goal_intents_suppressed_unchanged = 0
         if emit_intents and redis_client.enabled and status == "pass":
             for row in proposals:
                 if not bool(row.get("portfolio_action_enabled", False)):
@@ -496,18 +533,42 @@ def run(once: bool = False) -> None:
                     for goal_row in goal_rows:
                         if not isinstance(goal_row, dict):
                             continue
+                        bot_name = str(goal_row.get("bot", ""))
+                        if not bot_name:
+                            continue
+                        goal_target_pct = _safe_float(goal_row.get("daily_pnl_target_pct"), 0.0)
+                        goal_target_quote = _safe_float(goal_row.get("daily_pnl_target_quote"), 0.0)
+                        desk_target_pct_total = _safe_float(
+                            daily_goal_plan.get("target_pct_total_equity"), 0.0
+                        )
+                        desk_target_quote_total = _safe_float(
+                            daily_goal_plan.get("target_quote_total_equity"), 0.0
+                        )
+                        now_ts = time.time()
+                        signature = _daily_goal_intent_signature(
+                            daily_pnl_target_pct=goal_target_pct,
+                            daily_pnl_target_quote=goal_target_quote,
+                            desk_target_pct_total_equity=desk_target_pct_total,
+                            desk_target_quote_total_equity=desk_target_quote_total,
+                        )
+                        if not _should_publish_daily_goal_intent(
+                            now_ts=now_ts,
+                            signature=signature,
+                            last_state=last_daily_goal_intent_state.get(bot_name),
+                            republish_after_s=daily_goal_intent_republish_s,
+                        ):
+                            daily_goal_intents_suppressed_unchanged += 1
+                            continue
                         _publish_daily_goal_intent(
                             redis_client,
-                            bot=str(goal_row.get("bot", "")),
-                            daily_pnl_target_pct=_safe_float(goal_row.get("daily_pnl_target_pct"), 0.0),
-                            daily_pnl_target_quote=_safe_float(goal_row.get("daily_pnl_target_quote"), 0.0),
-                            desk_target_pct_total_equity=_safe_float(
-                                daily_goal_plan.get("target_pct_total_equity"), 0.0
-                            ),
-                            desk_target_quote_total_equity=_safe_float(
-                                daily_goal_plan.get("target_quote_total_equity"), 0.0
-                            ),
+                            bot=bot_name,
+                            daily_pnl_target_pct=goal_target_pct,
+                            daily_pnl_target_quote=goal_target_quote,
+                            desk_target_pct_total_equity=desk_target_pct_total,
+                            desk_target_quote_total_equity=desk_target_quote_total,
                         )
+                        last_daily_goal_intent_state[bot_name] = (now_ts, signature)
+                        daily_goal_intents_published += 1
 
         report = {
             "ts_utc": _utc_now(),
@@ -521,6 +582,9 @@ def run(once: bool = False) -> None:
             "enforce_diversification": bool(enforce_diversification),
             "diversification": diversification_diag,
             "total_equity_quote": total_equity,
+            "daily_goal_intent_republish_s": daily_goal_intent_republish_s,
+            "daily_goal_intents_published": daily_goal_intents_published,
+            "daily_goal_intents_suppressed_unchanged": daily_goal_intents_suppressed_unchanged,
             "daily_goal": daily_goal_plan,
             "proposals": proposals,
         }

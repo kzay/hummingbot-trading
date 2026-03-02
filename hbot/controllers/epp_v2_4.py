@@ -801,6 +801,8 @@ class EppV24Controller(MarketMakingControllerBase):
         self._last_external_intent_ts: float = 0.0
         self._external_target_base_pct_override_ts: float = 0.0
         self._external_daily_pnl_target_pct_override_ts: float = 0.0
+        self._external_target_base_pct_override_expires_ts: float = 0.0
+        self._external_daily_pnl_target_pct_override_expires_ts: float = 0.0
         self._cancel_pause_until: float = 0
         self._fee_source: str = "manual"
         self._fee_resolved: bool = False
@@ -1048,27 +1050,56 @@ class EppV24Controller(MarketMakingControllerBase):
     def _expire_external_intent_overrides(self, now_ts: float) -> None:
         """Expire stale external execution-intent overrides to prevent sticky state."""
         ttl_s = int(max(0, int(getattr(self.config, "execution_intent_override_ttl_s", 0))))
-        if ttl_s <= 0:
-            return
         ttl = float(ttl_s)
 
         base_override = getattr(self, "_external_target_base_pct_override", None)
         base_override_ts = float(getattr(self, "_external_target_base_pct_override_ts", 0.0) or 0.0)
-        if base_override is not None and (base_override_ts <= 0.0 or (now_ts - base_override_ts) > ttl):
+        base_override_expires_ts = float(
+            getattr(self, "_external_target_base_pct_override_expires_ts", 0.0) or 0.0
+        )
+        base_expired = False
+        if base_override is not None:
+            if base_override_expires_ts > 0.0:
+                base_expired = now_ts >= base_override_expires_ts
+            elif ttl_s > 0:
+                base_expired = base_override_ts <= 0.0 or (now_ts - base_override_ts) > ttl
+        if base_override is not None and base_expired:
             self._external_target_base_pct_override = None
             self._external_target_base_pct_override_ts = 0.0
+            self._external_target_base_pct_override_expires_ts = 0.0
             logger.info("Expired stale external target_base_pct override (ttl=%ss)", ttl_s)
 
         daily_target_override = getattr(self, "_external_daily_pnl_target_pct_override", None)
         daily_target_override_ts = float(
             getattr(self, "_external_daily_pnl_target_pct_override_ts", 0.0) or 0.0
         )
-        if daily_target_override is not None and (
-            daily_target_override_ts <= 0.0 or (now_ts - daily_target_override_ts) > ttl
-        ):
+        daily_target_override_expires_ts = float(
+            getattr(self, "_external_daily_pnl_target_pct_override_expires_ts", 0.0) or 0.0
+        )
+        daily_expired = False
+        if daily_target_override is not None:
+            if daily_target_override_expires_ts > 0.0:
+                daily_expired = now_ts >= daily_target_override_expires_ts
+            elif ttl_s > 0:
+                daily_expired = daily_target_override_ts <= 0.0 or (now_ts - daily_target_override_ts) > ttl
+        if daily_target_override is not None and daily_expired:
             self._external_daily_pnl_target_pct_override = None
             self._external_daily_pnl_target_pct_override_ts = 0.0
+            self._external_daily_pnl_target_pct_override_expires_ts = 0.0
             logger.info("Expired stale external daily_pnl_target_pct override (ttl=%ss)", ttl_s)
+
+    @staticmethod
+    def _intent_expires_ts(intent: Dict[str, object], now_ts: float) -> float:
+        expires_at_ms = intent.get("expires_at_ms")
+        try:
+            if expires_at_ms is None:
+                return 0.0
+            expires_ts = float(expires_at_ms) / 1000.0
+            if expires_ts <= now_ts:
+                return 0.0
+            return expires_ts
+        except Exception:
+            return 0.0
 
     def _track_daily_equity(self, equity_quote: Decimal) -> None:
         """Initialize and update daily equity open/peak watermarks."""
@@ -2252,6 +2283,9 @@ class EppV24Controller(MarketMakingControllerBase):
                     return False, "target_base_pct_out_of_range"
                 self._external_target_base_pct_override = _clip(candidate, Decimal("0"), Decimal("1"))
                 self._external_target_base_pct_override_ts = now_ts
+                self._external_target_base_pct_override_expires_ts = EppV24Controller._intent_expires_ts(
+                    intent, now_ts
+                )
                 return True, "ok"
             except Exception:
                 return False, "invalid_target_base_pct"
@@ -2267,6 +2301,9 @@ class EppV24Controller(MarketMakingControllerBase):
                     return False, "daily_pnl_target_pct_out_of_range"
                 self._external_daily_pnl_target_pct_override = _clip(candidate, Decimal("0"), Decimal("100"))
                 self._external_daily_pnl_target_pct_override_ts = now_ts
+                self._external_daily_pnl_target_pct_override_expires_ts = EppV24Controller._intent_expires_ts(
+                    intent, now_ts
+                )
                 return True, "ok"
             except Exception:
                 return False, "invalid_daily_pnl_target_pct"
@@ -3781,6 +3818,7 @@ class EppV24Controller(MarketMakingControllerBase):
             "external_model_version": self._last_external_model_version,
             "external_intent_reason": self._last_external_intent_reason,
             "external_daily_pnl_target_pct_override": self._external_daily_pnl_target_pct_override,
+            "external_daily_pnl_target_pct_override_expires_ts": self._external_daily_pnl_target_pct_override_expires_ts,
             "fee_source": self._fee_source,
             "maker_fee_pct": self._maker_fee_pct,
             "taker_fee_pct": self._taker_fee_pct,

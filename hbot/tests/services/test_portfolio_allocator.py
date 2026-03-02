@@ -4,7 +4,9 @@ from services.portfolio_allocator.main import (
     _apply_diversification_variance_overrides,
     _compute_daily_goal_plan,
     _compute_inverse_variance_allocations,
+    _daily_goal_intent_signature,
     _eligible_bots,
+    _should_publish_daily_goal_intent,
 )
 
 
@@ -176,3 +178,69 @@ def test_compute_daily_goal_plan_ignores_zero_weight_equity_in_goal_scope() -> N
     assert abs(float(out["target_quote_total_equity"]) - 1.0) < 1e-9
     rows = {str(r["bot"]): r for r in out["rows"]}
     assert abs(float(rows["bot1"]["daily_pnl_target_pct"]) - 1.0) < 1e-9
+
+
+def test_daily_goal_intent_publish_on_first_emit() -> None:
+    sig = _daily_goal_intent_signature(
+        daily_pnl_target_pct=0.6,
+        daily_pnl_target_quote=1.2,
+        desk_target_pct_total_equity=0.6,
+        desk_target_quote_total_equity=1.2,
+    )
+    assert _should_publish_daily_goal_intent(
+        now_ts=100.0,
+        signature=sig,
+        last_state=None,
+        republish_after_s=1800.0,
+    ) is True
+
+
+def test_daily_goal_intent_suppresses_unchanged_before_republish_window() -> None:
+    sig = _daily_goal_intent_signature(
+        daily_pnl_target_pct=0.6,
+        daily_pnl_target_quote=1.2,
+        desk_target_pct_total_equity=0.6,
+        desk_target_quote_total_equity=1.2,
+    )
+    assert _should_publish_daily_goal_intent(
+        now_ts=200.0,
+        signature=sig,
+        last_state=(100.0, sig),
+        republish_after_s=1800.0,
+    ) is False
+
+
+def test_daily_goal_intent_republishes_unchanged_after_window() -> None:
+    sig = _daily_goal_intent_signature(
+        daily_pnl_target_pct=0.6,
+        daily_pnl_target_quote=1.2,
+        desk_target_pct_total_equity=0.6,
+        desk_target_quote_total_equity=1.2,
+    )
+    assert _should_publish_daily_goal_intent(
+        now_ts=2001.0,
+        signature=sig,
+        last_state=(100.0, sig),
+        republish_after_s=1800.0,
+    ) is True
+
+
+def test_daily_goal_intent_publishes_when_signature_changes() -> None:
+    old_sig = _daily_goal_intent_signature(
+        daily_pnl_target_pct=0.6,
+        daily_pnl_target_quote=1.2,
+        desk_target_pct_total_equity=0.6,
+        desk_target_quote_total_equity=1.2,
+    )
+    new_sig = _daily_goal_intent_signature(
+        daily_pnl_target_pct=0.8,
+        daily_pnl_target_quote=1.6,
+        desk_target_pct_total_equity=0.8,
+        desk_target_quote_total_equity=1.6,
+    )
+    assert _should_publish_daily_goal_intent(
+        now_ts=120.0,
+        signature=new_sig,
+        last_state=(100.0, old_sig),
+        republish_after_s=1800.0,
+    ) is True
