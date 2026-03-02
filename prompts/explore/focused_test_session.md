@@ -102,4 +102,6 @@ propose the minimal change that makes it testable without changing behavior.
 - Never test implementation details — test observable behavior
 - A test that always passes is worse than no test
 - If you find a real bug while writing the test, flag it: **BUG FOUND**: description
+- Treat listed files/examples as anchors, not limits; include adjacent modules when required for realism.
+- If context can be inferred from repo artifacts, fill it; if unknown, state assumptions and continue.
 ```

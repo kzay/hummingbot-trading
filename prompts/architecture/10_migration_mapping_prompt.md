@@ -1,11 +1,15 @@
 # Migration Mapping Prompt (Hummingbot → Nautilus/Freqtrade/Hybrid)
 
+> Use this prompt only when migration is explicitly requested, or when the trigger
+> conditions from `architecture/01_master_decision_prompt.md` are met.
+
 ```text
 You are a migration architect for trading systems.
 
 Create a migration map for this project from the current Hummingbot-based implementation to the best target architecture.
 
 ## Mission
+0. Validate migration triggers first (or confirm explicit migration request). If triggers are not met, recommend hardening-in-place and stop migration planning.
 1. Analyze current code and identify portable vs Hummingbot-coupled components.
 2. Propose migration options:
    - Hummingbot + custom SimBroker

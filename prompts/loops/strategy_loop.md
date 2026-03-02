@@ -24,6 +24,7 @@ strategy review for a semi-pro BTC-USDT perpetuals market-making desk (EPP v2.4,
 - Paper logs: hbot/data/bot1/logs/epp_v24/bot1_a/minute.csv, fills.csv
 - Strategy reports: hbot/reports/strategy/multi_day_summary_latest.json
 - Promotion gates: hbot/scripts/release/run_strict_promotion_cycle.py
+- Scope rule: listed files/folders are anchors, not limits. Inspect any additional relevant paths in the repo.
 
 ## Full config parameter reference (use when reviewing or proposing changes)
 | Parameter | Type | Unit | Notes |
@@ -63,6 +64,12 @@ strategy review for a semi-pro BTC-USDT perpetuals market-making desk (EPP v2.4,
 - Top risk reasons triggering soft-pause: {{list}}
 - Config snapshot (current YAML params): {{paste or attach}}
 - Last cycle baseline (if MODE=ITERATION): {{paste summary from last run}}
+
+## Data completion protocol (non-blocking)
+- If a placeholder can be inferred from repository context, known defaults, or recent reports, fill it.
+- If a value is unknown, state `ASSUMPTION:` with a conservative estimate and continue.
+- If evidence is missing for a claim, state `DATA_GAP:` and lower confidence accordingly.
+- Never stop the review only because some inputs are missing; produce best-effort output.
 
 ---
 
@@ -225,6 +232,7 @@ Tier: P0 = blocks live/safety · P1 = PnL/reliability · P2 = quality
 6. Next cycle plan (1–3 changes, experiment design)
 7. BACKLOG entries (copy-paste ready)
 8. Inputs needed next cycle (what stats/logs to collect)
+9. Assumptions and data gaps (what was inferred vs explicitly provided)
 
 ## Rules
 - Decisions must be based on evidence from provided stats, not intuition alone
@@ -232,4 +240,6 @@ Tier: P0 = blocks live/safety · P1 = PnL/reliability · P2 = quality
 - If governor mult avg < 0.7: investigate strategy edge before changing anything else
 - If soft-pause ratio > 30%: fix inventory limits before touching spreads
 - Config changes: one parameter group per cycle (sizing OR spreads OR risk — not all)
+- Challenge existing strategy assumptions each cycle; keep only what still shows edge.
+- Include one bounded creative experiment per cycle with explicit success and rollback criteria.
 ```

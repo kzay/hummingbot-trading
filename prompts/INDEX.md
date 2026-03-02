@@ -3,7 +3,7 @@
 Prompts for the EPP v2.4 semi-pro trading desk (Hummingbot / Bitget / Paper Engine v2).
 
 Paste the content of any prompt into an AI chat (Cursor, Claude, GPT) along with your repo/stats context.
-Append `17_cursor_output_files_addon.md` to any prompt when you want results written as separate files.
+Use `17_cursor_output_files_addon.md` when you want results written as separate files; it is compatible with loop prompts and preserves their mandatory sections.
 
 ---
 
@@ -18,6 +18,13 @@ Each loop prompt has a `MODE` field at the top. Set it before running.
 | `loops/ops_loop.md` | Daily / Weekly | `DAILY_SCAN` / `WEEKLY_REVIEW` / `INITIAL_AUDIT` | Bot health · observability · alerting · service status · infrastructure · BACKLOG output |
 
 **Every loop ends with mandatory BACKLOG entries** — copy-paste ready for `hbot/BACKLOG.md`.
+
+## Default mindset (applies to all prompts)
+
+- Continuous improvement: challenge previous decisions and keep iterating based on evidence.
+- Non-blocking execution: if placeholders are known, fill them; if unknown, make explicit conservative assumptions and continue.
+- Creative but bounded change: propose experiments with validation and rollback criteria.
+- Repo-wide scope: file/folder lists are anchors, not hard limits; discover additional relevant paths.
 
 ---
 

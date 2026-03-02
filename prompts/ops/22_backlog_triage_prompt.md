@@ -12,7 +12,7 @@ structured, AI-executable backlog items for hbot/BACKLOG.md.
 
 ## BACKLOG item format (strict — copy exactly)
 
-### [P{tier}-{id}] {short title} `open`
+### [P{tier}-{track}-YYYYMMDD-N] {short title} `open`
 
 **Why it matters**: {1–2 sentences: trading impact, risk, or reliability consequence}
 
@@ -44,10 +44,19 @@ structured, AI-executable backlog items for hbot/BACKLOG.md.
 | P2 | Code quality, observability improvement, tech debt | Refactor, test coverage, dashboard improvement |
 | P3 | Nice-to-have, future research | New strategy feature, ML experiment |
 
-## ID format
-Use `ITER-YYYYMMDD-N` for items from iteration sessions (e.g. `ITER-20260228-1`).
-Use `AUDIT-YYYYMMDD-N` for items from audit sessions.
-Use `INC-YYYYMMDD-N` for items from incident postmortems.
+## Track code format
+Use one track code per item:
+- `STRAT` — strategy logic, edge, sizing, regime, fills/PnL behavior
+- `TECH` — code quality, reliability, performance, tests, refactors
+- `OPS` — observability, alerting, runbooks, deployment/runtime operations
+- `ARCH` — architecture boundaries, service design, platform-level structure
+- `INC` — direct incident-prevention work from postmortems
+- `AUDIT` — broad audit findings that do not fit the above cleanly
+- `GEN` — cross-domain item only when no single track applies
+
+Numbering rule:
+- `YYYYMMDD` = date of triage run
+- `N` = sequence number for that date and track
 
 ## Your task
 You will receive a list of raw findings, improvement ideas, or audit outputs.
@@ -61,6 +70,8 @@ Rules:
 5. Group related items and de-duplicate overlapping findings.
 6. Reject findings that are too vague to implement (flag them as "needs more info: {what's missing}").
 7. Order output: P0 first, then P1, P2, P3.
+8. If placeholders are already inferable from repo context, fill them automatically.
+9. If some detail is unknown, make a conservative explicit assumption and continue (do not block output).
 
 ## Output format
 1. Summary table (id | title | tier | effort S/M/L | source finding)

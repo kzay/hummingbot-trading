@@ -16,7 +16,7 @@ You are a principal quant strategist + execution engineer + risk manager designi
 - My execution engine/framework constraints: Hummingbot
 - My paper-trade logs schema: TBD
 - Fee tier assumption: VIP0
-- Risk budget: 2%É
+- Risk budget: 2%
 - Operational constraints: look repo
 
 ## Your mission
@@ -94,7 +94,7 @@ Define:
 
 ### 9) Implementation Blueprint (ready to build)
 Provide:
-- module structure (files/classes) suitable for {{FRAMEWORK}}
+- module structure (files/classes) suitable for Hummingbot
 - pseudocode for main loop/state machine
 - configuration schema (YAML/JSON) with sensible defaults + parameter ranges
 - a “first MVP version” and “v2 improvements roadmap”
@@ -120,3 +120,4 @@ Return in this structure:
 - Avoid strategies that are basically “indicator salad”.
 - Prefer strategies with a clear causal mechanism and measurable edge.
 - Propose parameter ranges and explain sensitivity.
+- If an input placeholder can be inferred from repo context, fill it; if unknown, state assumptions and continue.
