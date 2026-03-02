@@ -4,9 +4,11 @@ import json
 import logging
 import os
 import time as _time_mod
+from collections import deque
 from datetime import datetime, timezone
 from decimal import Decimal, ROUND_DOWN, ROUND_UP
-from typing import Any, Dict, List, Optional, Tuple
+from pathlib import Path
+from typing import Any, Deque, Dict, List, Optional, Tuple
 
 logger = logging.getLogger(__name__)
 
@@ -116,9 +118,9 @@ class EppV24Config(MarketMakingControllerConfigBase):
     spread_floor_recalc_s: int = Field(default=0, description="DEPRECATED: spread floor now recomputed every tick for consistency with edge gate. Kept for config compat.")
     daily_rollover_hour_utc: int = Field(default=0, ge=0, le=23)
     cancel_budget_per_min: int = Field(default=50)
-    min_net_edge_bps: int = Field(default=1)
+    min_net_edge_bps: Decimal = Field(default=Decimal("1"))
     cancel_pause_cooldown_s: int = Field(default=120)
-    edge_resume_bps: int = Field(default=4)
+    edge_resume_bps: Decimal = Field(default=Decimal("4"))
     edge_state_hold_s: int = Field(default=120, ge=5, le=3600)
     edge_gate_ewma_period: int = Field(default=6, ge=1, le=120, description="EWMA period (in ticks) used for edge gate decision. 1=disabled")
     adaptive_params_enabled: bool = Field(
@@ -185,6 +187,15 @@ class EppV24Config(MarketMakingControllerConfigBase):
         default=Decimal("0"),
         description="Legacy daily net PnL quote target. Used only when daily_pnl_target_pct <= 0.",
     )
+    execution_intent_override_ttl_s: int = Field(
+        default=1800,
+        ge=0,
+        le=86_400,
+        description=(
+            "Seconds before external execution-intent target overrides expire automatically. "
+            "Set 0 to disable expiry."
+        ),
+    )
     pnl_governor_activation_buffer_pct: Decimal = Field(
         default=Decimal("0.05"),
         description="Required relative deficit buffer before governor activates (0.05 = 5% of target).",
@@ -213,8 +224,85 @@ class EppV24Config(MarketMakingControllerConfigBase):
         default=Decimal("0"),
         description="Cap quote spread as multiple of observed market spread. 0 disables.",
     )
+    min_side_spread_bps: Decimal = Field(
+        default=Decimal("1.0"),
+        description="Minimum side spread floor in bps for competitiveness cap and market safety.",
+    )
     min_market_spread_bps: int = Field(default=0, ge=0, le=100)
+    auto_calibration_enabled: bool = Field(
+        default=False,
+        description="Enable bounded runtime auto-calibration of spread/edge knobs.",
+    )
+    auto_calibration_shadow_mode: bool = Field(
+        default=True,
+        description="When True, emit suggested tuning decisions without applying them.",
+    )
+    auto_calibration_update_interval_s: int = Field(
+        default=900, ge=60, le=7200,
+        description="Seconds between auto-calibration evaluations.",
+    )
+    auto_calibration_lookback_s: int = Field(
+        default=1800, ge=300, le=21600,
+        description="Lookback window size for auto-calibration metrics.",
+    )
+    auto_calibration_required_consecutive_relax_cycles: int = Field(
+        default=2, ge=1, le=20,
+        description="Consecutive relax signals required before applying relaxation.",
+    )
+    auto_calibration_max_step_bps: Decimal = Field(
+        default=Decimal("0.20"),
+        description="Maximum per-evaluation parameter move in bps.",
+    )
+    auto_calibration_max_total_change_per_hour_bps: Decimal = Field(
+        default=Decimal("0.60"),
+        description="Maximum absolute cumulative parameter moves (bps) over rolling hour.",
+    )
+    auto_calibration_min_net_edge_bps_min: Decimal = Field(default=Decimal("1.0"))
+    auto_calibration_min_net_edge_bps_max: Decimal = Field(default=Decimal("6.0"))
+    auto_calibration_edge_resume_bps_min: Decimal = Field(default=Decimal("1.0"))
+    auto_calibration_edge_resume_bps_max: Decimal = Field(default=Decimal("4.0"))
+    auto_calibration_min_side_spread_bps_min: Decimal = Field(default=Decimal("0.10"))
+    auto_calibration_min_side_spread_bps_max: Decimal = Field(default=Decimal("1.20"))
+    auto_calibration_relax_fills_lt: int = Field(default=2, ge=0, le=100)
+    auto_calibration_relax_edge_gate_blocked_ratio_gt: Decimal = Field(default=Decimal("0.40"))
+    auto_calibration_relax_orders_active_ratio_lt: Decimal = Field(default=Decimal("0.50"))
+    auto_calibration_relax_order_book_stale_ratio_lt: Decimal = Field(default=Decimal("0.10"))
+    auto_calibration_tighten_slippage_p95_bps_gt: Decimal = Field(default=Decimal("3.5"))
+    auto_calibration_tighten_net_pnl_bps_lt: Decimal = Field(default=Decimal("-8.0"))
+    auto_calibration_tighten_taker_ratio_gt: Decimal = Field(default=Decimal("0.70"))
+    auto_calibration_freeze_drawdown_pct: Decimal = Field(default=Decimal("0.015"))
+    auto_calibration_freeze_daily_loss_pct: Decimal = Field(default=Decimal("0.012"))
+    auto_calibration_freeze_order_book_stale_ratio_gt: Decimal = Field(default=Decimal("0.15"))
+    auto_calibration_rollback_enabled: bool = Field(default=True)
+    auto_calibration_rollback_negative_windows: int = Field(default=3, ge=1, le=20)
     max_clock_skew_s: float = Field(default=5.0, description="Maximum allowed clock skew tolerance for order book staleness detection")
+    order_book_stale_after_s: float = Field(
+        default=30.0,
+        ge=5.0,
+        le=300.0,
+        description=(
+            "Seconds of unchanged top-of-book before marking order_book_stale "
+            "(before max_clock_skew_s is added)."
+        ),
+    )
+    order_book_stale_soft_pause_after_s: float = Field(
+        default=75.0,
+        ge=10.0,
+        le=600.0,
+        description=(
+            "Seconds of sustained stale-book age required before forcing SOFT_PAUSE. "
+            "Helps avoid cancel/recreate churn on transient websocket reconnects."
+        ),
+    )
+    order_book_reconnect_grace_s: float = Field(
+        default=45.0,
+        ge=0.0,
+        le=300.0,
+        description=(
+            "Additional grace window after connector reconnect before stale-book "
+            "is considered actionable."
+        ),
+    )
     portfolio_risk_guard_enabled: bool = Field(
         default=True,
         description="When enabled, enforce global portfolio kill-switch snapshots from Redis stream.",
@@ -710,6 +798,9 @@ class EppV24Controller(MarketMakingControllerBase):
         self._external_daily_pnl_target_pct_override: Optional[Decimal] = None
         self._last_external_model_version: str = ""
         self._last_external_intent_reason: str = ""
+        self._last_external_intent_ts: float = 0.0
+        self._external_target_base_pct_override_ts: float = 0.0
+        self._external_daily_pnl_target_pct_override_ts: float = 0.0
         self._cancel_pause_until: float = 0
         self._fee_source: str = "manual"
         self._fee_resolved: bool = False
@@ -782,6 +873,15 @@ class EppV24Controller(MarketMakingControllerBase):
         self._runtime_size_mult_applied: Decimal = _ONE
         self._spread_competitiveness_cap_active: bool = False
         self._spread_competitiveness_cap_side_pct: Decimal = _ZERO
+        self._auto_calibration_minute_history: Deque[Dict[str, Any]] = deque(maxlen=20_000)
+        self._auto_calibration_fill_history: Deque[Dict[str, Any]] = deque(maxlen=20_000)
+        self._auto_calibration_change_events: Deque[Tuple[float, Decimal]] = deque(maxlen=1_000)
+        self._auto_calibration_last_eval_ts: float = 0.0
+        self._auto_calibration_relax_signal_streak: int = 0
+        self._auto_calibration_negative_window_streak: int = 0
+        self._auto_calibration_applied_changes: List[Dict[str, Any]] = []
+        self._auto_calibration_last_decision: str = "idle"
+        self._auto_calibration_last_report_ts: float = 0.0
         self._funding_rate: Decimal = _ZERO
         self._funding_cost_today_quote: Decimal = _ZERO
         self._last_funding_rate_ts: float = 0.0
@@ -801,6 +901,7 @@ class EppV24Controller(MarketMakingControllerBase):
         self._last_book_bid_size: Decimal = _ZERO
         self._last_book_ask_size: Decimal = _ZERO
         self._book_stale_since_ts: float = 0.0
+        self._book_reconnect_grace_until_ts: float = 0.0
         self._ws_reconnect_count: int = 0
         self._last_connector_ready: bool = True
         self._last_daily_state_save_ts: float = 0.0
@@ -933,6 +1034,7 @@ class EppV24Controller(MarketMakingControllerBase):
 
     def _preflight(self, now: float) -> None:
         """Startup sync, fee resolution, funding rate, reconciliation, protective stop."""
+        self._expire_external_intent_overrides(now)
         self._runtime_adapter.refresh_connector_cache()
         if not self._startup_position_sync_done:
             self._run_startup_position_sync()
@@ -942,6 +1044,31 @@ class EppV24Controller(MarketMakingControllerBase):
         self._check_position_reconciliation(now)
         if self._protective_stop is not None:
             self._protective_stop.update(self._position_base, self._avg_entry_price)
+
+    def _expire_external_intent_overrides(self, now_ts: float) -> None:
+        """Expire stale external execution-intent overrides to prevent sticky state."""
+        ttl_s = int(max(0, int(getattr(self.config, "execution_intent_override_ttl_s", 0))))
+        if ttl_s <= 0:
+            return
+        ttl = float(ttl_s)
+
+        base_override = getattr(self, "_external_target_base_pct_override", None)
+        base_override_ts = float(getattr(self, "_external_target_base_pct_override_ts", 0.0) or 0.0)
+        if base_override is not None and (base_override_ts <= 0.0 or (now_ts - base_override_ts) > ttl):
+            self._external_target_base_pct_override = None
+            self._external_target_base_pct_override_ts = 0.0
+            logger.info("Expired stale external target_base_pct override (ttl=%ss)", ttl_s)
+
+        daily_target_override = getattr(self, "_external_daily_pnl_target_pct_override", None)
+        daily_target_override_ts = float(
+            getattr(self, "_external_daily_pnl_target_pct_override_ts", 0.0) or 0.0
+        )
+        if daily_target_override is not None and (
+            daily_target_override_ts <= 0.0 or (now_ts - daily_target_override_ts) > ttl
+        ):
+            self._external_daily_pnl_target_pct_override = None
+            self._external_daily_pnl_target_pct_override_ts = 0.0
+            logger.info("Expired stale external daily_pnl_target_pct override (ttl=%ss)", ttl_s)
 
     def _track_daily_equity(self, equity_quote: Decimal) -> None:
         """Initialize and update daily equity open/peak watermarks."""
@@ -1142,7 +1269,12 @@ class EppV24Controller(MarketMakingControllerBase):
         )
         # Fail-closed on stale order book to avoid quoting off a frozen top-of-book.
         if market.order_book_stale and state != GuardState.HARD_STOP:
-            state = GuardState.SOFT_PAUSE
+            stale_soft_pause_after_s = max(
+                float(getattr(self.config, "order_book_stale_after_s", 30.0)),
+                float(getattr(self.config, "order_book_stale_soft_pause_after_s", 75.0)),
+            )
+            if self._order_book_stale_age_s(now) >= stale_soft_pause_after_s:
+                state = GuardState.SOFT_PAUSE
         if now < self._reconnect_cooldown_until and state == GuardState.RUNNING:
             state = GuardState.SOFT_PAUSE
         if self._consecutive_stuck_ticks >= self.config.stuck_executor_escalation_ticks:
@@ -1321,10 +1453,18 @@ class EppV24Controller(MarketMakingControllerBase):
 
         event_ts = datetime.fromtimestamp(now, tz=timezone.utc).isoformat()
         snapshot["tick_duration_ms"] = self._tick_duration_ms
-        snapshot["order_book_stale"] = self._book_stale_since_ts > 0 and (float(self.market_data_provider.time()) - self._book_stale_since_ts) > 30.0
+        snapshot["order_book_stale"] = self._is_order_book_stale(now)
         snapshot["cancel_per_min"] = self._cancel_per_min(now)
         snapshot["orders_active"] = sum(1 for ex in self.executors_info if getattr(ex, "is_active", False))
         self._tick_emitter.log_minute(now, event_ts, self.processed_data, state, risk_reasons_for_log, snapshot)
+        self._auto_calibration_record_minute(
+            now_ts=now,
+            state=state,
+            risk_reasons=risk_reasons_for_log,
+            snapshot=snapshot,
+            daily_loss_pct=daily_loss_pct,
+            drawdown_pct=drawdown_pct,
+        )
         try:
             eq = self.processed_data.get("equity_quote", _ZERO)
             eq = eq if isinstance(eq, Decimal) else to_decimal(eq)
@@ -1332,6 +1472,13 @@ class EppV24Controller(MarketMakingControllerBase):
             self._equity_sample_ts_today.append(event_ts)
         except Exception:
             logger.debug("Equity sample recording failed", exc_info=True)
+        self._auto_calibration_maybe_run(
+            now_ts=now,
+            state=state,
+            risk_reasons=risk_reasons_for_log,
+            daily_loss_pct=daily_loss_pct,
+            drawdown_pct=drawdown_pct,
+        )
         self._save_daily_state()
 
     def get_executor_config(self, level_id: str, price: Decimal, amount: Decimal):
@@ -1472,6 +1619,317 @@ class EppV24Controller(MarketMakingControllerBase):
         self._derisk_trace_last_ts = now_ts
         details = " ".join(f"{k}={v}" for k, v in fields.items())
         logger.warning("DERISK_TRACE stage=%s %s", stage, details)
+
+    @staticmethod
+    def _auto_calibration_p95(values: List[Decimal]) -> Decimal:
+        if not values:
+            return _ZERO
+        ordered = sorted(values)
+        idx = int((len(ordered) - 1) * 0.95)
+        return ordered[max(0, min(idx, len(ordered) - 1))]
+
+    def _auto_calibration_report_path(self) -> Path:
+        return Path(__file__).resolve().parents[1] / "reports" / "strategy" / "auto_tune_latest.json"
+
+    def _auto_calibration_report_paths(self) -> List[Path]:
+        paths = [self._auto_calibration_report_path()]
+        try:
+            paths.append(Path(self.config.log_dir) / "auto_tune_latest.json")
+        except Exception:
+            pass
+        try:
+            paths.append(Path(self._daily_state_path()).parent / "auto_tune_latest.json")
+        except Exception:
+            pass
+        dedup: List[Path] = []
+        seen: set[str] = set()
+        for p in paths:
+            key = str(p)
+            if key in seen:
+                continue
+            seen.add(key)
+            dedup.append(p)
+        return dedup
+
+    def _auto_calibration_write_report(self, payload: Dict[str, Any]) -> None:
+        try:
+            blob = json.dumps(payload, indent=2, default=str)
+            for path in self._auto_calibration_report_paths():
+                path.parent.mkdir(parents=True, exist_ok=True)
+                path.write_text(blob, encoding="utf-8")
+            self._auto_calibration_last_report_ts = float(self.market_data_provider.time())
+        except Exception:
+            logger.debug("auto_calibration report write failed", exc_info=True)
+
+    def _auto_calibration_record_minute(
+        self,
+        now_ts: float,
+        state: GuardState,
+        risk_reasons: List[str],
+        snapshot: Dict[str, Any],
+        daily_loss_pct: Decimal,
+        drawdown_pct: Decimal,
+    ) -> None:
+        self._auto_calibration_minute_history.append(
+            {
+                "ts": now_ts,
+                "state": str(getattr(state, "value", state)),
+                "risk_reasons": list(risk_reasons),
+                "edge_gate_blocked": bool(snapshot.get("edge_gate_blocked", False)),
+                "orders_active": int(to_decimal(snapshot.get("orders_active", _ZERO))),
+                "order_book_stale": bool(snapshot.get("order_book_stale", False)),
+                "net_edge_pct": to_decimal(self.processed_data.get("net_edge_pct", _ZERO)),
+                "net_edge_gate_pct": to_decimal(self.processed_data.get("net_edge_gate_pct", _ZERO)),
+                "daily_loss_pct": to_decimal(daily_loss_pct),
+                "drawdown_pct": to_decimal(drawdown_pct),
+            }
+        )
+
+    def _auto_calibration_record_fill(
+        self,
+        now_ts: float,
+        notional_quote: Decimal,
+        fee_quote: Decimal,
+        realized_pnl_quote: Decimal,
+        slippage_bps: Decimal,
+        is_maker: bool,
+    ) -> None:
+        net_pnl_quote = realized_pnl_quote - fee_quote
+        self._auto_calibration_fill_history.append(
+            {
+                "ts": now_ts,
+                "notional_quote": max(_ZERO, to_decimal(notional_quote)),
+                "fee_quote": max(_ZERO, to_decimal(fee_quote)),
+                "realized_pnl_quote": to_decimal(realized_pnl_quote),
+                "net_pnl_quote": to_decimal(net_pnl_quote),
+                "slippage_bps": to_decimal(slippage_bps),
+                "is_maker": bool(is_maker),
+            }
+        )
+
+    def _auto_calibration_maybe_run(
+        self,
+        now_ts: float,
+        state: GuardState,
+        risk_reasons: List[str],
+        daily_loss_pct: Decimal,
+        drawdown_pct: Decimal,
+    ) -> None:
+        if not self.config.auto_calibration_enabled:
+            return
+        interval_s = float(max(60, int(self.config.auto_calibration_update_interval_s)))
+        if (now_ts - self._auto_calibration_last_eval_ts) < interval_s:
+            return
+        self._auto_calibration_last_eval_ts = now_ts
+
+        lookback_s = float(max(300, int(self.config.auto_calibration_lookback_s)))
+        window_start = now_ts - lookback_s
+        minutes = [m for m in self._auto_calibration_minute_history if float(m.get("ts", 0.0)) >= window_start]
+        fills = [f for f in self._auto_calibration_fill_history if float(f.get("ts", 0.0)) >= window_start]
+        rows = max(1, len(minutes))
+
+        edge_gate_blocked_ratio = Decimal(sum(1 for m in minutes if bool(m.get("edge_gate_blocked", False)))) / Decimal(rows)
+        orders_active_ratio = Decimal(sum(1 for m in minutes if int(m.get("orders_active", 0)) > 0)) / Decimal(rows)
+        stale_ratio = Decimal(sum(1 for m in minutes if bool(m.get("order_book_stale", False)))) / Decimal(rows)
+        fills_count = len(fills)
+        taker_ratio = (
+            Decimal(sum(1 for f in fills if not bool(f.get("is_maker", False)))) / Decimal(fills_count)
+            if fills_count > 0 else _ZERO
+        )
+        notional_total = sum((to_decimal(f.get("notional_quote", _ZERO)) for f in fills), _ZERO)
+        net_pnl_total = sum((to_decimal(f.get("net_pnl_quote", _ZERO)) for f in fills), _ZERO)
+        net_pnl_bps = (net_pnl_total / notional_total * _10K) if notional_total > _ZERO else _ZERO
+        slippage_p95_bps = self._auto_calibration_p95([to_decimal(f.get("slippage_bps", _ZERO)) for f in fills])
+
+        freeze_reasons: List[str] = []
+        if to_decimal(drawdown_pct) >= to_decimal(self.config.auto_calibration_freeze_drawdown_pct):
+            freeze_reasons.append("drawdown_cap")
+        if to_decimal(daily_loss_pct) >= to_decimal(self.config.auto_calibration_freeze_daily_loss_pct):
+            freeze_reasons.append("daily_loss_cap")
+        if stale_ratio > to_decimal(self.config.auto_calibration_freeze_order_book_stale_ratio_gt):
+            freeze_reasons.append("order_book_stale_ratio")
+        if self._external_soft_pause:
+            freeze_reasons.append("external_guard")
+        if state == GuardState.HARD_STOP:
+            freeze_reasons.append("hard_stop")
+
+        relax_signal = (
+            fills_count < int(self.config.auto_calibration_relax_fills_lt)
+            and edge_gate_blocked_ratio > to_decimal(self.config.auto_calibration_relax_edge_gate_blocked_ratio_gt)
+            and orders_active_ratio < to_decimal(self.config.auto_calibration_relax_orders_active_ratio_lt)
+            and stale_ratio < to_decimal(self.config.auto_calibration_relax_order_book_stale_ratio_lt)
+        )
+        tighten_signal = (
+            (fills_count > 0 and slippage_p95_bps > to_decimal(self.config.auto_calibration_tighten_slippage_p95_bps_gt))
+            or (fills_count > 0 and net_pnl_bps < to_decimal(self.config.auto_calibration_tighten_net_pnl_bps_lt))
+            or (
+                fills_count > 0
+                and taker_ratio > to_decimal(self.config.auto_calibration_tighten_taker_ratio_gt)
+                and net_pnl_bps < _ZERO
+            )
+        )
+
+        if fills_count > 0 and net_pnl_bps < _ZERO:
+            self._auto_calibration_negative_window_streak += 1
+        elif fills_count > 0:
+            self._auto_calibration_negative_window_streak = 0
+
+        if relax_signal:
+            self._auto_calibration_relax_signal_streak += 1
+        else:
+            self._auto_calibration_relax_signal_streak = 0
+
+        decision = "hold"
+        direction = _ZERO
+        if freeze_reasons:
+            decision = "freeze"
+        elif tighten_signal:
+            decision = "tighten"
+            direction = _ONE
+            self._auto_calibration_relax_signal_streak = 0
+        elif relax_signal and self._auto_calibration_relax_signal_streak >= int(self.config.auto_calibration_required_consecutive_relax_cycles):
+            decision = "relax"
+            direction = Decimal("-1")
+
+        max_hourly = max(_ZERO, to_decimal(self.config.auto_calibration_max_total_change_per_hour_bps))
+        while self._auto_calibration_change_events and (now_ts - float(self._auto_calibration_change_events[0][0])) > 3600:
+            self._auto_calibration_change_events.popleft()
+        used_hourly = sum((to_decimal(v[1]) for v in self._auto_calibration_change_events), _ZERO)
+        remaining_hourly = max(_ZERO, max_hourly - used_hourly)
+        step_bps = max(_ZERO, to_decimal(self.config.auto_calibration_max_step_bps))
+        step_bps = min(step_bps, remaining_hourly / Decimal("3") if remaining_hourly > _ZERO else _ZERO)
+
+        old_min_edge = to_decimal(self.config.min_net_edge_bps)
+        old_resume = to_decimal(self.config.edge_resume_bps)
+        old_side_floor = to_decimal(self.config.min_side_spread_bps)
+        new_min_edge = old_min_edge
+        new_resume = old_resume
+        new_side_floor = old_side_floor
+
+        if decision in {"relax", "tighten"} and step_bps > _ZERO:
+            new_min_edge = _clip(
+                old_min_edge + (direction * step_bps),
+                to_decimal(self.config.auto_calibration_min_net_edge_bps_min),
+                to_decimal(self.config.auto_calibration_min_net_edge_bps_max),
+            )
+            new_resume = _clip(
+                old_resume + (direction * step_bps),
+                to_decimal(self.config.auto_calibration_edge_resume_bps_min),
+                to_decimal(self.config.auto_calibration_edge_resume_bps_max),
+            )
+            new_side_floor = _clip(
+                old_side_floor + (direction * step_bps),
+                to_decimal(self.config.auto_calibration_min_side_spread_bps_min),
+                to_decimal(self.config.auto_calibration_min_side_spread_bps_max),
+            )
+
+        change_abs = abs(new_min_edge - old_min_edge) + abs(new_resume - old_resume) + abs(new_side_floor - old_side_floor)
+        applied = False
+        shadow = bool(self.config.auto_calibration_shadow_mode)
+        rollback_applied = False
+
+        if decision in {"relax", "tighten"} and change_abs <= _ZERO:
+            decision = "hold_no_budget_or_bound"
+        elif decision in {"relax", "tighten"}:
+            if shadow:
+                decision = f"{decision}_shadow"
+            else:
+                self.config.min_net_edge_bps = new_min_edge
+                self.config.edge_resume_bps = new_resume
+                self.config.min_side_spread_bps = new_side_floor
+                self._spread_engine._min_net_edge_bps = new_min_edge
+                self._spread_engine._edge_resume_bps = new_resume
+                self._auto_calibration_change_events.append((now_ts, change_abs))
+                self._auto_calibration_applied_changes.append(
+                    {
+                        "ts": now_ts,
+                        "prev": {
+                            "min_net_edge_bps": str(old_min_edge),
+                            "edge_resume_bps": str(old_resume),
+                            "min_side_spread_bps": str(old_side_floor),
+                        },
+                        "new": {
+                            "min_net_edge_bps": str(new_min_edge),
+                            "edge_resume_bps": str(new_resume),
+                            "min_side_spread_bps": str(new_side_floor),
+                        },
+                    }
+                )
+                applied = True
+                logger.warning(
+                    "AUTO_TUNE applied decision=%s min_net_edge_bps=%s edge_resume_bps=%s min_side_spread_bps=%s",
+                    decision, str(new_min_edge), str(new_resume), str(new_side_floor),
+                )
+
+        if (
+            self.config.auto_calibration_rollback_enabled
+            and not shadow
+            and self._auto_calibration_negative_window_streak >= int(self.config.auto_calibration_rollback_negative_windows)
+            and len(self._auto_calibration_applied_changes) > 0
+        ):
+            last = self._auto_calibration_applied_changes.pop()
+            prev = last.get("prev", {})
+            rb_min_edge = to_decimal(prev.get("min_net_edge_bps", self.config.min_net_edge_bps))
+            rb_resume = to_decimal(prev.get("edge_resume_bps", self.config.edge_resume_bps))
+            rb_side_floor = to_decimal(prev.get("min_side_spread_bps", self.config.min_side_spread_bps))
+            rb_change = (
+                abs(to_decimal(self.config.min_net_edge_bps) - rb_min_edge)
+                + abs(to_decimal(self.config.edge_resume_bps) - rb_resume)
+                + abs(to_decimal(self.config.min_side_spread_bps) - rb_side_floor)
+            )
+            self.config.min_net_edge_bps = rb_min_edge
+            self.config.edge_resume_bps = rb_resume
+            self.config.min_side_spread_bps = rb_side_floor
+            self._spread_engine._min_net_edge_bps = rb_min_edge
+            self._spread_engine._edge_resume_bps = rb_resume
+            self._auto_calibration_change_events.append((now_ts, rb_change))
+            self._auto_calibration_negative_window_streak = 0
+            rollback_applied = True
+            decision = "rollback"
+            logger.warning(
+                "AUTO_TUNE rollback applied min_net_edge_bps=%s edge_resume_bps=%s min_side_spread_bps=%s",
+                str(rb_min_edge), str(rb_resume), str(rb_side_floor),
+            )
+
+        self._auto_calibration_last_decision = decision
+        report = {
+            "ts_utc": datetime.fromtimestamp(now_ts, tz=timezone.utc).isoformat(),
+            "enabled": bool(self.config.auto_calibration_enabled),
+            "shadow_mode": shadow,
+            "decision": decision,
+            "applied": applied,
+            "rollback_applied": rollback_applied,
+            "freeze_reasons": freeze_reasons,
+            "metrics": {
+                "lookback_s": int(lookback_s),
+                "minute_rows": len(minutes),
+                "fills": fills_count,
+                "edge_gate_blocked_ratio": float(edge_gate_blocked_ratio),
+                "orders_active_ratio": float(orders_active_ratio),
+                "order_book_stale_ratio": float(stale_ratio),
+                "taker_ratio": float(taker_ratio),
+                "slippage_p95_bps": float(slippage_p95_bps),
+                "net_pnl_bps": float(net_pnl_bps),
+                "net_pnl_quote": float(net_pnl_total),
+                "negative_window_streak": self._auto_calibration_negative_window_streak,
+                "relax_signal_streak": self._auto_calibration_relax_signal_streak,
+            },
+            "knobs_before": {
+                "min_net_edge_bps": str(old_min_edge),
+                "edge_resume_bps": str(old_resume),
+                "min_side_spread_bps": str(old_side_floor),
+            },
+            "knobs_after": {
+                "min_net_edge_bps": str(to_decimal(self.config.min_net_edge_bps)),
+                "edge_resume_bps": str(to_decimal(self.config.edge_resume_bps)),
+                "min_side_spread_bps": str(to_decimal(self.config.min_side_spread_bps)),
+            },
+            "limits": {
+                "max_step_bps": str(to_decimal(self.config.auto_calibration_max_step_bps)),
+                "remaining_hourly_budget_bps": str(max(_ZERO, remaining_hourly)),
+            },
+        }
+        self._auto_calibration_write_report(report)
 
     def _get_telemetry_redis(self) -> Optional[Any]:
         """Lazy-init a shared Redis client for fill telemetry. Never raises."""
@@ -1640,6 +2098,21 @@ class EppV24Controller(MarketMakingControllerBase):
                 logger.warning("Fill price deviation %.4f%% for order %s (fill=%.2f mid=%.2f)",
                                float(price_deviation_pct * _100), event.order_id, float(fill_price), float(mid_ref))
 
+        slippage_bps = _ZERO
+        if mid_ref > _ZERO:
+            if event.trade_type.name.lower() == "buy":
+                slippage_bps = (fill_price - mid_ref) / mid_ref * _10K
+            else:
+                slippage_bps = (mid_ref - fill_price) / mid_ref * _10K
+        self._auto_calibration_record_fill(
+            now_ts=float(event.timestamp),
+            notional_quote=notional,
+            fee_quote=fee_quote,
+            realized_pnl_quote=realized_pnl,
+            slippage_bps=slippage_bps,
+            is_maker=bool(is_maker),
+        )
+
         event_ts = datetime.fromtimestamp(event.timestamp, tz=timezone.utc).isoformat()
         self._csv.log_fill(
             {
@@ -1742,12 +2215,21 @@ class EppV24Controller(MarketMakingControllerBase):
 
     def set_external_soft_pause(self, active: bool, reason: str) -> None:
         self._external_soft_pause = bool(active)
-        self._external_pause_reason = reason
+        if self._external_soft_pause:
+            resolved_reason = str(reason or "").strip()
+            self._external_pause_reason = resolved_reason or "external_intent"
+        else:
+            # Keep pause reason empty when inactive to avoid stale guard side effects.
+            self._external_pause_reason = ""
 
     def apply_execution_intent(self, intent: Dict[str, object]) -> Tuple[bool, str]:
         action = str(intent.get("action", "")).strip()
         metadata = intent.get("metadata", {})
         metadata = metadata if isinstance(metadata, dict) else {}
+        now_ts = (
+            float(self.market_data_provider.time()) if hasattr(self, "market_data_provider") else _time_mod.time()
+        )
+        self._last_external_intent_ts = now_ts
         self._last_external_model_version = str(metadata.get("model_version", ""))
         self._last_external_intent_reason = str(metadata.get("reason", ""))
         if action == "soft_pause":
@@ -1755,7 +2237,7 @@ class EppV24Controller(MarketMakingControllerBase):
             self.set_external_soft_pause(True, reason)
             return True, "ok"
         if action == "resume":
-            self.set_external_soft_pause(False, "resume")
+            self.set_external_soft_pause(False, "")
             return True, "ok"
         if action == "kill_switch":
             self._ops_guard.force_hard_stop("external_kill_switch")
@@ -1769,6 +2251,7 @@ class EppV24Controller(MarketMakingControllerBase):
                 if candidate < Decimal("0") or candidate > Decimal("1"):
                     return False, "target_base_pct_out_of_range"
                 self._external_target_base_pct_override = _clip(candidate, Decimal("0"), Decimal("1"))
+                self._external_target_base_pct_override_ts = now_ts
                 return True, "ok"
             except Exception:
                 return False, "invalid_target_base_pct"
@@ -1783,6 +2266,7 @@ class EppV24Controller(MarketMakingControllerBase):
                 if candidate < Decimal("0") or candidate > Decimal("100"):
                     return False, "daily_pnl_target_pct_out_of_range"
                 self._external_daily_pnl_target_pct_override = _clip(candidate, Decimal("0"), Decimal("100"))
+                self._external_daily_pnl_target_pct_override_ts = now_ts
                 return True, "ok"
             except Exception:
                 return False, "invalid_daily_pnl_target_pct"
@@ -3155,6 +3639,7 @@ class EppV24Controller(MarketMakingControllerBase):
         return effective_min_edge_pct, market_floor_pct, vol_ratio
 
     def _evaluate_market_conditions(self, now_ts: float, band_pct: Decimal) -> MarketConditions:
+        """Build market condition snapshot with reconnect-aware stale-book detection."""
         is_high_vol = band_pct >= self.config.high_vol_band_pct
         bid_p, ask_p, market_spread_pct, best_bid_size, best_ask_size = self._get_top_of_book()
         if self.config.ob_imbalance_skew_weight > _ZERO:
@@ -3164,6 +3649,11 @@ class EppV24Controller(MarketMakingControllerBase):
         if not self._last_connector_ready and connector_ready_now:
             self._ws_reconnect_count += 1
             self._reconnect_cooldown_until = now_ts + self.config.reconnect_cooldown_s
+            reconnect_grace_s = max(0.0, float(getattr(self.config, "order_book_reconnect_grace_s", 45.0)))
+            self._book_reconnect_grace_until_ts = now_ts + reconnect_grace_s
+            # Reset stale clock at reconnect boundary; keep fail-closed logic for true long stale windows.
+            if self._book_stale_since_ts > 0.0:
+                self._book_stale_since_ts = now_ts
             logger.info("Connector reconnected (count=%d), cooldown %.0fs",
                         self._ws_reconnect_count, self.config.reconnect_cooldown_s)
         self._last_connector_ready = connector_ready_now
@@ -3185,15 +3675,16 @@ class EppV24Controller(MarketMakingControllerBase):
                 self._last_book_ask = ask_p
                 self._last_book_bid_size = best_bid_size
                 self._last_book_ask_size = best_ask_size
-        order_book_stale = self._book_stale_since_ts > 0 and (now_ts - self._book_stale_since_ts) > 30.0 + self.config.max_clock_skew_s
+        order_book_stale = self._is_order_book_stale(now_ts)
         market_spread_threshold = Decimal(self.config.min_market_spread_bps) / _10K
         market_spread_too_small = (
             self.config.min_market_spread_bps > 0 and market_spread_pct > 0 and market_spread_pct < market_spread_threshold
         )
 
-        side_spread_floor = _MIN_SPREAD
+        # Keep a tiny absolute floor to avoid zero-distance quoting edge cases.
+        side_spread_floor = max(Decimal("0.000001"), to_decimal(self.config.min_side_spread_bps) / _10K)
         if market_spread_pct > 0:
-            half_market = market_spread_pct / _TWO + Decimal("0.0001")
+            half_market = market_spread_pct / _TWO + side_spread_floor
             if half_market > side_spread_floor:
                 side_spread_floor = half_market
 
@@ -3209,6 +3700,22 @@ class EppV24Controller(MarketMakingControllerBase):
             market_spread_too_small=market_spread_too_small,
             side_spread_floor=side_spread_floor,
         )
+
+    def _order_book_stale_age_s(self, now_ts: float) -> float:
+        if self._book_stale_since_ts <= 0.0:
+            return 0.0
+        return max(0.0, float(now_ts) - float(self._book_stale_since_ts))
+
+    def _is_order_book_stale(self, now_ts: float) -> bool:
+        if self._book_stale_since_ts <= 0.0:
+            return False
+        if float(now_ts) < float(getattr(self, "_book_reconnect_grace_until_ts", 0.0) or 0.0):
+            return False
+        stale_after_s = (
+            max(5.0, float(getattr(self.config, "order_book_stale_after_s", 30.0)))
+            + max(0.0, float(getattr(self.config, "max_clock_skew_s", 5.0)))
+        )
+        return self._order_book_stale_age_s(now_ts) > stale_after_s
 
     def _build_tick_snapshot(self, equity_quote: Decimal) -> Dict[str, Any]:
         """Gather controller-level state into a snapshot dict for TickEmitter."""

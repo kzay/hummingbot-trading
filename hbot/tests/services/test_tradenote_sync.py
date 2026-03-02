@@ -131,6 +131,7 @@ def test_collect_daily_payloads_groups_multi_bot_same_day(tmp_path: Path) -> Non
         account_prefix="hbot",
         security_type="0",
         settlement_days=0,
+        scope_symbol_by_account=False,
     )
 
     assert day_y in rows_by_day
@@ -174,6 +175,7 @@ def test_collect_daily_payloads_skips_imported_days(tmp_path: Path) -> None:
         account_prefix="hbot",
         security_type="0",
         settlement_days=0,
+        scope_symbol_by_account=False,
     )
 
     assert rows_by_day == {}
@@ -185,3 +187,120 @@ def test_chunk_rows_splits_large_batches() -> None:
     chunks = tradenote_sync._chunk_rows(rows, max_rows_per_post=500)
     sizes = [len(c) for c in chunks]
     assert sizes == [500, 500, 201]
+
+
+def test_to_tradenote_execution_applies_exec_time_offset() -> None:
+    row = {
+        "ts": "2026-02-27T12:34:56+00:00",
+        "exchange": "bitget_paper_trade",
+        "trading_pair": "BTC-USDT",
+        "side": "buy",
+        "price": "100.5",
+        "amount_base": "0.1",
+        "notional_quote": "10.05",
+        "fee_quote": "0.01",
+        "order_id": "paper-B-123",
+        "is_maker": "false",
+    }
+    _, payload = tradenote_sync._to_tradenote_execution(
+        row=row,
+        account="hbot_bot1_a",
+        security_type="0",
+        settlement_days=0,
+        exec_time_offset_sec=10,
+    )
+    assert payload is not None
+    assert payload["Exec Time"] == "12:35:06"
+
+
+def test_collect_daily_payloads_offsets_exec_time_per_source(tmp_path: Path) -> None:
+    day_y = (datetime.now(timezone.utc).date() - timedelta(days=1)).isoformat()
+    headers = [
+        "ts",
+        "exchange",
+        "trading_pair",
+        "side",
+        "price",
+        "amount_base",
+        "notional_quote",
+        "fee_quote",
+        "order_id",
+        "is_maker",
+    ]
+    base = tmp_path / "data"
+    shared_ts = f"{day_y}T10:00:00+00:00"
+    _write_csv(
+        base / "bot1" / "logs" / "epp_v24" / "bot1_a" / "fills.csv",
+        headers,
+        [
+            {
+                "ts": shared_ts,
+                "exchange": "bitget_paper_trade",
+                "trading_pair": "BTC-USDT",
+                "side": "buy",
+                "price": "100",
+                "amount_base": "0.1",
+                "notional_quote": "10",
+                "fee_quote": "0.01",
+                "order_id": "b1-yday",
+                "is_maker": "true",
+            }
+        ],
+    )
+    _write_csv(
+        base / "bot3" / "logs" / "epp_v24" / "bot3_a" / "fills.csv",
+        headers,
+        [
+            {
+                "ts": shared_ts,
+                "exchange": "bitget_paper_trade",
+                "trading_pair": "BTC-USDT",
+                "side": "buy",
+                "price": "100",
+                "amount_base": "0.1",
+                "notional_quote": "10",
+                "fee_quote": "0.01",
+                "order_id": "b3-yday",
+                "is_maker": "false",
+            }
+        ],
+    )
+
+    discovered = tradenote_sync._discover_fill_files(base)
+    rows_by_day, _, _ = tradenote_sync._collect_daily_payloads(
+        fill_files=discovered,
+        imported_days=set(),
+        include_today=False,
+        lookback_days=7,
+        account_prefix="hbot",
+        security_type="0",
+        settlement_days=0,
+        scope_symbol_by_account=False,
+    )
+    rows = rows_by_day[day_y]
+    exec_time_by_account = {str(r["Account"]): str(r["Exec Time"]) for r in rows}
+    assert exec_time_by_account["hbot_bot1_a"] != exec_time_by_account["hbot_bot3_a"]
+
+
+def test_to_tradenote_execution_scopes_symbol_by_account() -> None:
+    row = {
+        "ts": "2026-02-27T12:34:56+00:00",
+        "exchange": "bitget_paper_trade",
+        "trading_pair": "BTC-USDT",
+        "side": "buy",
+        "price": "100.5",
+        "amount_base": "0.1",
+        "notional_quote": "10.05",
+        "fee_quote": "0.01",
+        "order_id": "paper-B-123",
+        "is_maker": "false",
+    }
+    _, payload = tradenote_sync._to_tradenote_execution(
+        row=row,
+        account="hbot_bot1_a",
+        security_type="0",
+        settlement_days=0,
+        scope_symbol_by_account=True,
+    )
+    assert payload is not None
+    assert payload["Symbol"] == "BTC-USDT__hbot_bot1_a"

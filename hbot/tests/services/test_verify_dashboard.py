@@ -145,3 +145,19 @@ def test_build_report_flags_tradenote_sync_error(tmp_path: Path) -> None:
     assert report["status"] == "fail"
     assert report["tradenote_ready"] is False
     assert "tradenote_sync_ok" in report["failed_checks"]
+
+
+def test_build_report_flags_stale_grafana_minute_data(tmp_path: Path) -> None:
+    now_ts = _seed_minimum_dashboard_data(tmp_path, tradenote_status="ok")
+    report = build_report(
+        root=tmp_path,
+        max_data_age_s=180,
+        tradenote_report_max_age_s=5400,
+        tradenote_fill_max_age_s=7 * 24 * 3600,
+        required_grafana_bot_variants=["bot1:a"],
+        required_tradenote_bot_variants=["bot1:a"],
+        now_ts=now_ts + 181.0,
+    )
+    assert report["status"] == "fail"
+    assert report["grafana_ready"] is False
+    assert "grafana_minute_fresh" in report["failed_checks"]

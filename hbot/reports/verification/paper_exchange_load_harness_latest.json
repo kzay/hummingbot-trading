@@ -1,5 +1,5 @@
 {
-  "ts_utc": "2026-03-02T03:32:32.228062+00:00",
+  "ts_utc": "2026-03-02T12:36:20.254715+00:00",
   "status": "pass",
   "failed_checks": [],
   "checks": {
@@ -15,13 +15,13 @@
     "publish_success_rate_pct": 100.0,
     "matched_results": 3600,
     "result_match_rate_pct": 100.0,
-    "achieved_publish_rate_cmds_per_sec": 59.99867262936586,
-    "latency_p95_ms": 5.0,
-    "latency_p99_ms": 29.0,
+    "achieved_publish_rate_cmds_per_sec": 59.99946670474011,
+    "latency_p95_ms": 28.0,
+    "latency_p99_ms": 34.0,
     "latency_samples": 3600
   },
   "diagnostics": {
-    "run_id": "20260302T033131775841Z",
+    "run_id": "20260302T123519630710Z",
     "duration_sec": 60.0,
     "target_cmd_rate": 60.0,
     "command_stream": "hb.paper_exchange.command.v1",
@@ -33,8 +33,8 @@
     "producer": "hb_bridge_active_adapter",
     "heartbeat": {
       "present": true,
-      "timestamp_ms": 1772422290070,
-      "age_s": 1.704,
+      "timestamp_ms": 1772454918402,
+      "age_s": 1.227,
       "error": ""
     },
     "result_timeout_sec": 30.0,

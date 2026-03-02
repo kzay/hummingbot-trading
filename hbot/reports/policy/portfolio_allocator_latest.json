@@ -1,5 +1,5 @@
 {
-  "ts_utc": "2026-03-02T11:57:30.609675+00:00",
+  "ts_utc": "2026-03-02T18:37:29.632205+00:00",
   "status": "pass",
   "reasons": [],
   "allocator_enabled": true,
@@ -10,12 +10,12 @@
   "enforce_diversification": false,
   "diversification": {
     "report_status": "pass",
-    "correlation": 0.39588382858376675,
+    "correlation": 0.2434760076779531,
     "max_abs_correlation": 0.7,
     "correlation_available": true,
     "correlation_ok": true,
-    "btc_variance": 1.0624373878037148e-06,
-    "eth_variance": 1.458809152474459e-06,
+    "btc_variance": 9.926924084025412e-07,
+    "eth_variance": 3.3335819691513193e-06,
     "overrides_applied": 3
   },
   "total_equity_quote": 6120.151444704382,
@@ -67,7 +67,7 @@
     {
       "bot": "bot1",
       "equity_quote": 240.31102200113824,
-      "variance_proxy": 1.0624373878037148e-06,
+      "variance_proxy": 9.926924084025412e-07,
       "variance_source": "diversification_report",
       "symbol_bucket": "btc",
       "max_alloc_pct": 1.0,
@@ -80,7 +80,7 @@
     {
       "bot": "bot3",
       "equity_quote": 200.1444227032436,
-      "variance_proxy": 1.458809152474459e-06,
+      "variance_proxy": 3.3335819691513193e-06,
       "variance_source": "diversification_report",
       "symbol_bucket": "eth",
       "max_alloc_pct": 0.0,
@@ -93,7 +93,7 @@
     {
       "bot": "bot4",
       "equity_quote": 5679.696,
-      "variance_proxy": 1.0624373878037148e-06,
+      "variance_proxy": 9.926924084025412e-07,
       "variance_source": "diversification_report",
       "symbol_bucket": "btc",
       "max_alloc_pct": 0.0,

@@ -522,7 +522,14 @@ def _run_paper_exchange_preflight_check(root: Path, strict: bool = False) -> Tup
     if strict:
         cmd.append("--strict")
     try:
-        proc = subprocess.run(cmd, cwd=str(root), capture_output=True, text=True, check=False)
+        proc = subprocess.run(
+            cmd,
+            cwd=str(root),
+            capture_output=True,
+            text=True,
+            check=False,
+            env=_build_subprocess_env(root),
+        )
         msg = (proc.stdout or "") + ("\n" + proc.stderr if proc.stderr else "")
         return int(proc.returncode), msg.strip()
     except Exception as e:
@@ -779,6 +786,45 @@ def _run_portfolio_diversification_check(root: Path) -> Tuple[int, str]:
         return 2, str(e)
 
 
+def _run_dashboard_readiness_check(
+    root: Path,
+    *,
+    max_data_age_s: int,
+    tradenote_report_max_age_s: int,
+    tradenote_fill_max_age_s: int,
+    required_grafana_bot_variants: str = "",
+    required_tradenote_bot_variants: str = "",
+) -> Tuple[int, str]:
+    cmd = [
+        sys.executable,
+        str(root / "scripts" / "ops" / "verify_dashboard.py"),
+        "--strict",
+        "--max-data-age-s",
+        str(max(30, int(max_data_age_s))),
+        "--tradenote-report-max-age-s",
+        str(max(30, int(tradenote_report_max_age_s))),
+        "--tradenote-fill-max-age-s",
+        str(max(30, int(tradenote_fill_max_age_s))),
+    ]
+    if str(required_grafana_bot_variants or "").strip():
+        cmd.extend(["--required-grafana-bot-variants", str(required_grafana_bot_variants).strip()])
+    if str(required_tradenote_bot_variants or "").strip():
+        cmd.extend(["--required-tradenote-bot-variants", str(required_tradenote_bot_variants).strip()])
+    try:
+        proc = subprocess.run(
+            cmd,
+            cwd=str(root),
+            capture_output=True,
+            text=True,
+            check=False,
+            env=_build_subprocess_env(root),
+        )
+        msg = (proc.stdout or "") + ("\n" + proc.stderr if proc.stderr else "")
+        return int(proc.returncode), msg.strip()
+    except Exception as e:
+        return 2, str(e)
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description="Run promotion gate contract checks.")
     parser.add_argument("--max-report-age-min", type=int, default=20, help="Max allowed age for fresh reports.")
@@ -911,6 +957,41 @@ def main() -> int:
         "--check-data-plane-consistency",
         action="store_true",
         help="Run INFRA-5 data-plane consistency gate (requires desk_snapshot_service running).",
+    )
+    parser.add_argument(
+        "--check-dashboard-readiness",
+        action="store_true",
+        default=str(os.getenv("PROMOTION_CHECK_DASHBOARD_READINESS", "false")).strip().lower()
+        in {"1", "true", "yes", "on"},
+        help="Run TradeNote + Grafana data readiness gate.",
+    )
+    parser.add_argument(
+        "--dashboard-max-data-age-s",
+        type=int,
+        default=int(os.getenv("DASHBOARD_DATA_MAX_AGE_S", "180")),
+        help="Max allowed age (seconds) for Grafana minute/snapshot data readiness checks.",
+    )
+    parser.add_argument(
+        "--dashboard-required-grafana-bot-variants",
+        default=os.getenv("DASHBOARD_REQUIRED_BOT_VARIANTS", "bot1:a,bot3:a,bot4:a"),
+        help="Required bot:variant list for Grafana readiness check.",
+    )
+    parser.add_argument(
+        "--dashboard-required-tradenote-bot-variants",
+        default=os.getenv("TRADENOTE_SYNC_BOT_VARIANTS", ""),
+        help="Required bot:variant list for TradeNote readiness check (empty means all discovered).",
+    )
+    parser.add_argument(
+        "--dashboard-tradenote-report-max-age-s",
+        type=int,
+        default=int(os.getenv("TRADENOTE_SYNC_HEALTH_MAX_SEC", "5400")),
+        help="Max age for TradeNote sync report in readiness gate.",
+    )
+    parser.add_argument(
+        "--dashboard-tradenote-fill-max-age-s",
+        type=int,
+        default=int(os.getenv("TRADENOTE_FILL_MAX_AGE_S", str(7 * 24 * 3600))),
+        help="Max acceptable fill age for TradeNote readiness sources.",
     )
     parser.add_argument(
         "--check-paper-exchange-thresholds",
@@ -1122,6 +1203,8 @@ def main() -> int:
     fill_backfill_msg = ""
     recon_refresh_rc = 0
     recon_refresh_msg = ""
+    dashboard_readiness_rc = 0
+    dashboard_readiness_msg = ""
 
     max_report_age_min = float(args.max_report_age_min)
     refresh_parity_once = bool(args.refresh_parity_once or args.ci)
@@ -1159,6 +1242,16 @@ def main() -> int:
     if args.check_alerting_health:
         alerting_health_rc, alerting_health_msg = _run_alerting_health_check(root)
 
+    if args.check_dashboard_readiness:
+        dashboard_readiness_rc, dashboard_readiness_msg = _run_dashboard_readiness_check(
+            root,
+            max_data_age_s=int(max(60, int(args.dashboard_max_data_age_s))),
+            tradenote_report_max_age_s=int(args.dashboard_tradenote_report_max_age_s),
+            tradenote_fill_max_age_s=int(args.dashboard_tradenote_fill_max_age_s),
+            required_grafana_bot_variants=str(args.dashboard_required_grafana_bot_variants),
+            required_tradenote_bot_variants=str(args.dashboard_required_tradenote_bot_variants),
+        )
+
     # 1) Preflight checks
     required_files = [
         root / "config" / "reconciliation_thresholds.json",
@@ -1185,6 +1278,7 @@ def main() -> int:
         root / "scripts" / "ops" / "preflight_paper_exchange.py",
         root / "scripts" / "ops" / "checklist_evidence_collector.py",
         root / "scripts" / "ops" / "validate_telegram_alerting.py",
+        root / "scripts" / "ops" / "verify_dashboard.py",
         root / "scripts" / "release" / "testnet_readiness_gate.py",
         root / "scripts" / "analysis" / "testnet_daily_scorecard.py",
         root / "scripts" / "analysis" / "portfolio_diversification_check.py",
@@ -1376,7 +1470,29 @@ def main() -> int:
             )
         )
 
-    # 1k) Quantitative paper-exchange threshold gate
+    # 1k) Unified dashboard data readiness gate (TradeNote + Grafana)
+    if args.check_dashboard_readiness:
+        dashboard_path = reports / "ops" / "dashboard_data_ready_latest.json"
+        dashboard_report = _read_json(dashboard_path, {})
+        dashboard_ok = (
+            dashboard_readiness_rc == 0
+            and str(dashboard_report.get("status", "fail")).strip().lower() == "pass"
+        )
+        checks.append(
+            _check(
+                dashboard_ok,
+                "dashboard_data_ready",
+                "critical",
+                "TradeNote + Grafana data readiness PASS"
+                if dashboard_ok
+                else f"dashboard readiness failed (rc={dashboard_readiness_rc})",
+                [str(dashboard_path), str(root / "scripts" / "ops" / "verify_dashboard.py")],
+            )
+        )
+        if not dashboard_ok:
+            critical_failures.append("dashboard_data_ready")
+
+    # 1l) Quantitative paper-exchange threshold gate
     if args.check_paper_exchange_thresholds:
         if args.check_paper_exchange_load and args.run_paper_exchange_load_harness:
             paper_exchange_load_harness_rc, paper_exchange_load_harness_msg = _run_paper_exchange_load_harness(
@@ -2022,6 +2138,14 @@ def main() -> int:
             "market_data_freshness_runner_output": md_msg[:2000],
             "alerting_health_runner_output": alerting_health_msg[:2000],
             "alerting_health_rc": alerting_health_rc,
+            "check_dashboard_readiness": bool(args.check_dashboard_readiness),
+            "dashboard_readiness_output": dashboard_readiness_msg[:2000],
+            "dashboard_readiness_rc": int(dashboard_readiness_rc),
+            "dashboard_max_data_age_s": int(args.dashboard_max_data_age_s),
+            "dashboard_required_grafana_bot_variants": str(args.dashboard_required_grafana_bot_variants),
+            "dashboard_required_tradenote_bot_variants": str(args.dashboard_required_tradenote_bot_variants),
+            "dashboard_tradenote_report_max_age_s": int(args.dashboard_tradenote_report_max_age_s),
+            "dashboard_tradenote_fill_max_age_s": int(args.dashboard_tradenote_fill_max_age_s),
             "recon_exchange_preflight_output": recon_preflight_msg[:2000],
             "recon_exchange_preflight_rc": recon_preflight_rc,
             "paper_exchange_preflight_output": paper_exchange_preflight_msg[:2000],

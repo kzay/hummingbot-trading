@@ -495,9 +495,9 @@ class OrderMatchingEngine:
                 continue
 
             fill_qty = decision.fill_quantity
-            # Price-protection bands are designed for resting orders; applying them to
-            # market orders can deadlock derisk flows under realistic slippage models.
-            if order.order_type != PaperOrderType.MARKET and self._violates_price_protection(order.side, decision.fill_price):
+            # Apply price protection uniformly so pathological fill-model outputs
+            # cannot execute at unrealistic prices in paper simulation.
+            if self._violates_price_protection(order.side, decision.fill_price):
                 if order.order_type == PaperOrderType.MARKET:
                     logger.warning(
                         "MATCH_ENGINE_PROBE stage=tick_price_protection_block instrument=%s order_id=%s fill_price=%s",

@@ -1,10 +1,10 @@
 {
-  "ts_utc": "2026-03-02T11:45:14.659185+00:00",
+  "ts_utc": "2026-03-02T18:14:13.635662+00:00",
   "status": "ok",
   "tradenote_url": "http://tradenote:8080",
   "selected_broker": "template",
   "upload_mfe_prices": false,
-  "include_today": false,
+  "include_today": true,
   "lookback_days": 14,
   "discovered_sources": [
     "bot1:a",
@@ -19,10 +19,11 @@
     "2026-02-26",
     "2026-02-27",
     "2026-02-28",
-    "2026-03-01"
+    "2026-03-01",
+    "2026-03-02"
   ],
-  "imported_days_total_before": 7,
-  "imported_days_total_after": 7,
+  "imported_days_total_before": 8,
+  "imported_days_total_after": 8,
   "imported_this_run": [],
   "rows_posted_by_day": {},
   "state_path": "/workspace/hbot/reports/tradenote/sync_state.json",

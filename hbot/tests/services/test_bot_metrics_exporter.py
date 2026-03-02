@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+from datetime import datetime, timezone
 from services.bot_metrics_exporter import BotMetricsExporter
 
 
@@ -189,3 +190,26 @@ def test_open_and_closed_trade_table_metrics_are_exported(tmp_path) -> None:
     assert "hbot_bot_closed_trade_profit_quote" in text
     assert "hbot_bot_closed_trade_profit_pct" in text
     assert "hbot_bot_closed_trade_info" in text
+
+
+def test_data_plane_consistency_fails_when_minute_age_is_stale(tmp_path) -> None:
+    data_root = tmp_path / "data"
+    (data_root / "bot1" / "logs" / "epp_v24" / "bot1_a").mkdir(parents=True, exist_ok=True)
+    snap_path = tmp_path / "reports" / "desk_snapshot" / "bot1" / "latest.json"
+    snap_path.parent.mkdir(parents=True, exist_ok=True)
+    snap_path.write_text(
+        json.dumps(
+            {
+                "generated_ts": datetime.now(timezone.utc).isoformat(),
+                "completeness": 1.0,
+                "minute_age_s": 181.0,
+                "fill_age_s": 10.0,
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    exporter = BotMetricsExporter(data_root=data_root)
+    text = exporter.render_prometheus()
+
+    assert "hbot_data_plane_consistency 0.0" in text

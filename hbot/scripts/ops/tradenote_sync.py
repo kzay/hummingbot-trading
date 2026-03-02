@@ -100,11 +100,23 @@ def _quote_currency(trading_pair: str) -> str:
     return "USD"
 
 
+def _scoped_symbol(trading_pair: str, account: str, scope_symbol_by_account: bool) -> str:
+    if not scope_symbol_by_account:
+        return trading_pair
+    pair = str(trading_pair).strip()
+    acct = str(account).strip()
+    if not pair or not acct:
+        return pair
+    return f"{pair}__{acct}"
+
+
 def _to_tradenote_execution(
     row: Dict[str, str],
     account: str,
     security_type: str,
     settlement_days: int,
+    exec_time_offset_sec: int = 0,
+    scope_symbol_by_account: bool = False,
 ) -> Tuple[Optional[str], Optional[Dict[str, object]]]:
     ts = _parse_iso_ts(row.get("ts"))
     if ts is None:
@@ -136,6 +148,14 @@ def _to_tradenote_execution(
     liq = "M" if safe_bool(row.get("is_maker")) else "T"
     order_id = str(row.get("order_id", "")).strip()
     note = f"hbot_order_id={order_id}" if order_id else "hbot_fill"
+    # TradeNote derives execution/trade ids from date-time + symbol + side.
+    # Offset per source keeps ids deterministic while avoiding cross-bot collisions.
+    offset = max(0, int(exec_time_offset_sec))
+    sec_of_day = ts.hour * 3600 + ts.minute * 60 + ts.second
+    shifted_sec = (sec_of_day + offset) % 86400
+    exec_hour, rem = divmod(shifted_sec, 3600)
+    exec_minute, exec_second = divmod(rem, 60)
+    exec_time = f"{exec_hour:02d}:{exec_minute:02d}:{exec_second:02d}"
 
     execution: Dict[str, object] = {
         "Account": account,
@@ -144,10 +164,10 @@ def _to_tradenote_execution(
         "Currency": _quote_currency(trading_pair),
         "Type": str(security_type),
         "Side": side,
-        "Symbol": trading_pair,
+        "Symbol": _scoped_symbol(trading_pair=trading_pair, account=account, scope_symbol_by_account=scope_symbol_by_account),
         "Qty": qty,
         "Price": price,
-        "Exec Time": ts.strftime("%H:%M:%S"),
+        "Exec Time": exec_time,
         "Comm": fee,
         "SEC": 0.0,
         "TAF": 0.0,
@@ -172,6 +192,7 @@ def _collect_daily_payloads(
     account_prefix: str,
     security_type: str,
     settlement_days: int,
+    scope_symbol_by_account: bool,
 ) -> Tuple[Dict[str, List[Dict[str, object]]], Dict[str, int], List[str]]:
     today = datetime.now(timezone.utc).date()
     min_day = today - timedelta(days=max(0, lookback_days)) if lookback_days > 0 else None
@@ -180,14 +201,18 @@ def _collect_daily_payloads(
     rows_by_source: Dict[str, int] = defaultdict(int)
     skipped_imported_days: set[str] = set()
 
-    for source_key, fill_path in fill_files.items():
+    for source_idx, (source_key, fill_path) in enumerate(sorted(fill_files.items())):
         account = _account_name(source_key=source_key, account_prefix=account_prefix)
+        # 10-second spacing prevents same-second id collisions across bot variants.
+        source_exec_time_offset_sec = source_idx * 10
         for row in _iter_csv_rows(fill_path):
             day_key, execution = _to_tradenote_execution(
                 row=row,
                 account=account,
                 security_type=security_type,
                 settlement_days=settlement_days,
+                exec_time_offset_sec=source_exec_time_offset_sec,
+                scope_symbol_by_account=scope_symbol_by_account,
             )
             if not day_key or execution is None:
                 continue
@@ -297,6 +322,7 @@ def run_once(
     request_max_attempts: int,
     max_rows_per_post: int,
     bot_variants: str,
+    scope_symbol_by_account: bool,
 ) -> Dict[str, object]:
     state = _load_state(state_path)
     imported_days = set(str(x) for x in state.get("imported_days", []))
@@ -311,6 +337,7 @@ def run_once(
         account_prefix=account_prefix,
         security_type=security_type,
         settlement_days=settlement_days,
+        scope_symbol_by_account=scope_symbol_by_account,
     )
     candidate_days = sorted(rows_by_day.keys())
     if max_days_per_run > 0:
@@ -335,6 +362,7 @@ def run_once(
         "state_path": str(state_path),
         "max_rows_per_post": max(1, int(max_rows_per_post)),
         "chunks_posted_by_day": {},
+        "scope_symbol_by_account": bool(scope_symbol_by_account),
     }
 
     if not tradenote_api_key.strip():
@@ -412,6 +440,7 @@ def main() -> int:
             request_max_attempts=int(os.getenv("TRADENOTE_SYNC_REQUEST_MAX_ATTEMPTS", "3")),
             max_rows_per_post=int(os.getenv("TRADENOTE_SYNC_MAX_ROWS_PER_POST", "100")),
             bot_variants=os.getenv("TRADENOTE_SYNC_BOT_VARIANTS", ""),
+            scope_symbol_by_account=safe_bool(os.getenv("TRADENOTE_SCOPE_SYMBOL_BY_ACCOUNT", "true")),
         )
         print(
             f"[tradenote-sync] run={run_count} status={report.get('status')} "

@@ -1,5 +1,5 @@
 {
-  "ts_utc": "2026-03-02T03:33:45.699589+00:00",
+  "ts_utc": "2026-03-02T12:36:22.356389+00:00",
   "status": "fail",
   "failed_checks": [
     "all_item_thresholds_passed"
@@ -15,8 +15,8 @@
     "path": "F:\\Environement\\git-repo\\hummingbot_custo\\hbot\\reports\\verification\\paper_exchange_threshold_inputs_latest.json",
     "present": true,
     "fresh": true,
-    "age_min": 0.018377184867858887,
-    "max_input_age_min": 30.0,
+    "age_min": 0.004124081134796143,
+    "max_input_age_min": 20.0,
     "require_input_fresh": true
   },
   "evaluation": {
@@ -62,9 +62,9 @@
         "metric": "p0_1_contract_tests_pass_rate_pct",
         "op": "ge",
         "target": 100.0,
-        "observed": 100.0,
-        "pass": true,
-        "reason": "pass"
+        "observed": 0.0,
+        "pass": false,
+        "reason": "threshold_breach"
       },
       {
         "item_id": "P0-PAPER-SVC-20260301-2",
@@ -287,7 +287,7 @@
         "metric": "p1_7_fill_ratio_delta_pp",
         "op": "le",
         "target": 2.0,
-        "observed": 0.0,
+        "observed": 0.006578947368421052,
         "pass": true,
         "reason": "pass"
       },
@@ -296,9 +296,9 @@
         "metric": "p1_7_reject_ratio_delta_pp",
         "op": "le",
         "target": 1.0,
-        "observed": null,
-        "pass": false,
-        "reason": "missing_metric"
+        "observed": 0.0,
+        "pass": true,
+        "reason": "pass"
       },
       {
         "item_id": "P1-PAPER-SVC-20260301-7",
@@ -323,7 +323,7 @@
         "metric": "p1_7_end_window_equity_delta_pct",
         "op": "le",
         "target": 0.3,
-        "observed": 0.1357725340239615,
+        "observed": 0.12030275509981488,
         "pass": true,
         "reason": "pass"
       },
@@ -692,7 +692,7 @@
         "metric": "p1_17_parity_slo_artifact_freshness_minutes",
         "op": "le",
         "target": 20.0,
-        "observed": 763.9615640362103,
+        "observed": 1306.5881895860036,
         "pass": false,
         "reason": "threshold_breach"
       },
@@ -701,9 +701,9 @@
         "metric": "p1_17_gate_path_tests_pass_rate_pct",
         "op": "ge",
         "target": 100.0,
-        "observed": 100.0,
-        "pass": true,
-        "reason": "pass"
+        "observed": 0.0,
+        "pass": false,
+        "reason": "threshold_breach"
       },
       {
         "item_id": "P0-PAPER-SVC-20260301-18",
@@ -746,7 +746,7 @@
         "metric": "p1_19_sustained_command_throughput_cmds_per_sec",
         "op": "ge",
         "target": 50.0,
-        "observed": 60.013002817277076,
+        "observed": 60.00200006666889,
         "pass": true,
         "reason": "pass"
       },
@@ -755,7 +755,7 @@
         "metric": "p1_19_command_latency_under_load_p95_ms",
         "op": "le",
         "target": 500.0,
-        "observed": 5.0,
+        "observed": 28.0,
         "pass": true,
         "reason": "pass"
       },
@@ -764,7 +764,7 @@
         "metric": "p1_19_command_latency_under_load_p99_ms",
         "op": "le",
         "target": 1000.0,
-        "observed": 29.0,
+        "observed": 34.0,
         "pass": true,
         "reason": "pass"
       },
@@ -809,9 +809,9 @@
         "metric": "p1_20_security_policy_test_suite_pass_rate_pct",
         "op": "ge",
         "target": 100.0,
-        "observed": 100.0,
-        "pass": true,
-        "reason": "pass"
+        "observed": 0.0,
+        "pass": false,
+        "reason": "threshold_breach"
       },
       {
         "item_id": "P1-PAPER-SVC-20260301-20",
@@ -867,7 +867,8 @@
           "p0_1_schema_validation_error_rate_pct",
           "p0_1_heartbeat_p99_gap_ms",
           "p0_1_heartbeat_max_gap_ms",
-          "p0_1_unsupported_command_reject_rate_pct"
+          "p0_1_unsupported_command_reject_rate_pct",
+          "p0_1_contract_tests_pass_rate_pct"
         ],
         "clause_count": 5
       },
@@ -999,7 +1000,8 @@
         "failed_clauses": [
           "p1_17_strict_cycle_checks_enforced_rate_pct",
           "p1_17_preflight_nonzero_on_missing_or_stale_rate_pct",
-          "p1_17_parity_slo_artifact_freshness_minutes"
+          "p1_17_parity_slo_artifact_freshness_minutes",
+          "p1_17_gate_path_tests_pass_rate_pct"
         ],
         "clause_count": 4
       },
@@ -1013,7 +1015,8 @@
         "item_id": "P1-PAPER-SVC-20260301-20",
         "status": "fail",
         "failed_clauses": [
-          "p1_20_unauthorized_producer_acceptance_rate_pct"
+          "p1_20_unauthorized_producer_acceptance_rate_pct",
+          "p1_20_security_policy_test_suite_pass_rate_pct"
         ],
         "clause_count": 4
       },
@@ -1045,7 +1048,6 @@
         "failed_clauses": [
           "p1_7_parity_eval_window_hours",
           "p1_7_parity_eval_command_events_count",
-          "p1_7_reject_ratio_delta_pp",
           "p1_7_fill_price_delta_p95_bps",
           "p1_7_fill_price_delta_p99_bps"
         ],
@@ -1109,8 +1111,8 @@
     "summary": {
       "total_items": 21,
       "total_clauses": 93,
-      "passed_clauses": 16,
-      "failed_clauses": 77,
+      "passed_clauses": 14,
+      "failed_clauses": 79,
       "coverage_pct": 100.0
     }
   }

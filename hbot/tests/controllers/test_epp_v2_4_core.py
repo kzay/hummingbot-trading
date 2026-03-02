@@ -146,6 +146,7 @@ def _make_config(**overrides) -> SimpleNamespace:
         pnl_governor_enabled=False,
         daily_pnl_target_pct=Decimal("0"),
         daily_pnl_target_quote=Decimal("0"),
+        execution_intent_override_ttl_s=1800,
         pnl_governor_activation_buffer_pct=Decimal("0.05"),
         pnl_governor_max_edge_bps_cut=Decimal("5"),
         pnl_governor_max_size_boost_pct=Decimal("0"),
@@ -1063,6 +1064,59 @@ class TestBandPctConsistency:
 
 
 class TestPnlGovernor:
+    def test_set_external_soft_pause_clears_reason_on_resume(self):
+        ctrl = SimpleNamespace(
+            _external_soft_pause=False,
+            _external_pause_reason="",
+        )
+
+        EppV24Controller.set_external_soft_pause(ctrl, True, "risk_guard")
+        assert ctrl._external_soft_pause is True
+        assert ctrl._external_pause_reason == "risk_guard"
+
+        EppV24Controller.set_external_soft_pause(ctrl, False, "resume")
+        assert ctrl._external_soft_pause is False
+        assert ctrl._external_pause_reason == ""
+
+    def test_external_override_ttl_expires_stale_intents(self):
+        ctrl = SimpleNamespace(
+            config=SimpleNamespace(execution_intent_override_ttl_s=60),
+            _external_target_base_pct_override=Decimal("0.30"),
+            _external_target_base_pct_override_ts=900.0,
+            _external_daily_pnl_target_pct_override=Decimal("0.80"),
+            _external_daily_pnl_target_pct_override_ts=950.0,
+        )
+
+        EppV24Controller._expire_external_intent_overrides(ctrl, 1000.0)
+
+        assert ctrl._external_target_base_pct_override is None
+        assert ctrl._external_target_base_pct_override_ts == 0.0
+        assert ctrl._external_daily_pnl_target_pct_override == Decimal("0.80")
+        assert ctrl._external_daily_pnl_target_pct_override_ts == 950.0
+
+    def test_apply_execution_intent_resume_clears_pause_reason(self):
+        ctrl = SimpleNamespace(
+            _last_external_model_version="",
+            _last_external_intent_reason="",
+            _external_soft_pause=True,
+            _external_pause_reason="ops_guard",
+            market_data_provider=SimpleNamespace(time=lambda: 1_700_000_000.0),
+        )
+        ctrl.set_external_soft_pause = _types_mod.MethodType(
+            EppV24Controller.set_external_soft_pause,
+            ctrl,
+        )
+
+        ok, msg = EppV24Controller.apply_execution_intent(
+            ctrl,
+            {"action": "resume", "metadata": {"reason": "manual_resume"}},
+        )
+
+        assert ok is True
+        assert msg == "ok"
+        assert ctrl._external_soft_pause is False
+        assert ctrl._external_pause_reason == ""
+
     def test_apply_execution_intent_sets_external_daily_target_pct(self):
         ctrl = SimpleNamespace(
             _last_external_model_version="",

@@ -11,8 +11,8 @@ trading_pair: BTC-USDT
 
 # ── Order sizing ───────────────────────────────────────────────────
 total_amount_quote: 20
-buy_spreads: "0.0025,0.0035"
-sell_spreads: "0.0025,0.0035"
+buy_spreads: "0.00020,0.00045"
+sell_spreads: "0.00020,0.00045"
 buy_amounts_pct: "50,50"
 sell_amounts_pct: "50,50"
 executor_refresh_time: 150
@@ -49,11 +49,23 @@ startup_position_sync: true
 
 # ── Edge gate ──────────────────────────────────────────────────────
 # Lower minimum edge to restore fill frequency while keeping positive expectancy.
-min_net_edge_bps: 8
-edge_resume_bps: 4
+min_net_edge_bps: 1
+edge_resume_bps: 1
 edge_state_hold_s: 120
 edge_gate_ewma_period: 8
 adaptive_edge_relax_max_bps: 12
+auto_calibration_enabled: true
+auto_calibration_shadow_mode: false
+auto_calibration_update_interval_s: 900
+auto_calibration_lookback_s: 1800
+auto_calibration_max_step_bps: 0.20
+auto_calibration_max_total_change_per_hour_bps: 0.60
+auto_calibration_required_consecutive_relax_cycles: 2
+auto_calibration_rollback_enabled: true
+auto_calibration_rollback_negative_windows: 3
+auto_calibration_freeze_drawdown_pct: 0.035
+auto_calibration_freeze_daily_loss_pct: 0.020
+auto_calibration_freeze_order_book_stale_ratio_gt: 0.20
 pnl_governor_enabled: true
 # Target trajectory now uses pct of opening equity; quote target remains
 # as legacy fallback when pct is zero.
@@ -67,6 +79,7 @@ pnl_governor_turnover_soft_cap_x: 6.0
 pnl_governor_drawdown_soft_cap_pct: 0.015
 # Keep quotes competitive to live top-of-book while preserving floor safety.
 max_quote_to_market_spread_mult: 1.50
+min_side_spread_bps: 0.20
 reconnect_cooldown_s: 1.0
 max_clock_skew_s: 20.0
 
@@ -138,31 +151,31 @@ paper_engine:
 regime_specs_override:
   up:
     one_sided: "off"
-    spread_min: "0.0022"
-    spread_max: "0.0042"
+    spread_min: "0.00025"
+    spread_max: "0.00075"
     target_base_pct: "0.0"
     fill_factor: "0.45"
   down:
     one_sided: "off"
-    spread_min: "0.0022"
-    spread_max: "0.0042"
+    spread_min: "0.00025"
+    spread_max: "0.00075"
     target_base_pct: "0.0"
     fill_factor: "0.45"
   neutral_low_vol:
-    spread_min: "0.0019"
-    spread_max: "0.0034"
+    spread_min: "0.00015"
+    spread_max: "0.00045"
     target_base_pct: "0.0"
     fill_factor: "0.50"
   neutral_high_vol:
     one_sided: "off"
-    spread_min: "0.0028"
-    spread_max: "0.0048"
+    spread_min: "0.00025"
+    spread_max: "0.00085"
     target_base_pct: "0.0"
     fill_factor: "0.42"
   high_vol_shock:
     one_sided: "off"
-    spread_min: "0.0038"
-    spread_max: "0.0068"
+    spread_min: "0.00040"
+    spread_max: "0.00150"
     target_base_pct: "0.0"
     fill_factor: "0.38"
 

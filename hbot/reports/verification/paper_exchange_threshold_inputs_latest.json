@@ -1,33 +1,34 @@
 {
-  "ts_utc": "2026-03-02T03:33:44.595954+00:00",
+  "ts_utc": "2026-03-02T12:36:22.106934+00:00",
   "status": "warning",
   "metrics": {
-    "p0_1_contract_tests_pass_rate_pct": 100.0,
-    "p1_17_gate_path_tests_pass_rate_pct": 100.0,
+    "p0_1_contract_tests_pass_rate_pct": 0.0,
+    "p1_17_gate_path_tests_pass_rate_pct": 0.0,
     "p1_17_strict_cycle_checks_enforced_rate_pct": 0.0,
     "p1_17_preflight_nonzero_on_missing_or_stale_rate_pct": 0.0,
-    "p1_17_parity_slo_artifact_freshness_minutes": 763.9615640362103,
+    "p1_17_parity_slo_artifact_freshness_minutes": 1306.5881895860036,
     "p1_8_critical_dead_letter_reasons_per_hour": 0.0,
     "p1_8_heartbeat_availability_pct": 100.0,
     "p1_8_command_processing_success_rate_pct": 100.0,
-    "p1_7_fill_ratio_delta_pp": 0.0,
-    "p1_7_end_window_equity_delta_pct": 0.1357725340239615,
+    "p1_7_fill_ratio_delta_pp": 0.006578947368421052,
+    "p1_7_reject_ratio_delta_pp": 0.0,
+    "p1_7_end_window_equity_delta_pct": 0.12030275509981488,
     "p0_18_strict_cycle_invocation_success_rate_pct": 0.0,
     "p1_20_privileged_command_attribution_complete_rate_pct": 100.0,
     "p1_20_privileged_command_missing_audit_event_rate_pct": 0.0,
-    "p1_20_security_policy_test_suite_pass_rate_pct": 100.0,
-    "p1_19_sustained_command_throughput_cmds_per_sec": 60.013002817277076,
-    "p1_19_command_latency_under_load_p95_ms": 5.0,
-    "p1_19_command_latency_under_load_p99_ms": 29.0,
+    "p1_20_security_policy_test_suite_pass_rate_pct": 0.0,
+    "p1_19_sustained_command_throughput_cmds_per_sec": 60.00200006666889,
+    "p1_19_command_latency_under_load_p95_ms": 28.0,
+    "p1_19_command_latency_under_load_p99_ms": 34.0,
     "p1_19_stream_backlog_growth_rate_pct_per_10min": 0.0,
     "p1_19_stress_window_oom_restart_count": 0.0
   },
   "diagnostics": {
     "required_metric_count": 93,
-    "computed_metric_count": 19,
+    "computed_metric_count": 20,
     "manual_metric_count": 0,
-    "resolved_metric_count": 19,
-    "unresolved_metric_count": 74,
+    "resolved_metric_count": 20,
+    "unresolved_metric_count": 73,
     "unresolved_metrics": [
       "p0_11_hb_event_count_delta_pct",
       "p0_11_hb_executor_lifecycle_tests_pass_rate_pct",
@@ -91,7 +92,6 @@
       "p1_7_fill_price_delta_p99_bps",
       "p1_7_parity_eval_command_events_count",
       "p1_7_parity_eval_window_hours",
-      "p1_7_reject_ratio_delta_pp",
       "p1_8_command_latency_p95_ms",
       "p1_8_command_latency_p99_ms",
       "p1_9_active_mode_rollout_concurrency_bots",
@@ -106,61 +106,59 @@
     ],
     "stale_sources": [
       "reliability_slo_latest",
-      "tests_latest",
-      "promotion_gates_latest",
-      "strict_cycle_latest"
+      "paper_exchange_command_journal_latest"
     ],
-    "max_source_age_min": 30.0
+    "max_source_age_min": 20.0
   },
   "source_artifacts": {
     "parity_latest": {
       "path": "F:\\Environement\\git-repo\\hummingbot_custo\\hbot\\reports\\parity\\latest.json",
       "exists": true,
       "status": "pass",
-      "ts_utc": "2026-03-02T03:30:57.970779+00:00",
-      "age_min": 2.7729455192883807
+      "ts_utc": "2026-03-02T12:35:05.823590+00:00",
+      "age_min": 1.2686908841133118
     },
     "reliability_slo_latest": {
       "path": "F:\\Environement\\git-repo\\hummingbot_custo\\hbot\\reports\\ops\\reliability_slo_latest.json",
       "exists": true,
       "status": "pass",
       "ts_utc": "2026-03-01T14:49:46.653668+00:00",
-      "age_min": 763.9615640362103
+      "age_min": 1306.5881895860036
     },
     "tests_latest": {
       "path": "F:\\Environement\\git-repo\\hummingbot_custo\\hbot\\reports\\tests\\latest.json",
       "exists": true,
-      "status": "pass",
-      "ts_utc": "2026-03-01T14:15:57.637539+00:00",
-      "age_min": 797.778499519825
+      "status": "fail",
+      "ts_utc": "2026-03-02T12:32:45.629280+00:00",
+      "age_min": 3.6052627166112265
     },
     "promotion_gates_latest": {
       "path": "F:\\Environement\\git-repo\\hummingbot_custo\\hbot\\reports\\promotion_gates\\latest.json",
       "exists": true,
       "status": "FAIL",
-      "ts_utc": "2026-03-01T14:16:49.210491+00:00",
-      "age_min": 796.9189503192902
+      "ts_utc": "2026-03-02T12:34:04.871001+00:00",
+      "age_min": 2.2845673680305483
     },
     "strict_cycle_latest": {
       "path": "F:\\Environement\\git-repo\\hummingbot_custo\\hbot\\reports\\promotion_gates\\strict_cycle_latest.json",
       "exists": true,
       "status": "",
-      "ts_utc": "2026-03-01T14:16:49.222206+00:00",
-      "age_min": 796.9187550663949
+      "ts_utc": "2026-03-02T12:34:04.881139+00:00",
+      "age_min": 2.2843984007835387
     },
     "paper_exchange_command_journal_latest": {
       "path": "F:\\Environement\\git-repo\\hummingbot_custo\\hbot\\reports\\verification\\paper_exchange_command_journal_latest.json",
       "exists": true,
       "status": "",
       "ts_utc": "2026-03-02T03:32:31Z",
-      "age_min": 1.22245850165685
+      "age_min": 543.8490840514501
     },
     "paper_exchange_load_latest": {
       "path": "F:\\Environement\\git-repo\\hummingbot_custo\\hbot\\reports\\verification\\paper_exchange_load_latest.json",
       "exists": true,
       "status": "pass",
-      "ts_utc": "2026-03-02T03:32:33.154901+00:00",
-      "age_min": 1.1865434845288594
+      "ts_utc": "2026-03-02T12:36:21.671330+00:00",
+      "age_min": 0.004561885197957357
     },
     "manual_metrics": {
       "path": "F:\\Environement\\git-repo\\hummingbot_custo\\hbot\\reports\\verification\\paper_exchange_threshold_metrics_manual.json",

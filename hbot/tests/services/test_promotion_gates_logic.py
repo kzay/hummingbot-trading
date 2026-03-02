@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import os
 from pathlib import Path
 
 from scripts.release.run_promotion_gates import (
@@ -7,6 +8,7 @@ from scripts.release.run_promotion_gates import (
     _day2_lag_within_tolerance,
     _parity_core_insufficient_active_bots,
     _portfolio_diversification_gate,
+    _run_paper_exchange_preflight_check,
 )
 
 
@@ -136,4 +138,30 @@ def test_portfolio_diversification_gate_fails_for_fail_or_missing_status() -> No
     assert "above threshold" in reason_fail
     assert ok_missing is False
     assert "missing or invalid" in reason_missing
+
+
+def test_run_paper_exchange_preflight_uses_pythonpath_env(monkeypatch, tmp_path: Path) -> None:
+    captured = {}
+
+    class _Proc:
+        returncode = 0
+        stdout = "ok"
+        stderr = ""
+
+    def _fake_run(cmd, cwd, capture_output, text, check, env):
+        captured["cmd"] = cmd
+        captured["cwd"] = cwd
+        captured["env"] = env
+        return _Proc()
+
+    monkeypatch.setattr("scripts.release.run_promotion_gates.subprocess.run", _fake_run)
+
+    rc, msg = _run_paper_exchange_preflight_check(tmp_path, strict=True)
+    assert rc == 0
+    assert msg == "ok"
+    assert str(tmp_path) == captured["cwd"]
+    assert "--strict" in captured["cmd"]
+    env = captured["env"]
+    py_path = str(env.get("PYTHONPATH", ""))
+    assert str(tmp_path) in py_path.split(os.pathsep)
 

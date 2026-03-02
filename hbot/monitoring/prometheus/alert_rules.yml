@@ -380,23 +380,33 @@ groups:
 
       - alert: BotFrozen
         expr: |
-          hbot_bot_snapshot_age_seconds > 300
+          hbot_bot_snapshot_age_seconds > 240
         for: 2m
         labels:
           severity: critical
         annotations:
           summary: "⛔ Bot {{ $labels.bot }} is FROZEN"
-          description: "minute.csv not updated for {{ $value | humanizeDuration }}. Event loop may be hung. Watchdog will auto-restart."
+          description: "snapshot age >4m ({{ $value | humanizeDuration }}). Event loop may be hung; watchdog restart may be required."
 
       - alert: DailyStateStale
         expr: |
-          hbot_bot_snapshot_age_seconds > 300
-        for: 5m
+          hbot_bot_snapshot_age_seconds > 180
+        for: 2m
         labels:
           severity: warning
         annotations:
           summary: "Bot snapshot stale on {{ $labels.bot }}"
-          description: "No minute.csv update for >5 minutes on {{ $labels.bot }}."
+          description: "No fresh snapshot update for >3 minutes on {{ $labels.bot }}."
+
+      - alert: MinutePipelineStale
+        expr: |
+          hbot_bot_minute_last_age_seconds > 180
+        for: 2m
+        labels:
+          severity: warning
+        annotations:
+          summary: "minute.csv freshness lag on {{ $labels.bot }}"
+          description: "minute_last_age_seconds exceeded 180s on {{ $labels.bot }}; Grafana PnL/trend panels may be stale."
 
       - alert: KillSwitchTriggered
         expr: |

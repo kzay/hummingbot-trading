@@ -574,12 +574,114 @@
       "options": { "reduceOptions": { "values": false, "calcs": ["lastNotNull"] }, "textMode": "value", "colorMode": "value", "graphMode": "none", "justifyMode": "center" }
     },
     {
+      "id": 103,
+      "type": "row",
+      "title": "Data Freshness",
+      "collapsed": false,
+      "gridPos": { "h": 1, "w": 24, "x": 0, "y": 9 }
+    },
+    {
+      "id": 503,
+      "type": "stat",
+      "title": "Data Plane Consistency",
+      "description": "1 = desk snapshot data is fresh/complete for active bots; 0 = stale/incomplete data plane.",
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "gridPos": { "h": 3, "w": 6, "x": 0, "y": 10 },
+      "targets": [
+        { "expr": "max(hbot_data_plane_consistency)", "refId": "A" }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "percentunit",
+          "decimals": 0,
+          "min": 0,
+          "max": 1,
+          "color": { "mode": "thresholds" },
+          "thresholds": { "mode": "absolute", "steps": [{ "color": "red", "value": null }, { "color": "yellow", "value": 0.999 }, { "color": "green", "value": 1 }] }
+        },
+        "overrides": []
+      },
+      "options": { "reduceOptions": { "values": false, "calcs": ["lastNotNull"] }, "textMode": "value", "colorMode": "value", "graphMode": "none", "justifyMode": "center" }
+    },
+    {
+      "id": 504,
+      "type": "stat",
+      "title": "Active Bot Sources (<6h)",
+      "description": "Bot series considered active by freshness rules (minute_last_age_seconds <= 6h).",
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "gridPos": { "h": 3, "w": 6, "x": 6, "y": 10 },
+      "targets": [
+        {
+          "expr": "sum(hbot_bot_minute_last_age_seconds{cluster=~\"$cluster\",environment=~\"$environment\",bot=~\"$bot\",exchange=~\"$exchange\",pair=~\"$symbol\",variant=~\"$strategy\",mode=~\"$venue\",regime=~\"$regime\"} <= bool 21600)",
+          "refId": "A"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "decimals": 0,
+          "color": { "mode": "thresholds" },
+          "thresholds": { "mode": "absolute", "steps": [{ "color": "red", "value": null }, { "color": "green", "value": 1 }] }
+        },
+        "overrides": []
+      },
+      "options": { "reduceOptions": { "values": false, "calcs": ["lastNotNull"] }, "textMode": "value", "colorMode": "value", "graphMode": "none", "justifyMode": "center" }
+    },
+    {
+      "id": 505,
+      "type": "stat",
+      "title": "Snapshot stale bots (>180s)",
+      "description": "Active bot series with snapshot age breach (>180s). Non-zero means PnL/state may lag.",
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "gridPos": { "h": 3, "w": 6, "x": 12, "y": 10 },
+      "targets": [
+        {
+          "expr": "sum((hbot_bot_minute_last_age_seconds{cluster=~\"$cluster\",environment=~\"$environment\",bot=~\"$bot\",exchange=~\"$exchange\",pair=~\"$symbol\",variant=~\"$strategy\",mode=~\"$venue\",regime=~\"$regime\"} <= bool 21600) * (hbot_bot_snapshot_age_seconds{cluster=~\"$cluster\",environment=~\"$environment\",bot=~\"$bot\",exchange=~\"$exchange\",pair=~\"$symbol\",variant=~\"$strategy\",mode=~\"$venue\",regime=~\"$regime\"} > bool 180))",
+          "refId": "A"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "decimals": 0,
+          "color": { "mode": "thresholds" },
+          "thresholds": { "mode": "absolute", "steps": [{ "color": "green", "value": null }, { "color": "yellow", "value": 1 }, { "color": "red", "value": 2 }] }
+        },
+        "overrides": []
+      },
+      "options": { "reduceOptions": { "values": false, "calcs": ["lastNotNull"] }, "textMode": "value", "colorMode": "value", "graphMode": "none", "justifyMode": "center" }
+    },
+    {
+      "id": 506,
+      "type": "stat",
+      "title": "Minute stale bots (>180s)",
+      "description": "Active bot series where minute.csv freshness exceeds 180s.",
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "gridPos": { "h": 3, "w": 6, "x": 18, "y": 10 },
+      "targets": [
+        {
+          "expr": "sum((hbot_bot_minute_last_age_seconds{cluster=~\"$cluster\",environment=~\"$environment\",bot=~\"$bot\",exchange=~\"$exchange\",pair=~\"$symbol\",variant=~\"$strategy\",mode=~\"$venue\",regime=~\"$regime\"} <= bool 21600) * (hbot_bot_minute_last_age_seconds{cluster=~\"$cluster\",environment=~\"$environment\",bot=~\"$bot\",exchange=~\"$exchange\",pair=~\"$symbol\",variant=~\"$strategy\",mode=~\"$venue\",regime=~\"$regime\"} > bool 180))",
+          "refId": "A"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "decimals": 0,
+          "color": { "mode": "thresholds" },
+          "thresholds": { "mode": "absolute", "steps": [{ "color": "green", "value": null }, { "color": "yellow", "value": 1 }, { "color": "red", "value": 2 }] }
+        },
+        "overrides": []
+      },
+      "options": { "reduceOptions": { "values": false, "calcs": ["lastNotNull"] }, "textMode": "value", "colorMode": "value", "graphMode": "none", "justifyMode": "center" }
+    },
+    {
       "id": 6,
       "type": "timeseries",
       "title": "Equity (Desk)",
       "description": "Desk equity over time (sum across selected bots).",
       "datasource": { "type": "prometheus", "uid": "prometheus" },
-      "gridPos": { "h": 7, "w": 12, "x": 0, "y": 9 },
+      "gridPos": { "h": 7, "w": 12, "x": 0, "y": 13 },
       "targets": [
         {
           "expr": "sum(hbot_bot_equity_quote{cluster=~\"$cluster\",environment=~\"$environment\",bot=~\"$bot\",exchange=~\"$exchange\",pair=~\"$symbol\",variant=~\"$strategy\",mode=~\"$venue\",regime=~\"$regime\"})",
@@ -604,7 +706,7 @@
       "title": "PnL Today (Desk, MTM)",
       "description": "Desk daily MTM PnL over time (sum across selected bots).",
       "datasource": { "type": "prometheus", "uid": "prometheus" },
-      "gridPos": { "h": 7, "w": 12, "x": 12, "y": 9 },
+      "gridPos": { "h": 7, "w": 12, "x": 12, "y": 13 },
       "targets": [
         {
           "expr": "sum(hbot_bot_daily_pnl_quote{cluster=~\"$cluster\",environment=~\"$environment\",bot=~\"$bot\",exchange=~\"$exchange\",pair=~\"$symbol\",variant=~\"$strategy\",mode=~\"$venue\",regime=~\"$regime\"})",
@@ -628,7 +730,7 @@
       "type": "row",
       "title": "Risk",
       "collapsed": false,
-      "gridPos": { "h": 1, "w": 24, "x": 0, "y": 16 }
+      "gridPos": { "h": 1, "w": 24, "x": 0, "y": 20 }
     },
     {
       "id": 201,
@@ -636,7 +738,7 @@
       "title": "Position Drift (max %)",
       "description": "Max divergence between local vs exchange position (percent). This is a critical risk integrity signal.",
       "datasource": { "type": "prometheus", "uid": "prometheus" },
-      "gridPos": { "h": 4, "w": 6, "x": 0, "y": 17 },
+      "gridPos": { "h": 4, "w": 6, "x": 0, "y": 21 },
       "targets": [
         {
           "expr": "100 * max(hbot_bot_position_drift_pct{cluster=~\"$cluster\",environment=~\"$environment\",bot=~\"$bot\",exchange=~\"$exchange\",pair=~\"$symbol\",variant=~\"$strategy\",mode=~\"$venue\",regime=~\"$regime\"})",
@@ -661,7 +763,7 @@
       "title": "Inventory Skew (avg abs %)",
       "description": "Average absolute deviation between base_pct and target_base_pct (percent). Higher = inventory not on target.",
       "datasource": { "type": "prometheus", "uid": "prometheus" },
-      "gridPos": { "h": 4, "w": 6, "x": 6, "y": 17 },
+      "gridPos": { "h": 4, "w": 6, "x": 6, "y": 21 },
       "targets": [
         {
           "expr": "100 * avg(hbot_bot_inventory_skew_abs{cluster=~\"$cluster\",environment=~\"$environment\",bot=~\"$bot\",exchange=~\"$exchange\",pair=~\"$symbol\",variant=~\"$strategy\",mode=~\"$venue\",regime=~\"$regime\"})",
@@ -686,7 +788,7 @@
       "title": "Worst Margin Ratio",
       "description": "Minimum margin ratio across selected bots (only meaningful for futures/perps). Lower = closer to liquidation.",
       "datasource": { "type": "prometheus", "uid": "prometheus" },
-      "gridPos": { "h": 4, "w": 6, "x": 12, "y": 17 },
+      "gridPos": { "h": 4, "w": 6, "x": 12, "y": 21 },
       "targets": [
         { "expr": "min(hbot_bot_margin_ratio{cluster=~\"$cluster\",environment=~\"$environment\",bot=~\"$bot\",exchange=~\"$exchange\",pair=~\"$symbol\",variant=~\"$strategy\",mode=~\"$venue\",regime=~\"$regime\"})", "refId": "A" }
       ],
@@ -708,7 +810,7 @@
       "title": "Funding Rate (max abs)",
       "description": "Maximum absolute funding rate across selected bots (perp-only).",
       "datasource": { "type": "prometheus", "uid": "prometheus" },
-      "gridPos": { "h": 4, "w": 6, "x": 18, "y": 17 },
+      "gridPos": { "h": 4, "w": 6, "x": 18, "y": 21 },
       "targets": [
         { "expr": "max(abs(hbot_bot_funding_rate{cluster=~\"$cluster\",environment=~\"$environment\",bot=~\"$bot\",exchange=~\"$exchange\",pair=~\"$symbol\",variant=~\"$strategy\",mode=~\"$venue\",regime=~\"$regime\"}))", "refId": "A" }
       ],
@@ -721,7 +823,7 @@
       "title": "Exposure (Gross / Net)",
       "description": "Desk exposure proxy in quote units. Use this to enforce risk budgets and spot unexpected inventory drift.",
       "datasource": { "type": "prometheus", "uid": "prometheus" },
-      "gridPos": { "h": 7, "w": 24, "x": 0, "y": 21 },
+      "gridPos": { "h": 7, "w": 24, "x": 0, "y": 25 },
       "targets": [
         {
           "expr": "sum(hbot_bot_gross_exposure_quote{cluster=~\"$cluster\",environment=~\"$environment\",bot=~\"$bot\",exchange=~\"$exchange\",pair=~\"$symbol\",variant=~\"$strategy\",mode=~\"$venue\",regime=~\"$regime\"})",
@@ -748,7 +850,7 @@
       "type": "row",
       "title": "Execution Quality",
       "collapsed": false,
-      "gridPos": { "h": 1, "w": 24, "x": 0, "y": 28 }
+      "gridPos": { "h": 1, "w": 24, "x": 0, "y": 32 }
     },
     {
       "id": 301,
@@ -756,7 +858,7 @@
       "title": "Cancel Rate (per min)",
       "description": "Sum of cancel-per-minute snapshots across selected bots. Spikes often indicate too-tight quoting or rapid repricing.",
       "datasource": { "type": "prometheus", "uid": "prometheus" },
-      "gridPos": { "h": 4, "w": 6, "x": 0, "y": 29 },
+      "gridPos": { "h": 4, "w": 6, "x": 0, "y": 33 },
       "targets": [
         { "expr": "sum(hbot_bot_cancel_per_min{cluster=~\"$cluster\",environment=~\"$environment\",bot=~\"$bot\",exchange=~\"$exchange\",pair=~\"$symbol\",variant=~\"$strategy\",mode=~\"$venue\",regime=~\"$regime\"})", "refId": "A" }
       ],
@@ -769,7 +871,7 @@
       "title": "Maker % (Δ $timeframe)",
       "description": "Maker share of fills over selected window (from fills.csv is_maker).",
       "datasource": { "type": "prometheus", "uid": "prometheus" },
-      "gridPos": { "h": 4, "w": 6, "x": 6, "y": 29 },
+      "gridPos": { "h": 4, "w": 6, "x": 6, "y": 33 },
       "targets": [
         {
           "expr": "100 * (sum(clamp_min(delta(hbot_bot_fills_maker_count{cluster=~\"$cluster\",environment=~\"$environment\",bot=~\"$bot\",exchange=~\"$exchange\",pair=~\"$symbol\",variant=~\"$strategy\",mode=~\"$venue\",regime=~\"$regime\"}[$timeframe]),0)) / clamp_min(sum(clamp_min(delta(hbot_bot_fills_maker_count{cluster=~\"$cluster\",environment=~\"$environment\",bot=~\"$bot\",exchange=~\"$exchange\",pair=~\"$symbol\",variant=~\"$strategy\",mode=~\"$venue\",regime=~\"$regime\"}[$timeframe]),0)) + sum(clamp_min(delta(hbot_bot_fills_taker_count{cluster=~\"$cluster\",environment=~\"$environment\",bot=~\"$bot\",exchange=~\"$exchange\",pair=~\"$symbol\",variant=~\"$strategy\",mode=~\"$venue\",regime=~\"$regime\"}[$timeframe]),0)), 1))",
@@ -795,7 +897,7 @@
       "title": "Adverse Drift 30s (bps, Δ $timeframe)",
       "description": "Average 30s adverse drift after fills (bps) from fills.csv `adverse_drift_30s`. Higher = worse short-horizon adverse selection.",
       "datasource": { "type": "prometheus", "uid": "prometheus" },
-      "gridPos": { "h": 4, "w": 6, "x": 12, "y": 29 },
+      "gridPos": { "h": 4, "w": 6, "x": 12, "y": 33 },
       "targets": [
         {
           "expr": "sum(clamp_min(delta(hbot_bot_adverse_drift_30s_bps_sum{cluster=~\"$cluster\",environment=~\"$environment\",bot=~\"$bot\",exchange=~\"$exchange\",pair=~\"$symbol\",variant=~\"$strategy\",mode=~\"$venue\",regime=~\"$regime\"}[$timeframe]), 0)) / clamp_min(sum(clamp_min(delta(hbot_bot_adverse_drift_30s_bps_count{cluster=~\"$cluster\",environment=~\"$environment\",bot=~\"$bot\",exchange=~\"$exchange\",pair=~\"$symbol\",variant=~\"$strategy\",mode=~\"$venue\",regime=~\"$regime\"}[$timeframe]), 0)), 1)",
@@ -819,7 +921,7 @@
       "title": "Order Book Stale Bots",
       "description": "Share of selected bots reporting stale order book (1=true).",
       "datasource": { "type": "prometheus", "uid": "prometheus" },
-      "gridPos": { "h": 4, "w": 6, "x": 18, "y": 29 },
+      "gridPos": { "h": 4, "w": 6, "x": 18, "y": 33 },
       "targets": [
         { "expr": "100 * avg(hbot_bot_order_book_stale{cluster=~\"$cluster\",environment=~\"$environment\",bot=~\"$bot\",exchange=~\"$exchange\",pair=~\"$symbol\",variant=~\"$strategy\",mode=~\"$venue\",regime=~\"$regime\"})", "refId": "A" }
       ],
@@ -832,7 +934,7 @@
       "title": "Tick Duration (ms) by Bot",
       "description": "End-to-end tick wall time. Sustained increases imply slow indicators, connector I/O, or host contention.",
       "datasource": { "type": "prometheus", "uid": "prometheus" },
-      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 33 },
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 37 },
       "targets": [
         {
           "expr": "1000 * hbot_bot_tick_duration_seconds{cluster=~\"$cluster\",environment=~\"$environment\",bot=~\"$bot\",exchange=~\"$exchange\",pair=~\"$symbol\",variant=~\"$strategy\",mode=~\"$venue\",regime=~\"$regime\"}",
@@ -849,7 +951,7 @@
       "title": "WS Reconnects (Δ $timeframe) by Bot",
       "description": "Connectivity stability proxy: delta of WS reconnect count gauge over selected window (clamped at 0).",
       "datasource": { "type": "prometheus", "uid": "prometheus" },
-      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 33 },
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 37 },
       "targets": [
         {
           "expr": "clamp_min(delta(hbot_bot_ws_reconnect_total{cluster=~\"$cluster\",environment=~\"$environment\",bot=~\"$bot\",exchange=~\"$exchange\",pair=~\"$symbol\",variant=~\"$strategy\",mode=~\"$venue\",regime=~\"$regime\"}[$timeframe]), 0)",
@@ -865,7 +967,7 @@
       "type": "row",
       "title": "Strategy KPIs",
       "collapsed": false,
-      "gridPos": { "h": 1, "w": 24, "x": 0, "y": 41 }
+      "gridPos": { "h": 1, "w": 24, "x": 0, "y": 45 }
     },
     {
       "id": 401,
@@ -873,7 +975,7 @@
       "title": "Bots (Key KPIs)",
       "description": "Desk table: state, health freshness, edge/spread, turnover, PnL, fees, exposure. Bot name is clickable → Deep Dive.",
       "datasource": { "type": "prometheus", "uid": "prometheus" },
-      "gridPos": { "h": 10, "w": 24, "x": 0, "y": 42 },
+      "gridPos": { "h": 10, "w": 24, "x": 0, "y": 46 },
       "targets": [
         { "expr": "label_replace(hbot_bot_snapshot_age_seconds{cluster=~\"$cluster\",environment=~\"$environment\",bot=~\"$bot\",exchange=~\"$exchange\",pair=~\"$symbol\",variant=~\"$strategy\",mode=~\"$venue\",regime=~\"$regime\"}, \"__name__\", \"snapshot_age_s\", \"\", \"\")", "refId": "A", "format": "table", "instant": true },
         { "expr": "label_replace(hbot_bot_equity_quote{cluster=~\"$cluster\",environment=~\"$environment\",bot=~\"$bot\",exchange=~\"$exchange\",pair=~\"$symbol\",variant=~\"$strategy\",mode=~\"$venue\",regime=~\"$regime\"}, \"__name__\", \"equity\", \"\", \"\")", "refId": "B", "format": "table", "instant": true },
@@ -884,7 +986,9 @@
         { "expr": "label_replace(hbot_bot_spread_pct{cluster=~\"$cluster\",environment=~\"$environment\",bot=~\"$bot\",exchange=~\"$exchange\",pair=~\"$symbol\",variant=~\"$strategy\",mode=~\"$venue\",regime=~\"$regime\"} * 10000, \"__name__\", \"spread_bps\", \"\", \"\")", "refId": "G", "format": "table", "instant": true },
         { "expr": "label_replace(hbot_bot_turnover_today_x{cluster=~\"$cluster\",environment=~\"$environment\",bot=~\"$bot\",exchange=~\"$exchange\",pair=~\"$symbol\",variant=~\"$strategy\",mode=~\"$venue\",regime=~\"$regime\"}, \"__name__\", \"turnover_x\", \"\", \"\")", "refId": "H", "format": "table", "instant": true },
         { "expr": "label_replace(hbot_bot_orders_active{cluster=~\"$cluster\",environment=~\"$environment\",bot=~\"$bot\",exchange=~\"$exchange\",pair=~\"$symbol\",variant=~\"$strategy\",mode=~\"$venue\",regime=~\"$regime\"}, \"__name__\", \"orders_active\", \"\", \"\")", "refId": "I", "format": "table", "instant": true },
-        { "expr": "label_replace(hbot_bot_recent_error_lines{cluster=~\"$cluster\",environment=~\"$environment\",bot=~\"$bot\",exchange=~\"$exchange\",pair=~\"$symbol\",variant=~\"$strategy\",mode=~\"$venue\",regime=~\"$regime\"}, \"__name__\", \"error_lines_tail\", \"\", \"\")", "refId": "J", "format": "table", "instant": true }
+        { "expr": "label_replace(hbot_bot_recent_error_lines{cluster=~\"$cluster\",environment=~\"$environment\",bot=~\"$bot\",exchange=~\"$exchange\",pair=~\"$symbol\",variant=~\"$strategy\",mode=~\"$venue\",regime=~\"$regime\"}, \"__name__\", \"error_lines_tail\", \"\", \"\")", "refId": "J", "format": "table", "instant": true },
+        { "expr": "label_replace(hbot_bot_minute_last_age_seconds{cluster=~\"$cluster\",environment=~\"$environment\",bot=~\"$bot\",exchange=~\"$exchange\",pair=~\"$symbol\",variant=~\"$strategy\",mode=~\"$venue\",regime=~\"$regime\"}, \"__name__\", \"minute_age_s\", \"\", \"\")", "refId": "K", "format": "table", "instant": true },
+        { "expr": "label_replace(hbot_bot_fills_last_age_seconds{cluster=~\"$cluster\",environment=~\"$environment\",bot=~\"$bot\",exchange=~\"$exchange\",pair=~\"$symbol\",variant=~\"$strategy\",mode=~\"$venue\",regime=~\"$regime\"}, \"__name__\", \"fills_age_s\", \"\", \"\")", "refId": "L", "format": "table", "instant": true }
       ],
       "transformations": [
         { "id": "seriesToColumns", "options": { "byField": "bot" } },
@@ -902,6 +1006,8 @@
               "Time 8": true,
               "Time 9": true,
               "Time 10": true,
+              "Time 11": true,
+              "Time 12": true,
               "__name__ 1": true,
               "__name__ 2": true,
               "__name__ 3": true,
@@ -912,6 +1018,8 @@
               "__name__ 8": true,
               "__name__ 9": true,
               "__name__ 10": true,
+              "__name__ 11": true,
+              "__name__ 12": true,
               "instance 1": true,
               "instance 2": true,
               "instance 3": true,
@@ -922,6 +1030,8 @@
               "instance 8": true,
               "instance 9": true,
               "instance 10": true,
+              "instance 11": true,
+              "instance 12": true,
               "job 1": true,
               "job 2": true,
               "job 3": true,
@@ -931,7 +1041,9 @@
               "job 7": true,
               "job 8": true,
               "job 9": true,
-              "job 10": true
+              "job 10": true,
+              "job 11": true,
+              "job 12": true
             },
             "renameByName": {
               "bot": "Bot",
@@ -948,7 +1060,9 @@
               "Value #G": "Spread (bps)",
               "Value #H": "Turnover (x)",
               "Value #I": "Orders active",
-              "Value #J": "ERROR lines (tail)"
+              "Value #J": "ERROR lines (tail)",
+              "Value #K": "Minute age (s)",
+              "Value #L": "Fills age (s)"
             }
           }
         }
@@ -973,6 +1087,8 @@
             ]
           },
           { "matcher": { "id": "byName", "options": "Snapshot age (s)" }, "properties": [{ "id": "unit", "value": "s" }, { "id": "decimals", "value": 0 }] },
+          { "matcher": { "id": "byName", "options": "Minute age (s)" }, "properties": [{ "id": "unit", "value": "s" }, { "id": "decimals", "value": 0 }] },
+          { "matcher": { "id": "byName", "options": "Fills age (s)" }, "properties": [{ "id": "unit", "value": "s" }, { "id": "decimals", "value": 0 }] },
           { "matcher": { "id": "byName", "options": "Equity" }, "properties": [{ "id": "unit", "value": "currencyUSD" }, { "id": "decimals", "value": 2 }] },
           {
             "matcher": { "id": "byName", "options": "PnL today" },
@@ -1002,13 +1118,13 @@
       "type": "row",
       "title": "Ops",
       "collapsed": false,
-      "gridPos": { "h": 1, "w": 24, "x": 0, "y": 52 }
+      "gridPos": { "h": 1, "w": 24, "x": 0, "y": 56 }
     },
     {
       "id": 501,
       "type": "alertlist",
       "title": "Active Alerts",
-      "gridPos": { "h": 4, "w": 24, "x": 0, "y": 53 },
+      "gridPos": { "h": 4, "w": 24, "x": 0, "y": 57 },
       "options": {
         "dashboardAlerts": false,
         "groupBy": [],
@@ -1026,7 +1142,7 @@
       "title": "Recent Bot Logs (WARN/ERROR)",
       "description": "Use this as the desk incident feed. Drill into a bot by narrowing variables or clicking the KPI table.",
       "datasource": { "type": "loki", "uid": "loki" },
-      "gridPos": { "h": 10, "w": 24, "x": 0, "y": 57 },
+      "gridPos": { "h": 10, "w": 24, "x": 0, "y": 61 },
       "targets": [
         { "expr": "{job=\"bot_logs\", bot=~\"$bot\"} |~ \"ERROR|WARNING|CRITICAL\"", "refId": "A" }
       ],

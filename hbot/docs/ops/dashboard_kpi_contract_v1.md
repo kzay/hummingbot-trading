@@ -57,6 +57,18 @@ Define the desk performance KPIs shown in Grafana and the source metric for each
 - `risk_reasons` is exported as an info metric label for operator triage, not for high-cardinality analytics.
 - All metrics are scraped via `bot-metrics-exporter` on Prometheus job `bot-metrics`.
 
+## Supervision Freshness Contract (2026-03-02)
+- Semi-prod default freshness budget:
+  - `DASHBOARD_DATA_MAX_AGE_S=180` (3 minutes)
+- Key freshness/supervision metrics (Trading Desk dashboard):
+  - `hbot_data_plane_consistency` (0/1 canonical readiness signal)
+  - `hbot_bot_snapshot_age_seconds`
+  - `hbot_bot_minute_last_age_seconds`
+  - `hbot_bot_fills_last_age_seconds`
+- Alerting expectations:
+  - warning on stale snapshot/minute at 180s
+  - critical frozen-state escalation when snapshot age exceeds 240s
+
 ## PnL Metric Migration (2026-02-27)
 - Canonical metric for intraday realized performance is now:
   - `hbot_bot_net_realized_pnl_today_quote`

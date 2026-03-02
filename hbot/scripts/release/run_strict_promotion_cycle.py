@@ -127,6 +127,19 @@ def main() -> int:
         default=os.getenv("PAPER_EXCHANGE_LOAD_RUN_ID", ""),
         help="Optional run_id filter forwarded to strict-cycle load checker.",
     )
+    parser.add_argument(
+        "--check-dashboard-readiness",
+        action="store_true",
+        default=str(os.getenv("STRICT_CHECK_DASHBOARD_READINESS", "true")).strip().lower()
+        in {"1", "true", "yes", "on"},
+        help="Enforce TradeNote + Grafana dashboard data readiness in strict cycle.",
+    )
+    parser.add_argument(
+        "--no-check-dashboard-readiness",
+        action="store_false",
+        dest="check_dashboard_readiness",
+        help="Disable dashboard readiness gate in strict cycle.",
+    )
     args = parser.parse_args()
 
     root = Path("/workspace/hbot") if Path("/.dockerenv").exists() else Path(__file__).resolve().parents[2]
@@ -188,6 +201,8 @@ def main() -> int:
             cmd.extend(["--paper-exchange-load-run-id", str(args.paper_exchange_load_run_id).strip()])
     if args.check_paper_exchange_preflight:
         cmd.append("--check-paper-exchange-preflight")
+    if args.check_dashboard_readiness:
+        cmd.append("--check-dashboard-readiness")
     proc = subprocess.run(cmd, cwd=str(root), capture_output=True, text=True, check=False)
     out = (proc.stdout or "") + ("\n" + proc.stderr if proc.stderr else "")
 

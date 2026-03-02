@@ -877,7 +877,7 @@ class BotMetricsExporter:
             "# TYPE hbot_desk_snapshot_minute_age_s gauge",
             "# HELP hbot_desk_snapshot_fill_age_s Age of latest fill as seen by snapshot service.",
             "# TYPE hbot_desk_snapshot_fill_age_s gauge",
-            "# HELP hbot_data_plane_consistency 1 if all bots have a fresh snapshot (<3 min), 0 otherwise.",
+            "# HELP hbot_data_plane_consistency 1 if active bots have fresh snapshot+minute data, 0 otherwise.",
             "# TYPE hbot_data_plane_consistency gauge",
         ])
         try:
@@ -917,8 +917,15 @@ class BotMetricsExporter:
                 # Inactive-bot exemption: bots whose minute data is > 6h old are
                 # considered inactive and excluded from the consistency signal.
                 _inactive_threshold_s = 6 * 3600
+                _snapshot_stale_threshold_s = 180.0
+                _minute_stale_threshold_s = 180.0
                 _bot_inactive = minute_age is not None and float(minute_age) > _inactive_threshold_s
-                if not _bot_inactive and (snap_age > 180 or completeness < 0.8):
+                _minute_stale = minute_age is None or float(minute_age) > _minute_stale_threshold_s
+                if not _bot_inactive and (
+                    snap_age > _snapshot_stale_threshold_s
+                    or completeness < 0.8
+                    or _minute_stale
+                ):
                     all_fresh = False
                 if not _bot_inactive:
                     snapshot_count += 1

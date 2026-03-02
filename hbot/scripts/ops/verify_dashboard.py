@@ -389,7 +389,7 @@ def _list_panels(root: Path, dashboard_rel_path: str) -> int:
 def main() -> int:
     parser = argparse.ArgumentParser(description="Verify dashboard data readiness for TradeNote and Grafana.")
     parser.add_argument("--strict", action="store_true", help="Return non-zero when readiness fails.")
-    parser.add_argument("--max-data-age-s", type=int, default=int(os.getenv("DASHBOARD_DATA_MAX_AGE_S", "900")))
+    parser.add_argument("--max-data-age-s", type=int, default=int(os.getenv("DASHBOARD_DATA_MAX_AGE_S", "180")))
     parser.add_argument(
         "--tradenote-report-max-age-s",
         type=int,
