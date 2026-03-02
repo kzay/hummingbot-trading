@@ -26,6 +26,7 @@ engineering review for a live algorithmic trading system.
 - Coverage: PYTHONPATH=hbot python -m pytest hbot/tests/ --cov=hbot --cov-report=term-missing
 - Gate: PYTHONPATH=hbot python scripts/release/run_strict_promotion_cycle.py
 - Python 3.11+, deps: hbot/compose/images/control_plane/requirements-control-plane.txt
+- Scope rule: listed files/folders are anchors, not limits. Inspect any additional relevant paths in the repo.
 
 ## Known past incidents (always verify these are STILL fixed)
 | Incident | Root cause | Fix location | Verify |
@@ -51,6 +52,12 @@ engineering review for a live algorithmic trading system.
 - Dep versions that are outdated or have CVEs: {{list or "none checked"}}
 - Known debt from last cycle: {{paste or "first run"}}
 - Recent incidents (brief): {{list or "none"}}
+
+## Data completion protocol (non-blocking)
+- If a placeholder can be inferred from repository context, known defaults, or recent reports, fill it.
+- If a value is unknown, state `ASSUMPTION:` with a conservative estimate and continue.
+- If evidence is missing for a claim, state `DATA_GAP:` and reduce confidence for that finding.
+- Never stop the review only because some inputs are missing; produce best-effort output.
 
 ---
 
@@ -267,6 +274,7 @@ For every item in the sprint plan:
 8. Sprint plan (2-week, ordered, with rollback)
 9. BACKLOG entries (copy-paste ready)
 10. Metrics to track next cycle (what proves the fixes worked)
+11. Assumptions and data gaps (what was inferred vs explicitly provided)
 
 ## Rules
 - Never remove a safety control to gain performance
@@ -274,4 +282,6 @@ For every item in the sprint plan:
 - Do not adopt new tools unless the benefit is concrete and the migration is bounded
 - Every sprint item must have a test or metric that proves it worked
 - Prefer boring, incremental improvements over clever architectural changes
+- Challenge existing design choices each cycle; keep what works, change what no longer does.
+- Include at least one creative but bounded experiment proposal per cycle (with rollback).
 ```

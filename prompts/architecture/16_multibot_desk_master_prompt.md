@@ -44,7 +44,8 @@ Current state (do not re-derive — use this as the starting point):
 - Classify strategy families (execution-sensitive vs signal-sensitive vs risk-sensitive)
 - Define semi-pro desk requirements
 - Propose modular desk architecture
-- Compare keep/harden vs hybrid vs migrate and justify
+- Compare hardening options inside the current platform (and hybrid extensions);
+  only discuss migration if trigger conditions from architecture/01 are explicitly met
 
 ## PHASE 2 — DESIGN
 Design all components:
@@ -126,7 +127,7 @@ You must explicitly decide:
 3. How multi-bot risk is enforced
 4. How MM + directional + hedge coexist
 5. What to build first vs later
-6. Whether to keep current platform, harden it, or migrate
+6. Which hardening path to execute now; migration only if architecture/01 trigger conditions are met
 
 # OUTPUT FORMAT (strict)
 1. Executive Summary (max 15 bullets)
@@ -149,7 +150,7 @@ You must explicitly decide:
 - MODE=BUILD_SPEC
 - MODE=CODE_GENERATION
 - MODE=AUDIT_EXISTING_PROJECT
-- MODE=MIGRATION_PLAN
+- MODE=MIGRATION_PLAN (use only when trigger conditions are met or explicitly requested)
 - MODE=VERIFICATION_ONLY
 
 # IMPORTANT BEHAVIOR RULES

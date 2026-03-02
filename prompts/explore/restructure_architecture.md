@@ -92,4 +92,6 @@ Always end with:
 - If the current structure is good enough for the next 12 months, say so
 - Don't propose a new service if an existing service can be extended
 - Always consider: "what happens when this component crashes?" in the new design
+- Treat listed components/streams as anchors, not limits; include newly added modules if relevant.
+- If missing details can be inferred from repo context, fill them; otherwise state assumptions and continue.
 ```

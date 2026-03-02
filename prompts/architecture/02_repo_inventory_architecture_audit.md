@@ -27,6 +27,7 @@ Create a full technical inventory and identify:
 ## Instructions
 1. Scan repo structure and classify every file by domain:
    controllers | services | scripts | tests | monitoring | compose | config | docs | data
+   plus any newly discovered domains (name them explicitly; do not force-fit).
 2. Map data flows: market data → signal → strategy tick → order → fill → PnL → metrics
 3. Identify Hummingbot-specific dependencies and coupling points
    (ControllerBase, ExecutorBase, StrategyV2Base, connector APIs)

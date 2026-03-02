@@ -27,6 +27,7 @@ for a semi-pro BTC-USDT perpetuals market-making desk.
 - CSV logs: hbot/data/bot1/logs/epp_v24/bot1_a/minute.csv + fills.csv
 - Incident playbooks: hbot/docs/ops/incident_playbooks/ (01–06)
 - Go-live checklist: hbot/docs/ops/go_live_hardening_checklist.md
+- Scope rule: listed files/folders are anchors, not limits. Inspect any additional relevant paths in the repo.
 
 ## Service report paths (check age at each review — stale = > 30 min)
 | Service | Report path |
@@ -81,6 +82,12 @@ increase(hbot_fill_count_total{bot="bot1"}[1h])
 - Disk usage on log/data volumes: {{X GB, growth rate}}
 - Errors in bot log past 24h: {{none / list}}
 - Last cycle baseline (if WEEKLY_REVIEW): {{paste summary or "first run"}}
+
+## Data completion protocol (non-blocking)
+- If a placeholder can be inferred from repository context, known defaults, or recent reports, fill it.
+- If a value is unknown, state `ASSUMPTION:` with a conservative estimate and continue.
+- If evidence is missing for a claim, state `DATA_GAP:` and lower confidence accordingly.
+- Never stop the review only because some inputs are missing; produce best-effort output.
 
 ---
 
@@ -299,8 +306,8 @@ Output: ops maturity score (0–10 per dimension) + prioritized list of top 20 g
 ## Output format
 
 **DAILY_SCAN**: Status (GREEN/YELLOW/RED) + issues + immediate actions only  
-**WEEKLY_REVIEW**: All 7 phases + BACKLOG entries + focus for next week  
-**INITIAL_AUDIT**: Full maturity scorecard + top 20 gaps + first BACKLOG entries
+**WEEKLY_REVIEW**: All 7 phases + BACKLOG entries + focus for next week + assumptions/data gaps  
+**INITIAL_AUDIT**: Full maturity scorecard + top 20 gaps + first BACKLOG entries + assumptions/data gaps
 
 ## Cross-loop escalation rules
 - soft_pause_ratio > 30% for 2+ weeks → escalate to strategy_loop
@@ -308,4 +315,5 @@ Output: ops maturity score (0–10 per dimension) + prioritized list of top 20 g
 - Freeze / hang > 1/week → escalate to tech_loop
 - Telegram untested > 7 days → test before closing this review
 - Any P0 at start of WEEKLY_REVIEW → stop, resolve P0 first
+- Keep improvement continuous: challenge stale thresholds and runbooks when weekly evidence supports change.
 ```

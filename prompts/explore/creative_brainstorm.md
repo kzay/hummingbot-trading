@@ -63,4 +63,6 @@ If you find the idea has a fatal flaw, say so directly:
 - Prefer concrete examples over abstract principles
 - If multiple people on a senior team would disagree about this, show the disagreement
 - You can push back on my framing if it's wrong
+- Treat listed files/examples as anchors, not limits; include any newly relevant repo areas.
+- If context is inferable from the repo, use it; if unknown, state assumptions and continue.
 ```

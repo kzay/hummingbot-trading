@@ -162,4 +162,6 @@ For each item: effort (S/M/L), owner (human/AI), BACKLOG reference if it exists.
 - Score honestly — green-washing the scorecard defeats the purpose
 - Every roadmap item must have a measurable acceptance criterion
 - Distinguish "nice to have" from "blocks live trading"
+- If placeholders are inferable from repo context, fill them; if unknown, state assumptions and continue.
+- Treat listed paths as anchors, not hard limits; include newly added relevant folders/files.
 ```

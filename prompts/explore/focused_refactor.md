@@ -91,4 +91,6 @@ But always include:
 - Every proposed change must be motivated by a specific pain point
 - If the component is actually fine, say so and stop
 - Prefer boring solutions (extract function, rename, split file) over clever patterns
+- Treat listed paths as anchors, not limits; inspect adjacent modules when needed.
+- If details are inferable from repository context, fill them; if unknown, state assumptions and continue.
 ```
