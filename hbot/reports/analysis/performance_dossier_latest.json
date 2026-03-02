@@ -1,0 +1,142 @@
+{
+  "ts_utc": "2026-03-02T11:59:21.665910+00:00",
+  "status": "warning",
+  "bot_log_root": "hbot\\data\\bot1\\logs\\epp_v24\\bot1_a",
+  "lookback_days": 5,
+  "summary": {
+    "days_included": 5,
+    "total_net_pnl_quote": 2.3749818531542015,
+    "mean_fee_bps": 2.815458133295718,
+    "mean_maker_ratio": 0.8,
+    "max_slippage_p95_bps": 4.224023531969014,
+    "max_drawdown_pct": 0.03288840701341591,
+    "soft_pause_ratio": 0.0,
+    "order_book_stale_rows": 92
+  },
+  "checks": [
+    {
+      "name": "net_pnl_non_negative",
+      "pass": true,
+      "value": 2.3749818531542015,
+      "threshold": 0.0
+    },
+    {
+      "name": "mean_fee_bps_within_0_to_12",
+      "pass": true,
+      "value": 2.815458133295718,
+      "threshold": [
+        0.0,
+        12.0
+      ]
+    },
+    {
+      "name": "maker_ratio_at_least_45pct",
+      "pass": true,
+      "value": 0.8,
+      "threshold": 0.45
+    },
+    {
+      "name": "slippage_p95_below_25bps",
+      "pass": true,
+      "value": 4.224023531969014,
+      "threshold": 25.0
+    },
+    {
+      "name": "drawdown_below_2pct",
+      "pass": false,
+      "value": 0.03288840701341591,
+      "threshold": 0.02
+    },
+    {
+      "name": "soft_pause_ratio_below_30pct",
+      "pass": true,
+      "value": 0.0,
+      "threshold": 0.3
+    },
+    {
+      "name": "reconciliation_not_critical",
+      "pass": true,
+      "value": 0.0,
+      "threshold": 0.0
+    },
+    {
+      "name": "portfolio_risk_not_critical",
+      "pass": true,
+      "value": 0.0,
+      "threshold": 0.0
+    }
+  ],
+  "daily_breakdown": [
+    {
+      "day": "2026-02-26",
+      "fills": 300,
+      "realized_pnl_quote": 8.85198243714065,
+      "fees_quote": 2.0552362095065115,
+      "net_pnl_quote": 6.796746227634139,
+      "fee_bps": 2.0772906664785897,
+      "maker_ratio": 1.0,
+      "slippage_median_bps": 0.08066473609107641,
+      "slippage_p95_bps": 4.224023531969014
+    },
+    {
+      "day": "2026-02-27",
+      "fills": 138,
+      "realized_pnl_quote": 0.4858895357515339,
+      "fees_quote": 0.8016983079395388,
+      "net_pnl_quote": -0.3158087721880049,
+      "fee_bps": 1.9999999999999998,
+      "maker_ratio": 1.0,
+      "slippage_median_bps": -0.29449409312765407,
+      "slippage_p95_bps": 2.9526392139187734
+    },
+    {
+      "day": "2026-02-28",
+      "fills": 65,
+      "realized_pnl_quote": 5.901771526259942,
+      "fees_quote": 0.3982963674253126,
+      "net_pnl_quote": 5.50347515883463,
+      "fee_bps": 2.0000000000000004,
+      "maker_ratio": 1.0,
+      "slippage_median_bps": 0.007585958391459786,
+      "slippage_p95_bps": 1.7441237498807942
+    },
+    {
+      "day": "2026-03-01",
+      "fills": 1,
+      "realized_pnl_quote": -1.3096601937635104,
+      "fees_quote": 0.007162846540994881,
+      "net_pnl_quote": -1.3168230403045054,
+      "fee_bps": 1.9999999999999998,
+      "maker_ratio": 1.0,
+      "slippage_median_bps": -1.0130731461324245,
+      "slippage_p95_bps": -1.0130731461324245
+    },
+    {
+      "day": "2026-03-02",
+      "fills": 1,
+      "realized_pnl_quote": -8.172217930897057,
+      "fees_quote": 0.120389789925,
+      "net_pnl_quote": -8.292607720822057,
+      "fee_bps": 6.000000000000001,
+      "maker_ratio": 0.0,
+      "slippage_median_bps": 0.3389044264478662,
+      "slippage_p95_bps": 0.3389044264478662
+    }
+  ],
+  "external": {
+    "reconciliation": {
+      "status": "ok",
+      "critical_count": 0,
+      "warning_count": 0
+    },
+    "portfolio_risk": {
+      "status": "ok",
+      "critical_count": 0,
+      "warning_count": 0
+    },
+    "strict_cycle": {
+      "status": "FAIL",
+      "rc": 2
+    }
+  }
+}

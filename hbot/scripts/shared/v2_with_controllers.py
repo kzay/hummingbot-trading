@@ -1,6 +1,9 @@
+import json
+import logging
 import os
 import time
 from decimal import Decimal
+from pathlib import Path
 from typing import Any, Dict, List, Optional, Set
 
 from hummingbot.client import hummingbot_application as hb_app_module
@@ -18,6 +21,16 @@ from controllers.paper_engine_v2.hb_bridge import (
     install_paper_desk_bridge as _install_paper_desk_bridge_v2,
 )
 from services.common.preflight import run_controller_preflight
+
+try:
+    from pydantic import ValidationError as PydanticValidationError
+except Exception:  # pragma: no cover
+    PydanticValidationError = None
+
+try:
+    from pydantic_core import ValidationError as PydanticCoreValidationError
+except Exception:  # pragma: no cover
+    PydanticCoreValidationError = None
 
 try:
     from services.contracts.event_schemas import AuditEvent, MarketSnapshotEvent
@@ -75,9 +88,75 @@ def _install_connector_alias_guard():
     hb_connector_manager._hbot_connector_alias_guard_installed = True
 
 
+def _install_transient_bitget_ws_timeout_guard():
+    """
+    Bitget websocket channels can intermittently timeout under network jitter.
+    We keep the reconnect behavior but avoid flooding ERROR logs with full stack traces
+    for this specific transient class, while preserving all non-timeout exceptions.
+    """
+    if os.getenv("HB_SUPPRESS_TRANSIENT_WS_TIMEOUT_ERRORS", "true").lower() not in {"1", "true", "yes"}:
+        return
+    if getattr(logging, "_hbot_transient_bitget_ws_timeout_guard_installed", False):
+        return
+
+    target_logger_names = {
+        # Perpetual
+        "hummingbot.connector.derivative.bitget_perpetual.bitget_perpetual_api_order_book_data_source."
+        "BitgetPerpetualAPIOrderBookDataSource",
+        "hummingbot.connector.derivative.bitget_perpetual.bitget_perpetual_api_user_stream_data_source."
+        "BitgetPerpetualUserStreamDataSource",
+        # Spot
+        "hummingbot.connector.exchange.bitget.bitget_api_order_book_data_source.BitgetAPIOrderBookDataSource",
+    }
+    target_messages = {
+        "Unexpected error occurred when listening to order book streams. Retrying in 5 seconds...",
+        "Unexpected error while listening to user stream. Retrying after 5 seconds...",
+    }
+    min_emit_interval_s = max(1.0, float(os.getenv("HB_TRANSIENT_WS_TIMEOUT_LOG_INTERVAL_S", "120")))
+    last_emit_by_logger: Dict[str, float] = {}
+
+    class _TransientBitgetWsTimeoutFilter(logging.Filter):
+        def filter(self, record: logging.LogRecord) -> bool:
+            if record.name not in target_logger_names:
+                return True
+            message = record.getMessage()
+            if message not in target_messages:
+                return True
+            exc = record.exc_info[1] if record.exc_info else None
+            # Only suppress/downgrade strict timeout reconnect loops.
+            if not isinstance(exc, TimeoutError):
+                return True
+            now = time.time()
+            last = last_emit_by_logger.get(record.name, 0.0)
+            if now - last < min_emit_interval_s:
+                return False
+            last_emit_by_logger[record.name] = now
+            record.levelno = logging.WARNING
+            record.levelname = "WARNING"
+            record.msg = (
+                "Transient websocket timeout; reconnecting automatically "
+                f"(throttled to >= {int(min_emit_interval_s)}s)."
+            )
+            record.args = ()
+            record.exc_info = None
+            record.exc_text = None
+            return True
+
+    timeout_filter = _TransientBitgetWsTimeoutFilter()
+    root_logger = logging.getLogger()
+    root_logger.addFilter(timeout_filter)
+    for handler in root_logger.handlers:
+        handler.addFilter(timeout_filter)
+    for logger_name in target_logger_names:
+        logging.getLogger(logger_name).addFilter(timeout_filter)
+    logging._hbot_transient_bitget_ws_timeout_guard_installed = True
+
+
 _install_trade_monitor_guard()
 _install_connector_alias_guard()
-enable_framework_paper_compat_fallbacks()
+_install_transient_bitget_ws_timeout_guard()
+if os.getenv("BOT_MODE", "paper").lower() != "live":
+    enable_framework_paper_compat_fallbacks()
 
 
 class V2WithControllersConfig(StrategyV2ConfigBase):
@@ -127,15 +206,489 @@ class V2WithControllers(StrategyV2Base):
         self._paper_adapter_installed: Set[str] = set()
         self._paper_adapter_pending_logged: Set[str] = set()
         self._paper_desk_v2 = None  # PaperDesk v2 -- created on first paper adapter install
+        self._heartbeat_write_interval_s: float = float(os.getenv("HB_HEARTBEAT_INTERVAL_S", "5"))
+        self._last_heartbeat_write_ts: float = 0.0
+        self._heartbeat_path: Path = Path(
+            os.getenv("HB_HEARTBEAT_PATH", "/home/hummingbot/logs/heartbeat/strategy_heartbeat.json")
+        )
+        self._open_orders_write_interval_s: float = float(os.getenv("HB_OPEN_ORDERS_SNAPSHOT_INTERVAL_S", "5"))
+        self._last_open_orders_write_ts: float = 0.0
+        self._open_orders_snapshot_path: Path = Path(
+            os.getenv("HB_OPEN_ORDERS_SNAPSHOT_PATH", "/home/hummingbot/logs/recovery/open_orders_latest.json")
+        )
+        self._config_reload_retry_interval_s: float = float(os.getenv("HB_CONFIG_RELOAD_RETRY_S", "30"))
+        self._config_reload_retry_after_ts: float = 0.0
+        self._config_reload_error_count: int = 0
+        self._config_reload_last_error: str = ""
+        self._config_reload_last_error_ts: float = 0.0
+        self._config_reload_degraded: bool = False
+        self._config_reload_last_success_ts: float = time.time()
+        self._config_reload_validation_error_types = tuple(
+            cls for cls in (PydanticValidationError, PydanticCoreValidationError) if cls is not None
+        )
+        self._hard_stop_kill_switch_last_reason_by_controller: Dict[str, str] = {}
+        self._hard_stop_kill_switch_last_ts_by_controller: Dict[str, float] = {}
+        self._hard_stop_kill_switch_republish_s: float = float(
+            os.getenv("HB_HARD_STOP_KILL_SWITCH_REPUBLISH_S", "300")
+        )
+        self._hard_stop_clear_candidate_since_by_controller: Dict[str, float] = {}
+        self._hard_stop_resume_last_ts_by_controller: Dict[str, float] = {}
+        self._hard_stop_clear_cooldown_s: float = float(
+            os.getenv("HB_HARD_STOP_CLEAR_COOLDOWN_S", "30")
+        )
+        self._controller_actions_buffer: List[Any] = []
+        self._action_trace_enabled: bool = os.getenv("HB_ACTION_TRACE_ENABLED", "true").lower() in {"1", "true", "yes"}
+        self._action_trace_cooldown_s: float = max(1.0, float(os.getenv("HB_ACTION_TRACE_COOLDOWN_S", "10")))
+        self._action_trace_last_ts: float = 0.0
+        self._executor_dispatch_trace_enabled: bool = (
+            os.getenv("HB_EXECUTOR_TRACE_ENABLED", "true").lower() in {"1", "true", "yes"}
+        )
+        self._executor_dispatch_trace_cooldown_s: float = max(
+            1.0, float(os.getenv("HB_EXECUTOR_TRACE_COOLDOWN_S", "5"))
+        )
+        self._executor_dispatch_trace_last_ts: float = 0.0
+        self._order_exec_trace_enabled: bool = (
+            os.getenv("HB_ORDER_EXEC_TRACE_ENABLED", "true").lower() in {"1", "true", "yes"}
+        )
+        default_auto_resume = "true" if os.getenv("BOT_MODE", "paper").strip().lower() == "paper" else "false"
+        self._hard_stop_auto_resume_on_clear: bool = (
+            os.getenv("HB_HARD_STOP_AUTO_RESUME_ON_CLEAR", default_auto_resume).strip().lower() in {"1", "true", "yes"}
+        )
+        self._startup_sync_report_path: Path = Path(
+            os.getenv("HB_STARTUP_SYNC_REPORT_PATH", "/home/hummingbot/logs/recovery/startup_sync_latest.json")
+        )
+        self._install_executor_dispatch_trace()
         self._init_external_bus()
         self._install_internal_paper_adapters()
 
+    @staticmethod
+    def _action_level_id(action: Any) -> str:
+        cfg = getattr(action, "executor_config", None)
+        return str(getattr(cfg, "level_id", "") or "")
+
+    @staticmethod
+    def _executor_level_id(executor: Any) -> str:
+        cfg = getattr(executor, "config", None)
+        return str(getattr(cfg, "level_id", "") or "")
+
+    @staticmethod
+    def _executor_runtime_id(executor: Any) -> str:
+        cfg = getattr(executor, "config", None)
+        # Runtime executors expose different IDs depending on stage/type; use first non-empty.
+        return str(
+            getattr(executor, "executor_id", "")
+            or getattr(executor, "id", "")
+            or getattr(cfg, "id", "")
+            or ""
+        )
+
+    def _is_position_rebalance_create(self, action: Any) -> bool:
+        return isinstance(action, CreateExecutorAction) and self._action_level_id(action) == "position_rebalance"
+
+    def _log_executor_dispatch_trace(
+        self,
+        *,
+        stage: str,
+        actions: List[Any],
+        before_count: int,
+        after_count: int,
+        new_executor_ids: List[str],
+        force: bool = False,
+    ) -> None:
+        if not self._executor_dispatch_trace_enabled:
+            return
+        now = time.time()
+        if not force and (now - self._executor_dispatch_trace_last_ts) < self._executor_dispatch_trace_cooldown_s:
+            return
+        self._executor_dispatch_trace_last_ts = now
+        create_actions = [a for a in actions if isinstance(a, CreateExecutorAction)]
+        stop_actions = [a for a in actions if isinstance(a, StopExecutorAction)]
+        create_levels = [self._action_level_id(a) for a in create_actions]
+        self.logger().warning(
+            "EXECUTOR_TRACE stage=%s total=%d create=%d stop=%d before=%d after=%d "
+            "create_levels=%s new_executor_ids=%s",
+            stage,
+            len(actions),
+            len(create_actions),
+            len(stop_actions),
+            before_count,
+            after_count,
+            ",".join(create_levels[:8]),
+            ",".join(new_executor_ids[:8]),
+        )
+
+    def _install_executor_dispatch_trace(self) -> None:
+        if not self._executor_dispatch_trace_enabled:
+            return
+        orchestrator = getattr(self, "executor_orchestrator", None)
+        if orchestrator is None or getattr(orchestrator, "_hb_executor_trace_installed", False):
+            return
+        original_execute_actions = getattr(orchestrator, "execute_actions", None)
+        if not callable(original_execute_actions):
+            return
+        original_execute_action = getattr(orchestrator, "execute_action", None)
+        original_create_executor = getattr(orchestrator, "create_executor", None)
+
+        def _runtime_executors() -> List[Any]:
+            active_map = getattr(orchestrator, "active_executors", {}) or {}
+            flattened: List[Any] = []
+            for executor_list in active_map.values():
+                if isinstance(executor_list, list):
+                    flattened.extend(executor_list)
+            return flattened
+
+        def _wrapped_execute_actions(actions):
+            action_list = list(actions or [])
+            rebalance_present = any(self._is_position_rebalance_create(a) for a in action_list)
+            before_executors = _runtime_executors()
+            before_ids = {self._executor_runtime_id(ex) for ex in before_executors if self._executor_runtime_id(ex)}
+            before_rebalance = [ex for ex in before_executors if self._executor_level_id(ex) == "position_rebalance"]
+            self._log_executor_dispatch_trace(
+                stage="dispatch_before",
+                actions=action_list,
+                before_count=len(before_executors),
+                after_count=len(before_executors),
+                new_executor_ids=[],
+                force=rebalance_present,
+            )
+            result = original_execute_actions(action_list)
+            after_executors = _runtime_executors()
+            after_ids = {self._executor_runtime_id(ex) for ex in after_executors if self._executor_runtime_id(ex)}
+            new_ids = sorted(ex_id for ex_id in (after_ids - before_ids) if ex_id)
+            self._log_executor_dispatch_trace(
+                stage="dispatch_after",
+                actions=action_list,
+                before_count=len(before_executors),
+                after_count=len(after_executors),
+                new_executor_ids=new_ids,
+                force=rebalance_present,
+            )
+            if rebalance_present and not new_ids:
+                # Rebalance creates can be intentionally deduplicated if one is already active.
+                rebalance_action_summaries: List[str] = []
+                for action in action_list:
+                    if not self._is_position_rebalance_create(action):
+                        continue
+                    cfg = getattr(action, "executor_config", None)
+                    if cfg is None:
+                        rebalance_action_summaries.append("missing_config")
+                        continue
+                    rebalance_action_summaries.append(
+                        "side=%s amount=%s pair=%s entry=%s order_type=%s"
+                        % (
+                            str(getattr(cfg, "side", "")),
+                            str(getattr(cfg, "amount", "")),
+                            str(getattr(cfg, "trading_pair", "")),
+                            str(getattr(cfg, "entry_price", "")),
+                            str(getattr(getattr(cfg, "triple_barrier_config", None), "open_order_type", "")),
+                        )
+                    )
+                msg = (
+                    "EXECUTOR_TRACE stage=position_rebalance_create_not_added "
+                    "reason=no_new_runtime_executor_after_dispatch "
+                    "active_before=%d active_after=%d existing_rebalance=%d rebalance_action=%s"
+                )
+                args = (
+                    len(before_executors),
+                    len(after_executors),
+                    len(before_rebalance),
+                    " | ".join(rebalance_action_summaries[:3]),
+                )
+                if len(before_rebalance) > 0:
+                    self.logger().warning(msg, *args)
+                else:
+                    self.logger().error(msg, *args)
+            return result
+
+        def _wrapped_execute_action(action: Any):
+            level_id = self._action_level_id(action)
+            is_create = isinstance(action, CreateExecutorAction)
+            if level_id == "position_rebalance":
+                self.logger().warning(
+                    "EXECUTOR_TRACE stage=execute_action_enter action_cls=%s is_create=%s controller_id=%s",
+                    type(action).__name__,
+                    str(is_create),
+                    str(getattr(action, "controller_id", "")),
+                )
+            try:
+                return original_execute_action(action) if callable(original_execute_action) else None
+            except Exception:
+                if level_id == "position_rebalance":
+                    self.logger().error(
+                        "EXECUTOR_TRACE stage=execute_action_exception controller_id=%s",
+                        str(getattr(action, "controller_id", "")),
+                        exc_info=True,
+                    )
+                raise
+
+        def _wrapped_create_executor(action: Any):
+            level_id = self._action_level_id(action)
+            if level_id == "position_rebalance":
+                cfg = getattr(action, "executor_config", None)
+                self.logger().warning(
+                    "EXECUTOR_TRACE stage=create_executor_enter cfg_type=%s cfg_class=%s",
+                    str(getattr(cfg, "type", "")),
+                    type(cfg).__name__ if cfg is not None else "None",
+                )
+            try:
+                result = original_create_executor(action) if callable(original_create_executor) else None
+            except Exception:
+                if level_id == "position_rebalance":
+                    self.logger().error("EXECUTOR_TRACE stage=create_executor_exception", exc_info=True)
+                raise
+            if level_id == "position_rebalance":
+                active_now = len(_runtime_executors())
+                self.logger().warning(
+                    "EXECUTOR_TRACE stage=create_executor_done active_now=%d",
+                    active_now,
+                )
+            return result
+
+        orchestrator.execute_actions = _wrapped_execute_actions
+        if callable(original_execute_action):
+            orchestrator.execute_action = _wrapped_execute_action
+        if callable(original_create_executor):
+            orchestrator.create_executor = _wrapped_create_executor
+
+        if self._order_exec_trace_enabled:
+            try:
+                from hummingbot.strategy_v2.executors.order_executor.order_executor import OrderExecutor
+
+                if not getattr(OrderExecutor, "_hb_order_exec_trace_installed", False):
+                    original_place_open_order = getattr(OrderExecutor, "place_open_order", None)
+                    original_place_order = getattr(OrderExecutor, "place_order", None)
+
+                    if callable(original_place_open_order):
+                        def _wrapped_place_open_order(executor_self: Any):
+                            cfg = getattr(executor_self, "config", None)
+                            level_id = str(getattr(cfg, "level_id", "") or "")
+                            if level_id == "position_rebalance":
+                                executor_self.logger().warning(
+                                    "ORDER_EXEC_TRACE stage=place_open_order_enter level_id=%s side=%s amount=%s strategy=%s",
+                                    level_id,
+                                    str(getattr(cfg, "side", "")),
+                                    str(getattr(cfg, "amount", "")),
+                                    str(getattr(cfg, "execution_strategy", "")),
+                                )
+                            try:
+                                return original_place_open_order(executor_self)
+                            except Exception:
+                                if level_id == "position_rebalance":
+                                    executor_self.logger().error(
+                                        "ORDER_EXEC_TRACE stage=place_open_order_exception level_id=%s",
+                                        level_id,
+                                        exc_info=True,
+                                    )
+                                raise
+                            finally:
+                                if level_id == "position_rebalance":
+                                    tracked_order = getattr(executor_self, "_order", None)
+                                    order_id = str(getattr(tracked_order, "order_id", "") or "")
+                                    executor_self.logger().warning(
+                                        "ORDER_EXEC_TRACE stage=place_open_order_done level_id=%s order_id=%s",
+                                        level_id,
+                                        order_id,
+                                    )
+
+                        OrderExecutor.place_open_order = _wrapped_place_open_order
+
+                    if callable(original_place_order):
+                        def _wrapped_place_order(
+                            executor_self: Any,
+                            connector_name: str,
+                            trading_pair: str,
+                            order_type: Any,
+                            side: Any,
+                            amount: Decimal,
+                            position_action: Any = None,
+                            price: Decimal = Decimal("NaN"),
+                        ):
+                            cfg = getattr(executor_self, "config", None)
+                            level_id = str(getattr(cfg, "level_id", "") or "")
+                            strategy_obj = getattr(executor_self, "_strategy", None)
+                            desk_obj = getattr(strategy_obj, "_paper_desk_v2", None)
+                            desk_events_before = -1
+                            if desk_obj is not None and hasattr(desk_obj, "event_log"):
+                                try:
+                                    desk_events_before = len(desk_obj.event_log())
+                                except Exception:
+                                    desk_events_before = -1
+                            if level_id == "position_rebalance":
+                                buy_callable = getattr(strategy_obj, "buy", None)
+                                buy_func = getattr(buy_callable, "__func__", buy_callable)
+                                buy_name = str(getattr(buy_func, "__name__", type(buy_callable).__name__))
+                                buy_module = str(getattr(buy_func, "__module__", ""))
+                                bridges = getattr(strategy_obj, "_paper_desk_v2_bridges", {}) or {}
+                                bridge_keys = ",".join(sorted(bridges.keys()))
+                                bridge_found = connector_name in bridges
+                                executor_self.logger().warning(
+                                    "ORDER_EXEC_TRACE stage=place_order_enter level_id=%s connector=%s pair=%s side=%s "
+                                    "amount=%s order_type=%s price=%s position_action=%s strategy_buy=%s strategy_buy_module=%s bridge_found=%s "
+                                    "bridge_keys=%s",
+                                    level_id,
+                                    connector_name,
+                                    trading_pair,
+                                    str(side),
+                                    str(amount),
+                                    str(order_type),
+                                    str(price),
+                                    str(position_action),
+                                    buy_name,
+                                    buy_module,
+                                    str(bridge_found),
+                                    bridge_keys,
+                                )
+                            try:
+                                order_id = original_place_order(
+                                    executor_self,
+                                    connector_name,
+                                    trading_pair,
+                                    order_type,
+                                    side,
+                                    amount,
+                                    position_action=position_action,
+                                    price=price,
+                                )
+                            except Exception:
+                                if level_id == "position_rebalance":
+                                    executor_self.logger().error(
+                                        "ORDER_EXEC_TRACE stage=place_order_exception level_id=%s",
+                                        level_id,
+                                        exc_info=True,
+                                    )
+                                raise
+                            if level_id == "position_rebalance":
+                                desk_events_after = -1
+                                desk_last_event = ""
+                                desk_last_reason = ""
+                                desk_last_order_id = ""
+                                desk_engine_open = -1
+                                desk_engine_market_open = -1
+                                desk_engine_inflight = -1
+                                desk_best_bid = ""
+                                desk_best_ask = ""
+                                desk_best_bid_size = ""
+                                desk_best_ask_size = ""
+                                probe_order_status = ""
+                                probe_order_remaining = ""
+                                probe_order_price = ""
+                                probe_order_type = ""
+                                probe_order_id = ""
+                                probe_fill_count = ""
+                                probe_last_fill_ns = ""
+                                probe_updated_ns = ""
+                                probe_eval_qty = ""
+                                probe_eval_price = ""
+                                if desk_obj is not None:
+                                    try:
+                                        events = desk_obj.event_log()
+                                        desk_events_after = len(events)
+                                        if events:
+                                            desk_last_event = type(events[-1]).__name__
+                                            desk_last_reason = str(getattr(events[-1], "reason", "") or "")
+                                            desk_last_order_id = str(getattr(events[-1], "order_id", "") or "")
+                                    except Exception:
+                                        pass
+                                    try:
+                                        bridges = getattr(strategy_obj, "_paper_desk_v2_bridges", {}) or {}
+                                        bridge = bridges.get(connector_name) or {}
+                                        instrument_id = bridge.get("instrument_id")
+                                        engine = getattr(desk_obj, "_engines", {}).get(getattr(instrument_id, "key", ""))
+                                        if engine is not None:
+                                            open_orders = engine.open_orders() if hasattr(engine, "open_orders") else []
+                                            desk_engine_open = len(open_orders)
+                                            desk_engine_market_open = len(
+                                                [
+                                                    o for o in open_orders
+                                                    if str(getattr(getattr(o, "order_type", None), "value", "")) == "market"
+                                                ]
+                                            )
+                                            desk_engine_inflight = len(getattr(engine, "_inflight", []) or [])
+                                            book = getattr(engine, "_book", None)
+                                            desk_best_bid = str(getattr(getattr(book, "best_bid", None), "price", ""))
+                                            desk_best_ask = str(getattr(getattr(book, "best_ask", None), "price", ""))
+                                            desk_best_bid_size = str(getattr(getattr(book, "best_bid", None), "size", ""))
+                                            desk_best_ask_size = str(getattr(getattr(book, "best_ask", None), "size", ""))
+                                            probe = engine.get_order(str(order_id or "")) if hasattr(engine, "get_order") else None
+                                            if probe is None and open_orders:
+                                                probe = open_orders[0]
+                                            if probe is not None:
+                                                probe_order_id = str(getattr(probe, "order_id", ""))
+                                                probe_order_status = str(getattr(getattr(probe, "status", None), "value", ""))
+                                                probe_order_remaining = str(getattr(probe, "remaining_quantity", ""))
+                                                probe_order_price = str(getattr(probe, "price", ""))
+                                                probe_order_type = str(getattr(getattr(probe, "order_type", None), "value", ""))
+                                                probe_fill_count = str(getattr(probe, "fill_count", ""))
+                                                probe_updated_ns = str(getattr(probe, "updated_at_ns", ""))
+                                                probe_last_fill_ns = str(
+                                                    (getattr(engine, "_last_fill_ns", {}) or {}).get(probe_order_id, "")
+                                                )
+                                                try:
+                                                    fill_model = getattr(engine, "_fill_model", None)
+                                                    book = getattr(engine, "_book", None)
+                                                    if fill_model is not None and book is not None:
+                                                        decision = fill_model.evaluate(
+                                                            probe,
+                                                            book,
+                                                            int(time.time() * 1_000_000_000),
+                                                        )
+                                                        probe_eval_qty = str(getattr(decision, "fill_quantity", ""))
+                                                        probe_eval_price = str(getattr(decision, "fill_price", ""))
+                                                except Exception:
+                                                    pass
+                                    except Exception:
+                                        pass
+                                executor_self.logger().warning(
+                                    "ORDER_EXEC_TRACE stage=place_order_done level_id=%s order_id=%s "
+                                    "desk_events_before=%d desk_events_after=%d desk_last_event=%s desk_last_reason=%s "
+                                    "desk_last_order_id=%s "
+                                    "engine_open=%d engine_market_open=%d engine_inflight=%d best_bid=%s best_ask=%s "
+                                    "best_bid_size=%s best_ask_size=%s probe_order_id=%s probe_status=%s probe_remaining=%s probe_price=%s probe_type=%s "
+                                    "probe_fill_count=%s probe_last_fill_ns=%s probe_updated_ns=%s probe_eval_qty=%s probe_eval_price=%s",
+                                    level_id,
+                                    str(order_id or ""),
+                                    desk_events_before,
+                                    desk_events_after,
+                                    desk_last_event,
+                                    desk_last_reason,
+                                    desk_last_order_id,
+                                    desk_engine_open,
+                                    desk_engine_market_open,
+                                    desk_engine_inflight,
+                                    desk_best_bid,
+                                    desk_best_ask,
+                                    desk_best_bid_size,
+                                    desk_best_ask_size,
+                                    probe_order_id,
+                                    probe_order_status,
+                                    probe_order_remaining,
+                                    probe_order_price,
+                                    probe_order_type,
+                                    probe_fill_count,
+                                    probe_last_fill_ns,
+                                    probe_updated_ns,
+                                    probe_eval_qty,
+                                    probe_eval_price,
+                                )
+                            return order_id
+
+                        OrderExecutor.place_order = _wrapped_place_order
+
+                    OrderExecutor._hb_order_exec_trace_installed = True
+            except Exception:
+                self.logger().debug("OrderExecutor trace patch install failed", exc_info=True)
+
+        orchestrator._hb_executor_trace_installed = True
+        self.logger().info("Executor dispatch trace installed.")
+
     def on_tick(self):
+        self._write_watchdog_heartbeat(reason="tick_start")
         self._install_internal_paper_adapters()
         self._tick_paper_adapters()
         if not self._preflight_checked:
             self._run_preflight_once()
             if self._preflight_failed:
+                self._write_watchdog_heartbeat(reason="preflight_failed")
                 return
         super().on_tick()
         self._tick_paper_adapters()
@@ -147,6 +700,159 @@ class V2WithControllers(StrategyV2Base):
             self.send_performance_report()
             self._handle_bus_outage_soft_pause()
             self._check_hard_stop_kill_switch()
+        self._write_open_orders_snapshot(reason="tick_end")
+        self._write_watchdog_heartbeat(reason="tick_end")
+
+    def update_controllers_configs(self):
+        """
+        Keep strategy ticks alive even if a hot-reloaded controller config is invalid.
+        """
+        now = time.time()
+        if now < self._config_reload_retry_after_ts:
+            return
+        try:
+            super().update_controllers_configs()
+            self._config_reload_last_success_ts = now
+            if self._config_reload_degraded:
+                self.logger().info("Controller config reload recovered; hot reload resumed.")
+                self._config_reload_degraded = False
+                self._config_reload_last_error = ""
+                self._config_reload_last_error_ts = 0.0
+                self._config_reload_retry_after_ts = 0.0
+            return
+        except Exception as exc:
+            if not self._is_controller_config_reload_validation_error(exc):
+                raise
+            self._config_reload_error_count += 1
+            self._config_reload_degraded = True
+            self._config_reload_last_error = f"{type(exc).__name__}: {exc}"
+            self._config_reload_last_error_ts = now
+            self._config_reload_retry_after_ts = now + max(1.0, self._config_reload_retry_interval_s)
+            self.logger().error(
+                "Controller config reload rejected; using last known-good config. "
+                f"retry_in_s={int(self._config_reload_retry_interval_s)} "
+                f"errors={self._config_reload_error_count} error={self._config_reload_last_error}"
+            )
+            self.logger().debug("Controller config reload rejection details.", exc_info=True)
+            self._write_watchdog_heartbeat(reason="config_reload_validation_error")
+
+    def _is_controller_config_reload_validation_error(self, exc: Exception) -> bool:
+        if self._config_reload_validation_error_types and isinstance(exc, self._config_reload_validation_error_types):
+            return True
+        msg = str(exc)
+        if "validation errors for" in msg:
+            return True
+        if "Extra inputs are not permitted" in msg:
+            return True
+        if "extra_forbidden" in msg:
+            return True
+        return False
+
+    def _write_watchdog_heartbeat(self, reason: str) -> None:
+        now = time.time()
+        if now - self._last_heartbeat_write_ts < self._heartbeat_write_interval_s:
+            return
+        self._last_heartbeat_write_ts = now
+        try:
+            self._heartbeat_path.parent.mkdir(parents=True, exist_ok=True)
+            payload = {
+                "ts_utc": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(now)),
+                "reason": reason,
+                "preflight_checked": bool(self._preflight_checked),
+                "preflight_failed": bool(self._preflight_failed),
+                "controller_count": len(self.controllers) if isinstance(self.controllers, dict) else 0,
+                "is_stop_triggered": bool(getattr(self, "_is_stop_triggered", False)),
+                "config_reload_degraded": bool(self._config_reload_degraded),
+                "config_reload_error_count": int(self._config_reload_error_count),
+                "config_reload_last_error": str(self._config_reload_last_error),
+                "config_reload_last_error_ts_utc": (
+                    time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(self._config_reload_last_error_ts))
+                    if self._config_reload_last_error_ts > 0
+                    else ""
+                ),
+                "config_reload_last_success_ts_utc": (
+                    time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(self._config_reload_last_success_ts))
+                    if self._config_reload_last_success_ts > 0
+                    else ""
+                ),
+            }
+            self._heartbeat_path.write_text(json.dumps(payload, indent=2), encoding="utf-8")
+        except Exception:
+            # Heartbeat should never break trading loop.
+            pass
+
+    def _write_startup_sync_report(self, status: str, errors: List[str], scan_summary: Dict[str, object]) -> None:
+        try:
+            self._startup_sync_report_path.parent.mkdir(parents=True, exist_ok=True)
+            payload = {
+                "ts_utc": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(time.time())),
+                "status": status,
+                "errors": errors,
+                "scan_summary": scan_summary,
+            }
+            self._startup_sync_report_path.write_text(json.dumps(payload, indent=2), encoding="utf-8")
+        except Exception:
+            pass
+
+    def _collect_open_orders_snapshot(self) -> Dict[str, object]:
+        payload: Dict[str, object] = {
+            "ts_utc": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(time.time())),
+            "controllers_checked": 0,
+            "orders": [],
+        }
+        orders: List[Dict[str, object]] = []
+        for controller_id, controller in self.controllers.items():
+            payload["controllers_checked"] = int(payload["controllers_checked"]) + 1
+            connector_name = str(getattr(controller.config, "connector_name", "") or "")
+            trading_pair = str(getattr(controller.config, "trading_pair", "") or "")
+            connector = self.connectors.get(connector_name) if connector_name else None
+            if connector is None:
+                continue
+            try:
+                open_orders_fn = getattr(connector, "get_open_orders", None)
+                if not callable(open_orders_fn):
+                    continue
+                open_orders = open_orders_fn() or []
+                for order in open_orders:
+                    order_pair = str(getattr(order, "trading_pair", "") or "")
+                    if trading_pair and order_pair and order_pair != trading_pair:
+                        continue
+                    side_raw = getattr(order, "trade_type", None)
+                    side = str(side_raw).upper() if side_raw is not None else ""
+                    if not side:
+                        is_buy = bool(getattr(order, "is_buy", False))
+                        side = "BUY" if is_buy else "SELL"
+                    orders.append(
+                        {
+                            "controller_id": controller_id,
+                            "connector_name": connector_name,
+                            "trading_pair": order_pair or trading_pair,
+                            "order_id": str(getattr(order, "client_order_id", "") or getattr(order, "order_id", "")),
+                            "side": side,
+                            "price": str(getattr(order, "price", "")),
+                            "amount": str(getattr(order, "amount", "")),
+                            "age_sec": float(getattr(order, "age", 0.0) or 0.0),
+                        }
+                    )
+            except Exception:
+                continue
+        payload["orders"] = orders
+        payload["orders_count"] = len(orders)
+        return payload
+
+    def _write_open_orders_snapshot(self, reason: str) -> None:
+        now = time.time()
+        if now - self._last_open_orders_write_ts < self._open_orders_write_interval_s:
+            return
+        self._last_open_orders_write_ts = now
+        try:
+            self._open_orders_snapshot_path.parent.mkdir(parents=True, exist_ok=True)
+            payload = self._collect_open_orders_snapshot()
+            payload["reason"] = reason
+            self._open_orders_snapshot_path.write_text(json.dumps(payload, indent=2), encoding="utf-8")
+        except Exception:
+            # Snapshot write should never break trading loop.
+            pass
 
     def control_max_drawdown(self):
         if self.config.max_controller_drawdown_quote:
@@ -236,11 +942,61 @@ class V2WithControllers(StrategyV2Base):
                 [StopExecutorAction(executor_id=executor.id,
                                     controller_id=executor.controller_id) for executor in non_trading_executors])
 
+    def _log_action_trace(self, stage: str, actions: List[Any], force: bool = False) -> None:
+        if not self._action_trace_enabled:
+            return
+        now = time.time()
+        if not force and (now - self._action_trace_last_ts) < self._action_trace_cooldown_s:
+            return
+        self._action_trace_last_ts = now
+        create_actions = [a for a in actions if isinstance(a, CreateExecutorAction)]
+        stop_actions = [a for a in actions if isinstance(a, StopExecutorAction)]
+        level_ids: List[str] = []
+        for action in create_actions:
+            cfg = getattr(action, "executor_config", None)
+            level_id = getattr(cfg, "level_id", None) if cfg is not None else None
+            if level_id is not None:
+                level_ids.append(str(level_id))
+        stop_ids = [str(getattr(a, "executor_id", "")) for a in stop_actions]
+        self.logger().warning(
+            "ACTION_TRACE stage=%s total=%d create=%d stop=%d level_ids=%s stop_ids=%s",
+            stage,
+            len(actions),
+            len(create_actions),
+            len(stop_actions),
+            ",".join(level_ids[:6]),
+            ",".join(stop_ids[:6]),
+        )
+
     def create_actions_proposal(self) -> List[CreateExecutorAction]:
-        return []
+        self._controller_actions_buffer = []
+        for controller in self.controllers.values():
+            if controller.status != RunnableStatus.RUNNING:
+                continue
+            try:
+                self._controller_actions_buffer.extend(controller.determine_executor_actions())
+            except Exception:
+                self.logger().error(
+                    "Controller action proposal failed for controller_id=%s",
+                    getattr(getattr(controller, "config", None), "id", "unknown"),
+                    exc_info=True,
+                )
+        force_log = any(
+            str(getattr(getattr(action, "executor_config", None), "level_id", "")) == "position_rebalance"
+            for action in self._controller_actions_buffer
+            if isinstance(action, CreateExecutorAction)
+        )
+        self._log_action_trace("buffered", self._controller_actions_buffer, force=force_log)
+        return [a for a in self._controller_actions_buffer if isinstance(a, CreateExecutorAction)]
 
     def stop_actions_proposal(self) -> List[StopExecutorAction]:
-        return []
+        if not self._controller_actions_buffer:
+            return []
+        stop_actions = [a for a in self._controller_actions_buffer if isinstance(a, StopExecutorAction)]
+        if stop_actions:
+            self._log_action_trace("stop_dispatch", stop_actions, force=True)
+        self._controller_actions_buffer = []
+        return stop_actions
 
     def apply_initial_setting(self):
         connectors_position_mode = {}
@@ -304,6 +1060,7 @@ class V2WithControllers(StrategyV2Base):
         """
         try:
             from controllers.paper_engine_v2.desk import PaperDesk
+            from controllers.paper_engine_v2.config import PaperEngineConfig
             from controllers.paper_engine_v2.types import InstrumentId
 
             connector_type = str(getattr(cfg, "resolved_connector_type", "spot"))
@@ -315,7 +1072,8 @@ class V2WithControllers(StrategyV2Base):
 
             # Create shared PaperDesk on first paper controller
             if self._paper_desk_v2 is None:
-                self._paper_desk_v2 = PaperDesk.from_epp_config(cfg)
+                paper_cfg = PaperEngineConfig.from_controller_config(cfg)
+                self._paper_desk_v2 = PaperDesk.from_paper_config(paper_cfg)
                 self.logger().info("PaperDesk v2 created (shared across all paper controllers)")
 
             return _install_paper_desk_bridge_v2(
@@ -342,6 +1100,12 @@ class V2WithControllers(StrategyV2Base):
         """
         Handle order failure events by logging the error and stopping the strategy if necessary.
         """
+        self.logger().error(
+            "ORDER_FAIL_TRACE order_id=%s trading_pair=%s message=%s",
+            str(getattr(order_failed_event, "order_id", "")),
+            str(getattr(order_failed_event, "trading_pair", "")),
+            str(getattr(order_failed_event, "error_message", "")),
+        )
         if order_failed_event.error_message and "position side" in order_failed_event.error_message.lower():
             connectors_position_mode = {}
             for controller_id, controller in self.controllers.items():
@@ -397,7 +1161,17 @@ class V2WithControllers(StrategyV2Base):
                 net_edge_pct=float(custom.get("net_edge_pct", 0) or 0),
                 turnover_x=float(custom.get("turnover_x", 0) or 0),
                 state=str(custom.get("state", "unknown")),
-                extra={"regime": str(custom.get("regime", "n/a"))},
+                extra={
+                    "regime": str(custom.get("regime", "n/a")),
+                    "band_pct": str(float(custom.get("spread_floor_pct", 0) or 0)),
+                    "adverse_drift_bps": str(float(custom.get("adverse_drift_30s", 0) or 0) * 10000),
+                    "funding_rate_bps": str(float(custom.get("funding_rate", 0) or 0) * 10000),
+                    "ob_imbalance": str(float(custom.get("ob_imbalance", 0) or 0)),
+                    "fill_edge_ewma_bps": str(float(custom.get("fill_edge_ewma_bps", 0) or 0)),
+                    "drawdown_pct": str(float(custom.get("drawdown_pct", 0) or 0)),
+                    "daily_loss_pct": str(float(custom.get("daily_loss_pct", 0) or 0)),
+                    "regime_source": str(custom.get("regime_source", "price_buffer")),
+                },
             )
             self._bus_publisher.publish_market_snapshot(event)
 
@@ -405,7 +1179,29 @@ class V2WithControllers(StrategyV2Base):
         if self._bus_consumer is None:
             return
         for entry_id, intent in self._bus_consumer.poll(count=20, block_ms=self.config.event_poll_ms):
-            controller = self.controllers.get(intent.controller_id)
+            target_instance = str(intent.instance_name).strip()
+            local_instances = {
+                str(getattr(getattr(ctrl, "config", None), "instance_name", "")).strip()
+                for ctrl in self.controllers.values()
+            }
+            local_instances.discard("")
+            # With per-bot consumer groups, each bot receives the full stream.
+            # Skip intents not addressed to this bot instance.
+            if target_instance and local_instances and target_instance not in local_instances:
+                self._bus_consumer.ack(entry_id, intent.event_id)
+                continue
+            resolved_controller_id = str(intent.controller_id)
+            controller = self.controllers.get(resolved_controller_id)
+            if controller is None:
+                # Fallback route: some producers emit a generic controller_id.
+                # Resolve by instance_name so desk-level intents still reach the right bot.
+                for candidate_id, candidate in self.controllers.items():
+                    cfg = getattr(candidate, "config", None)
+                    candidate_instance = str(getattr(cfg, "instance_name", "")).strip()
+                    if candidate_instance and candidate_instance == str(intent.instance_name).strip():
+                        controller = candidate
+                        resolved_controller_id = str(candidate_id)
+                        break
             if controller is None:
                 self._bus_consumer.reject(entry_id, intent.event_id, reason="controller_not_found")
                 continue
@@ -418,7 +1214,7 @@ class V2WithControllers(StrategyV2Base):
                     message="Intent rejected by local Hummingbot authority checks.",
                     metadata={
                         "event_id": intent.event_id,
-                        "controller_id": intent.controller_id,
+                        "controller_id": resolved_controller_id,
                         "action": intent.action,
                         "model_version": str(intent_meta.get("model_version", "")),
                     },
@@ -439,7 +1235,7 @@ class V2WithControllers(StrategyV2Base):
                     message="Execution intent applied.",
                     metadata={
                         "event_id": intent.event_id,
-                        "controller_id": intent.controller_id,
+                        "controller_id": resolved_controller_id,
                         "action": intent.action,
                         "model_version": str(intent_meta.get("model_version", "")),
                         "reason": str(intent_meta.get("reason", "")),
@@ -455,7 +1251,7 @@ class V2WithControllers(StrategyV2Base):
                     message=f"Intent rejected by controller: {reason}",
                     metadata={
                         "event_id": intent.event_id,
-                        "controller_id": intent.controller_id,
+                        "controller_id": resolved_controller_id,
                         "action": intent.action,
                         "model_version": str(intent_meta.get("model_version", "")),
                     },
@@ -481,6 +1277,19 @@ class V2WithControllers(StrategyV2Base):
                 return False
             if target < Decimal("0") or target > Decimal("1"):
                 return False
+        if action == "set_daily_pnl_target_pct":
+            value = intent.get("daily_pnl_target_pct")
+            metadata = intent.get("metadata", {})
+            if value is None and isinstance(metadata, dict):
+                value = metadata.get("daily_pnl_target_pct")
+            try:
+                if value is None:
+                    return False
+                target = Decimal(str(value))
+            except Exception:
+                return False
+            if target < Decimal("0") or target > Decimal("100"):
+                return False
         return True
 
     def _publish_audit(self, instance_name: str, severity: str, category: str, message: str, metadata: Dict[str, str]):
@@ -500,16 +1309,28 @@ class V2WithControllers(StrategyV2Base):
         """If any controller entered HARD_STOP with a risk reason, publish kill_switch intent."""
         if self._bus_publisher is None:
             return
+        now = time.time()
         for controller_id, controller in self.controllers.items():
             custom = controller.get_custom_info() if hasattr(controller, "get_custom_info") else {}
             state = str(custom.get("state", ""))
             risk_reasons = str(custom.get("risk_reasons", ""))
             if state != "hard_stop":
+                self._hard_stop_kill_switch_last_reason_by_controller.pop(controller_id, None)
+                self._hard_stop_kill_switch_last_ts_by_controller.pop(controller_id, None)
+                self._hard_stop_clear_candidate_since_by_controller.pop(controller_id, None)
+                self._hard_stop_resume_last_ts_by_controller.pop(controller_id, None)
                 continue
             risk_triggers = {"daily_loss_hard_limit", "drawdown_hard_limit", "daily_turnover_hard_limit",
                              "margin_ratio_critical", "cancel_budget_repeated_breach"}
             active_reasons = set(risk_reasons.split("|")) if risk_reasons else set()
-            if active_reasons & risk_triggers:
+            hard_reasons_active = bool(active_reasons & risk_triggers)
+            if hard_reasons_active:
+                self._hard_stop_clear_candidate_since_by_controller.pop(controller_id, None)
+                reason_key = risk_reasons.strip() or "hard_stop_triggered"
+                last_reason = self._hard_stop_kill_switch_last_reason_by_controller.get(controller_id, "")
+                last_ts = self._hard_stop_kill_switch_last_ts_by_controller.get(controller_id, 0.0)
+                if reason_key == last_reason and (now - last_ts) < self._hard_stop_kill_switch_republish_s:
+                    continue
                 try:
                     from services.contracts.event_schemas import ExecutionIntentEvent
                     from services.contracts.stream_names import EXECUTION_INTENT_STREAM, STREAM_RETENTION_MAXLEN
@@ -525,9 +1346,55 @@ class V2WithControllers(StrategyV2Base):
                         intent.model_dump(),
                         maxlen=STREAM_RETENTION_MAXLEN.get(EXECUTION_INTENT_STREAM),
                     )
+                    self._hard_stop_kill_switch_last_reason_by_controller[controller_id] = reason_key
+                    self._hard_stop_kill_switch_last_ts_by_controller[controller_id] = now
                     self.logger().error(f"HARD_STOP kill_switch published for {controller_id}: {risk_reasons}")
                 except Exception:
                     pass
+                continue
+
+            # Recovery policy: if controller still reports HARD_STOP but hard risk triggers
+            # are no longer active, wait for cooldown and publish a one-shot resume intent.
+            self._hard_stop_kill_switch_last_reason_by_controller.pop(controller_id, None)
+            self._hard_stop_kill_switch_last_ts_by_controller.pop(controller_id, None)
+            clear_since = self._hard_stop_clear_candidate_since_by_controller.get(controller_id)
+            if clear_since is None:
+                self._hard_stop_clear_candidate_since_by_controller[controller_id] = now
+                clear_since = now
+            if not self._hard_stop_auto_resume_on_clear:
+                continue
+            if (now - clear_since) < self._hard_stop_clear_cooldown_s:
+                continue
+            last_resume_ts = self._hard_stop_resume_last_ts_by_controller.get(controller_id, 0.0)
+            if (now - last_resume_ts) < self._hard_stop_kill_switch_republish_s:
+                continue
+            try:
+                from services.contracts.event_schemas import ExecutionIntentEvent
+                from services.contracts.stream_names import EXECUTION_INTENT_STREAM, STREAM_RETENTION_MAXLEN
+                resume_intent = ExecutionIntentEvent(
+                    producer=f"hb:{self.config.script_file_name}",
+                    instance_name=str(getattr(controller.config, "instance_name", "bot1")),
+                    controller_id=controller_id,
+                    action="resume",
+                    metadata={
+                        "reason": "hard_stop_recovered",
+                        "risk_reasons": risk_reasons,
+                    },
+                )
+                self._bus_client.xadd(
+                    EXECUTION_INTENT_STREAM,
+                    resume_intent.model_dump(),
+                    maxlen=STREAM_RETENTION_MAXLEN.get(EXECUTION_INTENT_STREAM),
+                )
+                self._hard_stop_resume_last_ts_by_controller[controller_id] = now
+                self.logger().info(
+                    "HARD_STOP recovery resume published for %s after %.0fs (reasons=%s).",
+                    controller_id,
+                    now - clear_since,
+                    risk_reasons or "none",
+                )
+            except Exception:
+                pass
 
     def _handle_bus_outage_soft_pause(self):
         if not self.config.external_signal_risk_enabled or not self.config.bus_soft_pause_on_outage:
@@ -564,15 +1431,24 @@ class V2WithControllers(StrategyV2Base):
         else:
             for err in errors:
                 self.logger().error(f"Preflight failed: {err}")
+            self._write_startup_sync_report("fail", errors, {"scan_executed": False})
             self._preflight_failed = True
             self._is_stop_triggered = True
             HummingbotApplication.main_application().stop()
             return
-        self._scan_orphan_orders()
+        summary = self._scan_orphan_orders()
+        self._write_startup_sync_report("pass", [], summary)
 
-    def _scan_orphan_orders(self):
+    def _scan_orphan_orders(self) -> Dict[str, object]:
         """Cancel any open orders on the exchange that are not tracked by executors."""
+        summary: Dict[str, object] = {
+            "scan_executed": True,
+            "controllers_checked": 0,
+            "orphans_canceled": 0,
+            "errors": 0,
+        }
         for controller_id, controller in self.controllers.items():
+            summary["controllers_checked"] = int(summary["controllers_checked"]) + 1
             connector_name = str(getattr(controller.config, "connector_name", ""))
             trading_pair = str(getattr(controller.config, "trading_pair", ""))
             if not connector_name or not trading_pair:
@@ -603,8 +1479,10 @@ class V2WithControllers(StrategyV2Base):
                         try:
                             connector.cancel(trading_pair, order_id)
                             orphans_canceled += 1
+                            summary["orphans_canceled"] = int(summary["orphans_canceled"]) + 1
                             self.logger().warning(f"Orphan order canceled: {order_id} on {connector_name}/{trading_pair}")
                         except Exception:
+                            summary["errors"] = int(summary["errors"]) + 1
                             self.logger().error(f"Failed to cancel orphan order: {order_id}", exc_info=True)
                 if orphans_canceled > 0:
                     self.logger().warning(f"Startup scan: canceled {orphans_canceled} orphan order(s) for {controller_id}")
@@ -618,4 +1496,6 @@ class V2WithControllers(StrategyV2Base):
                         except Exception:
                             pass
             except Exception:
+                summary["errors"] = int(summary["errors"]) + 1
                 self.logger().warning(f"Orphan order scan failed for {controller_id}", exc_info=True)
+        return summary

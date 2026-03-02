@@ -10,6 +10,8 @@ from __future__ import annotations
 
 import json
 import logging
+import os
+import tempfile
 from datetime import datetime, timezone
 from decimal import Decimal
 from pathlib import Path
@@ -41,7 +43,13 @@ class DailyStateStore:
 
         if redis_url and _redis_lib is not None:
             try:
-                self._redis = _redis_lib.Redis.from_url(redis_url, decode_responses=True)
+                self._redis = _redis_lib.Redis.from_url(
+                    redis_url,
+                    decode_responses=True,
+                    socket_connect_timeout=2,
+                    socket_timeout=2,
+                    socket_keepalive=True,
+                )
                 self._redis.ping()
                 logger.info("DailyStateStore: Redis connected for key %s", redis_key)
             except Exception as exc:
@@ -74,7 +82,17 @@ class DailyStateStore:
     def _save_file(self, json_str: str) -> None:
         try:
             self._file_path.parent.mkdir(parents=True, exist_ok=True)
-            self._file_path.write_text(json_str, encoding="utf-8")
+            fd, tmp_path = tempfile.mkstemp(
+                dir=str(self._file_path.parent),
+                suffix=".tmp",
+                prefix=".daily_state_",
+            )
+            try:
+                os.write(fd, json_str.encode("utf-8"))
+                os.fsync(fd)
+            finally:
+                os.close(fd)
+            os.replace(tmp_path, str(self._file_path))
         except Exception:
             logger.warning("DailyStateStore: file save failed (%s)", self._file_path, exc_info=True)
 

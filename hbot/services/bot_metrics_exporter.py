@@ -1,15 +1,37 @@
 from __future__ import annotations
 
 import csv
+import json
+import logging
 import os
-from dataclasses import dataclass
-from datetime import datetime, timezone
+from dataclasses import dataclass, field
+from datetime import datetime, timezone, timedelta
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from typing import Dict, List, Optional
 
 
 from services.common.utils import env_int as _env_int, safe_float as _safe_float, parse_iso_ts
+
+_LOGGER = logging.getLogger(__name__)
+
+_DEFAULT_MIN_BASE_PCT = 0.15
+_DEFAULT_MAX_BASE_PCT = 0.90
+_DEFAULT_MAX_TOTAL_NOTIONAL_QUOTE = 1000.0
+_DEFAULT_MAX_DAILY_TURNOVER_X_HARD = 6.0
+_DEFAULT_MAX_DAILY_LOSS_PCT_HARD = 0.03
+_DEFAULT_MAX_DRAWDOWN_PCT_HARD = 0.05
+_DEFAULT_MARGIN_RATIO_SOFT_PAUSE_PCT = 0.20
+_DEFAULT_MARGIN_RATIO_HARD_STOP_PCT = 0.10
+_DEFAULT_POSITION_DRIFT_SOFT_PAUSE_PCT = 0.05
+
+_HARD_GATE_REASONS = {
+    "daily_turnover_hard_limit",
+    "daily_loss_hard_limit",
+    "drawdown_hard_limit",
+    "margin_ratio_critical",
+    "cancel_fail_hard_limit",
+}
 
 
 def _safe_iso_ts_to_epoch(value: str) -> Optional[float]:
@@ -26,6 +48,34 @@ def _fmt_labels(labels: Dict[str, str]) -> str:
         return ""
     pairs = [f'{k}="{_escape_label(v)}"' for k, v in labels.items()]
     return "{" + ",".join(pairs) + "}"
+
+
+def _median(lst: list) -> float:
+    """Compute median of a numeric list; return 0.0 for empty input."""
+    if not lst:
+        return 0.0
+    s = sorted(lst)
+    n = len(s)
+    if n % 2 == 1:
+        return s[n // 2]
+    return (s[n // 2 - 1] + s[n // 2]) / 2
+
+
+def _split_reasons(raw: str) -> List[str]:
+    if not raw:
+        return []
+    parts = [p.strip() for p in raw.split("|")]
+    return [p for p in parts if p and p.lower() != "none"]
+
+
+def _headroom_ratio(current: float, threshold: float, lower_is_worse: bool) -> float:
+    if abs(threshold) <= 1e-9:
+        # Threshold disabled or unset -> treat as healthy/neutral headroom.
+        return 1.0
+    denom = abs(threshold)
+    if lower_is_worse:
+        return (current - threshold) / denom
+    return (threshold - current) / denom
 
 
 @dataclass
@@ -54,6 +104,60 @@ class FillStats:
     last_fill_price: float = 0.0
     last_fill_amount: float = 0.0
     last_fill_pnl: float = 0.0
+    # FreqText table metrics (computed from full fills.csv scan)
+    closed_pnl_total: float = 0.0         # sum realized_pnl_quote
+    trades_total: int = 0                  # total row count
+    trade_wins_total: int = 0              # rows with realized_pnl_quote > 0
+    trade_losses_total: int = 0            # rows with realized_pnl_quote < 0
+    trade_winrate: float = 0.0             # wins / (wins + losses)
+    trade_expectancy_quote: float = 0.0    # mean nonzero realized_pnl
+    trade_expectancy_rate_quote: float = 0.0  # avg_win*wr - avg_loss*(1-wr)
+    trade_median_win_quote: float = 0.0    # median of positive realized_pnl
+    trade_median_loss_quote: float = 0.0   # median of negative realized_pnl
+    first_fill_timestamp_seconds: float = 0.0  # epoch of earliest fill
+    last_fill_timestamp_seconds: float = 0.0   # epoch of latest fill
+    fills_24h_count: int = 0
+    realized_pnl_24h_quote: float = 0.0
+    fills_5m_count: int = 0
+    fills_1h_count: int = 0
+    realized_pnl_1h_quote: float = 0.0
+
+
+@dataclass
+class PositionSnapshot:
+    """One open position from paper_desk_v2.json."""
+    instrument_id: str = ""
+    pair: str = ""
+    quantity_base: float = 0.0
+    avg_entry_price: float = 0.0
+    unrealized_pnl_quote: float = 0.0
+    opened_at_seconds: float = 0.0
+    total_fees_paid_quote: float = 0.0
+
+
+@dataclass
+class PortfolioSnapshot:
+    """Aggregated portfolio data from paper_desk_v2.json."""
+    open_pnl_quote: float = 0.0
+    positions: List[PositionSnapshot] = field(default_factory=list)
+
+
+@dataclass
+class MinuteHistoryStats:
+    """KPIs computed from the full minute.csv history."""
+    equity_start_quote: float = 0.0          # equity_quote of first minute row
+    realized_pnl_week_quote: float = 0.0     # 7-day day-boundary aggregation
+    realized_pnl_month_quote: float = 0.0    # 30-day day-boundary aggregation
+
+
+@dataclass
+class OpenOrderSnapshot:
+    order_id: str = ""
+    side: str = ""
+    pair: str = ""
+    price: float = 0.0
+    amount_base: float = 0.0
+    age_sec: float = 0.0
 
 
 @dataclass
@@ -68,6 +172,7 @@ class BotSnapshot:
     regime: str
     ts_epoch: float
     net_edge_pct: float
+    net_edge_gate_pct: float
     spread_pct: float
     spread_floor_pct: float
     turnover_today_x: float
@@ -79,8 +184,20 @@ class BotSnapshot:
     equity_quote: float
     base_pct: float
     target_base_pct: float
+    projected_total_quote: float
     daily_loss_pct: float
     drawdown_pct: float
+    edge_pause_threshold_pct: float
+    edge_resume_threshold_pct: float
+    min_base_pct: float
+    max_base_pct: float
+    max_total_notional_quote: float
+    max_daily_turnover_x_hard: float
+    max_daily_loss_pct_hard: float
+    max_drawdown_pct_hard: float
+    margin_ratio_soft_pause_pct: float
+    margin_ratio_hard_stop_pct: float
+    position_drift_soft_pause_pct: float
     cancel_per_min: float
     risk_reasons: str
     daily_pnl_quote: float
@@ -93,15 +210,40 @@ class BotSnapshot:
     position_drift_pct: float
     margin_ratio: float
     funding_rate: float
+    funding_cost_today_quote: float
     realized_pnl_today_quote: float
+    net_realized_pnl_today_quote: float
     ws_reconnect_count: float
     order_book_stale: float
+    derisk_runtime_recovered: float = 0.0
+    derisk_runtime_recovery_count: float = 0.0
+    pnl_governor_target_effective_pct: float = 0.0
+    pnl_governor_size_mult_applied: float = 1.0
+    spread_competitiveness_cap_active: float = 0.0
+    spread_competitiveness_cap_side_pct: float = 0.0
+    pnl_governor_target_mode: str = "disabled"
     position_base: float = 0.0
     avg_entry_price: float = 0.0
     market_spread_bps: float = 0.0
     best_bid_price: float = 0.0
     best_ask_price: float = 0.0
+    mid_price: float = 0.0
+    best_bid_size: float = 0.0
+    best_ask_size: float = 0.0
+    book_imbalance: float = 0.0
     fill_stats: Optional[FillStats] = None
+    portfolio: Optional[PortfolioSnapshot] = None
+    minute_history: Optional[MinuteHistoryStats] = None
+    minute_rows_total: float = 0.0
+    minute_last_timestamp_seconds: float = 0.0
+    minute_last_age_seconds: float = 0.0
+    fills_last_timestamp_seconds: float = 0.0
+    fills_last_age_seconds: float = 0.0
+    open_orders_total: float = 0.0
+    open_orders_buy: float = 0.0
+    open_orders_sell: float = 0.0
+    open_orders: List[OpenOrderSnapshot] = field(default_factory=list)
+    recent_fills: List[Dict[str, object]] = field(default_factory=list)
 
 
 class BotMetricsExporter:
@@ -128,6 +270,10 @@ class BotMetricsExporter:
             fills_total = self._count_csv_rows(fills_path)
             fill_stats = self._compute_fill_stats(fills_path)
             recent_error_lines = self._count_recent_error_lines(self._data_root / bot_name / "logs")
+            portfolio = self._read_portfolio(log_dir / "paper_desk_v2.json")
+            minute_history = self._compute_minute_history(minute_file)
+            open_orders = self._read_open_orders(self._data_root / bot_name / "logs" / "recovery" / "open_orders_latest.json")
+            recent_fills = self._read_recent_fills(fills_path, limit=50)
 
             ts_epoch = _safe_iso_ts_to_epoch(str(latest_minute.get("ts", ""))) or 0.0
 
@@ -140,6 +286,13 @@ class BotMetricsExporter:
 
             live_pnl = equity_now - equity_open if equity_open > 0 else 0.0
             realized_today = _safe_float(latest_minute.get("realized_pnl_today_quote"))
+            funding_today = _safe_float(
+                latest_minute.get("funding_cost_today_quote", latest_minute.get("funding_paid_today_quote"))
+            )
+            net_realized_today = _safe_float(
+                latest_minute.get("net_realized_pnl_today_quote"),
+                realized_today - funding_today,
+            )
 
             snapshots.append(
                 BotSnapshot(
@@ -153,11 +306,24 @@ class BotMetricsExporter:
                     regime=str(latest_minute.get("regime", "")),
                     ts_epoch=ts_epoch,
                     net_edge_pct=_safe_float(latest_minute.get("net_edge_pct")),
+                    net_edge_gate_pct=_safe_float(latest_minute.get("net_edge_gate_pct")),
                     spread_pct=_safe_float(latest_minute.get("spread_pct")),
                     spread_floor_pct=_safe_float(latest_minute.get("spread_floor_pct")),
                     market_spread_bps=_safe_float(latest_minute.get("market_spread_bps")),
                     best_bid_price=_safe_float(latest_minute.get("best_bid_price")),
                     best_ask_price=_safe_float(latest_minute.get("best_ask_price")),
+                    mid_price=_safe_float(latest_minute.get("mid")),
+                    best_bid_size=_safe_float(latest_minute.get("best_bid_size")),
+                    best_ask_size=_safe_float(latest_minute.get("best_ask_size")),
+                    book_imbalance=(
+                        (
+                            _safe_float(latest_minute.get("best_bid_size")) - _safe_float(latest_minute.get("best_ask_size"))
+                        )
+                        / max(
+                            _safe_float(latest_minute.get("best_bid_size")) + _safe_float(latest_minute.get("best_ask_size")),
+                            1e-12,
+                        )
+                    ),
                     turnover_today_x=_safe_float(latest_minute.get("turnover_today_x")),
                     orders_active=_safe_float(latest_minute.get("orders_active")),
                     maker_fee_pct=_safe_float(latest_minute.get("maker_fee_pct")),
@@ -167,8 +333,34 @@ class BotMetricsExporter:
                     equity_quote=equity_now,
                     base_pct=_safe_float(latest_minute.get("base_pct")),
                     target_base_pct=_safe_float(latest_minute.get("target_base_pct")),
+                    projected_total_quote=_safe_float(latest_minute.get("projected_total_quote")),
                     daily_loss_pct=_safe_float(latest_minute.get("daily_loss_pct")),
                     drawdown_pct=_safe_float(latest_minute.get("drawdown_pct")),
+                    edge_pause_threshold_pct=_safe_float(latest_minute.get("edge_pause_threshold_pct")),
+                    edge_resume_threshold_pct=_safe_float(latest_minute.get("edge_resume_threshold_pct")),
+                    min_base_pct=_safe_float(latest_minute.get("min_base_pct"), _DEFAULT_MIN_BASE_PCT),
+                    max_base_pct=_safe_float(latest_minute.get("max_base_pct"), _DEFAULT_MAX_BASE_PCT),
+                    max_total_notional_quote=_safe_float(
+                        latest_minute.get("max_total_notional_quote"), _DEFAULT_MAX_TOTAL_NOTIONAL_QUOTE
+                    ),
+                    max_daily_turnover_x_hard=_safe_float(
+                        latest_minute.get("max_daily_turnover_x_hard"), _DEFAULT_MAX_DAILY_TURNOVER_X_HARD
+                    ),
+                    max_daily_loss_pct_hard=_safe_float(
+                        latest_minute.get("max_daily_loss_pct_hard"), _DEFAULT_MAX_DAILY_LOSS_PCT_HARD
+                    ),
+                    max_drawdown_pct_hard=_safe_float(
+                        latest_minute.get("max_drawdown_pct_hard"), _DEFAULT_MAX_DRAWDOWN_PCT_HARD
+                    ),
+                    margin_ratio_soft_pause_pct=_safe_float(
+                        latest_minute.get("margin_ratio_soft_pause_pct"), _DEFAULT_MARGIN_RATIO_SOFT_PAUSE_PCT
+                    ),
+                    margin_ratio_hard_stop_pct=_safe_float(
+                        latest_minute.get("margin_ratio_hard_stop_pct"), _DEFAULT_MARGIN_RATIO_HARD_STOP_PCT
+                    ),
+                    position_drift_soft_pause_pct=_safe_float(
+                        latest_minute.get("position_drift_soft_pause_pct"), _DEFAULT_POSITION_DRIFT_SOFT_PAUSE_PCT
+                    ),
                     cancel_per_min=_safe_float(latest_minute.get("cancel_per_min")),
                     risk_reasons=str(latest_minute.get("risk_reasons", "")),
                     daily_pnl_quote=live_pnl,
@@ -181,12 +373,37 @@ class BotMetricsExporter:
                     position_drift_pct=_safe_float(latest_minute.get("position_drift_pct")),
                     margin_ratio=_safe_float(latest_minute.get("margin_ratio"), 1.0),
                     funding_rate=_safe_float(latest_minute.get("funding_rate")),
+                    funding_cost_today_quote=funding_today,
                     realized_pnl_today_quote=realized_today,
+                    net_realized_pnl_today_quote=net_realized_today,
                     ws_reconnect_count=_safe_float(latest_minute.get("ws_reconnect_count")),
                     order_book_stale=1.0 if str(latest_minute.get("order_book_stale", "")).lower() == "true" else 0.0,
+                    derisk_runtime_recovered=1.0 if str(latest_minute.get("derisk_runtime_recovered", "")).lower() == "true" else 0.0,
+                    derisk_runtime_recovery_count=_safe_float(latest_minute.get("derisk_runtime_recovery_count")),
+                    pnl_governor_target_effective_pct=_safe_float(latest_minute.get("pnl_governor_target_effective_pct")),
+                    pnl_governor_size_mult_applied=_safe_float(latest_minute.get("pnl_governor_size_mult_applied"), 1.0),
+                    spread_competitiveness_cap_active=1.0 if str(latest_minute.get("spread_competitiveness_cap_active", "")).lower() == "true" else 0.0,
+                    spread_competitiveness_cap_side_pct=_safe_float(latest_minute.get("spread_competitiveness_cap_side_pct")),
+                    pnl_governor_target_mode=str(latest_minute.get("pnl_governor_target_mode", "disabled")),
                     position_base=_safe_float(latest_minute.get("position_base")),
                     avg_entry_price=_safe_float(latest_minute.get("avg_entry_price")),
                     fill_stats=fill_stats,
+                    portfolio=portfolio,
+                    minute_history=minute_history,
+                    minute_rows_total=float(self._count_csv_rows(minute_file)),
+                    minute_last_timestamp_seconds=ts_epoch,
+                    minute_last_age_seconds=max(0.0, datetime.now(timezone.utc).timestamp() - ts_epoch) if ts_epoch > 0 else 1e9,
+                    fills_last_timestamp_seconds=fill_stats.last_fill_timestamp_seconds if fill_stats else 0.0,
+                    fills_last_age_seconds=(
+                        max(0.0, datetime.now(timezone.utc).timestamp() - fill_stats.last_fill_timestamp_seconds)
+                        if fill_stats and fill_stats.last_fill_timestamp_seconds > 0
+                        else 1e9
+                    ),
+                    open_orders_total=float(len(open_orders)),
+                    open_orders_buy=float(sum(1 for o in open_orders if o.side == "BUY")),
+                    open_orders_sell=float(sum(1 for o in open_orders if o.side == "SELL")),
+                    open_orders=open_orders,
+                    recent_fills=recent_fills,
                 )
             )
         return snapshots
@@ -199,10 +416,13 @@ class BotMetricsExporter:
             self._last_render_cache = result
             return result
         except Exception:
+            _LOGGER.exception("bot_metrics_exporter render failure; serving cached payload")
             return self._last_render_cache or "# hbot_exporter_error 1\n"
 
     def _render_prometheus_impl(self) -> str:
         now = datetime.now(timezone.utc).timestamp()
+        cluster_label = os.getenv("HB_CLUSTER", os.getenv("CLUSTER", "local"))
+        environment_label = os.getenv("HB_ENVIRONMENT", os.getenv("ENVIRONMENT", "dev"))
         lines: List[str] = []
         lines.extend(
             [
@@ -214,6 +434,8 @@ class BotMetricsExporter:
                 "# TYPE hbot_bot_state gauge",
                 "# HELP hbot_bot_net_edge_pct Net edge percentage from strategy minute snapshot.",
                 "# TYPE hbot_bot_net_edge_pct gauge",
+                "# HELP hbot_bot_net_edge_gate_pct Net edge value used by edge gate decision (may be smoothed).",
+                "# TYPE hbot_bot_net_edge_gate_pct gauge",
                 "# HELP hbot_bot_spread_pct Active spread percentage from minute snapshot.",
                 "# TYPE hbot_bot_spread_pct gauge",
                 "# HELP hbot_bot_spread_floor_pct Active spread floor percentage from minute snapshot.",
@@ -224,6 +446,14 @@ class BotMetricsExporter:
                 "# TYPE hbot_bot_best_bid_price gauge",
                 "# HELP hbot_bot_best_ask_price Best ask price from order book (minute snapshot).",
                 "# TYPE hbot_bot_best_ask_price gauge",
+                "# HELP hbot_bot_mid_price Mid price from minute snapshot.",
+                "# TYPE hbot_bot_mid_price gauge",
+                "# HELP hbot_bot_best_bid_size Best bid size from minute snapshot.",
+                "# TYPE hbot_bot_best_bid_size gauge",
+                "# HELP hbot_bot_best_ask_size Best ask size from minute snapshot.",
+                "# TYPE hbot_bot_best_ask_size gauge",
+                "# HELP hbot_bot_book_imbalance Top-of-book size imbalance in [-1,1].",
+                "# TYPE hbot_bot_book_imbalance gauge",
                 "# HELP hbot_bot_turnover_today_x Daily turnover multiplier from minute snapshot.",
                 "# TYPE hbot_bot_turnover_today_x gauge",
                 "# HELP hbot_bot_orders_active Number of active orders in current minute snapshot.",
@@ -254,6 +484,20 @@ class BotMetricsExporter:
                 "# TYPE hbot_bot_cancel_per_min gauge",
                 "# HELP hbot_bot_risk_reasons_info Risk reasons info marker with reason label.",
                 "# TYPE hbot_bot_risk_reasons_info gauge",
+                "# HELP hbot_bot_gate_active_total Count of currently active gate reasons.",
+                "# TYPE hbot_bot_gate_active_total gauge",
+                "# HELP hbot_bot_gate_active_hard_total Count of active hard-stop gate reasons.",
+                "# TYPE hbot_bot_gate_active_hard_total gauge",
+                "# HELP hbot_bot_gate_active_soft_total Count of active soft/operational gate reasons.",
+                "# TYPE hbot_bot_gate_active_soft_total gauge",
+                "# HELP hbot_bot_gate_reason_active Active gate reason marker with reason and severity labels.",
+                "# TYPE hbot_bot_gate_reason_active gauge",
+                "# HELP hbot_bot_gate_current_value Current value used in gate headroom calculation by gate label.",
+                "# TYPE hbot_bot_gate_current_value gauge",
+                "# HELP hbot_bot_gate_threshold_value Threshold value used in gate headroom calculation by gate label.",
+                "# TYPE hbot_bot_gate_threshold_value gauge",
+                "# HELP hbot_bot_gate_headroom_ratio Normalized gate headroom ratio by gate label; negative means breached.",
+                "# TYPE hbot_bot_gate_headroom_ratio gauge",
                 "# HELP hbot_bot_fills_total Total fills rows observed in fills.csv.",
                 "# TYPE hbot_bot_fills_total gauge",
                 "# HELP hbot_bot_recent_error_lines Number of ERROR lines in recent bot log tail.",
@@ -278,6 +522,112 @@ class BotMetricsExporter:
                 "# TYPE hbot_bot_fee_bps_sum gauge",
                 "# HELP hbot_bot_fee_bps_count Count of fills contributing to hbot_bot_fee_bps_sum.",
                 "# TYPE hbot_bot_fee_bps_count gauge",
+                # FreqText header / table metrics
+                "# HELP hbot_bot_open_pnl_quote Sum of unrealized_pnl across all open positions (from paper_desk_v2.json).",
+                "# TYPE hbot_bot_open_pnl_quote gauge",
+                "# HELP hbot_bot_closed_pnl_quote_total Total realized PnL (sum realized_pnl_quote across fills.csv).",
+                "# TYPE hbot_bot_closed_pnl_quote_total gauge",
+                "# HELP hbot_bot_trades_total Total number of fills rows in fills.csv.",
+                "# TYPE hbot_bot_trades_total gauge",
+                "# HELP hbot_bot_trade_wins_total Number of fills with realized_pnl_quote > 0.",
+                "# TYPE hbot_bot_trade_wins_total gauge",
+                "# HELP hbot_bot_trade_losses_total Number of fills with realized_pnl_quote < 0.",
+                "# TYPE hbot_bot_trade_losses_total gauge",
+                "# HELP hbot_bot_trade_winrate Win rate fraction wins/(wins+losses) from fills.csv.",
+                "# TYPE hbot_bot_trade_winrate gauge",
+                "# HELP hbot_bot_trade_expectancy_quote Mean realized PnL per non-zero fill (quote).",
+                "# TYPE hbot_bot_trade_expectancy_quote gauge",
+                "# HELP hbot_bot_trade_expectancy_rate_quote avg_win*wr - avg_loss*(1-wr) from fills.csv (quote).",
+                "# TYPE hbot_bot_trade_expectancy_rate_quote gauge",
+                "# HELP hbot_bot_trade_median_win_quote Median positive realized PnL (quote).",
+                "# TYPE hbot_bot_trade_median_win_quote gauge",
+                "# HELP hbot_bot_trade_median_loss_quote Median negative realized PnL magnitude (quote, negative sign).",
+                "# TYPE hbot_bot_trade_median_loss_quote gauge",
+                "# HELP hbot_bot_first_fill_timestamp_seconds Unix epoch of the earliest fill in fills.csv.",
+                "# TYPE hbot_bot_first_fill_timestamp_seconds gauge",
+                # Equity start for cumulative profit chart
+                "# HELP hbot_bot_equity_start_quote Equity quote from the first row in minute.csv.",
+                "# TYPE hbot_bot_equity_start_quote gauge",
+                # Weekly / monthly realized PnL (day-boundary aggregation of minute.csv history)
+                "# HELP hbot_bot_realized_pnl_week_quote 7-day realized PnL via day-boundary aggregation of minute.csv.",
+                "# TYPE hbot_bot_realized_pnl_week_quote gauge",
+                "# HELP hbot_bot_realized_pnl_month_quote 30-day realized PnL via day-boundary aggregation of minute.csv.",
+                "# TYPE hbot_bot_realized_pnl_month_quote gauge",
+                "# HELP hbot_bot_minute_rows_total Total rows observed in minute.csv.",
+                "# TYPE hbot_bot_minute_rows_total gauge",
+                "# HELP hbot_bot_minute_last_timestamp_seconds Last timestamp observed in minute.csv (epoch seconds).",
+                "# TYPE hbot_bot_minute_last_timestamp_seconds gauge",
+                "# HELP hbot_bot_minute_last_age_seconds Age of latest minute.csv row in seconds.",
+                "# TYPE hbot_bot_minute_last_age_seconds gauge",
+                "# HELP hbot_bot_fills_last_timestamp_seconds Last timestamp observed in fills.csv (epoch seconds).",
+                "# TYPE hbot_bot_fills_last_timestamp_seconds gauge",
+                "# HELP hbot_bot_fills_last_age_seconds Age of latest fills.csv row in seconds.",
+                "# TYPE hbot_bot_fills_last_age_seconds gauge",
+                "# HELP hbot_bot_fills_24h_count Number of fills during trailing 24h from fills.csv.",
+                "# TYPE hbot_bot_fills_24h_count gauge",
+                "# HELP hbot_bot_realized_pnl_24h_quote Realized PnL during trailing 24h from fills.csv (quote).",
+                "# TYPE hbot_bot_realized_pnl_24h_quote gauge",
+                "# HELP hbot_bot_open_order_price Open order price by order_id and side.",
+                "# TYPE hbot_bot_open_order_price gauge",
+                "# HELP hbot_bot_open_order_amount_base Open order amount in base units by order_id and side.",
+                "# TYPE hbot_bot_open_order_amount_base gauge",
+                "# HELP hbot_bot_open_order_age_seconds Open order age in seconds by order_id and side.",
+                "# TYPE hbot_bot_open_order_age_seconds gauge",
+                "# HELP hbot_bot_open_orders_total Count of currently open orders from strategy snapshot.",
+                "# TYPE hbot_bot_open_orders_total gauge",
+                "# HELP hbot_bot_open_orders_buy Count of open buy orders from strategy snapshot.",
+                "# TYPE hbot_bot_open_orders_buy gauge",
+                "# HELP hbot_bot_open_orders_sell Count of open sell orders from strategy snapshot.",
+                "# TYPE hbot_bot_open_orders_sell gauge",
+                "# HELP hbot_bot_fills_5m_count Number of fills in trailing 5 minutes.",
+                "# TYPE hbot_bot_fills_5m_count gauge",
+                "# HELP hbot_bot_fills_1h_count Number of fills in trailing 1 hour.",
+                "# TYPE hbot_bot_fills_1h_count gauge",
+                "# HELP hbot_bot_realized_pnl_1h_quote Realized PnL in trailing 1 hour (quote).",
+                "# TYPE hbot_bot_realized_pnl_1h_quote gauge",
+                "# HELP hbot_bot_derisk_runtime_recovered Whether derisk sizing was auto-recovered this tick (1=true).",
+                "# TYPE hbot_bot_derisk_runtime_recovered gauge",
+                "# HELP hbot_bot_derisk_runtime_recovery_count Cumulative count of derisk runtime sizing recoveries.",
+                "# TYPE hbot_bot_derisk_runtime_recovery_count gauge",
+                "# HELP hbot_bot_pnl_governor_target_effective_pct Effective daily pnl target as pct of opening equity.",
+                "# TYPE hbot_bot_pnl_governor_target_effective_pct gauge",
+                "# HELP hbot_bot_pnl_governor_size_mult_applied Runtime sizing multiplier applied after clamps.",
+                "# TYPE hbot_bot_pnl_governor_size_mult_applied gauge",
+                "# HELP hbot_bot_spread_competitiveness_cap_active Whether spread competitiveness cap clipped spreads (1=true).",
+                "# TYPE hbot_bot_spread_competitiveness_cap_active gauge",
+                "# HELP hbot_bot_spread_competitiveness_cap_side_pct Per-side spread cap used by competitiveness guard.",
+                "# TYPE hbot_bot_spread_competitiveness_cap_side_pct gauge",
+                "# HELP hbot_bot_pnl_governor_target_mode_info Info metric for governor target mode label.",
+                "# TYPE hbot_bot_pnl_governor_target_mode_info gauge",
+                # Per-position metrics (one series per instrument_id)
+                "# HELP hbot_bot_position_quantity_base Signed position quantity in base asset (from paper_desk_v2.json).",
+                "# TYPE hbot_bot_position_quantity_base gauge",
+                "# HELP hbot_bot_position_avg_entry_price Average entry price for the position (quote).",
+                "# TYPE hbot_bot_position_avg_entry_price gauge",
+                "# HELP hbot_bot_position_unrealized_pnl_quote Unrealized PnL for the position (quote).",
+                "# TYPE hbot_bot_position_unrealized_pnl_quote gauge",
+                "# HELP hbot_bot_position_opened_at_seconds Unix epoch when the position was opened.",
+                "# TYPE hbot_bot_position_opened_at_seconds gauge",
+                "# HELP hbot_bot_position_total_fees_paid_quote Total fees paid on the position (quote).",
+                "# TYPE hbot_bot_position_total_fees_paid_quote gauge",
+                "# HELP hbot_bot_position_unrealized_pnl_pct Unrealized pnl as pct of stake for open positions.",
+                "# TYPE hbot_bot_position_unrealized_pnl_pct gauge",
+                "# HELP hbot_bot_position_duration_seconds Open position age in seconds.",
+                "# TYPE hbot_bot_position_duration_seconds gauge",
+                "# HELP hbot_bot_position_stop_pct Placeholder stop pct for open positions (0 when unavailable).",
+                "# TYPE hbot_bot_position_stop_pct gauge",
+                "# HELP hbot_bot_position_side_info Side marker for open positions with side label long/short.",
+                "# TYPE hbot_bot_position_side_info gauge",
+                "# HELP hbot_bot_closed_trade_profit_quote Recent closed trade profit in quote terms.",
+                "# TYPE hbot_bot_closed_trade_profit_quote gauge",
+                "# HELP hbot_bot_closed_trade_profit_pct Recent closed trade profit as pct of notional.",
+                "# TYPE hbot_bot_closed_trade_profit_pct gauge",
+                "# HELP hbot_bot_closed_trade_opened_at_seconds Recent closed trade opened-at placeholder timestamp (fill ts when open ts unavailable).",
+                "# TYPE hbot_bot_closed_trade_opened_at_seconds gauge",
+                "# HELP hbot_bot_closed_trade_duration_seconds Recent closed trade duration in seconds (0 when unavailable).",
+                "# TYPE hbot_bot_closed_trade_duration_seconds gauge",
+                "# HELP hbot_bot_closed_trade_info Recent closed trade info marker with trade labels.",
+                "# TYPE hbot_bot_closed_trade_info gauge",
             ]
         )
         for snapshot in self.collect():
@@ -289,6 +639,8 @@ class BotMetricsExporter:
                 "exchange": snapshot.exchange,
                 "pair": snapshot.trading_pair,
                 "regime": snapshot.regime,
+                "cluster": cluster_label,
+                "environment": environment_label,
             }
             lines.append(f"hbot_bot_snapshot_timestamp_seconds{_fmt_labels(base_labels)} {snapshot.ts_epoch}")
             lines.append(f"hbot_bot_snapshot_age_seconds{_fmt_labels(base_labels)} {max(0.0, now - snapshot.ts_epoch)}")
@@ -298,11 +650,16 @@ class BotMetricsExporter:
                 state_value = 1.0 if snapshot.state == state else 0.0
                 lines.append(f"hbot_bot_state{_fmt_labels(state_labels)} {state_value}")
             lines.append(f"hbot_bot_net_edge_pct{_fmt_labels(base_labels)} {snapshot.net_edge_pct}")
+            lines.append(f"hbot_bot_net_edge_gate_pct{_fmt_labels(base_labels)} {snapshot.net_edge_gate_pct}")
             lines.append(f"hbot_bot_spread_pct{_fmt_labels(base_labels)} {snapshot.spread_pct}")
             lines.append(f"hbot_bot_spread_floor_pct{_fmt_labels(base_labels)} {snapshot.spread_floor_pct}")
             lines.append(f"hbot_bot_market_spread_bps{_fmt_labels(base_labels)} {snapshot.market_spread_bps}")
             lines.append(f"hbot_bot_best_bid_price{_fmt_labels(base_labels)} {snapshot.best_bid_price}")
             lines.append(f"hbot_bot_best_ask_price{_fmt_labels(base_labels)} {snapshot.best_ask_price}")
+            lines.append(f"hbot_bot_mid_price{_fmt_labels(base_labels)} {snapshot.mid_price}")
+            lines.append(f"hbot_bot_best_bid_size{_fmt_labels(base_labels)} {snapshot.best_bid_size}")
+            lines.append(f"hbot_bot_best_ask_size{_fmt_labels(base_labels)} {snapshot.best_ask_size}")
+            lines.append(f"hbot_bot_book_imbalance{_fmt_labels(base_labels)} {snapshot.book_imbalance}")
             lines.append(f"hbot_bot_turnover_today_x{_fmt_labels(base_labels)} {snapshot.turnover_today_x}")
             lines.append(f"hbot_bot_orders_active{_fmt_labels(base_labels)} {snapshot.orders_active}")
             lines.append(f"hbot_bot_soft_pause_edge{_fmt_labels(base_labels)} {snapshot.soft_pause_edge}")
@@ -317,6 +674,15 @@ class BotMetricsExporter:
             lines.append(f"hbot_bot_drawdown_pct{_fmt_labels(base_labels)} {snapshot.drawdown_pct}")
             lines.append(f"hbot_bot_cancel_per_min{_fmt_labels(base_labels)} {snapshot.cancel_per_min}")
             lines.append(f"hbot_bot_fills_total{_fmt_labels(base_labels)} {snapshot.fills_total}")
+            lines.append(f"hbot_bot_minute_rows_total{_fmt_labels(base_labels)} {snapshot.minute_rows_total}")
+            lines.append(
+                f"hbot_bot_minute_last_timestamp_seconds{_fmt_labels(base_labels)} {snapshot.minute_last_timestamp_seconds}"
+            )
+            lines.append(f"hbot_bot_minute_last_age_seconds{_fmt_labels(base_labels)} {snapshot.minute_last_age_seconds}")
+            lines.append(
+                f"hbot_bot_fills_last_timestamp_seconds{_fmt_labels(base_labels)} {snapshot.fills_last_timestamp_seconds}"
+            )
+            lines.append(f"hbot_bot_fills_last_age_seconds{_fmt_labels(base_labels)} {snapshot.fills_last_age_seconds}")
             lines.append(f"hbot_bot_recent_error_lines{_fmt_labels(base_labels)} {snapshot.recent_error_lines}")
             fee_labels = dict(base_labels)
             fee_labels["source"] = snapshot.fee_source or "unknown"
@@ -324,6 +690,50 @@ class BotMetricsExporter:
             risk_labels = dict(base_labels)
             risk_labels["reasons"] = snapshot.risk_reasons or "none"
             lines.append(f"hbot_bot_risk_reasons_info{_fmt_labels(risk_labels)} 1")
+
+            # Gate diagnostics exported as first-class metrics so Grafana can stay simple.
+            active_reasons = _split_reasons(snapshot.risk_reasons)
+            if snapshot.soft_pause_edge >= 0.5 and "edge_gate_blocked" not in active_reasons:
+                active_reasons.append("edge_gate_blocked")
+            active_unique = sorted(set(active_reasons))
+            hard_count = sum(1 for reason in active_unique if reason in _HARD_GATE_REASONS)
+            active_total = len(active_unique)
+            soft_count = max(0, active_total - hard_count)
+            lines.append(f"hbot_bot_gate_active_total{_fmt_labels(base_labels)} {float(active_total)}")
+            lines.append(f"hbot_bot_gate_active_hard_total{_fmt_labels(base_labels)} {float(hard_count)}")
+            lines.append(f"hbot_bot_gate_active_soft_total{_fmt_labels(base_labels)} {float(soft_count)}")
+            if active_unique:
+                for reason in active_unique:
+                    reason_labels = dict(base_labels)
+                    reason_labels["reason"] = reason
+                    reason_labels["severity"] = "hard" if reason in _HARD_GATE_REASONS else "soft"
+                    lines.append(f"hbot_bot_gate_reason_active{_fmt_labels(reason_labels)} 1")
+            else:
+                reason_labels = dict(base_labels)
+                reason_labels["reason"] = "none"
+                reason_labels["severity"] = "none"
+                lines.append(f"hbot_bot_gate_reason_active{_fmt_labels(reason_labels)} 1")
+
+            gate_metrics = [
+                ("daily_loss", snapshot.daily_loss_pct, snapshot.max_daily_loss_pct_hard, False),
+                ("drawdown", snapshot.drawdown_pct, snapshot.max_drawdown_pct_hard, False),
+                ("turnover", snapshot.turnover_today_x, snapshot.max_daily_turnover_x_hard, False),
+                ("position_drift", snapshot.position_drift_pct, snapshot.position_drift_soft_pause_pct, False),
+                ("margin_soft", snapshot.margin_ratio, snapshot.margin_ratio_soft_pause_pct, True),
+                ("margin_hard", snapshot.margin_ratio, snapshot.margin_ratio_hard_stop_pct, True),
+                ("base_min", snapshot.base_pct, snapshot.min_base_pct, True),
+                ("base_max", snapshot.base_pct, snapshot.max_base_pct, False),
+                ("notional_cap", snapshot.projected_total_quote, snapshot.max_total_notional_quote, False),
+                ("edge_pause", snapshot.net_edge_gate_pct, snapshot.edge_pause_threshold_pct, True),
+            ]
+            for gate_name, current_value, threshold_value, lower_is_worse in gate_metrics:
+                gate_labels = dict(base_labels)
+                gate_labels["gate"] = gate_name
+                headroom = _headroom_ratio(current_value, threshold_value, lower_is_worse)
+                lines.append(f"hbot_bot_gate_current_value{_fmt_labels(gate_labels)} {current_value}")
+                lines.append(f"hbot_bot_gate_threshold_value{_fmt_labels(gate_labels)} {threshold_value}")
+                lines.append(f"hbot_bot_gate_headroom_ratio{_fmt_labels(gate_labels)} {headroom}")
+
             lines.append(f"hbot_bot_tick_duration_seconds{_fmt_labels(base_labels)} {snapshot.tick_duration_ms / 1000.0}")
             lines.append(f"hbot_bot_tick_indicator_seconds{_fmt_labels(base_labels)} {snapshot.indicator_duration_ms / 1000.0}")
             lines.append(f"hbot_bot_tick_connector_io_seconds{_fmt_labels(base_labels)} {snapshot.connector_io_duration_ms / 1000.0}")
@@ -331,8 +741,28 @@ class BotMetricsExporter:
             lines.append(f"hbot_bot_margin_ratio{_fmt_labels(base_labels)} {snapshot.margin_ratio}")
             lines.append(f"hbot_bot_funding_rate{_fmt_labels(base_labels)} {snapshot.funding_rate}")
             lines.append(f"hbot_bot_realized_pnl_today_quote{_fmt_labels(base_labels)} {snapshot.realized_pnl_today_quote}")
+            lines.append(
+                f"hbot_bot_net_realized_pnl_today_quote{_fmt_labels(base_labels)} {snapshot.net_realized_pnl_today_quote}"
+            )
             lines.append(f"hbot_bot_ws_reconnect_total{_fmt_labels(base_labels)} {snapshot.ws_reconnect_count}")
             lines.append(f"hbot_bot_order_book_stale{_fmt_labels(base_labels)} {snapshot.order_book_stale}")
+            lines.append(f"hbot_bot_derisk_runtime_recovered{_fmt_labels(base_labels)} {snapshot.derisk_runtime_recovered}")
+            lines.append(f"hbot_bot_derisk_runtime_recovery_count{_fmt_labels(base_labels)} {snapshot.derisk_runtime_recovery_count}")
+            lines.append(
+                f"hbot_bot_pnl_governor_target_effective_pct{_fmt_labels(base_labels)} {snapshot.pnl_governor_target_effective_pct}"
+            )
+            lines.append(
+                f"hbot_bot_pnl_governor_size_mult_applied{_fmt_labels(base_labels)} {snapshot.pnl_governor_size_mult_applied}"
+            )
+            lines.append(
+                f"hbot_bot_spread_competitiveness_cap_active{_fmt_labels(base_labels)} {snapshot.spread_competitiveness_cap_active}"
+            )
+            lines.append(
+                f"hbot_bot_spread_competitiveness_cap_side_pct{_fmt_labels(base_labels)} {snapshot.spread_competitiveness_cap_side_pct}"
+            )
+            target_mode_labels = dict(base_labels)
+            target_mode_labels["target_mode"] = snapshot.pnl_governor_target_mode or "disabled"
+            lines.append(f"hbot_bot_pnl_governor_target_mode_info{_fmt_labels(target_mode_labels)} 1")
             # Position metrics — always exported regardless of fill_stats
             lines.append(f"hbot_bot_position_base{_fmt_labels(base_labels)} {snapshot.position_base}")
             lines.append(f"hbot_bot_avg_entry_price{_fmt_labels(base_labels)} {snapshot.avg_entry_price}")
@@ -355,7 +785,264 @@ class BotMetricsExporter:
                 lines.append(f"hbot_bot_adverse_drift_30s_bps_count{_fmt_labels(base_labels)} {float(fs.adverse_drift_30s_bps_count)}")
                 lines.append(f"hbot_bot_fee_bps_sum{_fmt_labels(base_labels)} {fs.fee_bps_sum}")
                 lines.append(f"hbot_bot_fee_bps_count{_fmt_labels(base_labels)} {float(fs.fee_bps_count)}")
+                # FreqText table metrics (from fill_stats extended fields)
+                lines.append(f"hbot_bot_closed_pnl_quote_total{_fmt_labels(base_labels)} {fs.closed_pnl_total}")
+                lines.append(f"hbot_bot_trades_total{_fmt_labels(base_labels)} {float(fs.trades_total)}")
+                lines.append(f"hbot_bot_trade_wins_total{_fmt_labels(base_labels)} {float(fs.trade_wins_total)}")
+                lines.append(f"hbot_bot_trade_losses_total{_fmt_labels(base_labels)} {float(fs.trade_losses_total)}")
+                lines.append(f"hbot_bot_trade_winrate{_fmt_labels(base_labels)} {fs.trade_winrate}")
+                lines.append(f"hbot_bot_trade_expectancy_quote{_fmt_labels(base_labels)} {fs.trade_expectancy_quote}")
+                lines.append(f"hbot_bot_trade_expectancy_rate_quote{_fmt_labels(base_labels)} {fs.trade_expectancy_rate_quote}")
+                lines.append(f"hbot_bot_trade_median_win_quote{_fmt_labels(base_labels)} {fs.trade_median_win_quote}")
+                lines.append(f"hbot_bot_trade_median_loss_quote{_fmt_labels(base_labels)} {fs.trade_median_loss_quote}")
+                lines.append(f"hbot_bot_first_fill_timestamp_seconds{_fmt_labels(base_labels)} {fs.first_fill_timestamp_seconds}")
+                lines.append(f"hbot_bot_fills_24h_count{_fmt_labels(base_labels)} {float(fs.fills_24h_count)}")
+                lines.append(f"hbot_bot_realized_pnl_24h_quote{_fmt_labels(base_labels)} {fs.realized_pnl_24h_quote}")
+                lines.append(f"hbot_bot_fills_5m_count{_fmt_labels(base_labels)} {float(fs.fills_5m_count)}")
+                lines.append(f"hbot_bot_fills_1h_count{_fmt_labels(base_labels)} {float(fs.fills_1h_count)}")
+                lines.append(f"hbot_bot_realized_pnl_1h_quote{_fmt_labels(base_labels)} {fs.realized_pnl_1h_quote}")
+            # Portfolio / open PnL metrics
+            if snapshot.portfolio is not None:
+                pf = snapshot.portfolio
+                lines.append(f"hbot_bot_open_pnl_quote{_fmt_labels(base_labels)} {pf.open_pnl_quote}")
+                for pos in pf.positions:
+                    pos_labels = dict(base_labels)
+                    pos_labels["instrument_id"] = pos.instrument_id
+                    pos_labels["pair"] = pos.pair
+                    stake_quote = abs(pos.quantity_base * pos.avg_entry_price)
+                    pnl_pct = (pos.unrealized_pnl_quote / stake_quote) if stake_quote > 0 else 0.0
+                    duration_s = max(0.0, now - pos.opened_at_seconds) if pos.opened_at_seconds > 0 else 0.0
+                    side = "long" if pos.quantity_base >= 0 else "short"
+                    lines.append(f"hbot_bot_position_quantity_base{_fmt_labels(pos_labels)} {pos.quantity_base}")
+                    lines.append(f"hbot_bot_position_avg_entry_price{_fmt_labels(pos_labels)} {pos.avg_entry_price}")
+                    lines.append(f"hbot_bot_position_unrealized_pnl_quote{_fmt_labels(pos_labels)} {pos.unrealized_pnl_quote}")
+                    lines.append(f"hbot_bot_position_opened_at_seconds{_fmt_labels(pos_labels)} {pos.opened_at_seconds}")
+                    lines.append(f"hbot_bot_position_total_fees_paid_quote{_fmt_labels(pos_labels)} {pos.total_fees_paid_quote}")
+                    lines.append(f"hbot_bot_position_unrealized_pnl_pct{_fmt_labels(pos_labels)} {pnl_pct}")
+                    lines.append(f"hbot_bot_position_duration_seconds{_fmt_labels(pos_labels)} {duration_s}")
+                    lines.append(f"hbot_bot_position_stop_pct{_fmt_labels(pos_labels)} 0")
+                    side_labels = dict(pos_labels)
+                    side_labels["side"] = side
+                    lines.append(f"hbot_bot_position_side_info{_fmt_labels(side_labels)} 1")
+            else:
+                lines.append(f"hbot_bot_open_pnl_quote{_fmt_labels(base_labels)} 0")
+            # Minute history metrics (equity start + weekly/monthly PnL)
+            if snapshot.minute_history is not None:
+                mh = snapshot.minute_history
+                lines.append(f"hbot_bot_equity_start_quote{_fmt_labels(base_labels)} {mh.equity_start_quote}")
+                lines.append(f"hbot_bot_realized_pnl_week_quote{_fmt_labels(base_labels)} {mh.realized_pnl_week_quote}")
+                lines.append(f"hbot_bot_realized_pnl_month_quote{_fmt_labels(base_labels)} {mh.realized_pnl_month_quote}")
+            for order in snapshot.open_orders:
+                order_labels = dict(base_labels)
+                order_labels["order_id"] = order.order_id
+                order_labels["side"] = order.side
+                order_labels["pair"] = order.pair
+                lines.append(f"hbot_bot_open_order_price{_fmt_labels(order_labels)} {order.price}")
+                lines.append(f"hbot_bot_open_order_amount_base{_fmt_labels(order_labels)} {order.amount_base}")
+                lines.append(f"hbot_bot_open_order_age_seconds{_fmt_labels(order_labels)} {order.age_sec}")
+            lines.append(f"hbot_bot_open_orders_total{_fmt_labels(base_labels)} {snapshot.open_orders_total}")
+            lines.append(f"hbot_bot_open_orders_buy{_fmt_labels(base_labels)} {snapshot.open_orders_buy}")
+            lines.append(f"hbot_bot_open_orders_sell{_fmt_labels(base_labels)} {snapshot.open_orders_sell}")
+            for i, fill in enumerate(snapshot.recent_fills):
+                trade_id = str(fill.get("order_id", "")).strip() or f"fill_{i}"
+                pair = str(snapshot.trading_pair)
+                side = str(fill.get("side", "")).lower() or "unknown"
+                close_ts = str(fill.get("ts", ""))
+                close_epoch = _safe_iso_ts_to_epoch(close_ts) or 0.0
+                pnl_quote = _safe_float(fill.get("pnl"))
+                notional = _safe_float(fill.get("notional"))
+                pnl_pct = (pnl_quote / notional) if notional > 0 else 0.0
+                opened_at = close_epoch  # fill-level source has no true open timestamp
+                duration_s = 0.0
+                trade_labels = dict(base_labels)
+                trade_labels["trade_id"] = trade_id
+                trade_labels["pair"] = pair
+                trade_labels["side"] = side
+                trade_labels["close_ts"] = close_ts
+                lines.append(f"hbot_bot_closed_trade_profit_quote{_fmt_labels(trade_labels)} {pnl_quote}")
+                lines.append(f"hbot_bot_closed_trade_profit_pct{_fmt_labels(trade_labels)} {pnl_pct}")
+                lines.append(f"hbot_bot_closed_trade_opened_at_seconds{_fmt_labels(trade_labels)} {opened_at}")
+                lines.append(f"hbot_bot_closed_trade_duration_seconds{_fmt_labels(trade_labels)} {duration_s}")
+                lines.append(f"hbot_bot_closed_trade_info{_fmt_labels(trade_labels)} 1")
+
+        # ---------------------------------------------------------------------------
+        # INFRA-5: Data plane consistency metrics from desk_snapshot_service
+        # ---------------------------------------------------------------------------
+        lines.extend([
+            "# HELP hbot_desk_snapshot_age_seconds Age of the canonical desk snapshot in seconds.",
+            "# TYPE hbot_desk_snapshot_age_seconds gauge",
+            "# HELP hbot_desk_snapshot_completeness Fraction of required minute fields present (0-1).",
+            "# TYPE hbot_desk_snapshot_completeness gauge",
+            "# HELP hbot_desk_snapshot_minute_age_s Age of latest minute.csv tick as seen by snapshot service.",
+            "# TYPE hbot_desk_snapshot_minute_age_s gauge",
+            "# HELP hbot_desk_snapshot_fill_age_s Age of latest fill as seen by snapshot service.",
+            "# TYPE hbot_desk_snapshot_fill_age_s gauge",
+            "# HELP hbot_data_plane_consistency 1 if all bots have a fresh snapshot (<3 min), 0 otherwise.",
+            "# TYPE hbot_data_plane_consistency gauge",
+        ])
+        try:
+            snapshot_root = self._data_root.parent / "reports" / "desk_snapshot"
+            all_fresh = True
+            snapshot_count = 0
+            for bot_dir in sorted(snapshot_root.iterdir()) if snapshot_root.exists() else []:
+                if not bot_dir.is_dir():
+                    continue
+                snap_path = bot_dir / "latest.json"
+                if not snap_path.exists():
+                    all_fresh = False
+                    continue
+                try:
+                    snap = json.loads(snap_path.read_text(encoding="utf-8"))
+                except Exception:
+                    all_fresh = False
+                    continue
+                bot_label = bot_dir.name
+                bot_snap_labels = {"bot": bot_label}
+                gen_ts = str(snap.get("generated_ts", ""))
+                snap_age = 1e9
+                try:
+                    epoch = datetime.fromisoformat(gen_ts.replace("Z", "+00:00")).timestamp()
+                    snap_age = now - epoch
+                except Exception:
+                    pass
+                completeness = float(snap.get("completeness", 0.0))
+                minute_age = snap.get("minute_age_s")
+                fill_age = snap.get("fill_age_s")
+                lines.append(f"hbot_desk_snapshot_age_seconds{_fmt_labels(bot_snap_labels)} {snap_age:.1f}")
+                lines.append(f"hbot_desk_snapshot_completeness{_fmt_labels(bot_snap_labels)} {completeness:.3f}")
+                if minute_age is not None:
+                    lines.append(f"hbot_desk_snapshot_minute_age_s{_fmt_labels(bot_snap_labels)} {float(minute_age):.1f}")
+                if fill_age is not None:
+                    lines.append(f"hbot_desk_snapshot_fill_age_s{_fmt_labels(bot_snap_labels)} {float(fill_age):.1f}")
+                # Inactive-bot exemption: bots whose minute data is > 6h old are
+                # considered inactive and excluded from the consistency signal.
+                _inactive_threshold_s = 6 * 3600
+                _bot_inactive = minute_age is not None and float(minute_age) > _inactive_threshold_s
+                if not _bot_inactive and (snap_age > 180 or completeness < 0.8):
+                    all_fresh = False
+                if not _bot_inactive:
+                    snapshot_count += 1
+            consistency = 1.0 if (snapshot_count > 0 and all_fresh) else 0.0
+            lines.append(f"hbot_data_plane_consistency {consistency}")
+        except Exception:
+            lines.append("hbot_data_plane_consistency 0")
+
         return "\n".join(lines) + "\n"
+
+    def _read_open_orders(self, snapshot_path: Path) -> List[OpenOrderSnapshot]:
+        if not snapshot_path.exists():
+            return []
+        try:
+            payload = json.loads(snapshot_path.read_text(encoding="utf-8"))
+            orders_raw = payload.get("orders", [])
+            if not isinstance(orders_raw, list):
+                return []
+            out: List[OpenOrderSnapshot] = []
+            for row in orders_raw:
+                if not isinstance(row, dict):
+                    continue
+                order_id = str(row.get("order_id", "")).strip()
+                if not order_id:
+                    continue
+                out.append(
+                    OpenOrderSnapshot(
+                        order_id=order_id,
+                        side=str(row.get("side", "")).upper(),
+                        pair=str(row.get("trading_pair", "")),
+                        price=_safe_float(row.get("price")),
+                        amount_base=_safe_float(row.get("amount")),
+                        age_sec=_safe_float(row.get("age_sec")),
+                    )
+                )
+            return out
+        except Exception:
+            return []
+
+    def _read_portfolio(self, portfolio_path: Path) -> Optional[PortfolioSnapshot]:
+        """Read paper_desk_v2.json and return open position metrics."""
+        if not portfolio_path.exists():
+            return None
+        try:
+            data = json.loads(portfolio_path.read_text(encoding="utf-8"))
+            positions_raw = data.get("portfolio", {}).get("positions", {})
+            total_unrealized = 0.0
+            positions: List[PositionSnapshot] = []
+            for key, pos in positions_raw.items():
+                if not isinstance(pos, dict):
+                    continue
+                qty = _safe_float(pos.get("quantity"))
+                if qty == 0.0:
+                    continue
+                unr = _safe_float(pos.get("unrealized_pnl"))
+                total_unrealized += unr
+                opened_ns = _safe_float(pos.get("opened_at_ns"))
+                opened_s = opened_ns / 1e9 if opened_ns > 0 else 0.0
+                # Derive pair from key (e.g. "bitget:BTC-USDT:perp" → "BTC-USDT")
+                parts = key.split(":")
+                pair = parts[1] if len(parts) >= 2 else key
+                positions.append(PositionSnapshot(
+                    instrument_id=key,
+                    pair=pair,
+                    quantity_base=qty,
+                    avg_entry_price=_safe_float(pos.get("avg_entry_price")),
+                    unrealized_pnl_quote=unr,
+                    opened_at_seconds=opened_s,
+                    total_fees_paid_quote=_safe_float(pos.get("total_fees_paid")),
+                ))
+            return PortfolioSnapshot(open_pnl_quote=total_unrealized, positions=positions)
+        except Exception:
+            return None
+
+    def _compute_minute_history(self, minute_file: Path) -> Optional[MinuteHistoryStats]:
+        """
+        Scan all rows in minute.csv to compute:
+        - equity_start_quote: equity_quote of the first row
+        - realized_pnl_week_quote: 7-day day-boundary aggregation
+        - realized_pnl_month_quote: 30-day day-boundary aggregation
+        Matches DashboardData._pnl_since() and DashboardData.equity_series() logic.
+        """
+        if not minute_file.exists():
+            return None
+        try:
+            rows: List[Dict[str, str]] = []
+            with minute_file.open("r", encoding="utf-8", newline="") as fp:
+                reader = csv.DictReader(fp)
+                for row in reader:
+                    rows.append(row)
+            if not rows:
+                return None
+
+            equity_start = _safe_float(rows[0].get("equity_quote"))
+            now_utc = datetime.now(timezone.utc)
+
+            def _pnl_since(days: int) -> float:
+                cutoff = now_utc - timedelta(days=days)
+                pnl = 0.0
+                prev_date = None
+                prev_pnl_today = 0.0
+                for row in rows:
+                    ts_str = row.get("ts", "")
+                    dt = parse_iso_ts(ts_str)
+                    if dt is None:
+                        continue
+                    if dt < cutoff:
+                        continue
+                    day = dt.date()
+                    cur_pnl_today = _safe_float(row.get("realized_pnl_today_quote"))
+                    if prev_date is not None and day != prev_date:
+                        pnl += prev_pnl_today
+                    prev_date = day
+                    prev_pnl_today = cur_pnl_today
+                pnl += prev_pnl_today
+                return pnl
+
+            return MinuteHistoryStats(
+                equity_start_quote=equity_start,
+                realized_pnl_week_quote=_pnl_since(7),
+                realized_pnl_month_quote=_pnl_since(30),
+            )
+        except Exception:
+            return None
 
     def _read_daily_state_any(self, log_dir: Path) -> Optional[Dict[str, str]]:
         """Read any daily_state*.json file (v1 or v2 naming convention)."""
@@ -390,6 +1077,12 @@ class BotMetricsExporter:
             return stats
         try:
             buy_prices, sell_prices = [], []
+            pnl_values: List[float] = []
+            first_ts_epoch: float = 0.0
+            last_ts_epoch: float = 0.0
+            cutoff_5m = datetime.now(timezone.utc).timestamp() - (5 * 60)
+            cutoff_1h = datetime.now(timezone.utc).timestamp() - (60 * 60)
+            cutoff_24h = datetime.now(timezone.utc).timestamp() - (24 * 3600)
             with fills_path.open("r", encoding="utf-8", newline="") as fp:
                 reader = csv.DictReader(fp)
                 for row in reader:
@@ -403,9 +1096,31 @@ class BotMetricsExporter:
                     mid_ref = _safe_float(row.get("mid_ref"))
                     expected_spread_pct = _safe_float(row.get("expected_spread_pct"))
                     adverse_drift_30s = _safe_float(row.get("adverse_drift_30s"))
+                    ts_str = str(row.get("ts", ""))
 
+                    stats.trades_total += 1
                     stats.total_fees += fee
                     stats.total_realized_pnl += pnl
+                    pnl_values.append(pnl)
+
+                    # First fill timestamp
+                    if first_ts_epoch == 0.0 and ts_str:
+                        epoch = _safe_iso_ts_to_epoch(ts_str)
+                        if epoch:
+                            first_ts_epoch = epoch
+                    if ts_str:
+                        epoch = _safe_iso_ts_to_epoch(ts_str)
+                        if epoch:
+                            last_ts_epoch = max(last_ts_epoch, epoch)
+                            if epoch >= cutoff_5m:
+                                stats.fills_5m_count += 1
+                            if epoch >= cutoff_1h:
+                                stats.fills_1h_count += 1
+                                stats.realized_pnl_1h_quote += pnl
+                            if epoch >= cutoff_24h:
+                                stats.fills_24h_count += 1
+                                stats.realized_pnl_24h_quote += pnl
+
                     if is_maker:
                         stats.maker_fills += 1
                     else:
@@ -418,7 +1133,7 @@ class BotMetricsExporter:
                         stats.sells += 1
                         stats.sell_notional += notional
                         sell_prices.append(price)
-                    stats.last_fill_ts = str(row.get("ts", ""))
+                    stats.last_fill_ts = ts_str
                     stats.last_fill_side = side
                     stats.last_fill_price = price
                     stats.last_fill_amount = amount
@@ -426,9 +1141,6 @@ class BotMetricsExporter:
 
                     # Execution-quality proxies (bps) from fills.csv
                     if mid_ref > 0 and price > 0:
-                        # Positive value means worse-than-mid execution for the bot:
-                        # - BUY: pay above mid => positive (worse); below mid => negative (better)
-                        # - SELL: sell below mid => positive (worse); above mid => negative (better)
                         if side == "sell":
                             slippage_bps = ((mid_ref - price) / mid_ref) * 10000.0
                         else:
@@ -447,10 +1159,33 @@ class BotMetricsExporter:
                     if notional > 0:
                         stats.fee_bps_sum += (fee / notional) * 10000.0
                         stats.fee_bps_count += 1
+
             if buy_prices:
                 stats.avg_buy_price = sum(buy_prices) / len(buy_prices)
             if sell_prices:
                 stats.avg_sell_price = sum(sell_prices) / len(sell_prices)
+
+            # FreqText table metrics
+            stats.first_fill_timestamp_seconds = first_ts_epoch
+            stats.last_fill_timestamp_seconds = last_ts_epoch
+            stats.closed_pnl_total = sum(pnl_values)
+
+            wins = [p for p in pnl_values if p > 0]
+            losses = [p for p in pnl_values if p < 0]
+            stats.trade_wins_total = len(wins)
+            stats.trade_losses_total = len(losses)
+            nonzero = wins + losses
+            denom = len(wins) + len(losses)
+            if denom > 0:
+                stats.trade_winrate = len(wins) / denom
+                stats.trade_expectancy_quote = sum(nonzero) / len(nonzero)
+                avg_win = sum(wins) / len(wins) if wins else 0.0
+                avg_loss = abs(sum(losses) / len(losses)) if losses else 0.0
+                wr = stats.trade_winrate
+                stats.trade_expectancy_rate_quote = avg_win * wr - avg_loss * (1 - wr)
+            stats.trade_median_win_quote = _median(wins)
+            stats.trade_median_loss_quote = _median(losses)
+
         except Exception:
             pass
         return stats

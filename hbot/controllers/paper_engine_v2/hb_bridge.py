@@ -19,14 +19,19 @@ Phase 5 — EventSubscriber architecture:
 
   When subscribers are registered, events are dispatched to them BEFORE the
   legacy monkey-patch path, allowing gradual migration.
+
+DEBT-3: Signal consumption, adverse inference, and HB event firing have been
+extracted into focused modules under paper_engine_v2/. This file imports and
+delegates to them while preserving the original public API.
 """
 from __future__ import annotations
 
 import logging
+import os
 import time
 from decimal import Decimal
 from types import MethodType, SimpleNamespace
-from typing import Any, Dict, List, Optional, Protocol
+from typing import Any, Dict, List, Optional, Protocol, Set, Tuple
 
 from controllers.paper_engine_v2.data_feeds import HummingbotDataFeed
 from controllers.paper_engine_v2.desk import PaperDesk
@@ -42,248 +47,260 @@ from controllers.paper_engine_v2.types import (
     _ZERO,
 )
 
+# ---------------------------------------------------------------------------
+# DEBT-3 split modules — delegate to focused modules
+# ---------------------------------------------------------------------------
+
+from controllers.paper_engine_v2.signal_consumer import (
+    _find_controller_by_instance,
+    _consume_signals as _consume_signals_impl,
+    _check_hard_stop_transitions as _check_hard_stop_impl,
+    SIGNAL_STREAM as _SIGNAL_STREAM,
+    EXECUTION_INTENT_STREAM as _EXECUTION_INTENT_STREAM,
+)
+from controllers.paper_engine_v2.adverse_inference import (
+    _load_adverse_model as _load_adverse_model_impl,
+    _build_adverse_features,
+    _run_adverse_inference as _run_adverse_impl,
+)
+from controllers.paper_engine_v2.hb_event_fire import (
+    EventSubscriber,
+    _EVENT_SUBSCRIBERS,
+    register_event_subscriber,
+    unregister_event_subscriber,
+    _dispatch_to_subscribers,
+    _find_controller_for_connector,
+    _fire_hb_events as _fire_hb_events_impl,
+    _fire_fill_event as _fire_fill_event_impl,
+    _fire_cancel_event,
+    _fire_reject_event,
+)
+
 logger = logging.getLogger(__name__)
+
+_PAPER_ORDER_TRACE_ENABLED: bool = os.getenv("HB_PAPER_ORDER_TRACE_ENABLED", "true").lower() in {"1", "true", "yes"}
+_PAPER_ORDER_TRACE_COOLDOWN_S: float = max(0.5, float(os.getenv("HB_PAPER_ORDER_TRACE_COOLDOWN_S", "1.0")))
+_LAST_PAPER_ORDER_TRACE_TS: float = 0.0
+
+
+def _trace_paper_order(message: str, *args: Any, force: bool = False) -> None:
+    global _LAST_PAPER_ORDER_TRACE_TS
+    if not _PAPER_ORDER_TRACE_ENABLED:
+        return
+    now = time.time()
+    if not force and (now - _LAST_PAPER_ORDER_TRACE_TS) < _PAPER_ORDER_TRACE_COOLDOWN_S:
+        return
+    _LAST_PAPER_ORDER_TRACE_TS = now
+    logger.warning("PAPER_ORDER_TRACE " + message, *args)
+
+
+def _order_type_text(order_type: Any) -> str:
+    return str(getattr(order_type, "name", order_type) or "").upper()
+
+
+def _resolve_shadow_submit_price(
+    strategy: Any,
+    desk: PaperDesk,
+    instrument_id: InstrumentId,
+    connector_name: str,
+    trading_pair: str,
+    side: OrderSide,
+) -> Decimal:
+    """Best-effort non-zero price for market orders in shadow mode.
+
+    Paper engine validation enforces min-notional checks. Passing NaN->0 for market
+    orders causes deterministic rejections. Use top-of-book (or mid) as a surrogate.
+    """
+    try:
+        engine = getattr(desk, "_engines", {}).get(instrument_id.key)
+        book = getattr(engine, "_book", None) if engine is not None else None
+        if book is not None:
+            top = book.best_ask if side == OrderSide.BUY else book.best_bid
+            top_price = getattr(top, "price", None)
+            if top_price is not None:
+                px = Decimal(str(top_price))
+                if px > _ZERO:
+                    return px
+            mid_price = getattr(book, "mid_price", None)
+            if mid_price is not None:
+                px = Decimal(str(mid_price))
+                if px > _ZERO:
+                    return px
+    except Exception:
+        pass
+
+    try:
+        connector = getattr(strategy, "connectors", {}).get(connector_name)
+        if connector is not None and hasattr(connector, "get_price_by_type"):
+            from hummingbot.core.data_type.common import PriceType as _HBPriceType
+            px_any = connector.get_price_by_type(trading_pair, _HBPriceType.MidPrice)
+            px = Decimal(str(px_any))
+            if px > _ZERO:
+                return px
+    except Exception:
+        pass
+
+    return Decimal("0")
+
 
 _CANONICAL_CACHE: Dict[str, str] = {}
 
+
 # ---------------------------------------------------------------------------
-# Signal stream consumption state (module-level, persists across ticks)
+# BridgeState — holds all mutable state that was previously module-level.
+# Testable, resettable, multi-bot safe.
 # ---------------------------------------------------------------------------
 
-try:
-    from services.contracts.stream_names import (
-        SIGNAL_STREAM as _SIGNAL_STREAM,
-        EXECUTION_INTENT_STREAM as _EXECUTION_INTENT_STREAM,
+class BridgeState:
+    """Encapsulates all mutable bridge state (Redis, signal cursor, guard state, ML model).
+
+    A single process-wide instance ``_bridge_state`` replaces the former
+    module-level globals. Tests can call ``reset()`` instead of reaching into
+    six separate module attributes.
+    """
+
+    __slots__ = (
+        "redis_client", "redis_init_done", "last_signal_id",
+        "prev_guard_states", "adverse_model", "adverse_model_path",
+        "adverse_model_loaded", "sync_state_published_keys",
+        "paper_exchange_mode_warned_instances",
+        "last_paper_exchange_event_id", "paper_exchange_seen_event_ids",
+        "sync_requested_at_ms_by_key", "sync_confirmed_keys",
+        "sync_timeout_hard_stop_keys",
     )
-except Exception:
-    _SIGNAL_STREAM = "hb.signal.v1"
-    _EXECUTION_INTENT_STREAM = "hb.execution_intent.v1"
 
-_signal_redis_client: Optional[Any] = None
-_signal_redis_init_done: bool = False
-_last_signal_id: str = "0-0"
-_prev_guard_states: Dict[str, str] = {}
+    def __init__(self) -> None:
+        self.reset()
+
+    def reset(self) -> None:
+        self.redis_client: Optional[Any] = None
+        self.redis_init_done: bool = False
+        self.last_signal_id: str = "0-0"
+        self.prev_guard_states: Dict[str, str] = {}
+        self.adverse_model: Optional[Any] = None
+        self.adverse_model_path: str = ""
+        self.adverse_model_loaded: bool = False
+        self.sync_state_published_keys: Set[str] = set()
+        self.paper_exchange_mode_warned_instances: Set[str] = set()
+        self.last_paper_exchange_event_id: str = "0-0"
+        self.paper_exchange_seen_event_ids: Set[str] = set()
+        self.sync_requested_at_ms_by_key: Dict[str, int] = {}
+        self.sync_confirmed_keys: Set[str] = set()
+        self.sync_timeout_hard_stop_keys: Set[str] = set()
+
+    def get_redis(self) -> Optional[Any]:
+        """Lazy-init a Redis client for signal consumption. Returns None when unavailable."""
+        if self.redis_init_done:
+            return self.redis_client
+        self.redis_init_done = True
+        try:
+            import redis as _redis_lib
+            import os as _os
+            host = _os.environ.get("REDIS_HOST", "")
+            if not host:
+                return None
+            self.redis_client = _redis_lib.Redis(
+                host=host,
+                port=int(_os.environ.get("REDIS_PORT", "6379")),
+                db=int(_os.environ.get("REDIS_DB", "0")),
+                password=_os.environ.get("REDIS_PASSWORD") or None,
+                decode_responses=True,
+                socket_connect_timeout=2,
+                socket_timeout=2,
+                socket_keepalive=True,
+            )
+            logger.info("Signal consumer Redis client initialized (%s)", host)
+            return self.redis_client
+        except Exception as exc:
+            logger.warning("Signal consumer Redis init failed: %s", exc)
+            return None
+
+
+_bridge_state = BridgeState()
+
+# Backward-compat aliases so tests that poke module-level attrs still work.
+# These are *descriptors* that proxy reads/writes to the canonical BridgeState.
+# New code should use ``_bridge_state`` directly.
+
+def __getattr__(name: str) -> Any:
+    _ALIASES = {
+        "_signal_redis_client": "redis_client",
+        "_signal_redis_init_done": "redis_init_done",
+        "_last_signal_id": "last_signal_id",
+        "_prev_guard_states": "prev_guard_states",
+        "_adverse_model": "adverse_model",
+        "_adverse_model_path": "adverse_model_path",
+        "_adverse_model_loaded": "adverse_model_loaded",
+        "_last_paper_exchange_event_id": "last_paper_exchange_event_id",
+    }
+    if name in _ALIASES:
+        return getattr(_bridge_state, _ALIASES[name])
+    raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
+
+
+def __setattr_compat__(name: str, value: Any) -> None:
+    """Allow ``hb_bridge._signal_redis_client = x`` to still work (tests)."""
+    _ALIASES = {
+        "_signal_redis_client": "redis_client",
+        "_signal_redis_init_done": "redis_init_done",
+        "_last_signal_id": "last_signal_id",
+        "_prev_guard_states": "prev_guard_states",
+        "_adverse_model": "adverse_model",
+        "_adverse_model_path": "adverse_model_path",
+        "_adverse_model_loaded": "adverse_model_loaded",
+        "_last_paper_exchange_event_id": "last_paper_exchange_event_id",
+    }
+    if name in _ALIASES:
+        setattr(_bridge_state, _ALIASES[name], value)
+    else:
+        globals()[name] = value
+
+
+import sys as _sys
+_this_module = _sys.modules[__name__]
+_this_module.__class__ = type(
+    "BridgeModule", (type(_this_module),),
+    {"__setattr__": lambda self, n, v: __setattr_compat__(n, v)},
+)
 
 
 def _get_signal_redis() -> Optional[Any]:
     """Lazy-init a Redis client for signal consumption. Returns None when unavailable."""
-    global _signal_redis_client, _signal_redis_init_done
-    if _signal_redis_init_done:
-        return _signal_redis_client
-    _signal_redis_init_done = True
-    try:
-        import redis as _redis_lib
-        import os as _os
-        host = _os.environ.get("REDIS_HOST", "")
-        if not host:
-            return None
-        _signal_redis_client = _redis_lib.Redis(
-            host=host,
-            port=int(_os.environ.get("REDIS_PORT", "6379")),
-            db=int(_os.environ.get("REDIS_DB", "0")),
-            password=_os.environ.get("REDIS_PASSWORD") or None,
-            decode_responses=True,
-            socket_connect_timeout=2,
-        )
-        logger.info("Signal consumer Redis client initialized (%s)", host)
-        return _signal_redis_client
-    except Exception as exc:
-        logger.warning("Signal consumer Redis init failed: %s", exc)
-        return None
+    return _bridge_state.get_redis()
 
 
-def _find_controller_by_instance(strategy: Any, instance_name: str) -> Any:
-    """Find the controller whose config.instance_name matches."""
-    controllers = getattr(strategy, "controllers", {})
-    for _, ctrl in controllers.items():
-        cfg = getattr(ctrl, "config", None)
-        if cfg and str(getattr(cfg, "instance_name", "")) == instance_name:
-            return ctrl
-    return None
-
+# ---------------------------------------------------------------------------
+# Backward-compat wrappers — delegate to split modules with _bridge_state
+# ---------------------------------------------------------------------------
 
 def _consume_signals(strategy: Any) -> None:
-    """Poll SIGNAL_STREAM for new signals and route to controllers.
-
-    Non-blocking (block=0). Only processes ``inventory_rebalance`` signals.
-    Redis unavailability is logged as a warning; the tick continues normally.
-    """
-    global _last_signal_id
-    r = _get_signal_redis()
-    if r is None:
-        return
-    try:
-        result = r.xread({_SIGNAL_STREAM: _last_signal_id}, count=20, block=0)
-    except Exception as exc:
-        logger.warning("Signal xread failed (Redis may be down): %s", exc)
-        return
-    if not result:
-        return
-    import json as _json
-    for _stream_name, entries in result:
-        for entry_id, data in entries:
-            _last_signal_id = entry_id
-            try:
-                raw = data.get("payload")
-                if not isinstance(raw, str):
-                    continue
-                payload = _json.loads(raw)
-                signal_name = payload.get("signal_name", "")
-                if signal_name != "inventory_rebalance":
-                    continue
-                signal_value = payload.get("signal_value")
-                instance_name = payload.get("instance_name", "")
-                if signal_value is None or not instance_name:
-                    continue
-                ctrl = _find_controller_by_instance(strategy, instance_name)
-                if ctrl is None:
-                    continue
-                if hasattr(ctrl, "apply_execution_intent"):
-                    ok, msg = ctrl.apply_execution_intent({
-                        "action": "set_target_base_pct",
-                        "target_base_pct": signal_value,
-                    })
-                    if ok:
-                        logger.info(
-                            "Signal routed: inventory_rebalance -> %s (target_base_pct=%s)",
-                            instance_name, signal_value,
-                        )
-                    else:
-                        logger.warning("Signal rejected by controller %s: %s", instance_name, msg)
-            except Exception as exc:
-                logger.warning("Signal processing error for entry %s: %s", entry_id, exc)
+    """Backward-compat wrapper; delegates to signal_consumer module."""
+    _consume_signals_impl(strategy, _bridge_state)
 
 
 def _check_hard_stop_transitions(strategy: Any) -> None:
-    """Detect first HARD_STOP transition per controller and publish kill_switch intent.
-
-    Only fires once per transition (not on every HARD_STOP tick).
-    Redis unavailability is logged; the tick continues normally.
-    """
-    controllers = getattr(strategy, "controllers", {})
-    if not controllers:
-        return
-    r = _get_signal_redis()
-    if r is None:
-        return
-    import json as _json
-    for ctrl_key, ctrl in controllers.items():
-        try:
-            ops_guard = getattr(ctrl, "_ops_guard", None)
-            if ops_guard is None:
-                continue
-            raw_state = getattr(ops_guard, "state", None)
-            if raw_state is None:
-                continue
-            new_state = raw_state.value if hasattr(raw_state, "value") else str(raw_state)
-            prev_state = _prev_guard_states.get(ctrl_key)
-            _prev_guard_states[ctrl_key] = new_state
-
-            if new_state == "hard_stop" and prev_state != "hard_stop":
-                cfg = getattr(ctrl, "config", None)
-                instance_name = str(getattr(cfg, "instance_name", "") or ctrl_key)
-                controller_id = str(
-                    getattr(ctrl, "id", "")
-                    or getattr(ctrl, "controller_id", "")
-                    or ctrl_key
-                )
-                try:
-                    from services.contracts.event_schemas import ExecutionIntentEvent
-                    intent = ExecutionIntentEvent(
-                        producer="hb_bridge",
-                        instance_name=instance_name,
-                        controller_id=controller_id,
-                        action="kill_switch",
-                        metadata={
-                            "reason": "hard_stop_transition",
-                            "details": "controller entered HARD_STOP",
-                        },
-                    )
-                    payload = intent.model_dump()
-                except Exception:
-                    import uuid as _uuid_mod
-                    payload = {
-                        "event_type": "execution_intent",
-                        "event_id": str(_uuid_mod.uuid4()),
-                        "producer": "hb_bridge",
-                        "instance_name": instance_name,
-                        "controller_id": controller_id,
-                        "action": "kill_switch",
-                        "metadata": {
-                            "reason": "hard_stop_transition",
-                            "details": "controller entered HARD_STOP",
-                        },
-                    }
-                try:
-                    r.xadd(
-                        _EXECUTION_INTENT_STREAM,
-                        {"payload": _json.dumps(payload, default=str)},
-                        maxlen=50_000,
-                        approximate=True,
-                    )
-                    logger.warning(
-                        "HARD_STOP transition detected for %s — kill_switch intent published",
-                        instance_name,
-                    )
-                except Exception as exc:
-                    logger.error("Failed to publish kill_switch intent: %s", exc)
-        except Exception as exc:
-            logger.warning("Guard state check failed for %s: %s", ctrl_key, exc)
+    """Backward-compat wrapper; delegates to signal_consumer module."""
+    _check_hard_stop_impl(strategy, _bridge_state)
 
 
-# ---------------------------------------------------------------------------
-# EventSubscriber protocol (Phase 5: clean decoupled event routing)
-# ---------------------------------------------------------------------------
-
-class EventSubscriber(Protocol):
-    """Adapter-style subscriber that receives desk engine events.
-
-    Implement this protocol to receive events from the bridge without
-    relying on HB monkey-patching. Useful for:
-    - Testing without HB (inject a TestSubscriber)
-    - Custom loggers / analytics subscribers
-    - Future non-HB connectors
-
-    The bridge calls on_fill / on_cancel / on_reject for each event.
-    Implementations should never raise; errors are caught and logged.
-    """
-
-    def on_fill(self, event: OrderFilled, connector_name: str) -> None: ...
-    def on_cancel(self, event: OrderCanceled, connector_name: str) -> None: ...
-    def on_reject(self, event: OrderRejected, connector_name: str) -> None: ...
+def _load_adverse_model(model_path: str) -> Optional[Any]:
+    """Backward-compat wrapper; delegates to adverse_inference module."""
+    return _load_adverse_model_impl(_bridge_state, model_path)
 
 
-# Global subscriber registry — use register_event_subscriber() to add.
-_EVENT_SUBSCRIBERS: List[EventSubscriber] = []
+def _run_adverse_inference(strategy: Any) -> None:
+    """Backward-compat wrapper; delegates to adverse_inference module."""
+    _run_adverse_impl(strategy, _bridge_state)
 
 
-def register_event_subscriber(subscriber: EventSubscriber) -> None:
-    """Register a subscriber to receive desk events via clean protocol."""
-    _EVENT_SUBSCRIBERS.append(subscriber)
+def _fire_hb_events(strategy: Any, connector_name: str, event: Any) -> None:
+    """Backward-compat wrapper; delegates to hb_event_fire module."""
+    _fire_hb_events_impl(strategy, connector_name, event, _bridge_state)
 
 
-def unregister_event_subscriber(subscriber: EventSubscriber) -> None:
-    """Remove a previously registered subscriber."""
-    try:
-        _EVENT_SUBSCRIBERS.remove(subscriber)
-    except ValueError:
-        pass
-
-
-def _dispatch_to_subscribers(event: EngineEvent, connector_name: str) -> None:
-    """Dispatch a desk event to all registered EventSubscribers."""
-    if not _EVENT_SUBSCRIBERS:
-        return
-    for sub in _EVENT_SUBSCRIBERS:
-        try:
-            if isinstance(event, OrderFilled):
-                sub.on_fill(event, connector_name)
-            elif isinstance(event, OrderCanceled):
-                sub.on_cancel(event, connector_name)
-            elif isinstance(event, OrderRejected):
-                sub.on_reject(event, connector_name)
-        except Exception as exc:
-            logger.warning("EventSubscriber %s error: %s", type(sub).__name__, exc)
+def _fire_fill_event(strategy: Any, connector_name: str, fill_event: OrderFilled) -> None:
+    """Backward-compat wrapper; delegates to hb_event_fire module."""
+    _fire_fill_event_impl(strategy, connector_name, fill_event, _bridge_state)
 
 
 def _canonical_name(connector_name: str) -> str:
@@ -304,6 +321,669 @@ def _canonical_name(connector_name: str) -> str:
     result = connector_name[:-12]
     _CANONICAL_CACHE[connector_name] = result
     return result
+
+
+def _instance_env_suffix(instance_name: str) -> str:
+    raw = str(instance_name or "").strip().upper()
+    return "".join(ch if ch.isalnum() else "_" for ch in raw)
+
+
+def _paper_exchange_mode_for_instance(instance_name: str) -> str:
+    import os as _os
+
+    default_mode = str(_os.getenv("PAPER_EXCHANGE_MODE", "disabled")).strip().lower()
+    suffix = _instance_env_suffix(instance_name)
+    override_key = f"PAPER_EXCHANGE_MODE_{suffix}" if suffix else ""
+    override_mode = str(_os.getenv(override_key, "")).strip().lower() if override_key else ""
+    mode = override_mode or default_mode or "disabled"
+    if mode not in {"disabled", "shadow", "active"}:
+        return "disabled"
+    return mode
+
+
+def _resolve_controller_for_command(
+    strategy: Any,
+    connector_name: str,
+    trading_pair: str,
+) -> Tuple[Optional[Any], str, str]:
+    controllers = getattr(strategy, "controllers", {})
+    if isinstance(controllers, dict):
+        for controller_id, ctrl in controllers.items():
+            cfg = getattr(ctrl, "config", None)
+            if cfg is None:
+                continue
+            cfg_connector = str(getattr(cfg, "connector_name", "") or "")
+            cfg_pair = str(getattr(cfg, "trading_pair", "") or "")
+            if cfg_connector == str(connector_name) and (not trading_pair or cfg_pair == str(trading_pair)):
+                instance_name = str(getattr(cfg, "instance_name", "") or controller_id)
+                return ctrl, str(controller_id), instance_name
+    ctrl = _find_controller_for_connector(strategy, connector_name)
+    if ctrl is None:
+        return None, "", ""
+    cfg = getattr(ctrl, "config", None)
+    instance_name = str(getattr(cfg, "instance_name", "") or "")
+    controller_id = str(getattr(ctrl, "id", "") or getattr(ctrl, "controller_id", "") or "")
+    return ctrl, controller_id, instance_name
+
+
+def _paper_exchange_mode_for_route(strategy: Any, connector_name: str, trading_pair: str) -> str:
+    _ctrl, _controller_id, instance_name = _resolve_controller_for_command(strategy, connector_name, trading_pair)
+    return _paper_exchange_mode_for_instance(instance_name)
+
+
+def _bridge_for_exchange_event(
+    strategy: Any, connector_name: str, trading_pair: str
+) -> Tuple[Optional[str], Optional[Dict[str, object]]]:
+    bridges = getattr(strategy, "_paper_desk_v2_bridges", {})
+    if not isinstance(bridges, dict):
+        return None, None
+
+    # Fast path: exact connector key hit.
+    bridge = bridges.get(connector_name)
+    if isinstance(bridge, dict):
+        iid = bridge.get("instrument_id")
+        iid_pair = str(getattr(iid, "trading_pair", "") or "")
+        if not trading_pair or iid_pair == trading_pair:
+            return connector_name, bridge
+
+    # Fallback: canonical connector + pair match.
+    target_canonical = _canonical_name(str(connector_name))
+    for conn_name, candidate in bridges.items():
+        if not isinstance(candidate, dict):
+            continue
+        iid = candidate.get("instrument_id")
+        iid_pair = str(getattr(iid, "trading_pair", "") or "")
+        if trading_pair and iid_pair != trading_pair:
+            continue
+        if _canonical_name(str(conn_name)) == target_canonical:
+            return str(conn_name), candidate
+
+    return None, None
+
+
+def _sync_handshake_key(instance_name: str, connector_name: str, trading_pair: str) -> str:
+    return f"{str(instance_name or '').strip()}|{_canonical_name(str(connector_name or ''))}|{str(trading_pair or '').strip().upper()}"
+
+
+def _runtime_orders_store(strategy: Any) -> Dict[str, Dict[str, Any]]:
+    store = getattr(strategy, "_paper_exchange_runtime_orders", None)
+    if isinstance(store, dict):
+        return store
+    store = {}
+    try:
+        setattr(strategy, "_paper_exchange_runtime_orders", store)
+    except Exception:
+        pass
+    return store
+
+
+def _runtime_orders_bucket(strategy: Any, connector_name: str) -> Dict[str, Any]:
+    store = _runtime_orders_store(strategy)
+    key = str(connector_name or "")
+    bucket = store.get(key)
+    if isinstance(bucket, dict):
+        return bucket
+    bucket = {}
+    store[key] = bucket
+    return bucket
+
+
+def _runtime_order_trade_type(side: Optional[str]) -> str:
+    side_norm = str(side or "").strip().lower()
+    return "BUY" if side_norm == "buy" else "SELL"
+
+
+def _runtime_order_state_flags(state: str) -> Tuple[bool, bool]:
+    normalized = str(state or "").strip().lower()
+    if normalized in {"filled", "canceled", "cancelled", "failed", "rejected", "expired"}:
+        return True, False
+    if normalized in {"open", "pending_create", "pending_cancel", "partial"}:
+        return False, True
+    return False, False
+
+
+def _upsert_runtime_order(
+    strategy: Any,
+    *,
+    connector_name: str,
+    order_id: str,
+    trading_pair: Optional[str] = None,
+    side: Optional[str] = None,
+    order_type: Optional[Any] = None,
+    amount: Optional[Any] = None,
+    price: Optional[Any] = None,
+    state: Optional[str] = None,
+    failure_reason: str = "",
+) -> Optional[Any]:
+    order_key = str(order_id or "").strip()
+    if not order_key:
+        return None
+    now = time.time()
+    bucket = _runtime_orders_bucket(strategy, connector_name)
+    order = bucket.get(order_key)
+    if order is None:
+        order = SimpleNamespace(
+            client_order_id=order_key,
+            order_id=order_key,
+            exchange_order_id=None,
+            trading_pair=str(trading_pair or ""),
+            trade_type=_runtime_order_trade_type(side),
+            order_type=str(getattr(order_type, "name", order_type) or "").upper(),
+            amount=Decimal(str(amount)) if amount is not None else Decimal("0"),
+            price=Decimal(str(price)) if price is not None else Decimal("0"),
+            current_state="pending_create",
+            is_done=False,
+            is_open=True,
+            creation_timestamp=now,
+            last_update_timestamp=now,
+            executed_amount_base=Decimal("0"),
+            executed_amount_quote=Decimal("0"),
+            cumulative_fee_paid=Decimal("0"),
+            failure_reason="",
+            source="paper_exchange_service",
+        )
+        bucket[order_key] = order
+    else:
+        if trading_pair is not None:
+            order.trading_pair = str(trading_pair)
+        if side is not None:
+            order.trade_type = _runtime_order_trade_type(side)
+        if order_type is not None:
+            order.order_type = str(getattr(order_type, "name", order_type) or "").upper()
+        if amount is not None:
+            order.amount = Decimal(str(amount))
+        if price is not None:
+            order.price = Decimal(str(price))
+        order.last_update_timestamp = now
+
+    if state is not None:
+        state_text = str(state).strip().lower()
+        is_done, is_open = _runtime_order_state_flags(state_text)
+        order.current_state = state_text
+        order.is_done = bool(is_done)
+        order.is_open = bool(is_open)
+        order.last_update_timestamp = now
+    if failure_reason:
+        order.failure_reason = str(failure_reason)
+    return order
+
+
+def _prune_runtime_orders(strategy: Any, *, done_ttl_sec: float = 120.0) -> None:
+    store = _runtime_orders_store(strategy)
+    now = time.time()
+    for connector_name in list(store.keys()):
+        bucket = store.get(connector_name)
+        if not isinstance(bucket, dict):
+            continue
+        for order_id in list(bucket.keys()):
+            order = bucket.get(order_id)
+            if order is None:
+                continue
+            is_done = bool(getattr(order, "is_done", False))
+            updated_ts = float(getattr(order, "last_update_timestamp", now))
+            if is_done and (now - updated_ts) > float(done_ttl_sec):
+                bucket.pop(order_id, None)
+        if not bucket:
+            store.pop(connector_name, None)
+
+
+def _get_runtime_order_for_executor(strategy: Any, connector_name: str, order_id: str) -> Optional[Any]:
+    if strategy is None:
+        return None
+    _prune_runtime_orders(strategy)
+    order_key = str(order_id or "").strip()
+    if not order_key:
+        return None
+
+    store = _runtime_orders_store(strategy)
+    direct_bucket = store.get(str(connector_name or ""))
+    if isinstance(direct_bucket, dict):
+        direct = direct_bucket.get(order_key)
+        if direct is not None:
+            return direct
+
+    target_canonical = _canonical_name(str(connector_name or ""))
+    for key, bucket in store.items():
+        if not isinstance(bucket, dict):
+            continue
+        if _canonical_name(str(key)) != target_canonical:
+            continue
+        order = bucket.get(order_key)
+        if order is not None:
+            return order
+    return None
+
+
+def _force_sync_hard_stop(
+    strategy: Any,
+    *,
+    controller: Optional[Any],
+    controller_id: str,
+    instance_name: str,
+    connector_name: str,
+    trading_pair: str,
+    sync_key: str,
+    reason: str,
+) -> None:
+    if sync_key in _bridge_state.sync_timeout_hard_stop_keys:
+        return
+    _bridge_state.sync_timeout_hard_stop_keys.add(sync_key)
+
+    try:
+        ops_guard = getattr(controller, "_ops_guard", None)
+        if ops_guard is not None and hasattr(ops_guard, "force_hard_stop"):
+            ops_guard.force_hard_stop(str(reason))
+            logger.error(
+                "paper_exchange sync hard-stop forced | instance=%s controller=%s connector=%s pair=%s reason=%s",
+                instance_name,
+                controller_id,
+                connector_name,
+                trading_pair,
+                reason,
+            )
+    except Exception as exc:
+        logger.warning("paper_exchange sync hard-stop escalation failed: %s", exc)
+
+    try:
+        import json as _json
+        from services.contracts.event_schemas import AuditEvent
+        from services.contracts.stream_names import AUDIT_STREAM, STREAM_RETENTION_MAXLEN
+
+        r = _get_signal_redis()
+        if r is not None:
+            audit = AuditEvent(
+                producer="hb.paper_engine_v2",
+                instance_name=instance_name or connector_name,
+                severity="error",
+                category="paper_exchange_sync",
+                message="active_mode_sync_hard_stop",
+                metadata={
+                    "reason": str(reason),
+                    "controller_id": str(controller_id),
+                    "connector_name": str(connector_name),
+                    "trading_pair": str(trading_pair),
+                },
+            )
+            r.xadd(
+                AUDIT_STREAM,
+                {"payload": _json.dumps(audit.model_dump(), default=str)},
+                maxlen=STREAM_RETENTION_MAXLEN.get(AUDIT_STREAM, 100_000),
+                approximate=True,
+            )
+    except Exception:
+        logger.debug("paper_exchange sync hard-stop audit publish failed", exc_info=True)
+
+
+def _active_sync_gate(strategy: Any, connector_name: str, trading_pair: str) -> Tuple[bool, str]:
+    import os as _os
+
+    mode = _paper_exchange_mode_for_route(strategy, connector_name, trading_pair)
+    if mode != "active":
+        return True, "not_active_mode"
+
+    controller, controller_id, instance_name = _resolve_controller_for_command(strategy, connector_name, trading_pair)
+    if instance_name and instance_name not in _bridge_state.paper_exchange_mode_warned_instances:
+        logger.info(
+            "paper_exchange active sync gate enabled | instance=%s connector=%s pair=%s",
+            instance_name,
+            connector_name,
+            trading_pair,
+        )
+        _bridge_state.paper_exchange_mode_warned_instances.add(instance_name)
+    sync_key = _sync_handshake_key(instance_name, connector_name, trading_pair)
+    if sync_key in _bridge_state.sync_confirmed_keys:
+        return True, "sync_confirmed"
+
+    _ensure_sync_state_command(strategy, connector_name, trading_pair)
+
+    now_ms = int(time.time() * 1000)
+    requested_at_ms = _bridge_state.sync_requested_at_ms_by_key.get(sync_key, now_ms)
+    timeout_ms = max(1_000, int(float(_os.getenv("PAPER_EXCHANGE_SYNC_TIMEOUT_MS", "30000"))))
+    if now_ms - requested_at_ms >= timeout_ms:
+        _force_sync_hard_stop(
+            strategy,
+            controller=controller,
+            controller_id=controller_id,
+            instance_name=instance_name,
+            connector_name=connector_name,
+            trading_pair=trading_pair,
+            sync_key=sync_key,
+            reason="paper_exchange_sync_timeout",
+        )
+        return False, "paper_exchange_sync_timeout"
+    return False, "paper_exchange_sync_pending"
+
+
+def _publish_paper_exchange_command(
+    strategy: Any,
+    *,
+    connector_name: str,
+    trading_pair: str,
+    command: str,
+    order_id: Optional[str] = None,
+    side: Optional[str] = None,
+    order_type: Optional[Any] = None,
+    amount_base: Optional[Any] = None,
+    price: Optional[Any] = None,
+    metadata: Optional[Dict[str, str]] = None,
+) -> Optional[str]:
+    import json as _json
+    import os as _os
+
+    _ctrl, controller_id, instance_name = _resolve_controller_for_command(strategy, connector_name, trading_pair)
+    mode = _paper_exchange_mode_for_instance(instance_name)
+    if mode not in {"shadow", "active"}:
+        return None
+
+    r = _get_signal_redis()
+    if r is None:
+        return None
+
+    try:
+        from services.contracts.event_schemas import PaperExchangeCommandEvent
+        from services.contracts.stream_names import PAPER_EXCHANGE_COMMAND_STREAM, STREAM_RETENTION_MAXLEN
+
+        order_type_raw = getattr(order_type, "name", order_type)
+        order_type_value = str(order_type_raw).strip().lower() if order_type_raw is not None else None
+        amount_value = float(amount_base) if amount_base is not None else None
+        price_value: Optional[float] = None
+        if price is not None:
+            try:
+                # Decimal("NaN") check
+                if price == price:
+                    price_value = float(price)
+            except Exception:
+                price_value = None
+
+        ttl_ms = max(1_000, int(float(_os.getenv("PAPER_EXCHANGE_COMMAND_TTL_MS", "30000"))))
+        command_meta = {
+            "source": "hb_bridge_active_adapter" if mode == "active" else "hb_bridge_shadow_adapter",
+            "paper_exchange_mode": mode,
+            "controller_id": controller_id,
+        }
+        if metadata:
+            for key, value in metadata.items():
+                command_meta[str(key)] = str(value)
+
+        event = PaperExchangeCommandEvent(
+            producer="hb.paper_engine_v2",
+            instance_name=instance_name or str(connector_name),
+            command=command,  # type: ignore[arg-type]
+            connector_name=str(connector_name),
+            trading_pair=str(trading_pair),
+            order_id=str(order_id) if order_id else None,
+            side=side.lower() if isinstance(side, str) else None,  # type: ignore[arg-type]
+            order_type=order_type_value,
+            amount_base=amount_value,
+            price=price_value,
+            expires_at_ms=int(time.time() * 1000) + ttl_ms,
+            metadata=command_meta,
+        )
+        return r.xadd(
+            PAPER_EXCHANGE_COMMAND_STREAM,
+            {"payload": _json.dumps(event.model_dump(), default=str)},
+            maxlen=STREAM_RETENTION_MAXLEN.get(PAPER_EXCHANGE_COMMAND_STREAM, 100_000),
+            approximate=True,
+        )
+    except Exception as exc:
+        logger.debug("paper_exchange command publish failed: %s", exc, exc_info=True)
+        return None
+
+
+def _ensure_sync_state_command(strategy: Any, connector_name: str, trading_pair: str) -> None:
+    _ctrl, _controller_id, instance_name = _resolve_controller_for_command(strategy, connector_name, trading_pair)
+    mode = _paper_exchange_mode_for_instance(instance_name)
+    if mode not in {"shadow", "active"}:
+        return
+    sync_key = _sync_handshake_key(instance_name, connector_name, trading_pair)
+    if sync_key in _bridge_state.sync_confirmed_keys:
+        return
+    if sync_key in _bridge_state.sync_state_published_keys:
+        _bridge_state.sync_requested_at_ms_by_key.setdefault(sync_key, int(time.time() * 1000))
+        return
+    entry_id = _publish_paper_exchange_command(
+        strategy,
+        connector_name=connector_name,
+        trading_pair=trading_pair,
+        command="sync_state",
+        metadata={"sync_reason": "bridge_startup"},
+    )
+    if entry_id:
+        _bridge_state.sync_state_published_keys.add(sync_key)
+        _bridge_state.sync_requested_at_ms_by_key[sync_key] = int(time.time() * 1000)
+
+
+def _consume_paper_exchange_events(strategy: Any) -> None:
+    """Consume paper_exchange_event stream and map outcomes to HB callbacks.
+
+    Only `PAPER_EXCHANGE_MODE=active` instances are mapped back into HB events.
+    Shadow mode still uses in-process desk callbacks as source of truth.
+    """
+    r = _get_signal_redis()
+    if r is None:
+        return
+    try:
+        import json as _json
+        from services.contracts.event_schemas import PaperExchangeEvent
+        from controllers.paper_engine_v2.types import OrderCanceled as _OrderCanceled
+        from controllers.paper_engine_v2.types import OrderFilled as _OrderFilled
+        from controllers.paper_engine_v2.types import OrderRejected as _OrderRejected
+        from services.contracts.stream_names import PAPER_EXCHANGE_EVENT_STREAM
+
+        result = r.xread({PAPER_EXCHANGE_EVENT_STREAM: _bridge_state.last_paper_exchange_event_id}, count=200, block=0)
+        if not result:
+            return
+
+        for _stream_name, entries in result:
+            for entry_id, data in entries:
+                _bridge_state.last_paper_exchange_event_id = str(entry_id)
+                raw = data.get("payload")
+                if not isinstance(raw, str):
+                    continue
+                try:
+                    payload = _json.loads(raw)
+                    event = PaperExchangeEvent(**payload)
+                except Exception:
+                    continue
+
+                if event.event_id in _bridge_state.paper_exchange_seen_event_ids:
+                    continue
+                _bridge_state.paper_exchange_seen_event_ids.add(event.event_id)
+                if len(_bridge_state.paper_exchange_seen_event_ids) > 20_000:
+                    # Keep memory bounded; stream-id cursor still prevents replay in normal flow.
+                    _bridge_state.paper_exchange_seen_event_ids.clear()
+
+                mode = _paper_exchange_mode_for_instance(str(event.instance_name))
+                command = str(event.command or "").strip().lower()
+                status = str(event.status).strip().lower()
+                reason = str(event.reason or "")
+                sync_key = _sync_handshake_key(
+                    str(event.instance_name), str(event.connector_name), str(event.trading_pair)
+                )
+                if command == "sync_state":
+                    if status == "processed":
+                        _bridge_state.sync_confirmed_keys.add(sync_key)
+                        _bridge_state.sync_timeout_hard_stop_keys.discard(sync_key)
+                        continue
+                    if status == "rejected" and mode == "active":
+                        controller, controller_id, instance_name = _resolve_controller_for_command(
+                            strategy, str(event.connector_name), str(event.trading_pair)
+                        )
+                        _force_sync_hard_stop(
+                            strategy,
+                            controller=controller,
+                            controller_id=controller_id,
+                            instance_name=instance_name,
+                            connector_name=str(event.connector_name),
+                            trading_pair=str(event.trading_pair),
+                            sync_key=sync_key,
+                            reason=f"paper_exchange_sync_failed:{reason or 'rejected'}",
+                        )
+                    continue
+
+                if mode != "active":
+                    continue
+
+                resolved_connector_name, bridge = _bridge_for_exchange_event(
+                    strategy, str(event.connector_name), str(event.trading_pair)
+                )
+                if bridge is None or not resolved_connector_name:
+                    continue
+                instrument_id = bridge.get("instrument_id")
+                if instrument_id is None:
+                    continue
+
+                timestamp_ns = int(time.time() * 1e9)
+
+                if status == "rejected":
+                    if not event.order_id:
+                        continue
+                    _upsert_runtime_order(
+                        strategy,
+                        connector_name=resolved_connector_name,
+                        order_id=str(event.order_id),
+                        trading_pair=str(event.trading_pair),
+                        state="failed",
+                        failure_reason=f"paper_exchange:{reason or 'rejected'}",
+                    )
+                    reject_event = _OrderRejected(
+                        event_id=f"pe-reject-{event.event_id}",
+                        timestamp_ns=timestamp_ns,
+                        instrument_id=instrument_id,
+                        order_id=str(event.order_id),
+                        reason=f"paper_exchange:{reason or 'rejected'}",
+                        source_bot=resolved_connector_name,
+                    )
+                    _fire_hb_events(strategy, resolved_connector_name, reject_event)
+                    continue
+
+                if status != "processed":
+                    continue
+
+                if command == "cancel_order" and event.order_id:
+                    _upsert_runtime_order(
+                        strategy,
+                        connector_name=resolved_connector_name,
+                        order_id=str(event.order_id),
+                        trading_pair=str(event.trading_pair),
+                        state="canceled",
+                    )
+                    cancel_event = _OrderCanceled(
+                        event_id=f"pe-cancel-{event.event_id}",
+                        timestamp_ns=timestamp_ns,
+                        instrument_id=instrument_id,
+                        order_id=str(event.order_id),
+                        source_bot=resolved_connector_name,
+                    )
+                    _fire_hb_events(strategy, resolved_connector_name, cancel_event)
+                    continue
+
+                if command == "submit_order" and event.order_id:
+                    metadata = event.metadata if isinstance(event.metadata, dict) else {}
+                    order_state = str(metadata.get("order_state", "working")).strip().lower()
+                    runtime_state = "open"
+                    if order_state in {"filled", "expired", "rejected", "cancelled", "canceled"}:
+                        runtime_state = "filled" if order_state == "filled" else order_state
+                    elif order_state in {"partially_filled", "partial"}:
+                        runtime_state = "partial"
+                    _upsert_runtime_order(
+                        strategy,
+                        connector_name=resolved_connector_name,
+                        order_id=str(event.order_id),
+                        trading_pair=str(event.trading_pair),
+                        side=str(metadata.get("side", "")).lower() if metadata else None,
+                        order_type=str(metadata.get("order_type", "")).lower() if metadata else None,
+                        amount=metadata.get("amount_base"),
+                        price=metadata.get("price"),
+                        state=runtime_state,
+                    )
+                    if order_state == "expired":
+                        reject_event = _OrderRejected(
+                            event_id=f"pe-expired-{event.event_id}",
+                            timestamp_ns=timestamp_ns,
+                            instrument_id=instrument_id,
+                            order_id=str(event.order_id),
+                            reason=f"paper_exchange:{reason or 'expired'}",
+                            source_bot=resolved_connector_name,
+                        )
+                        _fire_hb_events(strategy, resolved_connector_name, reject_event)
+                        continue
+                    if order_state in {"partially_filled", "filled"}:
+                        try:
+                            fill_price = Decimal(str(metadata.get("fill_price", metadata.get("price", "0"))))
+                            fill_qty = Decimal(str(metadata.get("fill_amount_base", metadata.get("amount_base", "0"))))
+                            fill_fee = Decimal(str(metadata.get("fill_fee_quote", "0")))
+                            total_qty = Decimal(str(metadata.get("amount_base", "0")))
+                        except Exception:
+                            fill_price = Decimal("0")
+                            fill_qty = Decimal("0")
+                            fill_fee = Decimal("0")
+                            total_qty = Decimal("0")
+                        if fill_price > _ZERO and fill_qty > _ZERO:
+                            remaining = Decimal("0")
+                            if order_state == "partially_filled" and total_qty > _ZERO:
+                                remaining = max(_ZERO, total_qty - fill_qty)
+                            is_maker_text = str(metadata.get("is_maker", "0")).strip().lower()
+                            is_maker = is_maker_text in {"1", "true", "yes", "y", "on"}
+                            fill_event = _OrderFilled(
+                                event_id=f"pe-fill-{event.event_id}",
+                                timestamp_ns=timestamp_ns,
+                                instrument_id=instrument_id,
+                                order_id=str(event.order_id),
+                                fill_price=fill_price,
+                                fill_quantity=fill_qty,
+                                fee=fill_fee,
+                                is_maker=is_maker,
+                                remaining_quantity=remaining,
+                                source_bot=resolved_connector_name,
+                            )
+                            _fire_hb_events(strategy, resolved_connector_name, fill_event)
+                    continue
+
+                if command in {"order_fill", "fill", "fill_order"} and event.order_id:
+                    metadata = event.metadata if isinstance(event.metadata, dict) else {}
+                    order_state = str(metadata.get("order_state", "partially_filled")).strip().lower()
+                    runtime_state = "partial" if order_state in {"partial", "partially_filled"} else "filled"
+                    _upsert_runtime_order(
+                        strategy,
+                        connector_name=resolved_connector_name,
+                        order_id=str(event.order_id),
+                        trading_pair=str(event.trading_pair),
+                        side=str(metadata.get("side", "")).lower() if metadata else None,
+                        order_type=str(metadata.get("order_type", "")).lower() if metadata else None,
+                        amount=metadata.get("amount_base"),
+                        price=metadata.get("price"),
+                        state=runtime_state,
+                    )
+                    try:
+                        fill_price = Decimal(str(metadata.get("fill_price", metadata.get("price", "0"))))
+                        fill_qty = Decimal(str(metadata.get("fill_amount_base", "0")))
+                        fill_fee = Decimal(str(metadata.get("fill_fee_quote", "0")))
+                        remaining = Decimal(str(metadata.get("remaining_amount_base", "0")))
+                    except Exception:
+                        fill_price = Decimal("0")
+                        fill_qty = Decimal("0")
+                        fill_fee = Decimal("0")
+                        remaining = Decimal("0")
+                    if fill_price <= _ZERO or fill_qty <= _ZERO:
+                        continue
+                    is_maker_text = str(metadata.get("is_maker", "0")).strip().lower()
+                    is_maker = is_maker_text in {"1", "true", "yes", "y", "on"}
+                    fill_event = _OrderFilled(
+                        event_id=f"pe-fill-lifecycle-{event.event_id}",
+                        timestamp_ns=timestamp_ns,
+                        instrument_id=instrument_id,
+                        order_id=str(event.order_id),
+                        fill_price=fill_price,
+                        fill_quantity=fill_qty,
+                        fee=fill_fee,
+                        is_maker=is_maker,
+                        remaining_quantity=max(_ZERO, remaining),
+                        source_bot=resolved_connector_name,
+                    )
+                    _fire_hb_events(strategy, resolved_connector_name, fill_event)
+    except Exception as exc:
+        logger.warning("paper_exchange event consume failed (non-critical): %s", exc)
 
 
 # ---------------------------------------------------------------------------
@@ -430,7 +1110,6 @@ def _patch_executor_base() -> None:
                 rule = _extract_rule(getattr(connector, attr, None), trading_pair)
                 if rule is not None:
                     return rule
-            # Fallback stub — never crash the executor loop
             return SimpleNamespace(
                 trading_pair=trading_pair,
                 min_order_size=Decimal("0"), min_base_amount=Decimal("0"),
@@ -451,6 +1130,9 @@ def _patch_executor_base() -> None:
 
         def _safe_inflight(self, connector_name: str, order_id: str):
             connector = self.connectors.get(connector_name)
+            runtime_order = _get_runtime_order_for_executor(getattr(self, "strategy", None), connector_name, order_id)
+            if runtime_order is not None:
+                return runtime_order
             if connector is None:
                 return _orig_inflight(self, connector_name, order_id)
             tracker = getattr(connector, "_order_tracker", None)
@@ -499,7 +1181,6 @@ def install_paper_desk_bridge(
             except Exception:
                 pass
 
-        # 1. Register instrument with desk
         if instrument_id.key not in desk._engines:
             spec = instrument_spec
             if spec is None:
@@ -522,18 +1203,14 @@ def install_paper_desk_bridge(
         if equity <= _ZERO:
             equity = Decimal("500")
 
-        # 2. Install PaperBudgetChecker
         if connector is not None:
             _install_budget_checker(connector, equity)
 
-        # 3. Patch strategy order delegation (buy/sell/cancel)
         _install_order_delegation(strategy, desk, connector_name, instrument_id)
 
-        # 4. Patch connector balance reads to report paper portfolio
         if connector is not None:
             _patch_connector_balances(connector, desk, instrument_id)
 
-        # 5. Add paper_stats to connector
         if connector is not None:
             _install_paper_stats(connector, desk, instrument_id)
 
@@ -580,11 +1257,161 @@ def _install_order_delegation(
         if bridge is not None:
             _desk: PaperDesk = bridge["desk"]
             _iid: InstrumentId = bridge["instrument_id"]
-            _price = price if price == price else Decimal("0")  # NaN check
+            mode = _paper_exchange_mode_for_route(self, conn_name, trading_pair)
+            order_type_text = _order_type_text(order_type)
+            force_trace = "MARKET" in order_type_text or str(position_action or "").strip() != ""
+            _trace_paper_order(
+                "stage=bridge_buy_enter connector=%s pair=%s mode=%s amount=%s price=%s order_type=%s position_action=%s",
+                conn_name,
+                trading_pair,
+                mode,
+                str(amount),
+                str(price),
+                order_type_text,
+                str(position_action or ""),
+                force=force_trace,
+            )
+            if force_trace:
+                logger.warning(
+                    "PAPER_ROUTE_PROBE stage=bridge_buy_enter connector=%s pair=%s mode=%s amount=%s order_type=%s",
+                    conn_name,
+                    trading_pair,
+                    mode,
+                    str(amount),
+                    order_type_text,
+                )
+            if mode == "active":
+                sync_ready, sync_reason = _active_sync_gate(self, conn_name, trading_pair)
+                import uuid as _uuid_mod
+
+                generated_order_id = f"pe-{_uuid_mod.uuid4().hex[:16]}"
+                _upsert_runtime_order(
+                    self,
+                    connector_name=conn_name,
+                    order_id=generated_order_id,
+                    trading_pair=trading_pair,
+                    side="buy",
+                    order_type=order_type,
+                    amount=amount,
+                    price=price,
+                    state="pending_create",
+                )
+                if not sync_ready:
+                    _upsert_runtime_order(
+                        self,
+                        connector_name=conn_name,
+                        order_id=generated_order_id,
+                        state="failed",
+                        failure_reason=sync_reason,
+                    )
+                    reject_event = OrderRejected(
+                        event_id=f"pe-sync-reject-{generated_order_id}",
+                        timestamp_ns=int(time.time() * 1e9),
+                        instrument_id=_iid,
+                        order_id=generated_order_id,
+                        reason=sync_reason,
+                        source_bot=conn_name,
+                    )
+                    _fire_hb_events(self, conn_name, reject_event)
+                    _trace_paper_order(
+                        "stage=bridge_buy_sync_reject connector=%s pair=%s order_id=%s reason=%s",
+                        conn_name,
+                        trading_pair,
+                        generated_order_id,
+                        sync_reason,
+                        force=True,
+                    )
+                    return generated_order_id
+
+                publish_entry_id = _publish_paper_exchange_command(
+                    self,
+                    connector_name=conn_name,
+                    trading_pair=trading_pair,
+                    command="submit_order",
+                    order_id=generated_order_id,
+                    side="buy",
+                    order_type=order_type,
+                    amount_base=amount,
+                    price=price,
+                    metadata={"bridge_method": "buy", "compat_adapter": "active"},
+                )
+                if publish_entry_id is None:
+                    _upsert_runtime_order(
+                        self,
+                        connector_name=conn_name,
+                        order_id=generated_order_id,
+                        state="failed",
+                        failure_reason="paper_exchange_command_publish_failed",
+                    )
+                    reject_event = OrderRejected(
+                        event_id=f"pe-local-reject-{generated_order_id}",
+                        timestamp_ns=int(time.time() * 1e9),
+                        instrument_id=_iid,
+                        order_id=generated_order_id,
+                        reason="paper_exchange_command_publish_failed",
+                        source_bot=conn_name,
+                    )
+                    _fire_hb_events(self, conn_name, reject_event)
+                    _trace_paper_order(
+                        "stage=bridge_buy_publish_failed connector=%s pair=%s order_id=%s",
+                        conn_name,
+                        trading_pair,
+                        generated_order_id,
+                        force=True,
+                    )
+                else:
+                    _trace_paper_order(
+                        "stage=bridge_buy_published connector=%s pair=%s order_id=%s stream_entry_id=%s",
+                        conn_name,
+                        trading_pair,
+                        generated_order_id,
+                        str(publish_entry_id),
+                        force=force_trace,
+                    )
+                return generated_order_id
+
+            _price = price if price == price else _resolve_shadow_submit_price(
+                self,
+                _desk,
+                _iid,
+                conn_name,
+                trading_pair,
+                OrderSide.BUY,
+            )
             event = _desk.submit_order(
                 _iid, OrderSide.BUY, _hb_order_type_to_v2(order_type),
                 Decimal(str(_price)), Decimal(str(amount)),
                 source_bot=conn_name,
+            )
+            if force_trace:
+                logger.warning(
+                    "PAPER_ROUTE_PROBE stage=bridge_buy_submit connector=%s pair=%s order_id=%s event=%s reason=%s",
+                    conn_name,
+                    trading_pair,
+                    str(getattr(event, "order_id", "") or ""),
+                    type(event).__name__,
+                    str(getattr(event, "reason", "") or ""),
+                )
+            _publish_paper_exchange_command(
+                self,
+                connector_name=conn_name,
+                trading_pair=trading_pair,
+                command="submit_order",
+                order_id=str(getattr(event, "order_id", "") or "") or None,
+                side="buy",
+                order_type=order_type,
+                amount_base=amount,
+                price=_price,
+                metadata={"bridge_method": "buy", "compat_adapter": "shadow"},
+            )
+            _trace_paper_order(
+                "stage=bridge_buy_desk_submit connector=%s pair=%s order_id=%s event=%s reason=%s",
+                conn_name,
+                trading_pair,
+                str(getattr(event, "order_id", "") or ""),
+                type(event).__name__,
+                str(getattr(event, "reason", "") or ""),
+                force=force_trace or type(event).__name__ != "OrderAccepted",
             )
             _fire_hb_events(self, conn_name, event)
             return getattr(event, "order_id", None)
@@ -595,11 +1422,161 @@ def _install_order_delegation(
         if bridge is not None:
             _desk: PaperDesk = bridge["desk"]
             _iid: InstrumentId = bridge["instrument_id"]
-            _price = price if price == price else Decimal("0")
+            mode = _paper_exchange_mode_for_route(self, conn_name, trading_pair)
+            order_type_text = _order_type_text(order_type)
+            force_trace = "MARKET" in order_type_text or str(position_action or "").strip() != ""
+            _trace_paper_order(
+                "stage=bridge_sell_enter connector=%s pair=%s mode=%s amount=%s price=%s order_type=%s position_action=%s",
+                conn_name,
+                trading_pair,
+                mode,
+                str(amount),
+                str(price),
+                order_type_text,
+                str(position_action or ""),
+                force=force_trace,
+            )
+            if force_trace:
+                logger.warning(
+                    "PAPER_ROUTE_PROBE stage=bridge_sell_enter connector=%s pair=%s mode=%s amount=%s order_type=%s",
+                    conn_name,
+                    trading_pair,
+                    mode,
+                    str(amount),
+                    order_type_text,
+                )
+            if mode == "active":
+                sync_ready, sync_reason = _active_sync_gate(self, conn_name, trading_pair)
+                import uuid as _uuid_mod
+
+                generated_order_id = f"pe-{_uuid_mod.uuid4().hex[:16]}"
+                _upsert_runtime_order(
+                    self,
+                    connector_name=conn_name,
+                    order_id=generated_order_id,
+                    trading_pair=trading_pair,
+                    side="sell",
+                    order_type=order_type,
+                    amount=amount,
+                    price=price,
+                    state="pending_create",
+                )
+                if not sync_ready:
+                    _upsert_runtime_order(
+                        self,
+                        connector_name=conn_name,
+                        order_id=generated_order_id,
+                        state="failed",
+                        failure_reason=sync_reason,
+                    )
+                    reject_event = OrderRejected(
+                        event_id=f"pe-sync-reject-{generated_order_id}",
+                        timestamp_ns=int(time.time() * 1e9),
+                        instrument_id=_iid,
+                        order_id=generated_order_id,
+                        reason=sync_reason,
+                        source_bot=conn_name,
+                    )
+                    _fire_hb_events(self, conn_name, reject_event)
+                    _trace_paper_order(
+                        "stage=bridge_sell_sync_reject connector=%s pair=%s order_id=%s reason=%s",
+                        conn_name,
+                        trading_pair,
+                        generated_order_id,
+                        sync_reason,
+                        force=True,
+                    )
+                    return generated_order_id
+
+                publish_entry_id = _publish_paper_exchange_command(
+                    self,
+                    connector_name=conn_name,
+                    trading_pair=trading_pair,
+                    command="submit_order",
+                    order_id=generated_order_id,
+                    side="sell",
+                    order_type=order_type,
+                    amount_base=amount,
+                    price=price,
+                    metadata={"bridge_method": "sell", "compat_adapter": "active"},
+                )
+                if publish_entry_id is None:
+                    _upsert_runtime_order(
+                        self,
+                        connector_name=conn_name,
+                        order_id=generated_order_id,
+                        state="failed",
+                        failure_reason="paper_exchange_command_publish_failed",
+                    )
+                    reject_event = OrderRejected(
+                        event_id=f"pe-local-reject-{generated_order_id}",
+                        timestamp_ns=int(time.time() * 1e9),
+                        instrument_id=_iid,
+                        order_id=generated_order_id,
+                        reason="paper_exchange_command_publish_failed",
+                        source_bot=conn_name,
+                    )
+                    _fire_hb_events(self, conn_name, reject_event)
+                    _trace_paper_order(
+                        "stage=bridge_sell_publish_failed connector=%s pair=%s order_id=%s",
+                        conn_name,
+                        trading_pair,
+                        generated_order_id,
+                        force=True,
+                    )
+                else:
+                    _trace_paper_order(
+                        "stage=bridge_sell_published connector=%s pair=%s order_id=%s stream_entry_id=%s",
+                        conn_name,
+                        trading_pair,
+                        generated_order_id,
+                        str(publish_entry_id),
+                        force=force_trace,
+                    )
+                return generated_order_id
+
+            _price = price if price == price else _resolve_shadow_submit_price(
+                self,
+                _desk,
+                _iid,
+                conn_name,
+                trading_pair,
+                OrderSide.SELL,
+            )
             event = _desk.submit_order(
                 _iid, OrderSide.SELL, _hb_order_type_to_v2(order_type),
                 Decimal(str(_price)), Decimal(str(amount)),
                 source_bot=conn_name,
+            )
+            if force_trace:
+                logger.warning(
+                    "PAPER_ROUTE_PROBE stage=bridge_sell_submit connector=%s pair=%s order_id=%s event=%s reason=%s",
+                    conn_name,
+                    trading_pair,
+                    str(getattr(event, "order_id", "") or ""),
+                    type(event).__name__,
+                    str(getattr(event, "reason", "") or ""),
+                )
+            _publish_paper_exchange_command(
+                self,
+                connector_name=conn_name,
+                trading_pair=trading_pair,
+                command="submit_order",
+                order_id=str(getattr(event, "order_id", "") or "") or None,
+                side="sell",
+                order_type=order_type,
+                amount_base=amount,
+                price=_price,
+                metadata={"bridge_method": "sell", "compat_adapter": "shadow"},
+            )
+            _trace_paper_order(
+                "stage=bridge_sell_desk_submit connector=%s pair=%s order_id=%s event=%s reason=%s",
+                conn_name,
+                trading_pair,
+                str(getattr(event, "order_id", "") or ""),
+                type(event).__name__,
+                str(getattr(event, "reason", "") or ""),
+                force=force_trace or type(event).__name__ != "OrderAccepted",
             )
             _fire_hb_events(self, conn_name, event)
             return getattr(event, "order_id", None)
@@ -610,7 +1587,72 @@ def _install_order_delegation(
         if bridge is not None:
             _desk: PaperDesk = bridge["desk"]
             _iid: InstrumentId = bridge["instrument_id"]
+            mode = _paper_exchange_mode_for_route(self, conn_name, trading_pair)
+            if mode == "active":
+                sync_ready, sync_reason = _active_sync_gate(self, conn_name, trading_pair)
+                if not sync_ready:
+                    if order_id:
+                        _upsert_runtime_order(
+                            self,
+                            connector_name=conn_name,
+                            order_id=str(order_id),
+                            state="failed",
+                            failure_reason=sync_reason,
+                        )
+                        reject_event = OrderRejected(
+                            event_id=f"pe-sync-reject-cancel-{order_id}",
+                            timestamp_ns=int(time.time() * 1e9),
+                            instrument_id=_iid,
+                            order_id=str(order_id),
+                            reason=sync_reason,
+                            source_bot=conn_name,
+                        )
+                        _fire_hb_events(self, conn_name, reject_event)
+                    return
+
+                publish_entry_id = _publish_paper_exchange_command(
+                    self,
+                    connector_name=conn_name,
+                    trading_pair=trading_pair,
+                    command="cancel_order",
+                    order_id=str(order_id) if order_id else None,
+                    metadata={"bridge_method": "cancel", "compat_adapter": "active"},
+                )
+                if publish_entry_id is None and order_id:
+                    _upsert_runtime_order(
+                        self,
+                        connector_name=conn_name,
+                        order_id=str(order_id),
+                        state="failed",
+                        failure_reason="paper_exchange_command_publish_failed",
+                    )
+                    reject_event = OrderRejected(
+                        event_id=f"pe-local-reject-cancel-{order_id}",
+                        timestamp_ns=int(time.time() * 1e9),
+                        instrument_id=_iid,
+                        order_id=str(order_id),
+                        reason="paper_exchange_command_publish_failed",
+                        source_bot=conn_name,
+                    )
+                    _fire_hb_events(self, conn_name, reject_event)
+                elif order_id:
+                    _upsert_runtime_order(
+                        self,
+                        connector_name=conn_name,
+                        order_id=str(order_id),
+                        state="pending_cancel",
+                    )
+                return
+
             event = _desk.cancel_order(_iid, order_id)
+            _publish_paper_exchange_command(
+                self,
+                connector_name=conn_name,
+                trading_pair=trading_pair,
+                command="cancel_order",
+                order_id=str(order_id) if order_id else None,
+                metadata={"bridge_method": "cancel", "compat_adapter": "shadow"},
+            )
             if event:
                 _fire_hb_events(self, conn_name, event)
             return
@@ -631,14 +1673,11 @@ def _patch_connector_balances(connector: Any, desk: PaperDesk, iid: InstrumentId
     if getattr(connector, "_epp_v2_balance_patched", False):
         return
     try:
-        # Expose the active desk on the connector so controllers/exporters can
-        # read canonical paper accounting (position, avg entry, daily open equity).
         if not hasattr(connector, "_paper_desk_v2"):
             connector._paper_desk_v2 = desk
         if not hasattr(connector, "_paper_desk_v2_instrument_id"):
             connector._paper_desk_v2_instrument_id = iid
 
-        # Keep original methods for safety/fallback.
         if not hasattr(connector, "_epp_v2_orig_get_balance") and hasattr(connector, "get_balance"):
             connector._epp_v2_orig_get_balance = connector.get_balance
         if not hasattr(connector, "_epp_v2_orig_get_available_balance") and hasattr(connector, "get_available_balance"):
@@ -671,13 +1710,10 @@ def _patch_connector_balances(connector: Any, desk: PaperDesk, iid: InstrumentId
                 return orig(asset) if callable(orig) else Decimal("0")
 
         def _patched_ready(self) -> bool:
-            # In paper mode we route orders through PaperDesk, so connector readiness
-            # shouldn't block startup checks / ops guard.
             return True
 
         def _paper_position_obj():
             pos = desk.portfolio.get_position(iid)
-            # Hummingbot connectors typically return a position-like object with `amount`.
             return SimpleNamespace(
                 trading_pair=iid.trading_pair,
                 amount=pos.quantity,
@@ -696,14 +1732,11 @@ def _patch_connector_balances(connector: Any, desk: PaperDesk, iid: InstrumentId
 
         def _patched_account_positions(self, *args, **kwargs):
             try:
-                # Some connectors expose account_positions as a dict-like structure.
                 return {iid.trading_pair: {"amount": desk.portfolio.get_position(iid).quantity}}
             except Exception:
                 orig = getattr(self, "_epp_v2_orig_account_positions", None)
                 return orig(*args, **kwargs) if callable(orig) else {}
 
-        # Monkeypatch connector methods so the rest of the codebase (runtime adapter,
-        # minute logger, reconciliation services) sees PaperDesk equity/position.
         if hasattr(connector, "get_balance"):
             connector.get_balance = MethodType(_patched_get_balance, connector)
         if hasattr(connector, "get_available_balance"):
@@ -748,250 +1781,6 @@ def _hb_order_type_to_v2(hb_order_type: Any) -> PaperOrderType:
     return PaperOrderType.LIMIT
 
 
-def _fire_hb_events(strategy: Any, connector_name: str, event: Any) -> None:
-    """Convert v2 event to HB event and fire on the correct controller.
-
-    The controller's did_fill_order() writes to fills.csv and updates
-    minute.csv — this is what Grafana reads. Without this, fills are
-    invisible to the dashboard regardless of paper/live mode.
-
-    Phase 5: Dispatches to registered EventSubscribers FIRST (clean path),
-    then falls through to the legacy HB monkey-patch path.
-    """
-    if event is None:
-        return
-
-    # Clean subscriber dispatch (non-raising)
-    _dispatch_to_subscribers(event, connector_name)
-
-    # Legacy HB monkey-patch path (preserved for full backward compat)
-    try:
-        if isinstance(event, OrderFilled):
-            _fire_fill_event(strategy, connector_name, event)
-        elif isinstance(event, OrderCanceled):
-            _fire_cancel_event(strategy, connector_name, event)
-        elif isinstance(event, OrderRejected):
-            _fire_reject_event(strategy, connector_name, event)
-    except Exception as exc:
-        logger.warning("HB event fire failed: %s", exc, exc_info=True)
-
-
-def _find_controller_for_connector(strategy: Any, connector_name: str) -> Any:
-    """Find the controller that owns this connector_name."""
-    controllers = getattr(strategy, "controllers", {})
-    for _, ctrl in controllers.items():
-        cfg = getattr(ctrl, "config", None)
-        if cfg and str(getattr(cfg, "connector_name", "")) == connector_name:
-            return ctrl
-    return None
-
-
-def _fire_fill_event(strategy: Any, connector_name: str, fill_event: OrderFilled) -> None:
-    """Fire fill event directly to the controller's did_fill_order().
-
-    This is the critical path: controller.did_fill_order() writes to
-    fills.csv, updates daily counters, and feeds Grafana.
-    """
-    try:
-        from hummingbot.core.event.events import OrderFilledEvent as HBOrderFilledEvent  # type: ignore
-        from hummingbot.core.data_type.common import TradeType  # type: ignore
-
-        # Determine side from the order_id or source_bot
-        # The desk stores the side in the PositionChanged event, but OrderFilled
-        # doesn't carry it. We look it up from the desk's internal order tracker.
-        trade_type = TradeType.BUY  # default
-        bridges = getattr(strategy, "_paper_desk_v2_bridges", {})
-        bridge = bridges.get(connector_name)
-        if bridge:
-            _desk: PaperDesk = bridge["desk"]
-            for key, engine in _desk._engines.items():
-                # get_order_side works even after order is filled and removed
-                side_str = engine.get_order_side(fill_event.order_id)
-                if side_str:
-                    trade_type = TradeType.BUY if side_str == "buy" else TradeType.SELL
-                    break
-
-        now = time.time()
-
-        # Build fee object
-        try:
-            from hummingbot.core.event.events import TradeFee, TokenAmount
-            fee = TradeFee(
-                percent=Decimal("0"),
-                flat_fees=[TokenAmount(fill_event.instrument_id.quote_asset, fill_event.fee)],
-            )
-        except Exception:
-            fee = SimpleNamespace(
-                percent=Decimal("0"),
-                flat_fees=[],
-                fee_amount_in_token=lambda *a, **k: fill_event.fee,
-                is_maker=fill_event.is_maker,
-            )
-
-        hb_fill = HBOrderFilledEvent(
-            timestamp=now,
-            order_id=fill_event.order_id,
-            trading_pair=fill_event.instrument_id.trading_pair,
-            trade_type=trade_type,
-            order_type=None,
-            price=fill_event.fill_price,
-            amount=fill_event.fill_quantity,
-            trade_fee=fee,
-        )
-
-        # Fire to the controller directly (writes fills.csv, updates counters)
-        controller = _find_controller_for_connector(strategy, connector_name)
-        if controller and hasattr(controller, "did_fill_order"):
-            try:
-                controller.did_fill_order(hb_fill)
-            except Exception as exc:
-                logger.warning("Controller did_fill_order failed: %s", exc, exc_info=True)
-
-        # Publish fill to hb.bot_telemetry.v1 via Redis so the event_store
-        # service ingests paper fills the same way it ingests live fills.
-        # Falls back to direct JSONL write when Redis is unavailable.
-        #
-        # NOTE: We use `redis` directly here rather than importing from
-        # services.* because `controllers/types.py` shadows stdlib `types`,
-        # which breaks any services import chain that passes through enum/json.
-        try:
-            instance_name = str(getattr(getattr(controller, "config", None), "instance_name", "") or "")
-            controller_id = str(getattr(controller, "id", "") or getattr(controller, "controller_id", "") or "")
-            is_maker_val = bool(getattr(fill_event, "is_maker", False))
-            side_str = "buy" if trade_type == TradeType.BUY else "sell"
-
-            from datetime import datetime, timezone as _tz
-            from pathlib import Path
-            import json as _json
-            import os as _os
-            import uuid as _uuid_mod
-
-            _redis_published = False
-            try:
-                import redis as _redis_lib  # available in hummingbot conda env (redis 7.1.0)
-                _redis_host = _os.environ.get("REDIS_HOST", "")
-                if _redis_host:
-                    _r = _redis_lib.Redis(
-                        host=_redis_host,
-                        port=int(_os.environ.get("REDIS_PORT", "6379")),
-                        db=int(_os.environ.get("REDIS_DB", "0")),
-                        password=_os.environ.get("REDIS_PASSWORD") or None,
-                        decode_responses=True,
-                        socket_connect_timeout=1,
-                    )
-                    _payload = {
-                        "event_id": str(_uuid_mod.uuid4()),
-                        "event_type": "bot_fill",
-                        "event_version": "v1",
-                        "schema_version": "1.0",
-                        "ts_utc": datetime.now(_tz.utc).isoformat(),
-                        "producer": "hb.paper_engine_v2",
-                        "instance_name": instance_name,
-                        "controller_id": controller_id,
-                        "connector_name": str(connector_name),
-                        "trading_pair": str(fill_event.instrument_id.trading_pair),
-                        "side": side_str,
-                        "price": float(fill_event.fill_price),
-                        "amount_base": float(fill_event.fill_quantity),
-                        "notional_quote": float(fill_event.fill_price * fill_event.fill_quantity),
-                        "fee_quote": float(fill_event.fee),
-                        "order_id": str(fill_event.order_id),
-                        "accounting_source": "paper_desk_v2",
-                        "is_maker": is_maker_val,
-                        "realized_pnl_quote": 0.0,
-                        "bot_state": "",
-                        "correlation_id": str(getattr(fill_event, "event_id", "") or ""),
-                    }
-                    _r.xadd(
-                        "hb.bot_telemetry.v1",
-                        {"payload": _json.dumps(_payload)},
-                        maxlen=100_000,
-                        approximate=True,
-                    )
-                    _redis_published = True
-            except Exception:
-                pass  # Redis not available or down — fall through to JSONL
-
-            if not _redis_published:
-                # Fallback: direct JSONL write (offline / Redis-off environments)
-                root = Path("/workspace/hbot") if Path("/.dockerenv").exists() else Path(__file__).resolve().parents[2]
-                out_dir = root / "reports" / "event_store"
-                out_dir.mkdir(parents=True, exist_ok=True)
-                out_path = out_dir / f"events_{datetime.now(_tz.utc).strftime('%Y%m%d')}.jsonl"
-                envelope = {
-                    "event_id": str(_uuid_mod.uuid4()),
-                    "event_type": "bot_fill",
-                    "event_version": "v1",
-                    "ts_utc": datetime.now(_tz.utc).isoformat(),
-                    "producer": "hb.paper_engine_v2",
-                    "instance_name": instance_name,
-                    "controller_id": controller_id,
-                    "connector_name": str(connector_name),
-                    "trading_pair": str(fill_event.instrument_id.trading_pair),
-                    "correlation_id": str(getattr(fill_event, "event_id", "") or ""),
-                    "stream": "local.paper_engine_v2.fallback",
-                    "stream_entry_id": "",
-                    "accounting_source": "paper_desk_v2",
-                    "payload": {
-                        "order_id": str(fill_event.order_id),
-                        "side": side_str,
-                        "price": float(fill_event.fill_price),
-                        "amount_base": float(fill_event.fill_quantity),
-                        "fee_quote": float(fill_event.fee),
-                        "is_maker": is_maker_val,
-                    },
-                    "ingest_ts_utc": datetime.now(_tz.utc).isoformat(),
-                    "schema_validation_status": "ok",
-                }
-                with out_path.open("a", encoding="utf-8") as f:
-                    f.write(_json.dumps(envelope, ensure_ascii=True) + "\n")
-        except Exception:
-            # Never let telemetry break trading.
-            pass
-
-        # Also fire to the strategy (for V2 base class accounting)
-        if hasattr(strategy, "did_fill_order"):
-            try:
-                strategy.did_fill_order(hb_fill)
-            except Exception:
-                pass
-
-    except Exception as exc:
-        logger.warning("Fill event fire failed: %s", exc, exc_info=True)
-
-
-def _fire_cancel_event(strategy: Any, connector_name: str, cancel_event: OrderCanceled) -> None:
-    """Fire cancel event to controller."""
-    try:
-        from hummingbot.core.event.events import OrderCancelledEvent as HBCancelEvent
-        hb_cancel = HBCancelEvent(
-            timestamp=time.time(),
-            order_id=cancel_event.order_id,
-        )
-        controller = _find_controller_for_connector(strategy, connector_name)
-        if controller and hasattr(controller, "did_cancel_order"):
-            controller.did_cancel_order(hb_cancel)
-    except Exception as exc:
-        logger.debug("Cancel event fire failed: %s", exc)
-
-
-def _fire_reject_event(strategy: Any, connector_name: str, reject_event: OrderRejected) -> None:
-    """Fire reject event to controller."""
-    try:
-        from hummingbot.core.event.events import MarketOrderFailureEvent as HBFailEvent
-        hb_fail = HBFailEvent(
-            timestamp=time.time(),
-            order_id=reject_event.order_id,
-            order_type=None,
-            error_message=reject_event.reason,
-        )
-        controller = _find_controller_for_connector(strategy, connector_name)
-        if controller and hasattr(controller, "did_fail_order"):
-            controller.did_fail_order(hb_fail)
-    except Exception as exc:
-        logger.debug("Reject event fire failed: %s", exc)
-
-
 def drive_desk_tick(
     strategy: Any,
     desk: PaperDesk,
@@ -1012,15 +1801,43 @@ def drive_desk_tick(
     except Exception as exc:
         logger.warning("Guard state check failed (non-critical): %s", exc)
     try:
+        _run_adverse_inference(strategy)
+    except Exception as exc:
+        logger.warning("Adverse inference failed (non-critical): %s", exc)
+    try:
+        bridges: Dict = getattr(strategy, "_paper_desk_v2_bridges", {})
+        for conn_name, bridge in bridges.items():
+            bridge_iid = bridge.get("instrument_id")
+            trading_pair = str(getattr(bridge_iid, "trading_pair", "") or "")
+            if trading_pair:
+                _ensure_sync_state_command(strategy, conn_name, trading_pair)
+
+        _consume_paper_exchange_events(strategy)
+
         all_events = desk.tick(now_ns)
         if not all_events:
             return
-        bridges: Dict = getattr(strategy, "_paper_desk_v2_bridges", {})
         for event in all_events:
-            # Route event to the correct connector bridge
             event_iid = getattr(event, "instrument_id", None)
             if event_iid is None:
                 continue
+            if hasattr(event, "order_id"):
+                _trace_paper_order(
+                    "stage=desk_tick_event event=%s order_id=%s source_bot=%s",
+                    type(event).__name__,
+                    str(getattr(event, "order_id", "") or ""),
+                    str(getattr(event, "source_bot", "") or ""),
+                    force=type(event).__name__ in {"OrderRejected", "OrderFilled"},
+                )
+                order_id = str(getattr(event, "order_id", "") or "")
+                if order_id.startswith("paper_v2_") and type(event).__name__ in {"OrderAccepted", "OrderRejected", "OrderFilled", "OrderCanceled"}:
+                    logger.warning(
+                        "PAPER_ROUTE_PROBE stage=desk_tick_event event=%s order_id=%s source_bot=%s reason=%s",
+                        type(event).__name__,
+                        order_id,
+                        str(getattr(event, "source_bot", "") or ""),
+                        str(getattr(event, "reason", "") or ""),
+                    )
             for conn_name, bridge in bridges.items():
                 bridge_iid = bridge.get("instrument_id")
                 if bridge_iid and bridge_iid == event_iid:

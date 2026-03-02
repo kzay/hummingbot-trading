@@ -14,6 +14,11 @@ except Exception:
     ccxt = None
 
 
+from services.common.rate_limiter import ExchangeRateLimiter
+from services.common.retry import with_retry
+
+_RATE_LIMITER = ExchangeRateLimiter()
+FETCH_PERP_POSITIONS = os.getenv("FETCH_PERP_POSITIONS", "true").lower() == "true"
 from services.common.utils import (
     read_last_csv_row as _read_last_csv_row,
     safe_float as _safe_float,
@@ -48,7 +53,8 @@ def _fetch_bitget_balances_ccxt(assets: list[str], credential_prefix: str = "") 
     if not api_key or not secret or not passphrase:
         return {"status": "missing_credentials", "balances": {}, "error": f"bitget_credentials_not_set:{credential_prefix or 'GLOBAL'}"}
 
-    try:
+    def _fetch() -> Dict[str, object]:
+        _RATE_LIMITER.get_or_create("bitget").wait_if_needed()
         exchange = ccxt.bitget(
             {
                 "apiKey": api_key,
@@ -58,7 +64,10 @@ def _fetch_bitget_balances_ccxt(assets: list[str], credential_prefix: str = "") 
                 "options": {"defaultType": "spot"},
             }
         )
-        balances = exchange.fetch_balance()
+        return exchange.fetch_balance()
+
+    try:
+        balances = with_retry(_fetch, max_attempts=4, base_delay_s=2.0)
         total = balances.get("total", {}) if isinstance(balances, dict) else {}
         free = balances.get("free", {}) if isinstance(balances, dict) else {}
 
@@ -73,6 +82,62 @@ def _fetch_bitget_balances_ccxt(assets: list[str], credential_prefix: str = "") 
         return {
             "status": "fetch_failed",
             "balances": {},
+            "error": _redact_sensitive(str(e), credential_prefix),
+        }
+
+
+def _fetch_bitget_perp_positions(credential_prefix: str = "") -> Dict[str, object]:
+    """Fetch perpetual futures positions via ccxt with swap defaultType."""
+    if ccxt is None:
+        return {"status": "ccxt_unavailable", "positions": [], "error": "ccxt_not_installed"}
+    if not FETCH_PERP_POSITIONS:
+        return {"status": "disabled", "positions": [], "error": ""}
+
+    api_key, secret, passphrase = _get_bitget_credentials(credential_prefix)
+    if not api_key or not secret or not passphrase:
+        return {"status": "missing_credentials", "positions": [], "error": f"bitget_credentials_not_set:{credential_prefix or 'GLOBAL'}"}
+
+    def _fetch() -> list:
+        _RATE_LIMITER.get_or_create("bitget").wait_if_needed()
+        exchange = ccxt.bitget(
+            {
+                "apiKey": api_key,
+                "secret": secret,
+                "password": passphrase,
+                "enableRateLimit": True,
+                "options": {"defaultType": "swap"},
+            }
+        )
+        if hasattr(exchange, "fetch_positions") and callable(exchange.fetch_positions):
+            return exchange.fetch_positions()
+        bal = exchange.fetch_balance({"type": "swap"})
+        return bal.get("info", {}).get("positions", [])
+
+    try:
+        raw_positions = with_retry(_fetch, max_attempts=4, base_delay_s=2.0)
+        positions = []
+        for p in (raw_positions or []):
+            if not isinstance(p, dict):
+                continue
+            contracts = _safe_float(p.get("contracts") or p.get("contractSize"), 0.0)
+            if contracts == 0.0:
+                continue
+            positions.append({
+                "symbol": p.get("symbol", ""),
+                "side": p.get("side", ""),
+                "contracts": contracts,
+                "notional": _safe_float(p.get("notional"), 0.0),
+                "unrealizedPnl": _safe_float(p.get("unrealizedPnl"), 0.0),
+                "entryPrice": _safe_float(p.get("entryPrice"), 0.0),
+                "markPrice": _safe_float(p.get("markPrice"), 0.0),
+                "liquidationPrice": _safe_float(p.get("liquidationPrice"), 0.0),
+                "leverage": _safe_float(p.get("leverage"), 0.0),
+            })
+        return {"status": "ok", "positions": positions, "error": ""}
+    except Exception as e:
+        return {
+            "status": "fetch_failed",
+            "positions": [],
             "error": _redact_sensitive(str(e), credential_prefix),
         }
 
@@ -122,9 +187,15 @@ def run() -> None:
     while True:
         account_map = _load_account_map(account_map_path)
         account_probe = {"status": "disabled", "balances": {}, "error": ""}
+        perp_positions_global: Dict[str, object] = {"status": "disabled", "positions": [], "error": ""}
         probe_cache: Dict[str, Dict[str, object]] = {}
+        perp_cache: Dict[str, Dict[str, object]] = {}
         if snapshot_mode == "bitget_ccxt_private":
             account_probe = _fetch_bitget_balances_ccxt(assets, "")
+            try:
+                perp_positions_global = _fetch_bitget_perp_positions("")
+            except Exception:
+                perp_positions_global = {"status": "fetch_failed", "positions": [], "error": "unexpected_error"}
 
         bots: Dict[str, Dict[str, object]] = {}
         for minute_file in data_root.glob("*/logs/epp_v24/*/minute.csv"):
@@ -159,6 +230,13 @@ def run() -> None:
                 bots[bot]["account_exchange"] = account_cfg["exchange"]
                 bots[bot]["account_credential_prefix"] = prefix
                 bots[bot]["account_mode"] = mode
+                if mode not in ("disabled", "paper_only"):
+                    try:
+                        if prefix not in perp_cache:
+                            perp_cache[prefix] = _fetch_bitget_perp_positions(prefix)
+                        bots[bot]["perp_positions"] = perp_cache[prefix]
+                    except Exception:
+                        bots[bot]["perp_positions"] = {"status": "fetch_failed", "positions": [], "error": "unexpected_error"}
 
         payload = {
             "ts_utc": _utc_now(),
@@ -167,6 +245,7 @@ def run() -> None:
             "account_map_path": str(account_map_path),
             "note": "Snapshot uses local minute.csv references plus optional exchange probe. For per-bot exchange truth, use dedicated account mapping and direct API pull.",
             "account_probe": account_probe,
+            "perp_positions": perp_positions_global if snapshot_mode == "bitget_ccxt_private" else {"status": "disabled", "positions": [], "error": ""},
             "account_probe_cache": probe_cache if snapshot_mode == "bitget_ccxt_private" else {},
             "bots": bots,
         }

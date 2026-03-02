@@ -1,0 +1,1307 @@
+{
+  "ts_utc": "2026-03-01T14:50:47.785275+00:00",
+  "status": "PASS",
+  "duration_min": 0.2,
+  "interval_sec": 10,
+  "sample_count": 7,
+  "pass_count": 7,
+  "pass_rate": 1.0,
+  "failure_counts": {},
+  "samples": [
+    {
+      "ts_utc": "2026-03-01T14:49:46.893139+00:00",
+      "pass": true,
+      "failed_checks": [],
+      "warnings": [
+        "dead_letter_local_authority_reject_recovered:bot1:a3f128b2-1cd3-40b2-a1b6-aaff0877d74d"
+      ],
+      "checks": {
+        "allocator_status_pass": true,
+        "allocator_emit_intents_true": true,
+        "daily_goal_status_pass": true,
+        "daily_goal_target_pct_0_6": true,
+        "goal_bot1_pct_0_6": true,
+        "goal_bot3_pct_0": true,
+        "goal_bot4_pct_0": true,
+        "goal_bot1_quote_matches_pct": true,
+        "redis_groups_present": true,
+        "redis_groups_zero_lag": true,
+        "redis_groups_zero_pending": true,
+        "latest_intents_have_all_bots": true,
+        "latest_intent_bot1_pct_0_6": true,
+        "bot1_minute_present": true,
+        "bot1_minute_fresh": true,
+        "bot1_target_source_execution_intent": true,
+        "bot3_minute_present": true,
+        "bot3_minute_fresh": true,
+        "bot3_target_source_execution_intent": true,
+        "bot4_minute_present": true,
+        "bot4_minute_fresh": true,
+        "bot4_target_source_execution_intent": true,
+        "bot1_target_pct_0_6_runtime": true,
+        "bot3_target_pct_0_runtime": true,
+        "bot4_target_pct_0_runtime": true,
+        "latest_intents_no_critical_dead_letter": true
+      },
+      "allocator": {
+        "status": "pass",
+        "emit_intents": true,
+        "total_equity_quote": 6128.179239932035,
+        "daily_goal": {
+          "status": "pass",
+          "target_pct_total_equity": 0.6,
+          "target_quote_total_equity": 1.490899439592212,
+          "goal_scope_equity_quote": 248.4832399320353,
+          "rows": {
+            "bot1": {
+              "bot": "bot1",
+              "weight": 1.0,
+              "equity_quote": 248.4832399320353,
+              "target_pnl_pct_raw": 0.6,
+              "daily_pnl_target_pct": 0.6,
+              "daily_pnl_target_quote": 1.490899439592212,
+              "portfolio_action_enabled": true
+            },
+            "bot3": {
+              "bot": "bot3",
+              "weight": 0.0,
+              "equity_quote": 200.0,
+              "target_pnl_pct_raw": 0.0,
+              "daily_pnl_target_pct": 0.0,
+              "daily_pnl_target_quote": 0.0,
+              "portfolio_action_enabled": false
+            },
+            "bot4": {
+              "bot": "bot4",
+              "weight": 0.0,
+              "equity_quote": 5679.696,
+              "target_pnl_pct_raw": 0.0,
+              "daily_pnl_target_pct": 0.0,
+              "daily_pnl_target_quote": 0.0,
+              "portfolio_action_enabled": false
+            }
+          }
+        }
+      },
+      "snapshot_total_bots": 4,
+      "redis_groups": {
+        "hb_event_store_v1": {
+          "lag": 10950,
+          "pending": 0,
+          "last_delivered_id": "1772376460392-0"
+        },
+        "hb_group_bot1": {
+          "lag": 0,
+          "pending": 0,
+          "last_delivered_id": "1772376460392-0"
+        },
+        "hb_group_bot3": {
+          "lag": 0,
+          "pending": 0,
+          "last_delivered_id": "1772376460392-0"
+        },
+        "hb_group_bot4": {
+          "lag": 0,
+          "pending": 0,
+          "last_delivered_id": "1772376460392-0"
+        },
+        "hb_group_v1": {
+          "lag": 10716,
+          "pending": 0,
+          "last_delivered_id": "1772325298173-0"
+        },
+        "hb_kill_switch_v1": {
+          "lag": 0,
+          "pending": 0,
+          "last_delivered_id": "1772376460392-0"
+        }
+      },
+      "latest_daily_target_intents": [
+        {
+          "stream_id": "1772376460392-0",
+          "event_id": "b4946924-0d72-46f0-a303-a8975b3b53ab",
+          "instance_name": "bot4",
+          "timestamp_ms": 1772376460392,
+          "daily_pnl_target_pct": "0.000000",
+          "reason": "portfolio_allocator_daily_goal"
+        },
+        {
+          "stream_id": "1772376460391-1",
+          "event_id": "7e4e3906-8955-4fcc-8689-26f837bd119d",
+          "instance_name": "bot3",
+          "timestamp_ms": 1772376460391,
+          "daily_pnl_target_pct": "0.000000",
+          "reason": "portfolio_allocator_daily_goal"
+        },
+        {
+          "stream_id": "1772376460391-0",
+          "event_id": "a3f128b2-1cd3-40b2-a1b6-aaff0877d74d",
+          "instance_name": "bot1",
+          "timestamp_ms": 1772376460391,
+          "daily_pnl_target_pct": "0.600000",
+          "reason": "portfolio_allocator_daily_goal"
+        }
+      ],
+      "latest_dead_letter_matches": [
+        {
+          "stream_id": "1772376477420-0",
+          "event_id": "a3f128b2-1cd3-40b2-a1b6-aaff0877d74d",
+          "reason": "local_authority_reject"
+        }
+      ],
+      "latest_dead_letter_critical_matches": [],
+      "bots": {
+        "bot1": {
+          "present": true,
+          "path": "F:\\Environement\\git-repo\\hummingbot_custo\\hbot\\data\\bot1\\logs\\epp_v24\\bot1_a\\minute.csv",
+          "mtime_age_s": 44.920384645462036,
+          "ts": "2026-03-01T14:49:01.342170+00:00",
+          "state": "soft_pause",
+          "risk_reasons": "base_pct_above_max|derisk_only",
+          "equity_quote": 248.4832399320353,
+          "pnl_governor_target_source": "execution_intent_daily_pnl_target_pct",
+          "pnl_governor_target_pnl_pct": 0.6,
+          "pnl_governor_target_pnl_quote": 1.4287978833492603,
+          "pnl_governor_target_mode": "pct_equity"
+        },
+        "bot3": {
+          "present": true,
+          "path": "F:\\Environement\\git-repo\\hummingbot_custo\\hbot\\data\\bot3\\logs\\epp_v24\\bot3_a\\minute.csv",
+          "mtime_age_s": 45.545483112335205,
+          "ts": "2026-03-01T14:49:01.028734+00:00",
+          "state": "soft_pause",
+          "risk_reasons": "base_pct_below_min|derisk_only",
+          "equity_quote": 200.0,
+          "pnl_governor_target_source": "execution_intent_daily_pnl_target_pct",
+          "pnl_governor_target_pnl_pct": 0.0,
+          "pnl_governor_target_pnl_quote": 0.0,
+          "pnl_governor_target_mode": "disabled"
+        },
+        "bot4": {
+          "present": true,
+          "path": "F:\\Environement\\git-repo\\hummingbot_custo\\hbot\\data\\bot4\\logs\\epp_v24\\bot4_a\\minute.csv",
+          "mtime_age_s": 45.54013419151306,
+          "ts": "2026-03-01T14:49:01.033271+00:00",
+          "state": "running",
+          "risk_reasons": "",
+          "equity_quote": 4943.78016793,
+          "pnl_governor_target_source": "execution_intent_daily_pnl_target_pct",
+          "pnl_governor_target_pnl_pct": 0.0,
+          "pnl_governor_target_pnl_quote": 0.0,
+          "pnl_governor_target_mode": "disabled"
+        }
+      },
+      "policy_daily_goal_pct": 0.6
+    },
+    {
+      "ts_utc": "2026-03-01T14:49:57.040707+00:00",
+      "pass": true,
+      "failed_checks": [],
+      "warnings": [
+        "dead_letter_local_authority_reject_recovered:bot1:a3f128b2-1cd3-40b2-a1b6-aaff0877d74d"
+      ],
+      "checks": {
+        "allocator_status_pass": true,
+        "allocator_emit_intents_true": true,
+        "daily_goal_status_pass": true,
+        "daily_goal_target_pct_0_6": true,
+        "goal_bot1_pct_0_6": true,
+        "goal_bot3_pct_0": true,
+        "goal_bot4_pct_0": true,
+        "goal_bot1_quote_matches_pct": true,
+        "redis_groups_present": true,
+        "redis_groups_zero_lag": true,
+        "redis_groups_zero_pending": true,
+        "latest_intents_have_all_bots": true,
+        "latest_intent_bot1_pct_0_6": true,
+        "bot1_minute_present": true,
+        "bot1_minute_fresh": true,
+        "bot1_target_source_execution_intent": true,
+        "bot3_minute_present": true,
+        "bot3_minute_fresh": true,
+        "bot3_target_source_execution_intent": true,
+        "bot4_minute_present": true,
+        "bot4_minute_fresh": true,
+        "bot4_target_source_execution_intent": true,
+        "bot1_target_pct_0_6_runtime": true,
+        "bot3_target_pct_0_runtime": true,
+        "bot4_target_pct_0_runtime": true,
+        "latest_intents_no_critical_dead_letter": true
+      },
+      "allocator": {
+        "status": "pass",
+        "emit_intents": true,
+        "total_equity_quote": 6128.179239932035,
+        "daily_goal": {
+          "status": "pass",
+          "target_pct_total_equity": 0.6,
+          "target_quote_total_equity": 1.490899439592212,
+          "goal_scope_equity_quote": 248.4832399320353,
+          "rows": {
+            "bot1": {
+              "bot": "bot1",
+              "weight": 1.0,
+              "equity_quote": 248.4832399320353,
+              "target_pnl_pct_raw": 0.6,
+              "daily_pnl_target_pct": 0.6,
+              "daily_pnl_target_quote": 1.490899439592212,
+              "portfolio_action_enabled": true
+            },
+            "bot3": {
+              "bot": "bot3",
+              "weight": 0.0,
+              "equity_quote": 200.0,
+              "target_pnl_pct_raw": 0.0,
+              "daily_pnl_target_pct": 0.0,
+              "daily_pnl_target_quote": 0.0,
+              "portfolio_action_enabled": false
+            },
+            "bot4": {
+              "bot": "bot4",
+              "weight": 0.0,
+              "equity_quote": 5679.696,
+              "target_pnl_pct_raw": 0.0,
+              "daily_pnl_target_pct": 0.0,
+              "daily_pnl_target_quote": 0.0,
+              "portfolio_action_enabled": false
+            }
+          }
+        }
+      },
+      "snapshot_total_bots": 4,
+      "redis_groups": {
+        "hb_event_store_v1": {
+          "lag": 10950,
+          "pending": 0,
+          "last_delivered_id": "1772376460392-0"
+        },
+        "hb_group_bot1": {
+          "lag": 0,
+          "pending": 0,
+          "last_delivered_id": "1772376460392-0"
+        },
+        "hb_group_bot3": {
+          "lag": 0,
+          "pending": 0,
+          "last_delivered_id": "1772376460392-0"
+        },
+        "hb_group_bot4": {
+          "lag": 0,
+          "pending": 0,
+          "last_delivered_id": "1772376460392-0"
+        },
+        "hb_group_v1": {
+          "lag": 10716,
+          "pending": 0,
+          "last_delivered_id": "1772325298173-0"
+        },
+        "hb_kill_switch_v1": {
+          "lag": 0,
+          "pending": 0,
+          "last_delivered_id": "1772376460392-0"
+        }
+      },
+      "latest_daily_target_intents": [
+        {
+          "stream_id": "1772376460392-0",
+          "event_id": "b4946924-0d72-46f0-a303-a8975b3b53ab",
+          "instance_name": "bot4",
+          "timestamp_ms": 1772376460392,
+          "daily_pnl_target_pct": "0.000000",
+          "reason": "portfolio_allocator_daily_goal"
+        },
+        {
+          "stream_id": "1772376460391-1",
+          "event_id": "7e4e3906-8955-4fcc-8689-26f837bd119d",
+          "instance_name": "bot3",
+          "timestamp_ms": 1772376460391,
+          "daily_pnl_target_pct": "0.000000",
+          "reason": "portfolio_allocator_daily_goal"
+        },
+        {
+          "stream_id": "1772376460391-0",
+          "event_id": "a3f128b2-1cd3-40b2-a1b6-aaff0877d74d",
+          "instance_name": "bot1",
+          "timestamp_ms": 1772376460391,
+          "daily_pnl_target_pct": "0.600000",
+          "reason": "portfolio_allocator_daily_goal"
+        }
+      ],
+      "latest_dead_letter_matches": [
+        {
+          "stream_id": "1772376477420-0",
+          "event_id": "a3f128b2-1cd3-40b2-a1b6-aaff0877d74d",
+          "reason": "local_authority_reject"
+        }
+      ],
+      "latest_dead_letter_critical_matches": [],
+      "bots": {
+        "bot1": {
+          "present": true,
+          "path": "F:\\Environement\\git-repo\\hummingbot_custo\\hbot\\data\\bot1\\logs\\epp_v24\\bot1_a\\minute.csv",
+          "mtime_age_s": 55.238882541656494,
+          "ts": "2026-03-01T14:49:01.342170+00:00",
+          "state": "soft_pause",
+          "risk_reasons": "base_pct_above_max|derisk_only",
+          "equity_quote": 248.4832399320353,
+          "pnl_governor_target_source": "execution_intent_daily_pnl_target_pct",
+          "pnl_governor_target_pnl_pct": 0.6,
+          "pnl_governor_target_pnl_quote": 1.4287978833492603,
+          "pnl_governor_target_mode": "pct_equity"
+        },
+        "bot3": {
+          "present": true,
+          "path": "F:\\Environement\\git-repo\\hummingbot_custo\\hbot\\data\\bot3\\logs\\epp_v24\\bot3_a\\minute.csv",
+          "mtime_age_s": 55.86398100852966,
+          "ts": "2026-03-01T14:49:01.028734+00:00",
+          "state": "soft_pause",
+          "risk_reasons": "base_pct_below_min|derisk_only",
+          "equity_quote": 200.0,
+          "pnl_governor_target_source": "execution_intent_daily_pnl_target_pct",
+          "pnl_governor_target_pnl_pct": 0.0,
+          "pnl_governor_target_pnl_quote": 0.0,
+          "pnl_governor_target_mode": "disabled"
+        },
+        "bot4": {
+          "present": true,
+          "path": "F:\\Environement\\git-repo\\hummingbot_custo\\hbot\\data\\bot4\\logs\\epp_v24\\bot4_a\\minute.csv",
+          "mtime_age_s": 55.85863208770752,
+          "ts": "2026-03-01T14:49:01.033271+00:00",
+          "state": "running",
+          "risk_reasons": "",
+          "equity_quote": 4943.78016793,
+          "pnl_governor_target_source": "execution_intent_daily_pnl_target_pct",
+          "pnl_governor_target_pnl_pct": 0.0,
+          "pnl_governor_target_pnl_quote": 0.0,
+          "pnl_governor_target_mode": "disabled"
+        }
+      },
+      "policy_daily_goal_pct": 0.6
+    },
+    {
+      "ts_utc": "2026-03-01T14:50:07.177818+00:00",
+      "pass": true,
+      "failed_checks": [],
+      "warnings": [
+        "dead_letter_local_authority_reject_recovered:bot1:a3f128b2-1cd3-40b2-a1b6-aaff0877d74d"
+      ],
+      "checks": {
+        "allocator_status_pass": true,
+        "allocator_emit_intents_true": true,
+        "daily_goal_status_pass": true,
+        "daily_goal_target_pct_0_6": true,
+        "goal_bot1_pct_0_6": true,
+        "goal_bot3_pct_0": true,
+        "goal_bot4_pct_0": true,
+        "goal_bot1_quote_matches_pct": true,
+        "redis_groups_present": true,
+        "redis_groups_zero_lag": true,
+        "redis_groups_zero_pending": true,
+        "latest_intents_have_all_bots": true,
+        "latest_intent_bot1_pct_0_6": true,
+        "bot1_minute_present": true,
+        "bot1_minute_fresh": true,
+        "bot1_target_source_execution_intent": true,
+        "bot3_minute_present": true,
+        "bot3_minute_fresh": true,
+        "bot3_target_source_execution_intent": true,
+        "bot4_minute_present": true,
+        "bot4_minute_fresh": true,
+        "bot4_target_source_execution_intent": true,
+        "bot1_target_pct_0_6_runtime": true,
+        "bot3_target_pct_0_runtime": true,
+        "bot4_target_pct_0_runtime": true,
+        "latest_intents_no_critical_dead_letter": true
+      },
+      "allocator": {
+        "status": "pass",
+        "emit_intents": true,
+        "total_equity_quote": 6128.179239932035,
+        "daily_goal": {
+          "status": "pass",
+          "target_pct_total_equity": 0.6,
+          "target_quote_total_equity": 1.490899439592212,
+          "goal_scope_equity_quote": 248.4832399320353,
+          "rows": {
+            "bot1": {
+              "bot": "bot1",
+              "weight": 1.0,
+              "equity_quote": 248.4832399320353,
+              "target_pnl_pct_raw": 0.6,
+              "daily_pnl_target_pct": 0.6,
+              "daily_pnl_target_quote": 1.490899439592212,
+              "portfolio_action_enabled": true
+            },
+            "bot3": {
+              "bot": "bot3",
+              "weight": 0.0,
+              "equity_quote": 200.0,
+              "target_pnl_pct_raw": 0.0,
+              "daily_pnl_target_pct": 0.0,
+              "daily_pnl_target_quote": 0.0,
+              "portfolio_action_enabled": false
+            },
+            "bot4": {
+              "bot": "bot4",
+              "weight": 0.0,
+              "equity_quote": 5679.696,
+              "target_pnl_pct_raw": 0.0,
+              "daily_pnl_target_pct": 0.0,
+              "daily_pnl_target_quote": 0.0,
+              "portfolio_action_enabled": false
+            }
+          }
+        }
+      },
+      "snapshot_total_bots": 4,
+      "redis_groups": {
+        "hb_event_store_v1": {
+          "lag": 10950,
+          "pending": 0,
+          "last_delivered_id": "1772376460392-0"
+        },
+        "hb_group_bot1": {
+          "lag": 0,
+          "pending": 0,
+          "last_delivered_id": "1772376460392-0"
+        },
+        "hb_group_bot3": {
+          "lag": 0,
+          "pending": 0,
+          "last_delivered_id": "1772376460392-0"
+        },
+        "hb_group_bot4": {
+          "lag": 0,
+          "pending": 0,
+          "last_delivered_id": "1772376460392-0"
+        },
+        "hb_group_v1": {
+          "lag": 10716,
+          "pending": 0,
+          "last_delivered_id": "1772325298173-0"
+        },
+        "hb_kill_switch_v1": {
+          "lag": 0,
+          "pending": 0,
+          "last_delivered_id": "1772376460392-0"
+        }
+      },
+      "latest_daily_target_intents": [
+        {
+          "stream_id": "1772376460392-0",
+          "event_id": "b4946924-0d72-46f0-a303-a8975b3b53ab",
+          "instance_name": "bot4",
+          "timestamp_ms": 1772376460392,
+          "daily_pnl_target_pct": "0.000000",
+          "reason": "portfolio_allocator_daily_goal"
+        },
+        {
+          "stream_id": "1772376460391-1",
+          "event_id": "7e4e3906-8955-4fcc-8689-26f837bd119d",
+          "instance_name": "bot3",
+          "timestamp_ms": 1772376460391,
+          "daily_pnl_target_pct": "0.000000",
+          "reason": "portfolio_allocator_daily_goal"
+        },
+        {
+          "stream_id": "1772376460391-0",
+          "event_id": "a3f128b2-1cd3-40b2-a1b6-aaff0877d74d",
+          "instance_name": "bot1",
+          "timestamp_ms": 1772376460391,
+          "daily_pnl_target_pct": "0.600000",
+          "reason": "portfolio_allocator_daily_goal"
+        }
+      ],
+      "latest_dead_letter_matches": [
+        {
+          "stream_id": "1772376477420-0",
+          "event_id": "a3f128b2-1cd3-40b2-a1b6-aaff0877d74d",
+          "reason": "local_authority_reject"
+        }
+      ],
+      "latest_dead_letter_critical_matches": [],
+      "bots": {
+        "bot1": {
+          "present": true,
+          "path": "F:\\Environement\\git-repo\\hummingbot_custo\\hbot\\data\\bot1\\logs\\epp_v24\\bot1_a\\minute.csv",
+          "mtime_age_s": 65.38342785835266,
+          "ts": "2026-03-01T14:49:01.342170+00:00",
+          "state": "soft_pause",
+          "risk_reasons": "base_pct_above_max|derisk_only",
+          "equity_quote": 248.4832399320353,
+          "pnl_governor_target_source": "execution_intent_daily_pnl_target_pct",
+          "pnl_governor_target_pnl_pct": 0.6,
+          "pnl_governor_target_pnl_quote": 1.4287978833492603,
+          "pnl_governor_target_mode": "pct_equity"
+        },
+        "bot3": {
+          "present": true,
+          "path": "F:\\Environement\\git-repo\\hummingbot_custo\\hbot\\data\\bot3\\logs\\epp_v24\\bot3_a\\minute.csv",
+          "mtime_age_s": 5.960799694061279,
+          "ts": "2026-03-01T14:50:01.075626+00:00",
+          "state": "soft_pause",
+          "risk_reasons": "base_pct_below_min|derisk_only",
+          "equity_quote": 200.0,
+          "pnl_governor_target_source": "execution_intent_daily_pnl_target_pct",
+          "pnl_governor_target_pnl_pct": 0.0,
+          "pnl_governor_target_pnl_quote": 0.0,
+          "pnl_governor_target_mode": "disabled"
+        },
+        "bot4": {
+          "present": true,
+          "path": "F:\\Environement\\git-repo\\hummingbot_custo\\hbot\\data\\bot4\\logs\\epp_v24\\bot4_a\\minute.csv",
+          "mtime_age_s": 5.949914932250977,
+          "ts": "2026-03-01T14:50:01.082752+00:00",
+          "state": "running",
+          "risk_reasons": "",
+          "equity_quote": 4943.78016793,
+          "pnl_governor_target_source": "execution_intent_daily_pnl_target_pct",
+          "pnl_governor_target_pnl_pct": 0.0,
+          "pnl_governor_target_pnl_quote": 0.0,
+          "pnl_governor_target_mode": "disabled"
+        }
+      },
+      "policy_daily_goal_pct": 0.6
+    },
+    {
+      "ts_utc": "2026-03-01T14:50:17.318628+00:00",
+      "pass": true,
+      "failed_checks": [],
+      "warnings": [
+        "dead_letter_local_authority_reject_recovered:bot1:a3f128b2-1cd3-40b2-a1b6-aaff0877d74d"
+      ],
+      "checks": {
+        "allocator_status_pass": true,
+        "allocator_emit_intents_true": true,
+        "daily_goal_status_pass": true,
+        "daily_goal_target_pct_0_6": true,
+        "goal_bot1_pct_0_6": true,
+        "goal_bot3_pct_0": true,
+        "goal_bot4_pct_0": true,
+        "goal_bot1_quote_matches_pct": true,
+        "redis_groups_present": true,
+        "redis_groups_zero_lag": true,
+        "redis_groups_zero_pending": true,
+        "latest_intents_have_all_bots": true,
+        "latest_intent_bot1_pct_0_6": true,
+        "bot1_minute_present": true,
+        "bot1_minute_fresh": true,
+        "bot1_target_source_execution_intent": true,
+        "bot3_minute_present": true,
+        "bot3_minute_fresh": true,
+        "bot3_target_source_execution_intent": true,
+        "bot4_minute_present": true,
+        "bot4_minute_fresh": true,
+        "bot4_target_source_execution_intent": true,
+        "bot1_target_pct_0_6_runtime": true,
+        "bot3_target_pct_0_runtime": true,
+        "bot4_target_pct_0_runtime": true,
+        "latest_intents_no_critical_dead_letter": true
+      },
+      "allocator": {
+        "status": "pass",
+        "emit_intents": true,
+        "total_equity_quote": 6128.179239932035,
+        "daily_goal": {
+          "status": "pass",
+          "target_pct_total_equity": 0.6,
+          "target_quote_total_equity": 1.490899439592212,
+          "goal_scope_equity_quote": 248.4832399320353,
+          "rows": {
+            "bot1": {
+              "bot": "bot1",
+              "weight": 1.0,
+              "equity_quote": 248.4832399320353,
+              "target_pnl_pct_raw": 0.6,
+              "daily_pnl_target_pct": 0.6,
+              "daily_pnl_target_quote": 1.490899439592212,
+              "portfolio_action_enabled": true
+            },
+            "bot3": {
+              "bot": "bot3",
+              "weight": 0.0,
+              "equity_quote": 200.0,
+              "target_pnl_pct_raw": 0.0,
+              "daily_pnl_target_pct": 0.0,
+              "daily_pnl_target_quote": 0.0,
+              "portfolio_action_enabled": false
+            },
+            "bot4": {
+              "bot": "bot4",
+              "weight": 0.0,
+              "equity_quote": 5679.696,
+              "target_pnl_pct_raw": 0.0,
+              "daily_pnl_target_pct": 0.0,
+              "daily_pnl_target_quote": 0.0,
+              "portfolio_action_enabled": false
+            }
+          }
+        }
+      },
+      "snapshot_total_bots": 4,
+      "redis_groups": {
+        "hb_event_store_v1": {
+          "lag": 10950,
+          "pending": 0,
+          "last_delivered_id": "1772376460392-0"
+        },
+        "hb_group_bot1": {
+          "lag": 0,
+          "pending": 0,
+          "last_delivered_id": "1772376460392-0"
+        },
+        "hb_group_bot3": {
+          "lag": 0,
+          "pending": 0,
+          "last_delivered_id": "1772376460392-0"
+        },
+        "hb_group_bot4": {
+          "lag": 0,
+          "pending": 0,
+          "last_delivered_id": "1772376460392-0"
+        },
+        "hb_group_v1": {
+          "lag": 10716,
+          "pending": 0,
+          "last_delivered_id": "1772325298173-0"
+        },
+        "hb_kill_switch_v1": {
+          "lag": 0,
+          "pending": 0,
+          "last_delivered_id": "1772376460392-0"
+        }
+      },
+      "latest_daily_target_intents": [
+        {
+          "stream_id": "1772376460392-0",
+          "event_id": "b4946924-0d72-46f0-a303-a8975b3b53ab",
+          "instance_name": "bot4",
+          "timestamp_ms": 1772376460392,
+          "daily_pnl_target_pct": "0.000000",
+          "reason": "portfolio_allocator_daily_goal"
+        },
+        {
+          "stream_id": "1772376460391-1",
+          "event_id": "7e4e3906-8955-4fcc-8689-26f837bd119d",
+          "instance_name": "bot3",
+          "timestamp_ms": 1772376460391,
+          "daily_pnl_target_pct": "0.000000",
+          "reason": "portfolio_allocator_daily_goal"
+        },
+        {
+          "stream_id": "1772376460391-0",
+          "event_id": "a3f128b2-1cd3-40b2-a1b6-aaff0877d74d",
+          "instance_name": "bot1",
+          "timestamp_ms": 1772376460391,
+          "daily_pnl_target_pct": "0.600000",
+          "reason": "portfolio_allocator_daily_goal"
+        }
+      ],
+      "latest_dead_letter_matches": [
+        {
+          "stream_id": "1772376477420-0",
+          "event_id": "a3f128b2-1cd3-40b2-a1b6-aaff0877d74d",
+          "reason": "local_authority_reject"
+        }
+      ],
+      "latest_dead_letter_critical_matches": [],
+      "bots": {
+        "bot1": {
+          "present": true,
+          "path": "F:\\Environement\\git-repo\\hummingbot_custo\\hbot\\data\\bot1\\logs\\epp_v24\\bot1_a\\minute.csv",
+          "mtime_age_s": 75.52432894706726,
+          "ts": "2026-03-01T14:49:01.342170+00:00",
+          "state": "soft_pause",
+          "risk_reasons": "base_pct_above_max|derisk_only",
+          "equity_quote": 248.4832399320353,
+          "pnl_governor_target_source": "execution_intent_daily_pnl_target_pct",
+          "pnl_governor_target_pnl_pct": 0.6,
+          "pnl_governor_target_pnl_quote": 1.4287978833492603,
+          "pnl_governor_target_mode": "pct_equity"
+        },
+        "bot3": {
+          "present": true,
+          "path": "F:\\Environement\\git-repo\\hummingbot_custo\\hbot\\data\\bot3\\logs\\epp_v24\\bot3_a\\minute.csv",
+          "mtime_age_s": 16.10170078277588,
+          "ts": "2026-03-01T14:50:01.075626+00:00",
+          "state": "soft_pause",
+          "risk_reasons": "base_pct_below_min|derisk_only",
+          "equity_quote": 200.0,
+          "pnl_governor_target_source": "execution_intent_daily_pnl_target_pct",
+          "pnl_governor_target_pnl_pct": 0.0,
+          "pnl_governor_target_pnl_quote": 0.0,
+          "pnl_governor_target_mode": "disabled"
+        },
+        "bot4": {
+          "present": true,
+          "path": "F:\\Environement\\git-repo\\hummingbot_custo\\hbot\\data\\bot4\\logs\\epp_v24\\bot4_a\\minute.csv",
+          "mtime_age_s": 16.090816020965576,
+          "ts": "2026-03-01T14:50:01.082752+00:00",
+          "state": "running",
+          "risk_reasons": "",
+          "equity_quote": 4943.78016793,
+          "pnl_governor_target_source": "execution_intent_daily_pnl_target_pct",
+          "pnl_governor_target_pnl_pct": 0.0,
+          "pnl_governor_target_pnl_quote": 0.0,
+          "pnl_governor_target_mode": "disabled"
+        }
+      },
+      "policy_daily_goal_pct": 0.6
+    },
+    {
+      "ts_utc": "2026-03-01T14:50:27.458263+00:00",
+      "pass": true,
+      "failed_checks": [],
+      "warnings": [
+        "dead_letter_local_authority_reject_recovered:bot1:a3f128b2-1cd3-40b2-a1b6-aaff0877d74d"
+      ],
+      "checks": {
+        "allocator_status_pass": true,
+        "allocator_emit_intents_true": true,
+        "daily_goal_status_pass": true,
+        "daily_goal_target_pct_0_6": true,
+        "goal_bot1_pct_0_6": true,
+        "goal_bot3_pct_0": true,
+        "goal_bot4_pct_0": true,
+        "goal_bot1_quote_matches_pct": true,
+        "redis_groups_present": true,
+        "redis_groups_zero_lag": true,
+        "redis_groups_zero_pending": true,
+        "latest_intents_have_all_bots": true,
+        "latest_intent_bot1_pct_0_6": true,
+        "bot1_minute_present": true,
+        "bot1_minute_fresh": true,
+        "bot1_target_source_execution_intent": true,
+        "bot3_minute_present": true,
+        "bot3_minute_fresh": true,
+        "bot3_target_source_execution_intent": true,
+        "bot4_minute_present": true,
+        "bot4_minute_fresh": true,
+        "bot4_target_source_execution_intent": true,
+        "bot1_target_pct_0_6_runtime": true,
+        "bot3_target_pct_0_runtime": true,
+        "bot4_target_pct_0_runtime": true,
+        "latest_intents_no_critical_dead_letter": true
+      },
+      "allocator": {
+        "status": "pass",
+        "emit_intents": true,
+        "total_equity_quote": 6128.179239932035,
+        "daily_goal": {
+          "status": "pass",
+          "target_pct_total_equity": 0.6,
+          "target_quote_total_equity": 1.490899439592212,
+          "goal_scope_equity_quote": 248.4832399320353,
+          "rows": {
+            "bot1": {
+              "bot": "bot1",
+              "weight": 1.0,
+              "equity_quote": 248.4832399320353,
+              "target_pnl_pct_raw": 0.6,
+              "daily_pnl_target_pct": 0.6,
+              "daily_pnl_target_quote": 1.490899439592212,
+              "portfolio_action_enabled": true
+            },
+            "bot3": {
+              "bot": "bot3",
+              "weight": 0.0,
+              "equity_quote": 200.0,
+              "target_pnl_pct_raw": 0.0,
+              "daily_pnl_target_pct": 0.0,
+              "daily_pnl_target_quote": 0.0,
+              "portfolio_action_enabled": false
+            },
+            "bot4": {
+              "bot": "bot4",
+              "weight": 0.0,
+              "equity_quote": 5679.696,
+              "target_pnl_pct_raw": 0.0,
+              "daily_pnl_target_pct": 0.0,
+              "daily_pnl_target_quote": 0.0,
+              "portfolio_action_enabled": false
+            }
+          }
+        }
+      },
+      "snapshot_total_bots": 4,
+      "redis_groups": {
+        "hb_event_store_v1": {
+          "lag": 10950,
+          "pending": 0,
+          "last_delivered_id": "1772376460392-0"
+        },
+        "hb_group_bot1": {
+          "lag": 0,
+          "pending": 0,
+          "last_delivered_id": "1772376460392-0"
+        },
+        "hb_group_bot3": {
+          "lag": 0,
+          "pending": 0,
+          "last_delivered_id": "1772376460392-0"
+        },
+        "hb_group_bot4": {
+          "lag": 0,
+          "pending": 0,
+          "last_delivered_id": "1772376460392-0"
+        },
+        "hb_group_v1": {
+          "lag": 10716,
+          "pending": 0,
+          "last_delivered_id": "1772325298173-0"
+        },
+        "hb_kill_switch_v1": {
+          "lag": 0,
+          "pending": 0,
+          "last_delivered_id": "1772376460392-0"
+        }
+      },
+      "latest_daily_target_intents": [
+        {
+          "stream_id": "1772376460392-0",
+          "event_id": "b4946924-0d72-46f0-a303-a8975b3b53ab",
+          "instance_name": "bot4",
+          "timestamp_ms": 1772376460392,
+          "daily_pnl_target_pct": "0.000000",
+          "reason": "portfolio_allocator_daily_goal"
+        },
+        {
+          "stream_id": "1772376460391-1",
+          "event_id": "7e4e3906-8955-4fcc-8689-26f837bd119d",
+          "instance_name": "bot3",
+          "timestamp_ms": 1772376460391,
+          "daily_pnl_target_pct": "0.000000",
+          "reason": "portfolio_allocator_daily_goal"
+        },
+        {
+          "stream_id": "1772376460391-0",
+          "event_id": "a3f128b2-1cd3-40b2-a1b6-aaff0877d74d",
+          "instance_name": "bot1",
+          "timestamp_ms": 1772376460391,
+          "daily_pnl_target_pct": "0.600000",
+          "reason": "portfolio_allocator_daily_goal"
+        }
+      ],
+      "latest_dead_letter_matches": [
+        {
+          "stream_id": "1772376477420-0",
+          "event_id": "a3f128b2-1cd3-40b2-a1b6-aaff0877d74d",
+          "reason": "local_authority_reject"
+        }
+      ],
+      "latest_dead_letter_critical_matches": [],
+      "bots": {
+        "bot1": {
+          "present": true,
+          "path": "F:\\Environement\\git-repo\\hummingbot_custo\\hbot\\data\\bot1\\logs\\epp_v24\\bot1_a\\minute.csv",
+          "mtime_age_s": 85.67268347740173,
+          "ts": "2026-03-01T14:49:01.342170+00:00",
+          "state": "soft_pause",
+          "risk_reasons": "base_pct_above_max|derisk_only",
+          "equity_quote": 248.4832399320353,
+          "pnl_governor_target_source": "execution_intent_daily_pnl_target_pct",
+          "pnl_governor_target_pnl_pct": 0.6,
+          "pnl_governor_target_pnl_quote": 1.4287978833492603,
+          "pnl_governor_target_mode": "pct_equity"
+        },
+        "bot3": {
+          "present": true,
+          "path": "F:\\Environement\\git-repo\\hummingbot_custo\\hbot\\data\\bot3\\logs\\epp_v24\\bot3_a\\minute.csv",
+          "mtime_age_s": 26.25005531311035,
+          "ts": "2026-03-01T14:50:01.075626+00:00",
+          "state": "soft_pause",
+          "risk_reasons": "base_pct_below_min|derisk_only",
+          "equity_quote": 200.0,
+          "pnl_governor_target_source": "execution_intent_daily_pnl_target_pct",
+          "pnl_governor_target_pnl_pct": 0.0,
+          "pnl_governor_target_pnl_quote": 0.0,
+          "pnl_governor_target_mode": "disabled"
+        },
+        "bot4": {
+          "present": true,
+          "path": "F:\\Environement\\git-repo\\hummingbot_custo\\hbot\\data\\bot4\\logs\\epp_v24\\bot4_a\\minute.csv",
+          "mtime_age_s": 26.23917055130005,
+          "ts": "2026-03-01T14:50:01.082752+00:00",
+          "state": "running",
+          "risk_reasons": "",
+          "equity_quote": 4943.78016793,
+          "pnl_governor_target_source": "execution_intent_daily_pnl_target_pct",
+          "pnl_governor_target_pnl_pct": 0.0,
+          "pnl_governor_target_pnl_quote": 0.0,
+          "pnl_governor_target_mode": "disabled"
+        }
+      },
+      "policy_daily_goal_pct": 0.6
+    },
+    {
+      "ts_utc": "2026-03-01T14:50:37.573531+00:00",
+      "pass": true,
+      "failed_checks": [],
+      "warnings": [
+        "dead_letter_local_authority_reject_recovered:bot1:a3f128b2-1cd3-40b2-a1b6-aaff0877d74d"
+      ],
+      "checks": {
+        "allocator_status_pass": true,
+        "allocator_emit_intents_true": true,
+        "daily_goal_status_pass": true,
+        "daily_goal_target_pct_0_6": true,
+        "goal_bot1_pct_0_6": true,
+        "goal_bot3_pct_0": true,
+        "goal_bot4_pct_0": true,
+        "goal_bot1_quote_matches_pct": true,
+        "redis_groups_present": true,
+        "redis_groups_zero_lag": true,
+        "redis_groups_zero_pending": true,
+        "latest_intents_have_all_bots": true,
+        "latest_intent_bot1_pct_0_6": true,
+        "bot1_minute_present": true,
+        "bot1_minute_fresh": true,
+        "bot1_target_source_execution_intent": true,
+        "bot3_minute_present": true,
+        "bot3_minute_fresh": true,
+        "bot3_target_source_execution_intent": true,
+        "bot4_minute_present": true,
+        "bot4_minute_fresh": true,
+        "bot4_target_source_execution_intent": true,
+        "bot1_target_pct_0_6_runtime": true,
+        "bot3_target_pct_0_runtime": true,
+        "bot4_target_pct_0_runtime": true,
+        "latest_intents_no_critical_dead_letter": true
+      },
+      "allocator": {
+        "status": "pass",
+        "emit_intents": true,
+        "total_equity_quote": 6128.179239932035,
+        "daily_goal": {
+          "status": "pass",
+          "target_pct_total_equity": 0.6,
+          "target_quote_total_equity": 1.490899439592212,
+          "goal_scope_equity_quote": 248.4832399320353,
+          "rows": {
+            "bot1": {
+              "bot": "bot1",
+              "weight": 1.0,
+              "equity_quote": 248.4832399320353,
+              "target_pnl_pct_raw": 0.6,
+              "daily_pnl_target_pct": 0.6,
+              "daily_pnl_target_quote": 1.490899439592212,
+              "portfolio_action_enabled": true
+            },
+            "bot3": {
+              "bot": "bot3",
+              "weight": 0.0,
+              "equity_quote": 200.0,
+              "target_pnl_pct_raw": 0.0,
+              "daily_pnl_target_pct": 0.0,
+              "daily_pnl_target_quote": 0.0,
+              "portfolio_action_enabled": false
+            },
+            "bot4": {
+              "bot": "bot4",
+              "weight": 0.0,
+              "equity_quote": 5679.696,
+              "target_pnl_pct_raw": 0.0,
+              "daily_pnl_target_pct": 0.0,
+              "daily_pnl_target_quote": 0.0,
+              "portfolio_action_enabled": false
+            }
+          }
+        }
+      },
+      "snapshot_total_bots": 4,
+      "redis_groups": {
+        "hb_event_store_v1": {
+          "lag": 10950,
+          "pending": 0,
+          "last_delivered_id": "1772376460392-0"
+        },
+        "hb_group_bot1": {
+          "lag": 0,
+          "pending": 0,
+          "last_delivered_id": "1772376460392-0"
+        },
+        "hb_group_bot3": {
+          "lag": 0,
+          "pending": 0,
+          "last_delivered_id": "1772376460392-0"
+        },
+        "hb_group_bot4": {
+          "lag": 0,
+          "pending": 0,
+          "last_delivered_id": "1772376460392-0"
+        },
+        "hb_group_v1": {
+          "lag": 10716,
+          "pending": 0,
+          "last_delivered_id": "1772325298173-0"
+        },
+        "hb_kill_switch_v1": {
+          "lag": 0,
+          "pending": 0,
+          "last_delivered_id": "1772376460392-0"
+        }
+      },
+      "latest_daily_target_intents": [
+        {
+          "stream_id": "1772376460392-0",
+          "event_id": "b4946924-0d72-46f0-a303-a8975b3b53ab",
+          "instance_name": "bot4",
+          "timestamp_ms": 1772376460392,
+          "daily_pnl_target_pct": "0.000000",
+          "reason": "portfolio_allocator_daily_goal"
+        },
+        {
+          "stream_id": "1772376460391-1",
+          "event_id": "7e4e3906-8955-4fcc-8689-26f837bd119d",
+          "instance_name": "bot3",
+          "timestamp_ms": 1772376460391,
+          "daily_pnl_target_pct": "0.000000",
+          "reason": "portfolio_allocator_daily_goal"
+        },
+        {
+          "stream_id": "1772376460391-0",
+          "event_id": "a3f128b2-1cd3-40b2-a1b6-aaff0877d74d",
+          "instance_name": "bot1",
+          "timestamp_ms": 1772376460391,
+          "daily_pnl_target_pct": "0.600000",
+          "reason": "portfolio_allocator_daily_goal"
+        }
+      ],
+      "latest_dead_letter_matches": [
+        {
+          "stream_id": "1772376477420-0",
+          "event_id": "a3f128b2-1cd3-40b2-a1b6-aaff0877d74d",
+          "reason": "local_authority_reject"
+        }
+      ],
+      "latest_dead_letter_critical_matches": [],
+      "bots": {
+        "bot1": {
+          "present": true,
+          "path": "F:\\Environement\\git-repo\\hummingbot_custo\\hbot\\data\\bot1\\logs\\epp_v24\\bot1_a\\minute.csv",
+          "mtime_age_s": 95.80446362495422,
+          "ts": "2026-03-01T14:49:01.342170+00:00",
+          "state": "soft_pause",
+          "risk_reasons": "base_pct_above_max|derisk_only",
+          "equity_quote": 248.4832399320353,
+          "pnl_governor_target_source": "execution_intent_daily_pnl_target_pct",
+          "pnl_governor_target_pnl_pct": 0.6,
+          "pnl_governor_target_pnl_quote": 1.4287978833492603,
+          "pnl_governor_target_mode": "pct_equity"
+        },
+        "bot3": {
+          "present": true,
+          "path": "F:\\Environement\\git-repo\\hummingbot_custo\\hbot\\data\\bot3\\logs\\epp_v24\\bot3_a\\minute.csv",
+          "mtime_age_s": 36.38183546066284,
+          "ts": "2026-03-01T14:50:01.075626+00:00",
+          "state": "soft_pause",
+          "risk_reasons": "base_pct_below_min|derisk_only",
+          "equity_quote": 200.0,
+          "pnl_governor_target_source": "execution_intent_daily_pnl_target_pct",
+          "pnl_governor_target_pnl_pct": 0.0,
+          "pnl_governor_target_pnl_quote": 0.0,
+          "pnl_governor_target_mode": "disabled"
+        },
+        "bot4": {
+          "present": true,
+          "path": "F:\\Environement\\git-repo\\hummingbot_custo\\hbot\\data\\bot4\\logs\\epp_v24\\bot4_a\\minute.csv",
+          "mtime_age_s": 36.37095069885254,
+          "ts": "2026-03-01T14:50:01.082752+00:00",
+          "state": "running",
+          "risk_reasons": "",
+          "equity_quote": 4943.78016793,
+          "pnl_governor_target_source": "execution_intent_daily_pnl_target_pct",
+          "pnl_governor_target_pnl_pct": 0.0,
+          "pnl_governor_target_pnl_quote": 0.0,
+          "pnl_governor_target_mode": "disabled"
+        }
+      },
+      "policy_daily_goal_pct": 0.6
+    },
+    {
+      "ts_utc": "2026-03-01T14:50:47.785275+00:00",
+      "pass": true,
+      "failed_checks": [],
+      "warnings": [
+        "dead_letter_local_authority_reject_recovered:bot1:a3f128b2-1cd3-40b2-a1b6-aaff0877d74d"
+      ],
+      "checks": {
+        "allocator_status_pass": true,
+        "allocator_emit_intents_true": true,
+        "daily_goal_status_pass": true,
+        "daily_goal_target_pct_0_6": true,
+        "goal_bot1_pct_0_6": true,
+        "goal_bot3_pct_0": true,
+        "goal_bot4_pct_0": true,
+        "goal_bot1_quote_matches_pct": true,
+        "redis_groups_present": true,
+        "redis_groups_zero_lag": true,
+        "redis_groups_zero_pending": true,
+        "latest_intents_have_all_bots": true,
+        "latest_intent_bot1_pct_0_6": true,
+        "bot1_minute_present": true,
+        "bot1_minute_fresh": true,
+        "bot1_target_source_execution_intent": true,
+        "bot3_minute_present": true,
+        "bot3_minute_fresh": true,
+        "bot3_target_source_execution_intent": true,
+        "bot4_minute_present": true,
+        "bot4_minute_fresh": true,
+        "bot4_target_source_execution_intent": true,
+        "bot1_target_pct_0_6_runtime": true,
+        "bot3_target_pct_0_runtime": true,
+        "bot4_target_pct_0_runtime": true,
+        "latest_intents_no_critical_dead_letter": true
+      },
+      "allocator": {
+        "status": "pass",
+        "emit_intents": true,
+        "total_equity_quote": 6128.179239932035,
+        "daily_goal": {
+          "status": "pass",
+          "target_pct_total_equity": 0.6,
+          "target_quote_total_equity": 1.490899439592212,
+          "goal_scope_equity_quote": 248.4832399320353,
+          "rows": {
+            "bot1": {
+              "bot": "bot1",
+              "weight": 1.0,
+              "equity_quote": 248.4832399320353,
+              "target_pnl_pct_raw": 0.6,
+              "daily_pnl_target_pct": 0.6,
+              "daily_pnl_target_quote": 1.490899439592212,
+              "portfolio_action_enabled": true
+            },
+            "bot3": {
+              "bot": "bot3",
+              "weight": 0.0,
+              "equity_quote": 200.0,
+              "target_pnl_pct_raw": 0.0,
+              "daily_pnl_target_pct": 0.0,
+              "daily_pnl_target_quote": 0.0,
+              "portfolio_action_enabled": false
+            },
+            "bot4": {
+              "bot": "bot4",
+              "weight": 0.0,
+              "equity_quote": 5679.696,
+              "target_pnl_pct_raw": 0.0,
+              "daily_pnl_target_pct": 0.0,
+              "daily_pnl_target_quote": 0.0,
+              "portfolio_action_enabled": false
+            }
+          }
+        }
+      },
+      "snapshot_total_bots": 4,
+      "redis_groups": {
+        "hb_event_store_v1": {
+          "lag": 10950,
+          "pending": 0,
+          "last_delivered_id": "1772376460392-0"
+        },
+        "hb_group_bot1": {
+          "lag": 0,
+          "pending": 0,
+          "last_delivered_id": "1772376460392-0"
+        },
+        "hb_group_bot3": {
+          "lag": 0,
+          "pending": 0,
+          "last_delivered_id": "1772376460392-0"
+        },
+        "hb_group_bot4": {
+          "lag": 0,
+          "pending": 0,
+          "last_delivered_id": "1772376460392-0"
+        },
+        "hb_group_v1": {
+          "lag": 10716,
+          "pending": 0,
+          "last_delivered_id": "1772325298173-0"
+        },
+        "hb_kill_switch_v1": {
+          "lag": 0,
+          "pending": 0,
+          "last_delivered_id": "1772376460392-0"
+        }
+      },
+      "latest_daily_target_intents": [
+        {
+          "stream_id": "1772376460392-0",
+          "event_id": "b4946924-0d72-46f0-a303-a8975b3b53ab",
+          "instance_name": "bot4",
+          "timestamp_ms": 1772376460392,
+          "daily_pnl_target_pct": "0.000000",
+          "reason": "portfolio_allocator_daily_goal"
+        },
+        {
+          "stream_id": "1772376460391-1",
+          "event_id": "7e4e3906-8955-4fcc-8689-26f837bd119d",
+          "instance_name": "bot3",
+          "timestamp_ms": 1772376460391,
+          "daily_pnl_target_pct": "0.000000",
+          "reason": "portfolio_allocator_daily_goal"
+        },
+        {
+          "stream_id": "1772376460391-0",
+          "event_id": "a3f128b2-1cd3-40b2-a1b6-aaff0877d74d",
+          "instance_name": "bot1",
+          "timestamp_ms": 1772376460391,
+          "daily_pnl_target_pct": "0.600000",
+          "reason": "portfolio_allocator_daily_goal"
+        }
+      ],
+      "latest_dead_letter_matches": [
+        {
+          "stream_id": "1772376477420-0",
+          "event_id": "a3f128b2-1cd3-40b2-a1b6-aaff0877d74d",
+          "reason": "local_authority_reject"
+        }
+      ],
+      "latest_dead_letter_critical_matches": [],
+      "bots": {
+        "bot1": {
+          "present": true,
+          "path": "F:\\Environement\\git-repo\\hummingbot_custo\\hbot\\data\\bot1\\logs\\epp_v24\\bot1_a\\minute.csv",
+          "mtime_age_s": 105.9232497215271,
+          "ts": "2026-03-01T14:49:01.342170+00:00",
+          "state": "soft_pause",
+          "risk_reasons": "base_pct_above_max|derisk_only",
+          "equity_quote": 248.4832399320353,
+          "pnl_governor_target_source": "execution_intent_daily_pnl_target_pct",
+          "pnl_governor_target_pnl_pct": 0.6,
+          "pnl_governor_target_pnl_quote": 1.4287978833492603,
+          "pnl_governor_target_mode": "pct_equity"
+        },
+        "bot3": {
+          "present": true,
+          "path": "F:\\Environement\\git-repo\\hummingbot_custo\\hbot\\data\\bot3\\logs\\epp_v24\\bot3_a\\minute.csv",
+          "mtime_age_s": 46.50062155723572,
+          "ts": "2026-03-01T14:50:01.075626+00:00",
+          "state": "soft_pause",
+          "risk_reasons": "base_pct_below_min|derisk_only",
+          "equity_quote": 200.0,
+          "pnl_governor_target_source": "execution_intent_daily_pnl_target_pct",
+          "pnl_governor_target_pnl_pct": 0.0,
+          "pnl_governor_target_pnl_quote": 0.0,
+          "pnl_governor_target_mode": "disabled"
+        },
+        "bot4": {
+          "present": true,
+          "path": "F:\\Environement\\git-repo\\hummingbot_custo\\hbot\\data\\bot4\\logs\\epp_v24\\bot4_a\\minute.csv",
+          "mtime_age_s": 46.489736795425415,
+          "ts": "2026-03-01T14:50:01.082752+00:00",
+          "state": "running",
+          "risk_reasons": "",
+          "equity_quote": 4943.78016793,
+          "pnl_governor_target_source": "execution_intent_daily_pnl_target_pct",
+          "pnl_governor_target_pnl_pct": 0.0,
+          "pnl_governor_target_pnl_quote": 0.0,
+          "pnl_governor_target_mode": "disabled"
+        }
+      },
+      "policy_daily_goal_pct": 0.6
+    }
+  ]
+}

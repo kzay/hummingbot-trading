@@ -517,6 +517,18 @@ def _run_recon_exchange_preflight_check(root: Path) -> Tuple[int, str]:
         return 2, str(e)
 
 
+def _run_paper_exchange_preflight_check(root: Path, strict: bool = False) -> Tuple[int, str]:
+    cmd = [sys.executable, str(root / "scripts" / "ops" / "preflight_paper_exchange.py")]
+    if strict:
+        cmd.append("--strict")
+    try:
+        proc = subprocess.run(cmd, cwd=str(root), capture_output=True, text=True, check=False)
+        msg = (proc.stdout or "") + ("\n" + proc.stderr if proc.stderr else "")
+        return int(proc.returncode), msg.strip()
+    except Exception as e:
+        return 2, str(e)
+
+
 def _run_checklist_evidence_collector(root: Path) -> Tuple[int, str]:
     cmd = [sys.executable, str(root / "scripts" / "ops" / "checklist_evidence_collector.py")]
     try:
@@ -549,6 +561,178 @@ def _run_data_plane_consistency_check(root: Path) -> Tuple[int, str]:
     ]
     try:
         proc = subprocess.run(cmd, cwd=str(root), capture_output=True, text=True, check=False, timeout=30)
+        msg = (proc.stdout or "") + ("\n" + proc.stderr if proc.stderr else "")
+        return int(proc.returncode), msg.strip()
+    except Exception as e:
+        return 2, str(e)
+
+
+def _run_paper_exchange_load_harness(
+    root: Path,
+    *,
+    strict: bool = False,
+    duration_sec: float = 20.0,
+    target_cmd_rate: float = 60.0,
+    min_commands: int = 300,
+    command_stream: str = "hb.paper_exchange.command.v1",
+    event_stream: str = "hb.paper_exchange.event.v1",
+    heartbeat_stream: str = "hb.paper_exchange.heartbeat.v1",
+    producer: str = "hb_bridge_active_adapter",
+    instance_name: str = "bot1",
+    connector_name: str = "bitget_perpetual",
+    trading_pair: str = "BTC-USDT",
+    result_timeout_sec: float = 30.0,
+    poll_interval_ms: int = 300,
+    scan_count: int = 20_000,
+) -> Tuple[int, str]:
+    cmd = [
+        sys.executable,
+        str(root / "scripts" / "release" / "run_paper_exchange_load_harness.py"),
+        "--duration-sec",
+        str(max(0.1, float(duration_sec))),
+        "--target-cmd-rate",
+        str(max(1.0, float(target_cmd_rate))),
+        "--min-commands",
+        str(max(1, int(min_commands))),
+        "--command-stream",
+        str(command_stream),
+        "--event-stream",
+        str(event_stream),
+        "--heartbeat-stream",
+        str(heartbeat_stream),
+        "--producer",
+        str(producer),
+        "--instance-name",
+        str(instance_name),
+        "--connector-name",
+        str(connector_name),
+        "--trading-pair",
+        str(trading_pair),
+        "--result-timeout-sec",
+        str(max(0.0, float(result_timeout_sec))),
+        "--poll-interval-ms",
+        str(max(10, int(poll_interval_ms))),
+        "--scan-count",
+        str(max(100, int(scan_count))),
+    ]
+    if strict:
+        cmd.append("--strict")
+    try:
+        proc = subprocess.run(
+            cmd,
+            cwd=str(root),
+            capture_output=True,
+            text=True,
+            check=False,
+            env=_build_subprocess_env(root),
+        )
+        msg = (proc.stdout or "") + ("\n" + proc.stderr if proc.stderr else "")
+        return int(proc.returncode), msg.strip()
+    except Exception as e:
+        return 2, str(e)
+
+
+def _run_paper_exchange_load_check(
+    root: Path,
+    *,
+    strict: bool = False,
+    lookback_sec: int = 600,
+    sample_count: int = 8000,
+    min_latency_samples: int = 200,
+    min_window_sec: int = 120,
+    command_stream: str = "hb.paper_exchange.command.v1",
+    event_stream: str = "hb.paper_exchange.event.v1",
+    heartbeat_stream: str = "hb.paper_exchange.heartbeat.v1",
+    consumer_group: str = "hb_group_paper_exchange",
+    heartbeat_consumer_group: str = "",
+    heartbeat_consumer_name: str = "",
+    load_run_id: str = "",
+) -> Tuple[int, str]:
+    cmd = [
+        sys.executable,
+        str(root / "scripts" / "release" / "check_paper_exchange_load.py"),
+        "--lookback-sec",
+        str(max(1, int(lookback_sec))),
+        "--sample-count",
+        str(max(1, int(sample_count))),
+        "--min-latency-samples",
+        str(max(1, int(min_latency_samples))),
+        "--min-window-sec",
+        str(max(1, int(min_window_sec))),
+        "--command-stream",
+        str(command_stream),
+        "--event-stream",
+        str(event_stream),
+        "--heartbeat-stream",
+        str(heartbeat_stream),
+        "--consumer-group",
+        str(consumer_group),
+    ]
+    if str(heartbeat_consumer_group or "").strip():
+        cmd.extend(["--heartbeat-consumer-group", str(heartbeat_consumer_group).strip()])
+    if str(heartbeat_consumer_name or "").strip():
+        cmd.extend(["--heartbeat-consumer-name", str(heartbeat_consumer_name).strip()])
+    if str(load_run_id or "").strip():
+        cmd.extend(["--load-run-id", str(load_run_id).strip()])
+    if strict:
+        cmd.append("--strict")
+    try:
+        proc = subprocess.run(
+            cmd,
+            cwd=str(root),
+            capture_output=True,
+            text=True,
+            check=False,
+            env=_build_subprocess_env(root),
+        )
+        msg = (proc.stdout or "") + ("\n" + proc.stderr if proc.stderr else "")
+        return int(proc.returncode), msg.strip()
+    except Exception as e:
+        return 2, str(e)
+
+
+def _run_paper_exchange_threshold_inputs_builder(
+    root: Path,
+    *,
+    max_source_age_min: float = 20.0,
+) -> Tuple[int, str]:
+    cmd = [
+        sys.executable,
+        str(root / "scripts" / "release" / "build_paper_exchange_threshold_inputs.py"),
+        "--max-source-age-min",
+        str(float(max_source_age_min)),
+    ]
+    try:
+        proc = subprocess.run(
+            cmd,
+            cwd=str(root),
+            capture_output=True,
+            text=True,
+            check=False,
+            env=_build_subprocess_env(root),
+        )
+        msg = (proc.stdout or "") + ("\n" + proc.stderr if proc.stderr else "")
+        return int(proc.returncode), msg.strip()
+    except Exception as e:
+        return 2, str(e)
+
+
+def _run_paper_exchange_thresholds_check(
+    root: Path,
+    *,
+    strict: bool = False,
+    max_input_age_min: float = 20.0,
+) -> Tuple[int, str]:
+    cmd = [
+        sys.executable,
+        str(root / "scripts" / "release" / "check_paper_exchange_thresholds.py"),
+        "--max-input-age-min",
+        str(float(max_input_age_min)),
+    ]
+    if strict:
+        cmd.append("--strict")
+    try:
+        proc = subprocess.run(cmd, cwd=str(root), capture_output=True, text=True, check=False)
         msg = (proc.stdout or "") + ("\n" + proc.stderr if proc.stderr else "")
         return int(proc.returncode), msg.strip()
     except Exception as e:
@@ -692,6 +876,13 @@ def main() -> int:
         help="Run reconciliation exchange-source readiness preflight.",
     )
     parser.add_argument(
+        "--check-paper-exchange-preflight",
+        action="store_true",
+        default=str(os.getenv("PROMOTION_CHECK_PAPER_EXCHANGE_PREFLIGHT", "false")).strip().lower()
+        in {"1", "true", "yes", "on"},
+        help="Run paper-exchange service wiring preflight gate.",
+    )
+    parser.add_argument(
         "--collect-go-live-evidence",
         action="store_true",
         help="Run go-live checklist evidence collector and enforce artifact gate.",
@@ -721,6 +912,174 @@ def main() -> int:
         action="store_true",
         help="Run INFRA-5 data-plane consistency gate (requires desk_snapshot_service running).",
     )
+    parser.add_argument(
+        "--check-paper-exchange-thresholds",
+        action="store_true",
+        default=str(os.getenv("PROMOTION_CHECK_PAPER_EXCHANGE_THRESHOLDS", "false")).strip().lower()
+        in {"1", "true", "yes", "on"},
+        help=(
+            "Run quantitative paper-exchange threshold evaluator "
+            "(reports/verification/paper_exchange_thresholds_latest.json)."
+        ),
+    )
+    parser.add_argument(
+        "--paper-exchange-threshold-max-age-min",
+        type=float,
+        default=float(os.getenv("PAPER_EXCHANGE_THRESHOLD_MAX_AGE_MIN", "20")),
+        help="Max allowed age (minutes) for paper-exchange threshold input artifact.",
+    )
+    parser.add_argument(
+        "--build-paper-exchange-threshold-inputs",
+        action="store_true",
+        default=True,
+        help="Build threshold input artifact before paper-exchange threshold evaluation.",
+    )
+    parser.add_argument(
+        "--no-build-paper-exchange-threshold-inputs",
+        action="store_false",
+        dest="build_paper_exchange_threshold_inputs",
+        help="Skip threshold input artifact builder (use existing input artifact).",
+    )
+    parser.add_argument(
+        "--paper-exchange-threshold-source-max-age-min",
+        type=float,
+        default=float(os.getenv("PAPER_EXCHANGE_THRESHOLD_SOURCE_MAX_AGE_MIN", "20")),
+        help="Max source artifact age (minutes) used by threshold input builder.",
+    )
+    parser.add_argument(
+        "--check-paper-exchange-load",
+        action="store_true",
+        default=True,
+        help="Build paper-exchange load/backpressure evidence before threshold input build.",
+    )
+    parser.add_argument(
+        "--no-check-paper-exchange-load",
+        action="store_false",
+        dest="check_paper_exchange_load",
+        help="Skip paper-exchange load/backpressure evidence generation.",
+    )
+    parser.add_argument(
+        "--run-paper-exchange-load-harness",
+        action="store_true",
+        default=str(os.getenv("PROMOTION_RUN_PAPER_EXCHANGE_LOAD_HARNESS", "false")).strip().lower()
+        in {"1", "true", "yes", "on"},
+        help="Inject synthetic sync_state command load before paper-exchange load checker.",
+    )
+    parser.add_argument(
+        "--paper-exchange-load-harness-duration-sec",
+        type=float,
+        default=float(os.getenv("PAPER_EXCHANGE_LOAD_HARNESS_DURATION_SEC", "20")),
+        help="Duration of synthetic paper-exchange load harness run.",
+    )
+    parser.add_argument(
+        "--paper-exchange-load-harness-target-cmd-rate",
+        type=float,
+        default=float(os.getenv("PAPER_EXCHANGE_LOAD_HARNESS_TARGET_CMD_RATE", "60")),
+        help="Target sync_state command publish rate for load harness.",
+    )
+    parser.add_argument(
+        "--paper-exchange-load-harness-min-commands",
+        type=int,
+        default=int(os.getenv("PAPER_EXCHANGE_LOAD_HARNESS_MIN_COMMANDS", "300")),
+        help="Minimum commands the harness must publish for pass-grade evidence.",
+    )
+    parser.add_argument(
+        "--paper-exchange-load-command-stream",
+        default=os.getenv("PAPER_EXCHANGE_COMMAND_STREAM", "hb.paper_exchange.command.v1"),
+        help="Command stream used by paper-exchange load harness/check.",
+    )
+    parser.add_argument(
+        "--paper-exchange-load-event-stream",
+        default=os.getenv("PAPER_EXCHANGE_EVENT_STREAM", "hb.paper_exchange.event.v1"),
+        help="Event stream used by paper-exchange load harness/check.",
+    )
+    parser.add_argument(
+        "--paper-exchange-load-heartbeat-stream",
+        default=os.getenv("PAPER_EXCHANGE_HEARTBEAT_STREAM", "hb.paper_exchange.heartbeat.v1"),
+        help="Heartbeat stream used by paper-exchange load harness/check.",
+    )
+    parser.add_argument(
+        "--paper-exchange-load-consumer-group",
+        default=os.getenv("PAPER_EXCHANGE_CONSUMER_GROUP", "hb_group_paper_exchange"),
+        help="Consumer group used by load checker lag/pending diagnostics.",
+    )
+    parser.add_argument(
+        "--paper-exchange-load-heartbeat-consumer-group",
+        default=os.getenv("PAPER_EXCHANGE_CONSUMER_GROUP", ""),
+        help="Optional heartbeat metadata consumer_group filter for load checker restart diagnostics.",
+    )
+    parser.add_argument(
+        "--paper-exchange-load-heartbeat-consumer-name",
+        default=os.getenv("PAPER_EXCHANGE_CONSUMER_NAME", ""),
+        help="Optional heartbeat metadata consumer_name filter for load checker restart diagnostics.",
+    )
+    parser.add_argument(
+        "--paper-exchange-load-harness-producer",
+        default=os.getenv("PAPER_EXCHANGE_LOAD_HARNESS_PRODUCER", "hb_bridge_active_adapter"),
+        help="Producer name emitted by the synthetic load harness.",
+    )
+    parser.add_argument(
+        "--paper-exchange-load-harness-instance-name",
+        default=os.getenv("PAPER_EXCHANGE_LOAD_HARNESS_INSTANCE_NAME", "bot1"),
+        help="Instance name used in harness commands.",
+    )
+    parser.add_argument(
+        "--paper-exchange-load-harness-connector-name",
+        default=os.getenv("PAPER_EXCHANGE_LOAD_HARNESS_CONNECTOR_NAME", "bitget_perpetual"),
+        help="Connector used in harness commands.",
+    )
+    parser.add_argument(
+        "--paper-exchange-load-harness-trading-pair",
+        default=os.getenv("PAPER_EXCHANGE_LOAD_HARNESS_TRADING_PAIR", "BTC-USDT"),
+        help="Trading pair used in harness commands.",
+    )
+    parser.add_argument(
+        "--paper-exchange-load-harness-result-timeout-sec",
+        type=float,
+        default=float(os.getenv("PAPER_EXCHANGE_LOAD_HARNESS_RESULT_TIMEOUT_SEC", "30")),
+        help="Timeout waiting for command results during harness execution.",
+    )
+    parser.add_argument(
+        "--paper-exchange-load-harness-poll-interval-ms",
+        type=int,
+        default=int(os.getenv("PAPER_EXCHANGE_LOAD_HARNESS_POLL_INTERVAL_MS", "300")),
+        help="Polling interval for harness result collection.",
+    )
+    parser.add_argument(
+        "--paper-exchange-load-harness-scan-count",
+        type=int,
+        default=int(os.getenv("PAPER_EXCHANGE_LOAD_HARNESS_SCAN_COUNT", "20000")),
+        help="Rows scanned by harness when matching command results.",
+    )
+    parser.add_argument(
+        "--paper-exchange-load-lookback-sec",
+        type=int,
+        default=int(os.getenv("PAPER_EXCHANGE_LOAD_LOOKBACK_SEC", "600")),
+        help="Load-evidence window in seconds for paper-exchange load checker.",
+    )
+    parser.add_argument(
+        "--paper-exchange-load-sample-count",
+        type=int,
+        default=int(os.getenv("PAPER_EXCHANGE_LOAD_SAMPLE_COUNT", "8000")),
+        help="Max stream rows sampled by paper-exchange load checker.",
+    )
+    parser.add_argument(
+        "--paper-exchange-load-min-latency-samples",
+        type=int,
+        default=int(os.getenv("PAPER_EXCHANGE_LOAD_MIN_LATENCY_SAMPLES", "200")),
+        help="Minimum matched command/result samples for pass-grade load evidence.",
+    )
+    parser.add_argument(
+        "--paper-exchange-load-min-window-sec",
+        type=int,
+        default=int(os.getenv("PAPER_EXCHANGE_LOAD_MIN_WINDOW_SEC", "120")),
+        help="Minimum command observation window (seconds) for pass-grade load evidence.",
+    )
+    parser.add_argument(
+        "--paper-exchange-load-run-id",
+        default=os.getenv("PAPER_EXCHANGE_LOAD_RUN_ID", ""),
+        help="Optional run_id filter for load checker (defaults to latest harness run_id when harness is executed).",
+    )
     args = parser.parse_args()
 
     root = Path("/workspace/hbot") if Path("/.dockerenv").exists() else Path(__file__).resolve().parents[2]
@@ -736,6 +1095,8 @@ def main() -> int:
     alerting_health_msg = ""
     recon_preflight_rc = 0
     recon_preflight_msg = ""
+    paper_exchange_preflight_rc = 0
+    paper_exchange_preflight_msg = ""
     checklist_evidence_rc = 0
     checklist_evidence_msg = ""
     telegram_validation_rc = 0
@@ -746,6 +1107,15 @@ def main() -> int:
     testnet_scorecard_msg = ""
     diversification_rc = 0
     diversification_msg = ""
+    paper_exchange_load_harness_rc = 0
+    paper_exchange_load_harness_msg = ""
+    paper_exchange_load_rc = 0
+    paper_exchange_load_msg = ""
+    paper_exchange_load_run_id = ""
+    paper_exchange_threshold_inputs_rc = 0
+    paper_exchange_threshold_inputs_msg = ""
+    paper_exchange_thresholds_rc = 0
+    paper_exchange_thresholds_msg = ""
     day2_catchup_rc = 0
     day2_catchup_msg = ""
     fill_backfill_rc = 0
@@ -807,7 +1177,12 @@ def main() -> int:
         root / "scripts" / "release" / "check_accounting_integrity_v2.py",
         root / "scripts" / "release" / "check_market_data_freshness.py",
         root / "scripts" / "release" / "check_alerting_health.py",
+        root / "scripts" / "release" / "run_paper_exchange_load_harness.py",
+        root / "scripts" / "release" / "check_paper_exchange_load.py",
+        root / "scripts" / "release" / "build_paper_exchange_threshold_inputs.py",
+        root / "scripts" / "release" / "check_paper_exchange_thresholds.py",
         root / "scripts" / "ops" / "preflight_startup.py",
+        root / "scripts" / "ops" / "preflight_paper_exchange.py",
         root / "scripts" / "ops" / "checklist_evidence_collector.py",
         root / "scripts" / "ops" / "validate_telegram_alerting.py",
         root / "scripts" / "release" / "testnet_readiness_gate.py",
@@ -863,7 +1238,32 @@ def main() -> int:
         if not recon_preflight_ok:
             critical_failures.append("recon_exchange_live_gate")
 
-    # 1d) Go-live checklist evidence collector
+    # 1d) Paper exchange preflight
+    if args.check_paper_exchange_preflight:
+        paper_exchange_preflight_rc, paper_exchange_preflight_msg = _run_paper_exchange_preflight_check(
+            root, strict=bool(args.ci)
+        )
+        pe_preflight_path = root / "reports" / "ops" / "preflight_paper_exchange_latest.json"
+        pe_preflight_report = _read_json(pe_preflight_path, {})
+        pe_preflight_ok = (
+            paper_exchange_preflight_rc == 0
+            and str(pe_preflight_report.get("status", "fail")).strip().lower() == "pass"
+        )
+        checks.append(
+            _check(
+                pe_preflight_ok,
+                "paper_exchange_preflight",
+                "critical",
+                "paper-exchange preflight PASS"
+                if pe_preflight_ok
+                else f"paper-exchange preflight failed (rc={paper_exchange_preflight_rc})",
+                [str(pe_preflight_path)],
+            )
+        )
+        if not pe_preflight_ok:
+            critical_failures.append("paper_exchange_preflight")
+
+    # 1e) Go-live checklist evidence collector
     if args.collect_go_live_evidence:
         checklist_evidence_rc, checklist_evidence_msg = _run_checklist_evidence_collector(root)
         evidence_path = root / "reports" / "ops" / "go_live_checklist_evidence_latest.json"
@@ -884,7 +1284,7 @@ def main() -> int:
         if not evidence_ok:
             critical_failures.append("go_live_checklist_evidence_gate")
 
-    # 1e) Telegram validation evidence
+    # 1f) Telegram validation evidence
     if args.check_telegram_validation:
         telegram_validation_rc, telegram_validation_msg = _run_telegram_validation(root, strict=bool(args.ci))
         telegram_path = root / "reports" / "ops" / "telegram_validation_latest.json"
@@ -904,7 +1304,7 @@ def main() -> int:
         if not telegram_ok:
             critical_failures.append("telegram_alerting_gate")
 
-    # 1f) ROAD-5 testnet readiness gate
+    # 1g) ROAD-5 testnet readiness gate
     if args.check_testnet_readiness:
         testnet_readiness_rc, testnet_readiness_msg = _run_testnet_readiness_gate(root, strict=bool(args.ci))
         testnet_ready_path = root / "reports" / "ops" / "testnet_readiness_latest.json"
@@ -920,7 +1320,7 @@ def main() -> int:
             )
         )
 
-    # 1g) ROAD-5 daily scorecard
+    # 1h) ROAD-5 daily scorecard
     if args.check_testnet_daily_scorecard:
         day_utc = datetime.now(timezone.utc).strftime("%Y-%m-%d")
         testnet_scorecard_rc, testnet_scorecard_msg = _run_testnet_daily_scorecard(root, day_utc=day_utc)
@@ -939,7 +1339,7 @@ def main() -> int:
             )
         )
 
-    # 1h) ROAD-9 diversification evidence (BTC vs ETH correlation + inverse-variance weights)
+    # 1i) ROAD-9 diversification evidence (BTC vs ETH correlation + inverse-variance weights)
     if args.check_portfolio_diversification:
         diversification_rc, diversification_msg = _run_portfolio_diversification_check(root)
         diversification_path = reports / "policy" / "portfolio_diversification_latest.json"
@@ -958,7 +1358,7 @@ def main() -> int:
             )
         )
 
-    # 1i) INFRA-5 data-plane consistency gate
+    # 1j) INFRA-5 data-plane consistency gate
     if args.check_data_plane_consistency:
         dp_rc, dp_msg = _run_data_plane_consistency_check(root)
         dp_path = reports / "data_plane_consistency" / "latest.json"
@@ -975,6 +1375,112 @@ def main() -> int:
                 [str(dp_path)],
             )
         )
+
+    # 1k) Quantitative paper-exchange threshold gate
+    if args.check_paper_exchange_thresholds:
+        if args.check_paper_exchange_load and args.run_paper_exchange_load_harness:
+            paper_exchange_load_harness_rc, paper_exchange_load_harness_msg = _run_paper_exchange_load_harness(
+                root,
+                strict=False,
+                duration_sec=float(args.paper_exchange_load_harness_duration_sec),
+                target_cmd_rate=float(args.paper_exchange_load_harness_target_cmd_rate),
+                min_commands=int(args.paper_exchange_load_harness_min_commands),
+                command_stream=str(args.paper_exchange_load_command_stream),
+                event_stream=str(args.paper_exchange_load_event_stream),
+                heartbeat_stream=str(args.paper_exchange_load_heartbeat_stream),
+                producer=str(args.paper_exchange_load_harness_producer),
+                instance_name=str(args.paper_exchange_load_harness_instance_name),
+                connector_name=str(args.paper_exchange_load_harness_connector_name),
+                trading_pair=str(args.paper_exchange_load_harness_trading_pair),
+                result_timeout_sec=float(args.paper_exchange_load_harness_result_timeout_sec),
+                poll_interval_ms=int(args.paper_exchange_load_harness_poll_interval_ms),
+                scan_count=int(args.paper_exchange_load_harness_scan_count),
+            )
+            pe_harness_path = reports / "verification" / "paper_exchange_load_harness_latest.json"
+            pe_harness_report = _read_json(pe_harness_path, {})
+            pe_harness_diag = pe_harness_report.get("diagnostics", {})
+            pe_harness_diag = pe_harness_diag if isinstance(pe_harness_diag, dict) else {}
+            paper_exchange_load_run_id = str(pe_harness_diag.get("run_id", "")).strip()
+            pe_harness_ok = (
+                paper_exchange_load_harness_rc == 0
+                and str(pe_harness_report.get("status", "fail")).strip().lower() == "pass"
+            )
+            checks.append(
+                _check(
+                    pe_harness_ok,
+                    "paper_exchange_load_harness",
+                    "warning",
+                    "paper-exchange load harness PASS"
+                    if pe_harness_ok
+                    else f"paper-exchange load harness failed (rc={paper_exchange_load_harness_rc})",
+                    [str(pe_harness_path)],
+                )
+            )
+        if args.check_paper_exchange_load:
+            paper_exchange_load_rc, paper_exchange_load_msg = _run_paper_exchange_load_check(
+                root,
+                strict=False,
+                lookback_sec=int(args.paper_exchange_load_lookback_sec),
+                sample_count=int(args.paper_exchange_load_sample_count),
+                min_latency_samples=int(args.paper_exchange_load_min_latency_samples),
+                min_window_sec=int(args.paper_exchange_load_min_window_sec),
+                command_stream=str(args.paper_exchange_load_command_stream),
+                event_stream=str(args.paper_exchange_load_event_stream),
+                heartbeat_stream=str(args.paper_exchange_load_heartbeat_stream),
+                consumer_group=str(args.paper_exchange_load_consumer_group),
+                heartbeat_consumer_group=str(args.paper_exchange_load_heartbeat_consumer_group),
+                heartbeat_consumer_name=str(args.paper_exchange_load_heartbeat_consumer_name),
+                load_run_id=(paper_exchange_load_run_id or str(args.paper_exchange_load_run_id)),
+            )
+            pe_load_path = reports / "verification" / "paper_exchange_load_latest.json"
+            pe_load_report = _read_json(pe_load_path, {})
+            pe_load_status = str(pe_load_report.get("status", "")).strip().lower()
+            pe_load_ok = paper_exchange_load_rc == 0 and pe_load_status in {"pass", "warning"}
+            checks.append(
+                _check(
+                    pe_load_ok,
+                    "paper_exchange_load_validation",
+                    "warning",
+                    "paper-exchange load/backpressure evidence generated"
+                    if pe_load_ok
+                    else f"paper-exchange load/backpressure evidence failed (rc={paper_exchange_load_rc})",
+                    [str(pe_load_path)],
+                )
+            )
+        if args.build_paper_exchange_threshold_inputs:
+            paper_exchange_threshold_inputs_rc, paper_exchange_threshold_inputs_msg = (
+                _run_paper_exchange_threshold_inputs_builder(
+                    root,
+                    max_source_age_min=float(args.paper_exchange_threshold_source_max_age_min),
+                )
+            )
+        paper_exchange_thresholds_rc, paper_exchange_thresholds_msg = _run_paper_exchange_thresholds_check(
+            root,
+            strict=bool(args.ci),
+            max_input_age_min=float(args.paper_exchange_threshold_max_age_min),
+        )
+        pe_threshold_path = reports / "verification" / "paper_exchange_thresholds_latest.json"
+        pe_threshold_report = _read_json(pe_threshold_path, {})
+        pe_threshold_ok = (
+            paper_exchange_thresholds_rc == 0
+            and str(pe_threshold_report.get("status", "fail")).strip().lower() == "pass"
+        )
+        checks.append(
+            _check(
+                pe_threshold_ok,
+                "paper_exchange_thresholds",
+                "critical",
+                "paper-exchange quantitative thresholds PASS"
+                if pe_threshold_ok
+                else (
+                    "paper-exchange quantitative thresholds failed "
+                    f"(rc={paper_exchange_thresholds_rc})"
+                ),
+                [str(pe_threshold_path)],
+            )
+        )
+        if not pe_threshold_ok:
+            critical_failures.append("paper_exchange_thresholds")
 
     # 2) Multi-bot policy consistency check
     policy_check_path = reports / "policy" / "latest.json"
@@ -1518,6 +2024,9 @@ def main() -> int:
             "alerting_health_rc": alerting_health_rc,
             "recon_exchange_preflight_output": recon_preflight_msg[:2000],
             "recon_exchange_preflight_rc": recon_preflight_rc,
+            "paper_exchange_preflight_output": paper_exchange_preflight_msg[:2000],
+            "paper_exchange_preflight_rc": paper_exchange_preflight_rc,
+            "check_paper_exchange_preflight": bool(args.check_paper_exchange_preflight),
             "go_live_checklist_evidence_output": checklist_evidence_msg[:2000],
             "go_live_checklist_evidence_rc": checklist_evidence_rc,
             "telegram_validation_output": telegram_validation_msg[:2000],
@@ -1528,6 +2037,42 @@ def main() -> int:
             "testnet_scorecard_rc": testnet_scorecard_rc,
             "portfolio_diversification_output": diversification_msg[:2000],
             "portfolio_diversification_rc": diversification_rc,
+            "check_paper_exchange_thresholds": bool(args.check_paper_exchange_thresholds),
+            "check_paper_exchange_load": bool(args.check_paper_exchange_load),
+            "run_paper_exchange_load_harness": bool(args.run_paper_exchange_load_harness),
+            "paper_exchange_load_harness_duration_sec": float(args.paper_exchange_load_harness_duration_sec),
+            "paper_exchange_load_harness_target_cmd_rate": float(args.paper_exchange_load_harness_target_cmd_rate),
+            "paper_exchange_load_harness_min_commands": int(args.paper_exchange_load_harness_min_commands),
+            "paper_exchange_load_harness_producer": str(args.paper_exchange_load_harness_producer),
+            "paper_exchange_load_harness_instance_name": str(args.paper_exchange_load_harness_instance_name),
+            "paper_exchange_load_harness_connector_name": str(args.paper_exchange_load_harness_connector_name),
+            "paper_exchange_load_harness_trading_pair": str(args.paper_exchange_load_harness_trading_pair),
+            "paper_exchange_load_harness_result_timeout_sec": float(args.paper_exchange_load_harness_result_timeout_sec),
+            "paper_exchange_load_harness_poll_interval_ms": int(args.paper_exchange_load_harness_poll_interval_ms),
+            "paper_exchange_load_harness_scan_count": int(args.paper_exchange_load_harness_scan_count),
+            "paper_exchange_load_harness_output": paper_exchange_load_harness_msg[:2000],
+            "paper_exchange_load_harness_rc": int(paper_exchange_load_harness_rc),
+            "paper_exchange_load_run_id": paper_exchange_load_run_id,
+            "paper_exchange_load_command_stream": str(args.paper_exchange_load_command_stream),
+            "paper_exchange_load_event_stream": str(args.paper_exchange_load_event_stream),
+            "paper_exchange_load_heartbeat_stream": str(args.paper_exchange_load_heartbeat_stream),
+            "paper_exchange_load_consumer_group": str(args.paper_exchange_load_consumer_group),
+            "paper_exchange_load_heartbeat_consumer_group": str(args.paper_exchange_load_heartbeat_consumer_group),
+            "paper_exchange_load_heartbeat_consumer_name": str(args.paper_exchange_load_heartbeat_consumer_name),
+            "paper_exchange_load_run_id_override": str(args.paper_exchange_load_run_id),
+            "paper_exchange_load_lookback_sec": int(args.paper_exchange_load_lookback_sec),
+            "paper_exchange_load_sample_count": int(args.paper_exchange_load_sample_count),
+            "paper_exchange_load_min_latency_samples": int(args.paper_exchange_load_min_latency_samples),
+            "paper_exchange_load_min_window_sec": int(args.paper_exchange_load_min_window_sec),
+            "paper_exchange_load_output": paper_exchange_load_msg[:2000],
+            "paper_exchange_load_rc": int(paper_exchange_load_rc),
+            "build_paper_exchange_threshold_inputs": bool(args.build_paper_exchange_threshold_inputs),
+            "paper_exchange_threshold_source_max_age_min": float(args.paper_exchange_threshold_source_max_age_min),
+            "paper_exchange_threshold_inputs_output": paper_exchange_threshold_inputs_msg[:2000],
+            "paper_exchange_threshold_inputs_rc": paper_exchange_threshold_inputs_rc,
+            "paper_exchange_threshold_max_age_min": float(args.paper_exchange_threshold_max_age_min),
+            "paper_exchange_thresholds_output": paper_exchange_thresholds_msg[:2000],
+            "paper_exchange_thresholds_rc": paper_exchange_thresholds_rc,
         },
     }
 

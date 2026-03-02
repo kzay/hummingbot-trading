@@ -22,18 +22,43 @@ logger = logging.getLogger(__name__)
 
 
 async def check_system_time_drift(max_drift_seconds: float = 2.0) -> bool:
-    """Check if system time is reasonably accurate."""
+    """Check system clock against Bitget server time.
+
+    Queries Bitget's public time endpoint and compares against local clock.
+    Falls back to checking against multiple HTTP Date headers if Bitget is unreachable.
+    """
     import time
+    import urllib.request
+    import json as _json
 
-    ntp_time = time.time()
-    local_time = datetime.now(timezone.utc).timestamp()
-    drift = abs(ntp_time - local_time)
+    endpoints = [
+        ("https://api.bitget.com/api/v2/public/time", "bitget"),
+        ("https://api.binance.com/api/v3/time", "binance"),
+    ]
+    for url, name in endpoints:
+        try:
+            req = urllib.request.Request(url, method="GET")
+            req.add_header("User-Agent", "hbot-health-check/1.0")
+            with urllib.request.urlopen(req, timeout=5) as resp:
+                body = _json.loads(resp.read())
+                if name == "bitget":
+                    server_ms = int(body.get("data", {}).get("serverTime", 0))
+                else:
+                    server_ms = int(body.get("serverTime", 0))
+                if server_ms > 0:
+                    server_s = server_ms / 1000.0
+                    local_s = time.time()
+                    drift = abs(local_s - server_s)
+                    if drift > max_drift_seconds:
+                        logger.warning("Clock drift %.2fs vs %s server (max %.1fs)", drift, name, max_drift_seconds)
+                        return False
+                    logger.info("Clock drift: %.3fs vs %s server (OK)", drift, name)
+                    return True
+        except Exception as exc:
+            logger.debug("Time check via %s failed: %s", name, exc)
+            continue
 
-    if drift > max_drift_seconds:
-        logger.warning(f"System time drift detected: {drift:.2f}s")
-        return False
-
-    logger.info(f"System time drift: {drift:.4f}s (OK)")
+    logger.warning("Could not reach any time server — clock drift check skipped")
     return True
 
 

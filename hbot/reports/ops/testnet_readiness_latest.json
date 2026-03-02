@@ -1,0 +1,40 @@
+{
+  "ts_utc": "2026-03-01T13:27:37.851779+00:00",
+  "status": "fail",
+  "checks": [
+    {
+      "name": "kill_switch_non_dry_run_config",
+      "pass": false,
+      "reason": "KILL_SWITCH_DRY_RUN not set to false",
+      "evidence_paths": [
+        "F:\\Environement\\git-repo\\hummingbot_custo\\hbot\\env\\.env"
+      ]
+    },
+    {
+      "name": "kill_switch_execution_evidence",
+      "pass": false,
+      "reason": "non-dry-run kill switch evidence failed checks: non_dry_run,execution_status_ok",
+      "evidence_paths": [
+        "F:\\Environement\\git-repo\\hummingbot_custo\\hbot\\reports\\kill_switch\\latest.json",
+        "F:\\Environement\\git-repo\\hummingbot_custo\\hbot\\reports\\ops\\kill_switch_non_dry_run_evidence_latest.json",
+        "F:\\Environement\\git-repo\\hummingbot_custo\\hbot\\reports\\ops\\kill_switch_non_dry_run_evidence_20260301T132737Z.json"
+      ]
+    },
+    {
+      "name": "bot1_connector_target",
+      "pass": true,
+      "reason": "bot1 configured for bitget_perpetual",
+      "evidence_paths": [
+        "F:\\Environement\\git-repo\\hummingbot_custo\\hbot\\data\\bot1\\conf\\controllers\\epp_v2_4_bot_a.yml"
+      ]
+    },
+    {
+      "name": "go_live_checklist_evidence",
+      "pass": true,
+      "reason": "checklist evidence present",
+      "evidence_paths": [
+        "F:\\Environement\\git-repo\\hummingbot_custo\\hbot\\reports\\ops\\go_live_checklist_evidence_latest.json"
+      ]
+    }
+  ]
+}

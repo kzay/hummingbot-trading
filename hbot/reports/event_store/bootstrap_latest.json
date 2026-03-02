@@ -1,0 +1,9 @@
+{
+  "ts_utc": "2026-03-02T02:37:36.938309+00:00",
+  "status": "pass",
+  "seeded_count": 0,
+  "seeded_streams": [],
+  "missing_streams_without_latest_event": [
+    "hb.ml_signal.v1"
+  ]
+}

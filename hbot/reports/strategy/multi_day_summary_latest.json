@@ -1,0 +1,192 @@
+{
+  "period": {
+    "start": "2026-02-26",
+    "end": "2026-03-02"
+  },
+  "n_days": 5,
+  "days_with_data": 5,
+  "days_checked": 5,
+  "missing_days_count": 0,
+  "missing_days": [],
+  "warnings": [],
+  "data_quality": {
+    "confidence_counts": {
+      "high": 5,
+      "medium": 0,
+      "low": 0
+    },
+    "high_confidence_days": 5,
+    "medium_confidence_days": 0,
+    "low_confidence_days": 0
+  },
+  "total_net_pnl_usdt": 2.374981853154201,
+  "total_fees_usdt": 3.382783521337358,
+  "mean_daily_pnl_usdt": 0.4749963706308402,
+  "std_daily_pnl_usdt": 5.402906463334558,
+  "sharpe_annualized": 1.396,
+  "win_rate": 0.4,
+  "winning_days": 2,
+  "losing_days": 3,
+  "max_single_day_drawdown_pct": 0.0329,
+  "hard_stop_days": 0,
+  "total_fills": 505,
+  "spread_competitiveness_cap_active_rows": 1523,
+  "spread_competitiveness_cap_observed_rows": 3452,
+  "spread_competitiveness_cap_hit_ratio": 0.4411935110081112,
+  "regime_breakdown": {
+    "down": 319,
+    "neutral_low_vol": 2408,
+    "high_vol_shock": 380,
+    "up": 345
+  },
+  "daily_table_markdown": "| date | net_pnl_usdt | net_pnl_bps | drawdown_pct | fills | turnover_x | dominant_regime |\n|---|---:|---:|---:|---:|---:|---|\n| 2026-02-26 | 6.7967 | 133.78 | 0.0001 | 300 | 12.315 | neutral_low_vol |\n| 2026-02-27 | -0.3158 | -6.21 | 0.0033 | 138 | 7.453 | neutral_low_vol |\n| 2026-02-28 | 5.5035 | 107.10 | 0.0057 | 65 | 3.844 | neutral_low_vol |\n| 2026-03-01 | -1.3168 | -52.99 | 0.0000 | 1 | 0.000 | neutral_low_vol |\n| 2026-03-02 | -8.2926 | -345.08 | 0.0329 | 1 | 0.835 | neutral_low_vol |",
+  "road1_gate": {
+    "pass": false,
+    "criteria": {
+      "mean_daily_pnl_positive": true,
+      "sharpe_gte_1_5": false,
+      "max_drawdown_lt_2pct": false,
+      "no_hard_stop_days": true
+    }
+  },
+  "daily_breakdown": [
+    {
+      "date": "2026-02-26",
+      "realized_pnl_usdt": 8.85198243714065,
+      "fees_usdt": 2.055236209506512,
+      "net_pnl_usdt": 6.796746227634138,
+      "net_pnl_bps": 133.77554127169233,
+      "drawdown_pct": 5.58460858273192e-05,
+      "daily_loss_pct": 0.0,
+      "fills": 300,
+      "turnover_x": 12.314693677026828,
+      "dominant_regime": "neutral_low_vol",
+      "equity_quote": 508.0709196182761,
+      "regime_counts": {
+        "down": 153,
+        "neutral_low_vol": 453,
+        "high_vol_shock": 18,
+        "up": 140
+      },
+      "spread_competitiveness_cap_active_rows": 0,
+      "spread_competitiveness_cap_observed_rows": 764,
+      "spread_competitiveness_cap_hit_ratio": 0.0,
+      "data_quality": {
+        "confidence": "high",
+        "minute_rows": 764,
+        "has_equity_quote": true,
+        "has_regime_counts": true
+      }
+    },
+    {
+      "date": "2026-02-27",
+      "realized_pnl_usdt": 0.4858895357515338,
+      "fees_usdt": 0.8016983079395386,
+      "net_pnl_usdt": -0.31580877218800474,
+      "net_pnl_bps": -6.214719957518072,
+      "drawdown_pct": 0.0032689263442658135,
+      "daily_loss_pct": 0.0,
+      "fills": 138,
+      "turnover_x": 7.452680279166043,
+      "dominant_regime": "neutral_low_vol",
+      "equity_quote": 508.1625147179231,
+      "regime_counts": {
+        "neutral_low_vol": 238,
+        "high_vol_shock": 1
+      },
+      "spread_competitiveness_cap_active_rows": 0,
+      "spread_competitiveness_cap_observed_rows": 239,
+      "spread_competitiveness_cap_hit_ratio": 0.0,
+      "data_quality": {
+        "confidence": "high",
+        "minute_rows": 239,
+        "has_equity_quote": true,
+        "has_regime_counts": true
+      }
+    },
+    {
+      "date": "2026-02-28",
+      "realized_pnl_usdt": 5.901771526259943,
+      "fees_usdt": 0.39829636742531255,
+      "net_pnl_usdt": 5.503475158834631,
+      "net_pnl_bps": 107.10140687982326,
+      "drawdown_pct": 0.0057098082533036075,
+      "daily_loss_pct": 0.0,
+      "fills": 65,
+      "turnover_x": 3.84361155063674,
+      "dominant_regime": "neutral_low_vol",
+      "equity_quote": 513.8564766950252,
+      "regime_counts": {
+        "neutral_low_vol": 772,
+        "high_vol_shock": 97,
+        "up": 95,
+        "down": 38
+      },
+      "spread_competitiveness_cap_active_rows": 76,
+      "spread_competitiveness_cap_observed_rows": 1002,
+      "spread_competitiveness_cap_hit_ratio": 0.07584830339321358,
+      "data_quality": {
+        "confidence": "high",
+        "minute_rows": 1002,
+        "has_equity_quote": true,
+        "has_regime_counts": true
+      }
+    },
+    {
+      "date": "2026-03-01",
+      "realized_pnl_usdt": -1.3096601937635104,
+      "fees_usdt": 0.007162846540994881,
+      "net_pnl_usdt": -1.3168230403045051,
+      "net_pnl_bps": -52.9944410200334,
+      "drawdown_pct": 0.0,
+      "daily_loss_pct": 0.0,
+      "fills": 1,
+      "turnover_x": 0.0,
+      "dominant_regime": "neutral_low_vol",
+      "equity_quote": 248.4832399320353,
+      "regime_counts": {
+        "neutral_low_vol": 665,
+        "up": 64,
+        "down": 72,
+        "high_vol_shock": 165
+      },
+      "spread_competitiveness_cap_active_rows": 966,
+      "spread_competitiveness_cap_observed_rows": 966,
+      "spread_competitiveness_cap_hit_ratio": 1.0,
+      "data_quality": {
+        "confidence": "high",
+        "minute_rows": 966,
+        "has_equity_quote": true,
+        "has_regime_counts": true
+      }
+    },
+    {
+      "date": "2026-03-02",
+      "realized_pnl_usdt": -8.172217930897057,
+      "fees_usdt": 0.120389789925,
+      "net_pnl_usdt": -8.292607720822058,
+      "net_pnl_bps": -345.0781263284203,
+      "drawdown_pct": 0.03288840701341591,
+      "daily_loss_pct": 0.010277871766733853,
+      "fills": 1,
+      "turnover_x": 0.8349581646490173,
+      "dominant_regime": "neutral_low_vol",
+      "equity_quote": 240.31102200113824,
+      "regime_counts": {
+        "neutral_low_vol": 280,
+        "high_vol_shock": 99,
+        "down": 56,
+        "up": 46
+      },
+      "spread_competitiveness_cap_active_rows": 481,
+      "spread_competitiveness_cap_observed_rows": 481,
+      "spread_competitiveness_cap_hit_ratio": 1.0,
+      "data_quality": {
+        "confidence": "high",
+        "minute_rows": 481,
+        "has_equity_quote": true,
+        "has_regime_counts": true
+      }
+    }
+  ]
+}

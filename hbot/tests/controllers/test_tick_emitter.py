@@ -48,6 +48,16 @@ def _snapshot_defaults() -> dict:
         "kelly_order_quote": Decimal("0"),
         "ml_regime_override": "",
         "adverse_skip_count": 0,
+        "pnl_governor_active": False,
+        "pnl_governor_day_progress": Decimal("0"),
+        "pnl_governor_target_pnl_pct": Decimal("0"),
+        "pnl_governor_target_pnl_quote": Decimal("0"),
+        "pnl_governor_expected_pnl_quote": Decimal("0"),
+        "pnl_governor_actual_pnl_quote": Decimal("0"),
+        "pnl_governor_deficit_ratio": Decimal("0"),
+        "pnl_governor_edge_relax_bps": Decimal("0"),
+        "pnl_governor_size_mult": Decimal("1"),
+        "pnl_governor_size_boost_active": False,
         "indicator_duration_ms": 0.0,
         "connector_io_duration_ms": 0.0,
     }
@@ -103,3 +113,6 @@ def test_build_tick_output_defaults_missing_adaptive_keys():
     assert out["adaptive_effective_min_edge_pct"] == Decimal("0")
     assert out["adaptive_fill_age_s"] == Decimal("0")
     assert out["adaptive_market_floor_pct"] == Decimal("0")
+    assert out["pnl_governor_target_mode"] == "disabled"
+    assert out["pnl_governor_size_mult_applied"] == Decimal("1")
+    assert out["spread_competitiveness_cap_active"] is False

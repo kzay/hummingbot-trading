@@ -8,8 +8,15 @@ from decimal import Decimal
 import pytest
 
 from controllers.paper_engine_v2.fill_models import (
+    BestPriceFillModel,
+    CompetitionAwareFillModel,
     FillDecision, LatencyAwareFillModel, LatencyAwareConfig,
+    MarketHoursAwareFillModel,
+    OneTickSlippageFillModel,
     QueuePositionConfig, QueuePositionFillModel, TopOfBookFillModel,
+    SizeAwareFillModel,
+    ThreeTierFillModel,
+    TwoTierFillModel, make_fill_model,
     _NO_FILL,
 )
 from controllers.paper_engine_v2.types import OrderSide, OrderStatus, PaperOrderType
@@ -148,6 +155,36 @@ class TestQueuePositionFillModel:
         assert decision.fill_price < Decimal("100.00")
         assert decision.is_maker is False
 
+    def test_taker_fill_uses_multi_level_vwap(self):
+        """Taker fill should price from multi-level contra depth, not only top."""
+        from controllers.paper_engine_v2.types import BookLevel, OrderBookSnapshot
+
+        model = self._make(
+            queue_participation=Decimal("1.0"),
+            queue_jitter_pct=0.0,
+            slippage_bps=Decimal("0"),
+            adverse_selection_bps=Decimal("0"),
+            depth_levels=3,
+            seed=7,
+        )
+        order = make_order("buy", "market", "0", "2.0")
+        order.crossed_at_creation = True
+        order.status = OrderStatus.OPEN
+        book = OrderBookSnapshot(
+            instrument_id=BTC_SPOT,
+            bids=(BookLevel(price=Decimal("100.00"), size=Decimal("5.0")),),
+            asks=(
+                BookLevel(price=Decimal("100.00"), size=Decimal("1.0")),
+                BookLevel(price=Decimal("100.10"), size=Decimal("1.0")),
+                BookLevel(price=Decimal("100.20"), size=Decimal("5.0")),
+            ),
+            timestamp_ns=_now(),
+        )
+        decision = model.evaluate(order, book, _now())
+        assert decision.fill_quantity >= Decimal("2.0")
+        # Pure two-level VWAP for 2.0 = (1*100.00 + 1*100.10)/2 = 100.05
+        assert decision.fill_price == Decimal("100.05")
+
 
 class TestTopOfBookFillModel:
     def test_v5_instant_full_fill(self):
@@ -169,6 +206,55 @@ class TestTopOfBookFillModel:
         empty = OrderBookSnapshot(instrument_id=BTC_SPOT, bids=(), asks=(), timestamp_ns=0)
         d = model.evaluate(order, empty, _now())
         assert d.fill_quantity == Decimal("0")
+
+
+class TestNautilusStylePresets:
+    def test_best_price_alias_behaves_like_top_of_book(self):
+        model = BestPriceFillModel()
+        order = make_order("buy", "market", "0", "1.0")
+        order.status = OrderStatus.OPEN
+        book = make_book("100.00", "100.05")
+        d = model.evaluate(order, book, _now())
+        assert d.fill_quantity == Decimal("1.0")
+        assert d.fill_price == Decimal("100.05")
+
+    def test_one_tick_slippage_buy_is_worse_than_top(self):
+        model = OneTickSlippageFillModel()
+        order = make_order("buy", "market", "0", "1.0")
+        order.status = OrderStatus.OPEN
+        book = make_book("100.00", "100.05")
+        d = model.evaluate(order, book, _now())
+        assert d.fill_price > Decimal("100.05")
+
+    def test_two_tier_vwap_applies_second_tier_price(self):
+        model = TwoTierFillModel(tier1_size=Decimal("1"))
+        order = make_order("buy", "market", "0", "2.0")
+        order.status = OrderStatus.OPEN
+        book = make_book("100.00", "100.05")
+        d = model.evaluate(order, book, _now())
+        # 1 @ 100.05 and 1 @ 100.0501
+        assert d.fill_price == Decimal("100.05005")
+
+    def test_factory_supports_nautilus_style_names(self):
+        assert isinstance(make_fill_model("best_price"), BestPriceFillModel)
+        assert isinstance(make_fill_model("one_tick_slippage"), OneTickSlippageFillModel)
+        assert isinstance(make_fill_model("two_tier"), TwoTierFillModel)
+        assert isinstance(make_fill_model("three_tier"), ThreeTierFillModel)
+        assert isinstance(make_fill_model("competition_aware"), CompetitionAwareFillModel)
+        assert isinstance(make_fill_model("size_aware"), SizeAwareFillModel)
+        assert isinstance(make_fill_model("market_hours_aware"), MarketHoursAwareFillModel)
+
+    def test_three_tier_has_worse_vwap_than_two_tier_for_large_order(self):
+        book = make_book("100.00", "100.05")
+        order = make_order("buy", "market", "0", "3.0")
+        order.status = OrderStatus.OPEN
+        two = TwoTierFillModel(tier1_size=Decimal("1")).evaluate(order, book, _now())
+        three = ThreeTierFillModel(
+            tier1_size=Decimal("1"),
+            tier2_size=Decimal("1"),
+            tier3_size=Decimal("1"),
+        ).evaluate(order, book, _now())
+        assert three.fill_price > two.fill_price
 
 
 class TestLatencyAwareFillModel:

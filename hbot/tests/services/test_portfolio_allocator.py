@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from services.portfolio_allocator.main import (
     _apply_diversification_variance_overrides,
+    _compute_daily_goal_plan,
     _compute_inverse_variance_allocations,
     _eligible_bots,
 )
@@ -110,3 +111,68 @@ def test_diversification_variance_overrides_skip_when_metrics_missing() -> None:
     assert float(updated["bot1"]["variance"]) == 1.0
     assert str(updated["bot1"]["variance_source"]) == "policy_proxy"
     assert int(diag["overrides_applied"]) == 0
+
+
+def test_compute_daily_goal_plan_weighted_by_allocation_pct() -> None:
+    allocator_cfg = {
+        "daily_goal": {
+            "enabled": True,
+            "target_pct_total_equity": 1.0,
+            "distribution": "allocation_weighted",
+            "apply_only_portfolio_action_enabled": False,
+            "min_bot_target_pct": 0.0,
+            "max_bot_target_pct": 10.0,
+        }
+    }
+    proposals = [
+        {"bot": "bot1", "equity_quote": 100.0, "allocation_pct": 0.8, "portfolio_action_enabled": True},
+        {"bot": "bot3", "equity_quote": 100.0, "allocation_pct": 0.2, "portfolio_action_enabled": False},
+    ]
+    out = _compute_daily_goal_plan(allocator_cfg, proposals, total_equity_quote=200.0)
+    assert out["status"] == "pass"
+    rows = {str(r["bot"]): r for r in out["rows"]}
+    assert abs(float(rows["bot1"]["daily_pnl_target_pct"]) - 1.6) < 1e-9
+    assert abs(float(rows["bot3"]["daily_pnl_target_pct"]) - 0.4) < 1e-9
+    assert abs(float(out["target_quote_total_equity"]) - 2.0) < 1e-9
+
+
+def test_compute_daily_goal_plan_can_filter_to_action_scope() -> None:
+    allocator_cfg = {
+        "daily_goal": {
+            "enabled": True,
+            "target_pct_total_equity": 1.0,
+            "distribution": "allocation_weighted",
+            "apply_only_portfolio_action_enabled": True,
+        }
+    }
+    proposals = [
+        {"bot": "bot1", "equity_quote": 100.0, "allocation_pct": 0.8, "portfolio_action_enabled": True},
+        {"bot": "bot3", "equity_quote": 100.0, "allocation_pct": 0.2, "portfolio_action_enabled": False},
+    ]
+    out = _compute_daily_goal_plan(allocator_cfg, proposals, total_equity_quote=200.0)
+    assert out["status"] == "pass"
+    rows = {str(r["bot"]): r for r in out["rows"]}
+    assert set(rows.keys()) == {"bot1"}
+    assert abs(float(rows["bot1"]["daily_pnl_target_pct"]) - 1.0) < 1e-9
+
+
+def test_compute_daily_goal_plan_ignores_zero_weight_equity_in_goal_scope() -> None:
+    allocator_cfg = {
+        "daily_goal": {
+            "enabled": True,
+            "target_pct_total_equity": 1.0,
+            "distribution": "allocation_weighted",
+            "apply_only_portfolio_action_enabled": False,
+        }
+    }
+    proposals = [
+        {"bot": "bot1", "equity_quote": 100.0, "allocation_pct": 1.0, "portfolio_action_enabled": True},
+        {"bot": "bot3", "equity_quote": 10_000.0, "allocation_pct": 0.0, "portfolio_action_enabled": False},
+    ]
+    out = _compute_daily_goal_plan(allocator_cfg, proposals, total_equity_quote=10_100.0)
+    assert out["status"] == "pass"
+    # Goal scope should be only weighted bots (bot1), not all snapshot equity.
+    assert abs(float(out["goal_scope_equity_quote"]) - 100.0) < 1e-9
+    assert abs(float(out["target_quote_total_equity"]) - 1.0) < 1e-9
+    rows = {str(r["bot"]): r for r in out["rows"]}
+    assert abs(float(rows["bot1"]["daily_pnl_target_pct"]) - 1.0) < 1e-9

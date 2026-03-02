@@ -365,6 +365,41 @@ Run before any promotion decision:
 5. If you need emergency rollback, set `internal_paper_enabled: false` and
    recreate the bot container.
 
+## Paper Exchange Service Rollout (P1-9)
+
+Use this for controlled cutover of `PAPER_EXCHANGE_MODE` per bot.
+
+One-command canary launcher (recommended):
+- `python scripts/ops/run_paper_exchange_canary.py --bot bot3 --mode shadow`
+- Preview only (no changes/commands):
+  - `python scripts/ops/run_paper_exchange_canary.py --bot bot3 --mode shadow --dry-run`
+
+1. Start service in isolated profile:
+   - `docker compose --env-file ../env/.env --profile external --profile paper-exchange up -d redis paper-exchange-service`
+2. Canary in shadow mode on a validation bot (recommended `bot3`):
+   - set `PAPER_EXCHANGE_MODE_BOT3=shadow` in `env/.env`
+   - recreate canary bot:
+     - `docker compose --env-file ../env/.env --profile test up -d --force-recreate bot3`
+3. Validate parity + load evidence:
+   - `python scripts/release/run_promotion_gates.py --check-paper-exchange-thresholds --run-paper-exchange-load-harness`
+4. Promote canary to active mode:
+   - set `PAPER_EXCHANGE_MODE_BOT3=active` and recreate `bot3`
+5. Roll to bot1 only after gate pass:
+   - set `PAPER_EXCHANGE_MODE_BOT1=shadow` (then `active` after parity re-check)
+   - recreate `bot1` each step.
+
+### Paper Exchange Rollback
+
+1. Immediate rollback for impacted bot:
+   - set `PAPER_EXCHANGE_MODE_BOT<id>=disabled` in `env/.env`
+   - recreate that bot container (`--force-recreate`)
+2. If service instability persists:
+   - stop service profile:
+     - `docker compose --env-file ../env/.env --profile paper-exchange stop paper-exchange-service`
+3. Confirm rollback health:
+   - `python scripts/ops/preflight_paper_exchange.py`
+   - `python scripts/release/run_promotion_gates.py --check-paper-exchange-thresholds`
+
 ## EPP Paper Validation Checklist (24h minimum)
 
 Track these KPIs from `minute.csv` / `fills.csv` before changing capital:

@@ -14,7 +14,10 @@ from urllib.parse import urlencode
 from urllib.request import Request, urlopen
 
 
+from services.common.rate_limiter import ExchangeRateLimiter
 from services.common.utils import to_decimal
+
+_RATE_LIMITER = ExchangeRateLimiter()
 
 
 @dataclass
@@ -104,6 +107,7 @@ class FeeResolver:
             "User-Agent": "hbot-epp-fee-resolver/1.0",
         }
         try:
+            _RATE_LIMITER.get_or_create("bitget").wait_if_needed()
             with urlopen(Request(f"https://api.bitget.com{request_path}", headers=headers, method="GET"), timeout=5) as resp:
                 payload = json.loads(resp.read().decode("utf-8"))
             if str(payload.get("code")) != "00000":

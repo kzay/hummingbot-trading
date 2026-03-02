@@ -1,0 +1,103 @@
+{
+  "ts_utc": "2026-03-01T14:49:46.653668+00:00",
+  "status": "pass",
+  "failed_checks": [],
+  "checks": {
+    "heartbeat_bot1_present": true,
+    "heartbeat_bot1_fresh": true,
+    "heartbeat_bot3_present": true,
+    "heartbeat_bot3_fresh": true,
+    "heartbeat_bot4_present": true,
+    "heartbeat_bot4_fresh": true,
+    "exchange_snapshot_present": true,
+    "exchange_snapshot_fresh": true,
+    "redis_connected": true,
+    "redis_groups_present": true,
+    "redis_groups_lag_within_slo": true,
+    "redis_groups_pending_within_slo": true,
+    "dead_letter_critical_within_slo": true
+  },
+  "details": {
+    "heartbeats": {
+      "bot1": {
+        "path": "F:\\Environement\\git-repo\\hummingbot_custo\\hbot\\data\\bot1\\logs\\heartbeat\\strategy_heartbeat.json",
+        "present": true,
+        "age_s": 17.51801609992981,
+        "ts_utc": "2026-03-01T14:49:29Z",
+        "reason": "tick_end"
+      },
+      "bot3": {
+        "path": "F:\\Environement\\git-repo\\hummingbot_custo\\hbot\\data\\bot3\\logs\\heartbeat\\strategy_heartbeat.json",
+        "present": true,
+        "age_s": 5.51801609992981,
+        "ts_utc": "2026-03-01T14:49:41Z",
+        "reason": "tick_end"
+      },
+      "bot4": {
+        "path": "F:\\Environement\\git-repo\\hummingbot_custo\\hbot\\data\\bot4\\logs\\heartbeat\\strategy_heartbeat.json",
+        "present": true,
+        "age_s": 1.5180160999298096,
+        "ts_utc": "2026-03-01T14:49:45Z",
+        "reason": "tick_end"
+      }
+    },
+    "exchange_snapshot": {
+      "path": "F:\\Environement\\git-repo\\hummingbot_custo\\hbot\\reports\\exchange_snapshots\\latest.json",
+      "present": true,
+      "age_s": 107.78425717353821,
+      "ts_utc": "2026-03-01T14:47:58.733759+00:00"
+    },
+    "redis": {
+      "connected": true,
+      "error": "",
+      "required_groups": [
+        "hb_group_bot1",
+        "hb_group_bot3",
+        "hb_group_bot4"
+      ],
+      "group_stats": {
+        "hb_event_store_v1": {
+          "lag": 10950,
+          "pending": 0
+        },
+        "hb_group_bot1": {
+          "lag": 0,
+          "pending": 0
+        },
+        "hb_group_bot3": {
+          "lag": 0,
+          "pending": 0
+        },
+        "hb_group_bot4": {
+          "lag": 0,
+          "pending": 0
+        },
+        "hb_group_v1": {
+          "lag": 10716,
+          "pending": 0
+        },
+        "hb_kill_switch_v1": {
+          "lag": 0,
+          "pending": 0
+        }
+      },
+      "max_group_lag": 0,
+      "max_group_pending": 0
+    },
+    "dead_letter": {
+      "scanned": 5000,
+      "in_lookback_window": 4,
+      "critical_count": 0,
+      "reason_counts": {
+        "local_authority_reject": 4
+      },
+      "latest_timestamp_ms": 1772376477420,
+      "lookback_sec": 900,
+      "max_critical_dead_letters": 0,
+      "non_critical_reasons": [
+        "local_authority_reject",
+        "expired_intent"
+      ]
+    }
+  }
+}

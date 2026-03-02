@@ -1,0 +1,119 @@
+{
+  "ts_utc": "2026-02-28T02:51:29.745129+00:00",
+  "reports": {
+    "2h": {
+      "ts_utc": "2026-02-28T02:51:29.717090+00:00",
+      "window_hours": 2,
+      "window": {
+        "since_utc": "2026-02-28T00:51:29.692796+00:00",
+        "until_utc": "2026-02-28T02:51:29.692796+00:00"
+      },
+      "A": {
+        "label": "A",
+        "root": "hbot\\data\\bot1\\logs\\epp_v24\\bot1_a",
+        "minute_rows": 0,
+        "fill_rows": 23,
+        "fills_per_hour": 11.5,
+        "avg_spread_bps": 0.0,
+        "avg_net_edge_bps": 0.0,
+        "avg_turnover_x": 0.0,
+        "avg_pnl_governor_deficit_ratio": 0.0,
+        "pnl_governor_active_rate": 0.0,
+        "size_boost_active_rate": 0.0,
+        "avg_size_mult": 1.0,
+        "net_realized_delta_quote": 0.0,
+        "window": {
+          "since_utc": "2026-02-27T22:51:29.692796+00:00",
+          "until_utc": "2026-02-28T00:51:29.692796+00:00"
+        }
+      },
+      "B": {
+        "label": "B",
+        "root": "hbot\\data\\bot1\\logs\\epp_v24\\bot1_a",
+        "minute_rows": 4,
+        "fill_rows": 2,
+        "fills_per_hour": 1.0,
+        "avg_spread_bps": 35.12475167322838,
+        "avg_net_edge_bps": 7.886538743804983,
+        "avg_turnover_x": 0.7473096269606908,
+        "avg_pnl_governor_deficit_ratio": 0.0,
+        "pnl_governor_active_rate": 0.0,
+        "size_boost_active_rate": 0.0,
+        "avg_size_mult": 1.0,
+        "net_realized_delta_quote": 0.0,
+        "window": {
+          "since_utc": "2026-02-28T00:51:29.692796+00:00",
+          "until_utc": "2026-02-28T02:51:29.692796+00:00"
+        }
+      },
+      "delta_b_minus_a": {
+        "fills_per_hour": -10.5,
+        "avg_spread_bps": 35.12475167322838,
+        "avg_net_edge_bps": 7.886538743804983,
+        "avg_turnover_x": 0.7473096269606908,
+        "net_realized_delta_quote": 0.0,
+        "pnl_governor_active_rate": 0.0,
+        "size_boost_active_rate": 0.0,
+        "avg_size_mult": 0.0
+      },
+      "mode": "single_root_sequential"
+    },
+    "24h": {
+      "ts_utc": "2026-02-28T02:51:29.744128+00:00",
+      "window_hours": 24,
+      "window": {
+        "since_utc": "2026-02-27T02:51:29.717090+00:00",
+        "until_utc": "2026-02-28T02:51:29.717090+00:00"
+      },
+      "A": {
+        "label": "A",
+        "root": "hbot\\data\\bot1\\logs\\epp_v24\\bot1_a",
+        "minute_rows": 0,
+        "fill_rows": 88,
+        "fills_per_hour": 3.6666666666666665,
+        "avg_spread_bps": 0.0,
+        "avg_net_edge_bps": 0.0,
+        "avg_turnover_x": 0.0,
+        "avg_pnl_governor_deficit_ratio": 0.0,
+        "pnl_governor_active_rate": 0.0,
+        "size_boost_active_rate": 0.0,
+        "avg_size_mult": 1.0,
+        "net_realized_delta_quote": 0.0,
+        "window": {
+          "since_utc": "2026-02-26T02:51:29.717090+00:00",
+          "until_utc": "2026-02-27T02:51:29.717090+00:00"
+        }
+      },
+      "B": {
+        "label": "B",
+        "root": "hbot\\data\\bot1\\logs\\epp_v24\\bot1_a",
+        "minute_rows": 4,
+        "fill_rows": 152,
+        "fills_per_hour": 6.333333333333333,
+        "avg_spread_bps": 35.12475167322838,
+        "avg_net_edge_bps": 7.886538743804983,
+        "avg_turnover_x": 0.7473096269606908,
+        "avg_pnl_governor_deficit_ratio": 0.0,
+        "pnl_governor_active_rate": 0.0,
+        "size_boost_active_rate": 0.0,
+        "avg_size_mult": 1.0,
+        "net_realized_delta_quote": 0.0,
+        "window": {
+          "since_utc": "2026-02-27T02:51:29.717090+00:00",
+          "until_utc": "2026-02-28T02:51:29.717090+00:00"
+        }
+      },
+      "delta_b_minus_a": {
+        "fills_per_hour": 2.6666666666666665,
+        "avg_spread_bps": 35.12475167322838,
+        "avg_net_edge_bps": 7.886538743804983,
+        "avg_turnover_x": 0.7473096269606908,
+        "net_realized_delta_quote": 0.0,
+        "pnl_governor_active_rate": 0.0,
+        "size_boost_active_rate": 0.0,
+        "avg_size_mult": 0.0
+      },
+      "mode": "single_root_sequential"
+    }
+  }
+}

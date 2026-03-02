@@ -3,6 +3,9 @@ from services.contracts.event_schemas import (
     ExecutionIntentEvent,
     MarketSnapshotEvent,
     MlSignalEvent,
+    PaperExchangeCommandEvent,
+    PaperExchangeEvent,
+    PaperExchangeHeartbeatEvent,
     RiskDecisionEvent,
     StrategySignalEvent,
 )
@@ -23,11 +26,24 @@ def test_market_snapshot_schema_roundtrip():
         net_edge_pct=0.0005,
         turnover_x=1.2,
         state="running",
+        best_bid=99.9,
+        best_ask=100.1,
+        best_bid_size=2.5,
+        best_ask_size=1.7,
+        mark_price=100.05,
+        exchange_ts_ms=1_234_567,
+        ingest_ts_ms=1_234_568,
+        market_sequence=42,
     )
     data = event.model_dump()
     restored = MarketSnapshotEvent(**data)
     assert restored.event_type == "market_snapshot"
     assert restored.trading_pair == "BTC-USDT"
+    assert restored.best_bid == 99.9
+    assert restored.best_ask == 100.1
+    assert restored.best_bid_size == 2.5
+    assert restored.best_ask_size == 1.7
+    assert restored.market_sequence == 42
 
 
 def test_execution_intent_schema_validation():
@@ -39,6 +55,18 @@ def test_execution_intent_schema_validation():
     )
     assert event.event_type == "execution_intent"
     assert event.action == "resume"
+
+
+def test_execution_intent_daily_target_action_validation():
+    event = ExecutionIntentEvent(
+        producer="portfolio_allocator_service",
+        instance_name="bot1",
+        controller_id="epp_v2_4",
+        action="set_daily_pnl_target_pct",
+        metadata={"daily_pnl_target_pct": "0.6"},
+    )
+    assert event.action == "set_daily_pnl_target_pct"
+    assert event.metadata.get("daily_pnl_target_pct") == "0.6"
 
 
 def test_signal_and_risk_schema_compatibility():
@@ -88,4 +116,37 @@ def test_ml_signal_schema_roundtrip():
     restored = MlSignalEvent(**event.model_dump())
     assert restored.event_type == "ml_signal"
     assert restored.model_version == "2026-02-19"
+
+
+def test_paper_exchange_command_schema_roundtrip() -> None:
+    event = PaperExchangeCommandEvent(
+        producer="hb",
+        instance_name="bot1",
+        command="submit_order",
+        connector_name="bitget_perpetual",
+        trading_pair="BTC-USDT",
+        side="buy",
+        amount_base=0.01,
+        price=10_000.0,
+    )
+    restored = PaperExchangeCommandEvent(**event.model_dump())
+    assert restored.event_type == "paper_exchange_command"
+    assert restored.command == "submit_order"
+
+
+def test_paper_exchange_event_and_heartbeat_defaults() -> None:
+    result = PaperExchangeEvent(
+        producer="paper_exchange_service",
+        instance_name="bot1",
+        command_event_id="cmd-1",
+        command="sync_state",
+        connector_name="bitget_perpetual",
+        trading_pair="BTC-USDT",
+    )
+    heartbeat = PaperExchangeHeartbeatEvent(
+        producer="paper_exchange_service",
+        instance_name="paper_exchange",
+    )
+    assert result.status == "processed"
+    assert heartbeat.service_name == "paper_exchange_service"
 

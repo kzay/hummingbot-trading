@@ -56,3 +56,17 @@ Define the desk performance KPIs shown in Grafana and the source metric for each
 ## Notes
 - `risk_reasons` is exported as an info metric label for operator triage, not for high-cardinality analytics.
 - All metrics are scraped via `bot-metrics-exporter` on Prometheus job `bot-metrics`.
+
+## PnL Metric Migration (2026-02-27)
+- Canonical metric for intraday realized performance is now:
+  - `hbot_bot_net_realized_pnl_today_quote`
+  - Definition: `realized_pnl_today_quote - funding_cost_today_quote`
+- Legacy metric remains exported for compatibility:
+  - `hbot_bot_realized_pnl_today_quote`
+  - Meaning: realized-only PnL before funding drag.
+
+### Operator Rollout Checklist
+- Dashboards: use `hbot_bot_net_realized_pnl_today_quote` for all “realized today” tiles.
+- Alerts: evaluate loss thresholds against `hbot_bot_net_realized_pnl_today_quote`.
+- Ad-hoc PromQL: keep temporary dual-queries during transition, then remove legacy queries.
+- Backward compatibility: if old minute rows do not contain net field yet, exporter computes fallback as `realized - funding`.

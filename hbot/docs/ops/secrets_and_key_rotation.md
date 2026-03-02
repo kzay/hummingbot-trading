@@ -1,4 +1,4 @@
-# Secrets and Key Rotation (Day 12/20)
+# Secrets and Key Rotation (Day 12/20, ROAD-8)
 
 ## Purpose
 Define safe handling rules, key rotation procedure, and break-glass policy for trading credentials.
@@ -21,6 +21,24 @@ Define safe handling rules, key rotation procedure, and break-glass policy for t
   - no withdraw permission
   - IP allowlist enabled when supported
 
+## Three API Key Policy (ROAD-8)
+
+Use three distinct API keys for production:
+
+| Key | Permissions | Env Vars | Purpose |
+|-----|-------------|----------|---------|
+| **Read-only data** | Read only (balances, order book, positions) | Optional; can share with bot key | Data feeds, exchange snapshot, reconciliation probes |
+| **Trade-only bot** | Trade + read (no withdraw) | `BOT1_BITGET_API_KEY`, `BOT1_BITGET_API_SECRET`, `BOT1_BITGET_PASSPHRASE` | Bot execution; primary trading key |
+| **Kill-switch emergency** | Trade + cancel only | `KILL_SWITCH_API_KEY`, `KILL_SWITCH_SECRET`, `KILL_SWITCH_PASSPHRASE` | Emergency cancel-all; survives bot process death |
+
+**Why a separate kill-switch key?** The kill-switch service runs in its own container and must cancel orders even when the bot is frozen or crashed. Using the same key as the bot would require the bot to be healthy to trigger cancels. A dedicated key allows out-of-band HTTP trigger (`POST /kill`) and ccxt-based cancel-all without depending on bot state.
+
+## IP Allowlist Requirement
+
+- **All keys** must have IP allowlist configured on the exchange when supported.
+- Restrict to deployment host(s) and any monitoring/ops IPs.
+- Reduces blast radius if a key is leaked.
+
 ## Secret Inventory (Current Runtime)
 - `BOT*_BITGET_API_KEY`
 - `BOT*_BITGET_API_SECRET`
@@ -32,8 +50,20 @@ Define safe handling rules, key rotation procedure, and break-glass policy for t
 - Planned restart window only.
 - Target service interruption: <= 5 minutes for external services.
 - No strategy code changes required for key rotation.
+- **90-day rotation** recommended for all keys (ROAD-8).
 
-## Standard Rotation Procedure
+## 90-Day Rotation Procedure
+
+1. **Create new key** — Generate at exchange with same permissions; add to IP allowlist.
+2. **Update `.env`** — Replace old key/secret/passphrase with new values on host.
+3. **Restart services** — Recreate affected containers:
+   - Bot key: `bot1`, `exchange-snapshot-service`
+   - Kill-switch key: `kill-switch`
+   - Example: `docker compose --env-file env/.env -f compose/docker-compose.yml up -d --force-recreate bot1 exchange-snapshot-service kill-switch`
+4. **Revoke old key** — After validation, revoke at exchange.
+5. **Verify** — Snapshot healthy; reconciliation within thresholds; kill-switch dry-run succeeds.
+
+## Standard Rotation Procedure (Legacy / Ad-Hoc)
 1. **Prepare**
    - Generate new exchange keys with least privilege.
    - Keep old keys active during cutover window.
@@ -54,6 +84,28 @@ Define safe handling rules, key rotation procedure, and break-glass policy for t
 5. **Finalize**
    - Revoke old keys.
    - Record rotation metadata (time/owner/scope) without secret values.
+
+## Emergency Rotation Checklist (Compromised Key)
+
+Use when a key is suspected compromised or unauthorized activity is detected:
+
+1. [ ] **Pause trading** — Trigger `soft_pause` or kill switch immediately.
+2. [ ] **Revoke compromised key** at exchange (do not wait).
+3. [ ] **Create emergency key** with same permissions; add to IP allowlist.
+4. [ ] **Update `.env`** with new key/secret/passphrase.
+5. [ ] **Restart affected services** (bot, exchange-snapshot, kill-switch if that key).
+6. [ ] **Validate** — Snapshot, reconciliation, kill-switch health.
+7. [ ] **Incident note** — Timestamp, impacted bots, key scope revoked/rotated, validation evidence (no secret values).
+
+## Kill-Switch Integration
+
+The kill-switch service uses **its own API key** (`KILL_SWITCH_API_KEY`, `KILL_SWITCH_SECRET`, `KILL_SWITCH_PASSPHRASE`), not the bot key. This allows:
+
+- **Out-of-band triggering** — HTTP `POST /kill` works even when the bot is frozen.
+- **Independent lifecycle** — Kill-switch container can run and cancel orders without the bot process.
+- **Blast radius containment** — If the bot key is compromised, the kill-switch key can still cancel; if the kill-switch key is compromised, it can only cancel (no new orders from the bot key).
+
+Rotate the kill-switch key on the same 90-day schedule; use the emergency checklist if compromised.
 
 ## Break-Glass Policy
 Use break-glass only if credential compromise is suspected or unauthorized activity is detected.
@@ -111,4 +163,4 @@ Immediate actions:
 
 ## Owner
 - Ops + Engineering
-- Last-updated: 2026-02-22 (Day 20)
+- Last-updated: 2026-02-27 (ROAD-8)

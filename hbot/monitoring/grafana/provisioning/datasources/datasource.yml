@@ -39,18 +39,3 @@ datasources:
   #   secureJsonData:
   #     password: ${OPS_DB_PASSWORD}
 
-  # ClickHouse Events — disabled until ClickHouse container is running
-  # - name: ClickHouse Events
-  #   uid: clickhouse-events
-  #   type: grafana-clickhouse-datasource
-  #   access: proxy
-  #   url: http://${CH_HOST}:${CH_HTTP_PORT}
-  #   editable: true
-  #   jsonData:
-  #     defaultDatabase: ${CH_DB}
-  #     protocol: http
-  #     port: ${CH_HTTP_PORT}
-  #     server: ${CH_HOST}
-  #     username: ${CH_USER}
-  #   secureJsonData:
-  #     password: ${CH_PASSWORD}

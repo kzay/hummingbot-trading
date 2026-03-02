@@ -37,6 +37,17 @@ class MarketSnapshotEvent(EventEnvelope):
     net_edge_pct: float
     turnover_x: float
     state: str
+    # Exchange-like L1 extensions (backward compatible as optional fields).
+    best_bid: Optional[float] = None
+    best_ask: Optional[float] = None
+    best_bid_size: Optional[float] = None
+    best_ask_size: Optional[float] = None
+    last_trade_price: Optional[float] = None
+    mark_price: Optional[float] = None
+    funding_rate: Optional[float] = None
+    exchange_ts_ms: Optional[int] = None
+    ingest_ts_ms: Optional[int] = None
+    market_sequence: Optional[int] = None
     extra: Dict[str, str] = Field(default_factory=dict)
 
 
@@ -81,7 +92,7 @@ class ExecutionIntentEvent(EventEnvelope):
     event_type: Literal["execution_intent"] = "execution_intent"
     instance_name: str
     controller_id: str
-    action: Literal["set_target_base_pct", "soft_pause", "resume", "kill_switch"]
+    action: Literal["set_target_base_pct", "set_daily_pnl_target_pct", "soft_pause", "resume", "kill_switch"]
     target_base_pct: Optional[float] = None
     expires_at_ms: Optional[int] = None
     metadata: Dict[str, str] = Field(default_factory=dict)
@@ -146,5 +157,51 @@ class BotFillEvent(EventEnvelope):
     is_maker: bool = False
     realized_pnl_quote: float = 0.0
     bot_state: str = ""                          # ops guard state at fill time
+    metadata: Dict[str, str] = Field(default_factory=dict)
+
+
+class PaperExchangeCommandEvent(EventEnvelope):
+    """Command emitted toward paper-exchange service."""
+
+    event_type: Literal["paper_exchange_command"] = "paper_exchange_command"
+    instance_name: str
+    command: Literal["submit_order", "cancel_order", "cancel_all", "sync_state"]
+    connector_name: str
+    trading_pair: str
+    order_id: Optional[str] = None
+    side: Optional[Literal["buy", "sell"]] = None
+    order_type: Optional[str] = None
+    amount_base: Optional[float] = None
+    price: Optional[float] = None
+    expires_at_ms: Optional[int] = None
+    metadata: Dict[str, str] = Field(default_factory=dict)
+
+
+class PaperExchangeEvent(EventEnvelope):
+    """Result emitted by paper-exchange service for command lifecycle."""
+
+    event_type: Literal["paper_exchange_event"] = "paper_exchange_event"
+    instance_name: str
+    command_event_id: str
+    command: str
+    status: Literal["processed", "rejected"] = "processed"
+    reason: str = ""
+    connector_name: str
+    trading_pair: str
+    order_id: Optional[str] = None
+    metadata: Dict[str, str] = Field(default_factory=dict)
+
+
+class PaperExchangeHeartbeatEvent(EventEnvelope):
+    """Health heartbeat for exchange-mirroring readiness and data freshness."""
+
+    event_type: Literal["paper_exchange_heartbeat"] = "paper_exchange_heartbeat"
+    instance_name: str
+    service_name: str = "paper_exchange_service"
+    status: Literal["ok", "degraded"] = "ok"
+    market_pairs_total: int = 0
+    stale_pairs: int = 0
+    newest_snapshot_age_ms: int = 0
+    oldest_snapshot_age_ms: int = 0
     metadata: Dict[str, str] = Field(default_factory=dict)
 

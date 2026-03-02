@@ -4,7 +4,7 @@
   "tags": ["hummingbot", "trading", "desk"],
   "timezone": "utc",
   "schemaVersion": 39,
-  "version": 5,
+  "version": 9,
   "style": "dark",
   "editable": true,
   "graphTooltip": 1,
@@ -208,7 +208,7 @@
       "title": "Bots Running",
       "description": "How many bots currently report state=running (one-hot gauge).",
       "datasource": { "type": "prometheus", "uid": "prometheus" },
-      "gridPos": { "h": 4, "w": 4, "x": 0, "y": 1 },
+      "gridPos": { "h": 4, "w": 3, "x": 0, "y": 1 },
       "targets": [
         {
           "expr": "sum(hbot_bot_state{cluster=~\"$cluster\",environment=~\"$environment\",bot=~\"$bot\",exchange=~\"$exchange\",pair=~\"$symbol\",variant=~\"$strategy\",mode=~\"$venue\",regime=~\"$regime\",state=\"running\"})",
@@ -239,7 +239,7 @@
       "title": "Uptime (Healthy)",
       "description": "Percent of selected bot series that are RUNNING and have fresh minute.csv (snapshot_age < 90s). Use this as a desk uptime proxy.",
       "datasource": { "type": "prometheus", "uid": "prometheus" },
-      "gridPos": { "h": 4, "w": 4, "x": 4, "y": 1 },
+      "gridPos": { "h": 4, "w": 3, "x": 3, "y": 1 },
       "targets": [
         {
           "expr": "avg(hbot_bot_running_fresh{cluster=~\"$cluster\",environment=~\"$environment\",bot=~\"$bot\",exchange=~\"$exchange\",pair=~\"$symbol\",variant=~\"$strategy\",mode=~\"$venue\",regime=~\"$regime\"})",
@@ -278,7 +278,7 @@
       "title": "Equity (Desk)",
       "description": "Sum of `equity_quote` across selected bots/symbols.",
       "datasource": { "type": "prometheus", "uid": "prometheus" },
-      "gridPos": { "h": 4, "w": 4, "x": 8, "y": 1 },
+      "gridPos": { "h": 4, "w": 3, "x": 6, "y": 1 },
       "targets": [
         {
           "expr": "sum(hbot_bot_equity_quote{cluster=~\"$cluster\",environment=~\"$environment\",bot=~\"$bot\",exchange=~\"$exchange\",pair=~\"$symbol\",variant=~\"$strategy\",mode=~\"$venue\",regime=~\"$regime\"})",
@@ -303,7 +303,7 @@
       "title": "PnL Today (MTM)",
       "description": "Daily mark-to-market PnL from equity_open→equity_now derived by exporter.",
       "datasource": { "type": "prometheus", "uid": "prometheus" },
-      "gridPos": { "h": 4, "w": 4, "x": 12, "y": 1 },
+      "gridPos": { "h": 4, "w": 3, "x": 9, "y": 1 },
       "targets": [
         {
           "expr": "sum(hbot_bot_daily_pnl_quote{cluster=~\"$cluster\",environment=~\"$environment\",bot=~\"$bot\",exchange=~\"$exchange\",pair=~\"$symbol\",variant=~\"$strategy\",mode=~\"$venue\",regime=~\"$regime\"})",
@@ -333,10 +333,10 @@
       "title": "Realized PnL Today",
       "description": "Realized PnL from fills (quote units).",
       "datasource": { "type": "prometheus", "uid": "prometheus" },
-      "gridPos": { "h": 4, "w": 4, "x": 16, "y": 1 },
+      "gridPos": { "h": 4, "w": 3, "x": 12, "y": 1 },
       "targets": [
         {
-          "expr": "sum(hbot_bot_realized_pnl_today_quote{cluster=~\"$cluster\",environment=~\"$environment\",bot=~\"$bot\",exchange=~\"$exchange\",pair=~\"$symbol\",variant=~\"$strategy\",mode=~\"$venue\",regime=~\"$regime\"})",
+          "expr": "sum(hbot_bot_net_realized_pnl_today_quote{cluster=~\"$cluster\",environment=~\"$environment\",bot=~\"$bot\",exchange=~\"$exchange\",pair=~\"$symbol\",variant=~\"$strategy\",mode=~\"$venue\",regime=~\"$regime\"})",
           "refId": "A"
         }
       ],
@@ -363,7 +363,7 @@
       "title": "Max Drawdown",
       "description": "Maximum drawdown across selected bots (percent).",
       "datasource": { "type": "prometheus", "uid": "prometheus" },
-      "gridPos": { "h": 4, "w": 4, "x": 20, "y": 1 },
+      "gridPos": { "h": 4, "w": 3, "x": 15, "y": 1 },
       "targets": [
         {
           "expr": "max(hbot_bot_drawdown_pct{cluster=~\"$cluster\",environment=~\"$environment\",bot=~\"$bot\",exchange=~\"$exchange\",pair=~\"$symbol\",variant=~\"$strategy\",mode=~\"$venue\",regime=~\"$regime\"}) * 100",
@@ -382,6 +382,72 @@
               { "color": "green", "value": null },
               { "color": "yellow", "value": 1 },
               { "color": "red", "value": 3 }
+            ]
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "reduceOptions": { "values": false, "calcs": ["lastNotNull"] },
+        "textMode": "value",
+        "colorMode": "value",
+        "graphMode": "none",
+        "justifyMode": "center"
+      }
+    },
+    {
+      "id": 15,
+      "type": "stat",
+      "title": "Day Goal ($ allocator distributed)",
+      "description": "Desk daily target quote distributed by allocator (`daily_goal.target_quote_distributed`) with safe fallback.",
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "gridPos": { "h": 4, "w": 3, "x": 18, "y": 1 },
+      "targets": [
+        {
+          "expr": "max(hbot_portfolio_allocator_daily_goal_target_quote_distributed) or on() vector(0)",
+          "refId": "A"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "currencyUSD",
+          "decimals": 2,
+          "color": { "mode": "fixed", "fixedColor": "orange" }
+        },
+        "overrides": []
+      },
+      "options": {
+        "reduceOptions": { "values": false, "calcs": ["lastNotNull"] },
+        "textMode": "value",
+        "colorMode": "value",
+        "graphMode": "none",
+        "justifyMode": "center"
+      }
+    },
+    {
+      "id": 16,
+      "type": "stat",
+      "title": "Day Progress (PnL / Allocator Goal)",
+      "description": "Progress toward allocator distributed desk target with no-data-safe fallback.",
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "gridPos": { "h": 4, "w": 3, "x": 21, "y": 1 },
+      "targets": [
+        {
+          "expr": "((100 * sum(hbot_bot_daily_pnl_quote{cluster=~\"$cluster\",environment=~\"$environment\",bot=~\"$bot\",exchange=~\"$exchange\",pair=~\"$symbol\",variant=~\"$strategy\",mode=~\"$venue\",regime=~\"$regime\"}) / clamp_min(abs(max(hbot_portfolio_allocator_daily_goal_target_quote_distributed)), 0.000001)) and on() (max(hbot_portfolio_allocator_daily_goal_target_quote_distributed) > bool 0)) or on() vector(0)",
+          "refId": "A"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "percent",
+          "decimals": 1,
+          "color": { "mode": "thresholds" },
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              { "color": "red", "value": null },
+              { "color": "yellow", "value": 50 },
+              { "color": "green", "value": 80 }
             ]
           }
         },
@@ -812,7 +878,7 @@
         { "expr": "label_replace(hbot_bot_snapshot_age_seconds{cluster=~\"$cluster\",environment=~\"$environment\",bot=~\"$bot\",exchange=~\"$exchange\",pair=~\"$symbol\",variant=~\"$strategy\",mode=~\"$venue\",regime=~\"$regime\"}, \"__name__\", \"snapshot_age_s\", \"\", \"\")", "refId": "A", "format": "table", "instant": true },
         { "expr": "label_replace(hbot_bot_equity_quote{cluster=~\"$cluster\",environment=~\"$environment\",bot=~\"$bot\",exchange=~\"$exchange\",pair=~\"$symbol\",variant=~\"$strategy\",mode=~\"$venue\",regime=~\"$regime\"}, \"__name__\", \"equity\", \"\", \"\")", "refId": "B", "format": "table", "instant": true },
         { "expr": "label_replace(hbot_bot_daily_pnl_quote{cluster=~\"$cluster\",environment=~\"$environment\",bot=~\"$bot\",exchange=~\"$exchange\",pair=~\"$symbol\",variant=~\"$strategy\",mode=~\"$venue\",regime=~\"$regime\"}, \"__name__\", \"pnl_today\", \"\", \"\")", "refId": "C", "format": "table", "instant": true },
-        { "expr": "label_replace(hbot_bot_realized_pnl_today_quote{cluster=~\"$cluster\",environment=~\"$environment\",bot=~\"$bot\",exchange=~\"$exchange\",pair=~\"$symbol\",variant=~\"$strategy\",mode=~\"$venue\",regime=~\"$regime\"}, \"__name__\", \"realized_today\", \"\", \"\")", "refId": "D", "format": "table", "instant": true },
+        { "expr": "label_replace(hbot_bot_net_realized_pnl_today_quote{cluster=~\"$cluster\",environment=~\"$environment\",bot=~\"$bot\",exchange=~\"$exchange\",pair=~\"$symbol\",variant=~\"$strategy\",mode=~\"$venue\",regime=~\"$regime\"}, \"__name__\", \"realized_today\", \"\", \"\")", "refId": "D", "format": "table", "instant": true },
         { "expr": "label_replace(hbot_bot_drawdown_pct{cluster=~\"$cluster\",environment=~\"$environment\",bot=~\"$bot\",exchange=~\"$exchange\",pair=~\"$symbol\",variant=~\"$strategy\",mode=~\"$venue\",regime=~\"$regime\"} * 100, \"__name__\", \"drawdown_pct\", \"\", \"\")", "refId": "E", "format": "table", "instant": true },
         { "expr": "label_replace(hbot_bot_net_edge_pct{cluster=~\"$cluster\",environment=~\"$environment\",bot=~\"$bot\",exchange=~\"$exchange\",pair=~\"$symbol\",variant=~\"$strategy\",mode=~\"$venue\",regime=~\"$regime\"} * 10000, \"__name__\", \"net_edge_bps\", \"\", \"\")", "refId": "F", "format": "table", "instant": true },
         { "expr": "label_replace(hbot_bot_spread_pct{cluster=~\"$cluster\",environment=~\"$environment\",bot=~\"$bot\",exchange=~\"$exchange\",pair=~\"$symbol\",variant=~\"$strategy\",mode=~\"$venue\",regime=~\"$regime\"} * 10000, \"__name__\", \"spread_bps\", \"\", \"\")", "refId": "G", "format": "table", "instant": true },

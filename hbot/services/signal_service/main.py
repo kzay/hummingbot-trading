@@ -14,7 +14,7 @@ from services.contracts.stream_names import (
 )
 from services.hb_bridge.redis_client import RedisStreamClient
 from services.signal_service.feature_builder import build_features
-from services.signal_service.inference_engine import run_inference
+from services.signal_service.inference_engine import is_classifier, predict_regime, run_inference
 from services.signal_service.model_loader import load_model
 
 
@@ -76,30 +76,57 @@ def run() -> None:
             if ml_enabled and loaded_model is not None and ml_model_uri:
                 try:
                     feature_vector, feature_map, feature_hash = build_features(market, ml_feature_set)
-                    predicted_return, confidence, latency_ms = run_inference(loaded_model, feature_vector, feature_map)
-                    if latency_ms <= ml_inference_timeout_ms and confidence >= ml_confidence_min:
-                        ml_signal = MlSignalEvent(
-                            producer=svc_cfg.producer_name,
-                            correlation_id=market.event_id,
-                            instance_name=market.instance_name,
-                            controller_id=market.controller_id,
-                            trading_pair=market.trading_pair,
-                            model_id=loaded_model.model_id,
-                            model_version=loaded_model.model_version,
-                            runtime=loaded_model.runtime,  # type: ignore[arg-type]
-                            horizon_s=ml_horizon_s,
-                            predicted_return=predicted_return,
-                            confidence=confidence,
-                            feature_hash=feature_hash,
-                            inference_latency_ms=latency_ms,
-                            signal_age_ms=max(0, int(time.time() * 1000) - market.timestamp_ms),
-                            metadata={"state": market.state, "feature_set": ml_feature_set},
-                        )
-                        client.xadd(
-                            ML_SIGNAL_STREAM,
-                            ml_signal.model_dump(),
-                            maxlen=STREAM_RETENTION_MAXLEN.get(ML_SIGNAL_STREAM),
-                        )
+
+                    if is_classifier(loaded_model):
+                        # Regime classifier path (ROAD-10): publish StrategySignalEvent with regime_override
+                        regime_str, confidence, latency_ms = predict_regime(loaded_model, feature_vector)
+                        if latency_ms <= ml_inference_timeout_ms and confidence >= ml_confidence_min:
+                            signal = StrategySignalEvent(
+                                producer=svc_cfg.producer_name,
+                                correlation_id=market.event_id,
+                                instance_name=market.instance_name,
+                                signal_name="regime_override",
+                                signal_value=float(confidence),
+                                confidence=confidence,
+                                metadata={
+                                    "regime": regime_str,
+                                    "model_id": loaded_model.model_id,
+                                    "model_version": loaded_model.model_version,
+                                    "feature_set": ml_feature_set,
+                                    "state": market.state,
+                                },
+                            )
+                            client.xadd(
+                                SIGNAL_STREAM,
+                                signal.model_dump(),
+                                maxlen=STREAM_RETENTION_MAXLEN.get(SIGNAL_STREAM),
+                            )
+                    else:
+                        # Return-prediction path: publish MlSignalEvent to ML_SIGNAL_STREAM
+                        predicted_return, confidence, latency_ms = run_inference(loaded_model, feature_vector, feature_map)
+                        if latency_ms <= ml_inference_timeout_ms and confidence >= ml_confidence_min:
+                            ml_signal = MlSignalEvent(
+                                producer=svc_cfg.producer_name,
+                                correlation_id=market.event_id,
+                                instance_name=market.instance_name,
+                                controller_id=market.controller_id,
+                                trading_pair=market.trading_pair,
+                                model_id=loaded_model.model_id,
+                                model_version=loaded_model.model_version,
+                                runtime=loaded_model.runtime,  # type: ignore[arg-type]
+                                horizon_s=ml_horizon_s,
+                                predicted_return=predicted_return,
+                                confidence=confidence,
+                                feature_hash=feature_hash,
+                                inference_latency_ms=latency_ms,
+                                signal_age_ms=max(0, int(time.time() * 1000) - market.timestamp_ms),
+                                metadata={"state": market.state, "feature_set": ml_feature_set},
+                            )
+                            client.xadd(
+                                ML_SIGNAL_STREAM,
+                                ml_signal.model_dump(),
+                                maxlen=STREAM_RETENTION_MAXLEN.get(ML_SIGNAL_STREAM),
+                            )
                 except Exception:
                     pass
             else:

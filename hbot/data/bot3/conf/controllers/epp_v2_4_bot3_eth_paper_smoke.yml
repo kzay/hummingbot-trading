@@ -1,0 +1,70 @@
+# Bot3 - V2 controller paper smoke (ETH strategy lane)
+id: epp_v2_4_bot3_eth_paper_smoke
+controller_name: epp_v2_4
+controller_type: market_making
+
+connector_name: bitget_perpetual
+connector_type: perp
+trading_pair: ETH-USDT
+
+total_amount_quote: 10
+buy_spreads: "0.0025,0.0035"
+sell_spreads: "0.0025,0.0035"
+buy_amounts_pct: "50,50"
+sell_amounts_pct: "50,50"
+executor_refresh_time: 60
+cooldown_time: 10
+leverage: 1
+position_mode: ONEWAY
+stop_loss: 0.004
+take_profit: 0.004
+time_limit: 600
+take_profit_order_type: LIMIT
+skip_rebalance: true
+
+variant: a
+enabled: true
+no_trade: false
+instance_name: bot3
+log_dir: /home/hummingbot/logs
+
+fee_mode: auto
+fee_profile: vip0
+require_fee_resolution: true
+spot_fee_pct: 0.0010
+slippage_est_pct: 0.0005
+turnover_cap_x: 3.0
+turnover_penalty_step: 0.0005
+min_net_edge_bps: 8
+edge_resume_bps: 4
+paper_edge_gate_bypass: false
+paper_use_portfolio_equity_for_risk: false
+internal_paper_enabled: false
+paper_engine:
+  paper_equity_quote: 200
+  paper_realism_profile: balanced
+  paper_seed: 7
+  paper_fill_model: latency_aware
+  paper_latency_model: configured_latency_ms
+  paper_latency_ms: 150
+  paper_insert_latency_ms: 20
+  paper_cancel_latency_ms: 80
+  paper_liquidity_consumption: true
+  paper_queue_participation: 0.35
+  paper_slippage_bps: 1.0
+  paper_adverse_selection_bps: 1.5
+  paper_partial_fill_min_ratio: 0.15
+  paper_partial_fill_max_ratio: 0.85
+  paper_depth_levels: 5
+  paper_depth_decay: 0.70
+  paper_queue_position_enabled: true
+  paper_queue_ahead_ratio: 0.45
+  paper_queue_trade_through_ratio: 0.35
+  paper_price_protection_points: 8
+  paper_margin_model_type: leveraged
+  paper_max_fills_per_order: 8
+
+sample_interval_s: 10
+spread_floor_recalc_s: 120
+cancel_budget_per_min: 35
+position_drift_soft_pause_pct: 2.0

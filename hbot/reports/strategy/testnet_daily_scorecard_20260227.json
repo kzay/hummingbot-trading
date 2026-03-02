@@ -1,0 +1,21 @@
+{
+  "ts_utc": "2026-02-27T23:42:36.879323+00:00",
+  "day": "2026-02-27",
+  "status": "pass",
+  "failures": [],
+  "inputs": {
+    "testnet_root": "F:\\Environement\\git-repo\\hummingbot_custo\\hbot\\data\\bot1\\logs\\epp_v24\\bot1_a",
+    "paper_root": "F:\\Environement\\git-repo\\hummingbot_custo\\hbot\\data\\bot3\\logs\\epp_v24\\bot3_a",
+    "reports_root": "F:\\Environement\\git-repo\\hummingbot_custo\\hbot\\reports"
+  },
+  "metrics": {
+    "testnet_fill_count": 138,
+    "paper_fill_count": 0,
+    "fill_count_ratio": 0.0,
+    "avg_slippage_pct": 0.0,
+    "rejection_count": 0,
+    "rejection_rate": 0.0,
+    "cancel_before_fill_rate": 0.0,
+    "drift_alarm_count": 0
+  }
+}

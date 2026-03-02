@@ -56,12 +56,23 @@ REALISTIC_LATENCY = LatencyModel(
 PAPER_DEFAULT_LATENCY = LatencyModel.from_ms(base_ms=150)         # 150ms, matches paper_latency_ms default
 
 
-def make_latency_model(name: str, latency_ms: int = 0) -> LatencyModel:
+def make_latency_model(
+    name: str,
+    latency_ms: int = 0,
+    insert_latency_ms: int = 0,
+    cancel_latency_ms: int = 0,
+) -> LatencyModel:
     """Create a latency model by name string."""
     if name == "fast":
         return FAST_LATENCY
     if name == "realistic":
         return REALISTIC_LATENCY
+    if name == "configured_latency_ms":
+        return LatencyModel.from_ms(
+            base_ms=max(0, int(latency_ms)),
+            insert_ms=max(0, int(insert_latency_ms)),
+            cancel_ms=max(0, int(cancel_latency_ms)),
+        )
     if name == "none" or name == "":
         return NO_LATENCY
     if latency_ms > 0:

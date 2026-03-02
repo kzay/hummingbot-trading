@@ -37,13 +37,14 @@ turnover_penalty_step: 0.0005
 min_net_edge_bps: -100
 edge_resume_bps: -100
 internal_paper_enabled: true
-paper_latency_ms: 0
-paper_queue_participation: 1.0
-paper_slippage_bps: 0
-paper_adverse_selection_bps: 0
-paper_partial_fill_min_ratio: 1.0
-paper_partial_fill_max_ratio: 1.0
-paper_max_fills_per_order: 8
+paper_engine:
+  paper_latency_ms: 0
+  paper_queue_participation: 1.0
+  paper_slippage_bps: 0
+  paper_adverse_selection_bps: 0
+  paper_partial_fill_min_ratio: 1.0
+  paper_partial_fill_max_ratio: 1.0
+  paper_max_fills_per_order: 8
 override_spread_pct: 0.0001
 
 sample_interval_s: 10

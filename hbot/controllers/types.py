@@ -10,7 +10,7 @@ from decimal import Decimal
 from typing import TypedDict
 
 
-PROCESSED_STATE_SCHEMA_VERSION: int = 2
+PROCESSED_STATE_SCHEMA_VERSION: int = 8
 """Increment whenever a field is added, removed, or changes semantics.
 Consumers should check this on deserialization and drop/log on mismatch."""
 
@@ -30,13 +30,17 @@ class ProcessedState(TypedDict, total=False):
     reference_price: Decimal
     """Mid price used as reference for order placement."""
     spread_multiplier: Decimal
-    """Multiplier applied to spread (always 1 in current version)."""
+    """Multiplier applied to spread (>1 when adverse fill protection is active)."""
     mid: Decimal
     """Raw mid price from connector."""
 
     # -- Regime --
     regime: str
     """Detected market regime: neutral_low_vol | up | down | high_vol_shock."""
+    regime_source: str
+    """How the regime was determined: price_buffer | external_override."""
+    ml_regime_override: str
+    """External ML model regime override (empty string if none)."""
 
     # -- Inventory --
     target_base_pct: Decimal
@@ -65,6 +69,56 @@ class ProcessedState(TypedDict, total=False):
     """Edge value used by edge gate (may be smoothed)."""
     net_edge_ewma_pct: Decimal
     """EWMA-smoothed net edge for debugging edge gate stability."""
+    adaptive_effective_min_edge_pct: Decimal
+    """Adaptive min edge threshold currently enforced (post history-based adjustments)."""
+    adaptive_fill_age_s: Decimal
+    """Seconds since last fill used by adaptation feedback controller."""
+    adaptive_market_spread_bps_ewma: Decimal
+    """EWMA of observed market spread in bps for ticker-specific adaptation."""
+    adaptive_band_pct_ewma: Decimal
+    """EWMA of volatility band used by adaptive spread/edge controls."""
+    adaptive_market_floor_pct: Decimal
+    """Adaptive market-derived spread floor contribution (pct)."""
+    adaptive_vol_ratio: Decimal
+    """Normalized volatility ratio used for adaptive spread widening [0..1]."""
+    pnl_governor_active: bool
+    """True when daily PnL governor is actively relaxing edge threshold."""
+    pnl_governor_day_progress: Decimal
+    """UTC day progress in [0..1] used by the PnL governor target trajectory."""
+    pnl_governor_target_pnl_pct: Decimal
+    """Configured daily target in pct of opening equity (0 means quote target fallback)."""
+    pnl_governor_target_pnl_quote: Decimal
+    """Configured daily PnL target in quote units."""
+    pnl_governor_expected_pnl_quote: Decimal
+    """Expected PnL at current day progress according to the governor trajectory."""
+    pnl_governor_actual_pnl_quote: Decimal
+    """Current marked-to-market day PnL used by the governor."""
+    pnl_governor_deficit_ratio: Decimal
+    """Normalized deficit ratio in [0..1] when behind target (0 otherwise)."""
+    pnl_governor_edge_relax_bps: Decimal
+    """Current edge-threshold relaxation applied by the PnL governor (bps)."""
+    pnl_governor_size_mult: Decimal
+    """Dynamic sizing multiplier from the governor (1.0 when inactive)."""
+    pnl_governor_size_boost_active: bool
+    """True when dynamic size boost is active and >1 multiplier is applied."""
+    pnl_governor_target_mode: str
+    """How target is resolved: pct_equity | quote_legacy | disabled."""
+    pnl_governor_target_source: str
+    """Config source used for target resolution."""
+    pnl_governor_target_equity_open_quote: Decimal
+    """Opening equity used to convert pct target into quote target."""
+    pnl_governor_target_effective_pct: Decimal
+    """Effective daily target as pct of opening equity (0 when disabled)."""
+    pnl_governor_size_mult_applied: Decimal
+    """Final sizing multiplier applied to runtime quote sizing after clamps."""
+    pnl_governor_activation_reason: str
+    """Per-tick governor activation reason code (active or explicit non-activation branch)."""
+    pnl_governor_size_boost_reason: str
+    """Per-tick size boost reason code (active or explicit non-activation branch)."""
+    pnl_governor_activation_reason_counts: str
+    """JSON map of cumulative activation-reason counters for current runtime/day."""
+    pnl_governor_size_boost_reason_counts: str
+    """JSON map of cumulative size-boost reason counters for current runtime/day."""
     skew: Decimal
     """Inventory skew applied to buy/sell spread asymmetry."""
     adverse_drift_30s: Decimal
@@ -73,16 +127,30 @@ class ProcessedState(TypedDict, total=False):
     """EWMA-smoothed adverse drift used for cost model and edge gate (less spiky than raw)."""
     drift_spread_mult: Decimal
     """Spread multiplier applied due to drift spike (1.0 = no widening, >1 = widened)."""
+    fill_edge_ewma_bps: Decimal
+    """EWMA of realized fill edge in basis points (0 if no fills yet)."""
 
     # -- Market microstructure --
     market_spread_pct: Decimal
     """Best ask - best bid as fraction of mid."""
     market_spread_bps: Decimal
     """Market spread in basis points."""
+    best_bid_price: Decimal
+    """Price at best bid."""
+    best_ask_price: Decimal
+    """Price at best ask."""
     best_bid_size: Decimal
     """Size at best bid."""
     best_ask_size: Decimal
     """Size at best ask."""
+    ob_imbalance: Decimal
+    """Order book imbalance [-1, +1]. Positive = more bids (buy pressure)."""
+    spread_competitiveness_cap_active: bool
+    """True when quote side spreads are clipped by market competitiveness cap."""
+    spread_competitiveness_cap_side_pct: Decimal
+    """Per-side spread cap used by competitiveness logic."""
+    order_book_stale: bool
+    """True if the order book data is considered stale."""
 
     # -- Guard / state --
     state: str
@@ -102,6 +170,12 @@ class ProcessedState(TypedDict, total=False):
     balance_read_failed: bool
     """True if the last balance read from connector failed."""
 
+    # -- Adverse fill protection --
+    adverse_fill_active: bool
+    """True if adverse fill spread widening is active."""
+    adverse_skip_count: int
+    """Number of ticks skipped due to adverse fill detection."""
+
     # -- Daily accounting --
     turnover_x: Decimal
     """Daily traded notional / equity (turnover multiple)."""
@@ -119,6 +193,32 @@ class ProcessedState(TypedDict, total=False):
     """Estimated spread capture = turnover * spread * fill_factor."""
     pnl_quote: Decimal
     """Unrealized daily PnL (equity_now - equity_open)."""
+    realized_pnl_today_quote: Decimal
+    """Realized PnL today from closed positions (perps)."""
+    net_realized_pnl_today_quote: Decimal
+    """Realized PnL net of funding cost today (realized - funding_cost_today_quote)."""
+
+    # -- Perpetual-specific --
+    is_perpetual: bool
+    """True if the connector is a perpetual futures connector."""
+    funding_rate: Decimal
+    """Current funding rate (perps only, 0 for spot)."""
+    funding_cost_today_quote: Decimal
+    """Cumulative funding cost paid today in quote (perps only)."""
+    margin_ratio: Decimal
+    """Current margin ratio (perps only, 1 for spot)."""
+    avg_entry_price: Decimal
+    """Average entry price for the current position (perps)."""
+    position_base: Decimal
+    """Current position size in base (signed for perps)."""
+    position_drift_pct: Decimal
+    """Position drift as fraction of equity (perps)."""
+
+    # -- Kelly sizing --
+    kelly_size_active: bool
+    """True if Kelly criterion sizing is active (enough observations)."""
+    kelly_order_quote: Decimal
+    """Kelly-optimal order size in quote (0 if Kelly not active)."""
 
     # -- Paper engine --
     paper_fill_count: int
@@ -145,3 +245,17 @@ class ProcessedState(TypedDict, total=False):
     """Effective maker fee as decimal (e.g. 0.001 = 0.1%)."""
     taker_fee_pct: Decimal
     """Effective taker fee as decimal."""
+
+    # -- Connectivity --
+    ws_reconnect_count: int
+    """Number of WebSocket reconnections since startup."""
+    connector_status: str
+    """Human-readable connector status summary."""
+
+    # -- Internal profiling (prefixed with _) --
+    _tick_duration_ms: float
+    """Wall-clock duration of the last update_processed_data tick."""
+    _indicator_duration_ms: float
+    """Wall-clock duration of indicator computation within the tick."""
+    _connector_io_duration_ms: float
+    """Wall-clock duration of connector I/O within the tick."""

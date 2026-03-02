@@ -44,7 +44,7 @@
 |-------|------|--------|-------------|
 | Daily Loss vs Limit | Bar gauge | `hbot_bot_daily_loss_pct` vs 0.03 threshold | % of daily limit used |
 | Drawdown vs Limit | Bar gauge | `hbot_bot_drawdown_pct` vs 0.05 threshold | % of drawdown limit used |
-| Realized PnL Today | Stat | `hbot_bot_realized_pnl_today_quote` | Fill-level PnL (not mark-to-market) |
+| Net Realized PnL Today | Stat | `hbot_bot_net_realized_pnl_today_quote` | Realized PnL net of funding (realized - funding_cost_today_quote) |
 
 ### Row 3: Portfolio
 | Panel | Type | Metric | Description |

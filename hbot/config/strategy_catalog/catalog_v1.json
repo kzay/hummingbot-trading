@@ -72,7 +72,7 @@
       "bot": "bot3",
       "venue": "bitget",
       "mode": "paper_smoke",
-      "controller_config": "data/bot3/conf/controllers/epp_v2_4_bot3_paper_smoke.yml",
+      "controller_config": "data/bot3/conf/controllers/epp_v2_4_bot3_eth_paper_smoke.yml",
       "script_config": "data/bot3/conf/scripts/v2_epp_v2_4_bot3_paper_smoke.yml"
     },
     {

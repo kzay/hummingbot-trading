@@ -36,11 +36,13 @@ Provide one-command local workflows for test/external bring-up and fast develope
 ## Canonical Smoke Workflow (bot3 + bot4)
 1. Start test profile:
    - `python scripts/release/dev_workflow.py up-test`
-2. In bot3 terminal, run paper smoke:
-   - `start --script v2_with_controllers.py --conf v2_epp_v2_4_bot3_paper_smoke.yml`
-3. In bot4 terminal, run Binance testnet smoke:
-   - `start --script v2_with_controllers.py --conf v2_epp_v2_4_bot4_binance_smoke.yml`
-4. Run fast checks:
+2. bot3 auto-starts ETH paper smoke from compose:
+   - `SCRIPT_CONFIG=v2_epp_v2_4_bot3_paper_smoke.yml`
+3. bot4 auto-starts Binance testnet smoke from compose:
+   - `SCRIPT_CONFIG=v2_epp_v2_4_bot4_binance_smoke.yml`
+4. Optional manual override in terminal (if testing alternate configs):
+   - `start --script v2_with_controllers.py --conf <other_config>.yml`
+5. Run fast checks:
    - `python scripts/release/dev_workflow.py fast-checks`
 
 ## Stale Cache Footgun (Automated)

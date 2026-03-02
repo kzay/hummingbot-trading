@@ -59,11 +59,12 @@ cancel_budget_per_min: 30
 position_drift_soft_pause_pct: 0.50
 
 # ── Paper simulation params ───────────────────────────────────────
-paper_equity_quote: 500
-paper_latency_ms: 150
-paper_queue_participation: 0.35
-paper_slippage_bps: 1.0
-paper_adverse_selection_bps: 1.5
-paper_partial_fill_min_ratio: 0.15
-paper_partial_fill_max_ratio: 0.85
-paper_max_fills_per_order: 8
+paper_engine:
+  paper_equity_quote: 500
+  paper_latency_ms: 150
+  paper_queue_participation: 0.35
+  paper_slippage_bps: 1.0
+  paper_adverse_selection_bps: 1.5
+  paper_partial_fill_min_ratio: 0.15
+  paper_partial_fill_max_ratio: 0.85
+  paper_max_fills_per_order: 8

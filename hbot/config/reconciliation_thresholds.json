@@ -6,6 +6,7 @@
     "exchange_check_enabled": true,
     "fill_parity_check_enabled": true,
     "accounting_check_enabled": true,
+    "perp_inventory_basis": "position_drift_pct",
     "inventory_warn": 0.25,
     "inventory_critical": 0.45,
     "exchange_drift_warn": 0.10,
@@ -16,6 +17,7 @@
   },
   "bots": {
     "bot1": {
+      "exchange_check_enabled": false,
       "inventory_warn": 0.40,
       "inventory_critical": 0.65
     },

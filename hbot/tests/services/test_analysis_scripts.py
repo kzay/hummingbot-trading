@@ -404,3 +404,37 @@ def test_portfolio_diversification_fails_for_high_correlation(tmp_path: Path) ->
         min_overlap_points=3,
     )
     assert payload["status"] == "fail"
+
+
+def test_portfolio_diversification_aligns_offset_rows_by_minute(tmp_path: Path) -> None:
+    btc_path = tmp_path / "btc_minute.csv"
+    eth_path = tmp_path / "eth_minute.csv"
+    _write_csv(
+        btc_path,
+        ["ts", "mid"],
+        [
+            {"ts": "2026-02-27T10:00:00+00:00", "mid": "100"},
+            {"ts": "2026-02-27T10:01:00+00:00", "mid": "102"},
+            {"ts": "2026-02-27T10:02:00+00:00", "mid": "101"},
+            {"ts": "2026-02-27T10:03:00+00:00", "mid": "103"},
+        ],
+    )
+    _write_csv(
+        eth_path,
+        ["ts", "mid"],
+        [
+            {"ts": "2026-02-27T10:00:05+00:00", "mid": "200"},
+            {"ts": "2026-02-27T10:01:05+00:00", "mid": "199"},
+            {"ts": "2026-02-27T10:02:05+00:00", "mid": "201"},
+            {"ts": "2026-02-27T10:03:05+00:00", "mid": "200"},
+        ],
+    )
+
+    payload = build_diversification_report(
+        btc_minute_path=btc_path,
+        eth_minute_path=eth_path,
+        max_abs_correlation=0.7,
+        min_overlap_points=2,
+    )
+    assert payload["status"] in {"pass", "fail"}
+    assert int(payload["metrics"]["overlap_points"]) >= 2

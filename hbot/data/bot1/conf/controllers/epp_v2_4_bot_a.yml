@@ -10,7 +10,7 @@ connector_type: perp
 trading_pair: BTC-USDT
 
 # ── Order sizing ───────────────────────────────────────────────────
-total_amount_quote: 50
+total_amount_quote: 20
 buy_spreads: "0.0025,0.0035"
 sell_spreads: "0.0025,0.0035"
 buy_amounts_pct: "50,50"
@@ -41,59 +41,95 @@ slippage_est_pct: 0.0005
 turnover_cap_x: 3.0
 turnover_penalty_step: 0.0005
 
-# ── Hard risk caps (paper experiment) ───────────────────────────────
-# Paper mode: raise turnover cap to observe full-day natural behavior.
-# At ~0.27 fills/min × ~33 USDT notional, the bot generates ~26x/day.
-# Cap at 30x to allow a full 24h run while still blocking runaway churn.
-# For live trading, reduce to 6-8x.
-max_daily_turnover_x_hard: 30.0
+# ── Hard risk caps (low-equity ramp) ────────────────────────────────
+# For a 200 USDT start, keep turnover moderate to compound faster while
+# controlling fee drag and churn in unstable sessions.
+max_daily_turnover_x_hard: 10.0
+startup_position_sync: true
 
 # ── Edge gate ──────────────────────────────────────────────────────
-# Raise minimum edge to avoid marginal churn (fees+drift).
-min_net_edge_bps: 15
+# Lower minimum edge to restore fill frequency while keeping positive expectancy.
+min_net_edge_bps: 8
 edge_resume_bps: 4
 edge_state_hold_s: 120
 edge_gate_ewma_period: 8
+adaptive_edge_relax_max_bps: 12
+pnl_governor_enabled: true
+# Target trajectory now uses pct of opening equity; quote target remains
+# as legacy fallback when pct is zero.
+daily_pnl_target_pct: 0.6
+daily_pnl_target_quote: 0
+pnl_governor_activation_buffer_pct: 0.05
+pnl_governor_max_edge_bps_cut: 5
+pnl_governor_max_size_boost_pct: 0.20
+pnl_governor_size_activation_deficit_pct: 0.12
+pnl_governor_turnover_soft_cap_x: 6.0
+pnl_governor_drawdown_soft_cap_pct: 0.015
+# Keep quotes competitive to live top-of-book while preserving floor safety.
+max_quote_to_market_spread_mult: 1.50
+reconnect_cooldown_s: 1.0
+max_clock_skew_s: 20.0
 
 # ── Execution safety ────────────────────────────────────────────────
 # Cap concurrent executors to avoid runaway churn / memory growth.
-max_active_executors: 30
+max_active_executors: 12
 
 # ── Derisk spread ───────────────────────────────────────────────────
 # During derisk-only mode, place close-out orders this close to mid
 # so they fill quickly without chasing a large adverse move.
-derisk_spread_pct: 0.0003
+derisk_spread_pct: 0.0001
 
 # ── Perp inventory ────────────────────────────────────────────────
 # Delta-neutral: target net exposure = 0 for balanced MM
 perp_target_net_base_pct: 0.0
 min_base_pct: 0.0
-# Lower derisk trigger from 0.90 → 0.60 so position is capped earlier
+# Lower derisk trigger from 0.90 → 0.55 so position is capped earlier
 # and the derisk cycle completes before large adverse moves.
-max_base_pct: 0.60
+max_base_pct: 0.55
 
 # ── Drift protection ──────────────────────────────────────────────
 adverse_drift_ewma_alpha: 0.25
-drift_spike_threshold_bps: 5
-drift_spike_mult_max: 1.8
+drift_spike_threshold_bps: 8
+drift_spike_mult_max: 1.35
+spread_step_multiplier: 0.25
 
 # ── Sampling ───────────────────────────────────────────────────────
 sample_interval_s: 10
 spread_floor_recalc_s: 30
-cancel_budget_per_min: 50
+cancel_budget_per_min: 35
 
 # ── Paper simulation params (only active when BOT_MODE=paper) ─────
-paper_equity_quote: 500
 # IMPORTANT: disable the paper edge-gate bypass so min_net_edge_bps is enforced.
 paper_edge_gate_bypass: false
-paper_seed: 7
-paper_latency_ms: 150
-paper_queue_participation: 0.35
-paper_slippage_bps: 1.0
-paper_adverse_selection_bps: 1.5
-paper_partial_fill_min_ratio: 0.15
-paper_partial_fill_max_ratio: 0.85
-paper_max_fills_per_order: 8
+# Keep paper behavior close to live risk path (no paper-only auto-healing).
+paper_use_portfolio_equity_for_risk: false
+paper_state_reconcile_enabled: false
+paper_daily_baseline_auto_reset_on_startup: false
+paper_engine:
+  paper_equity_quote: 200
+  # Quick realism switch (custom|conservative|balanced|aggressive).
+  # "custom" uses the explicit paper_* knobs below.
+  paper_realism_profile: balanced
+  paper_seed: 7
+  paper_fill_model: latency_aware
+  paper_latency_model: configured_latency_ms
+  paper_latency_ms: 150
+  paper_insert_latency_ms: 20
+  paper_cancel_latency_ms: 80
+  paper_liquidity_consumption: true
+  paper_queue_participation: 0.35
+  paper_slippage_bps: 1.0
+  paper_adverse_selection_bps: 1.5
+  paper_partial_fill_min_ratio: 0.15
+  paper_partial_fill_max_ratio: 0.85
+  paper_depth_levels: 5
+  paper_depth_decay: 0.70
+  paper_queue_position_enabled: true
+  paper_queue_ahead_ratio: 0.45
+  paper_queue_trade_through_ratio: 0.35
+  paper_price_protection_points: 8
+  paper_margin_model_type: leveraged
+  paper_max_fills_per_order: 8
 
 # ── Regime overrides ────────────────────────────────────────────────
 # For delta-neutral perp MM: remove one-sided extremes in up/down
@@ -102,13 +138,57 @@ paper_max_fills_per_order: 8
 regime_specs_override:
   up:
     one_sided: "off"
-    spread_min: "0.0030"
-    spread_max: "0.0060"
+    spread_min: "0.0022"
+    spread_max: "0.0042"
     target_base_pct: "0.0"
+    fill_factor: "0.45"
   down:
     one_sided: "off"
-    spread_min: "0.0030"
-    spread_max: "0.0060"
+    spread_min: "0.0022"
+    spread_max: "0.0042"
     target_base_pct: "0.0"
+    fill_factor: "0.45"
   neutral_low_vol:
+    spread_min: "0.0019"
+    spread_max: "0.0034"
     target_base_pct: "0.0"
+    fill_factor: "0.50"
+  neutral_high_vol:
+    one_sided: "off"
+    spread_min: "0.0028"
+    spread_max: "0.0048"
+    target_base_pct: "0.0"
+    fill_factor: "0.42"
+  high_vol_shock:
+    one_sided: "off"
+    spread_min: "0.0038"
+    spread_max: "0.0068"
+    target_base_pct: "0.0"
+    fill_factor: "0.38"
+
+# ── Order book imbalance (ROAD-3) ─────────────────────────────────
+# Set ob_imbalance_skew_weight: 0 to disable. Positive weight adds OB
+# imbalance as a skew contribution (bid pressure → widen ask spread).
+ob_imbalance_depth: 5
+ob_imbalance_skew_weight: 0.3
+
+# ── Kelly sizing (ROAD-4) ─────────────────────────────────────────
+# Disabled by default. Enable after 20+ days of paper data confirm edge.
+# use_kelly_sizing: true activates fractional Kelly based on fill_edge_ewma.
+use_kelly_sizing: false
+kelly_fraction: 0.25
+kelly_min_observations: 20
+kelly_max_order_quote: 200
+kelly_min_order_quote: 10
+
+# ── ML regime classifier (ROAD-10) ────────────────────────────────
+# Disabled by default. Enable after training regime_classifier_v1.joblib.
+ml_regime_enabled: false
+ml_regime_override_ttl_s: 30.0
+
+# ── Adverse fill classifier (ROAD-11) ─────────────────────────────
+# Disabled by default. Enable after training adverse_classifier_v1.joblib.
+adverse_classifier_enabled: false
+adverse_classifier_model_path: ""
+adverse_threshold_widen: 0.70
+adverse_threshold_skip: 0.85

@@ -8,11 +8,11 @@ from controllers.paper_engine_v2.types import FundingApplied, OrderSide, _ZERO
 from tests.controllers.test_paper_engine_v2.conftest import BTC_PERP, BTC_SPOT, make_spec
 
 
-def _settle_perp(portfolio, qty, price):
+def _settle_perp(portfolio, qty, price, side: OrderSide = OrderSide.BUY):
     spec = make_spec(BTC_PERP)
     return portfolio.settle_fill(
         instrument_id=BTC_PERP,
-        side=OrderSide.BUY,
+        side=side,
         quantity=Decimal(qty),
         price=Decimal(price),
         fee=_ZERO,
@@ -93,3 +93,29 @@ class TestFundingSimulator:
         sim.tick(28800 * 1_000_000_000, p, instruments)
         pos = p.get_position(BTC_PERP)
         assert pos.funding_paid > _ZERO
+
+    def test_positive_funding_credits_short_position(self):
+        sim = FundingSimulator()
+        p = self._make_portfolio(usdt="10000")
+        spec = make_spec(BTC_PERP)
+        _settle_perp(p, "1.0", "100", side=OrderSide.SELL)
+        instruments = {BTC_PERP.key: (spec, Decimal("0.0001"))}
+        sim.tick(0, p, instruments)
+        initial_usdt = p.balance("USDT")
+        events = sim.tick(28800 * 1_000_000_000, p, instruments)
+        assert len(events) == 1
+        assert events[0].charge_quote < _ZERO
+        assert p.balance("USDT") > initial_usdt
+
+    def test_negative_funding_credits_long_position(self):
+        sim = FundingSimulator()
+        p = self._make_portfolio(usdt="10000")
+        spec = make_spec(BTC_PERP)
+        _settle_perp(p, "1.0", "100", side=OrderSide.BUY)
+        instruments = {BTC_PERP.key: (spec, Decimal("-0.0001"))}
+        sim.tick(0, p, instruments)
+        initial_usdt = p.balance("USDT")
+        events = sim.tick(28800 * 1_000_000_000, p, instruments)
+        assert len(events) == 1
+        assert events[0].charge_quote < _ZERO
+        assert p.balance("USDT") > initial_usdt

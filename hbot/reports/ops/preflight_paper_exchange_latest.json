@@ -1,0 +1,95 @@
+{
+  "ts_utc": "2026-03-02T03:31:31.413905+00:00",
+  "status": "pass",
+  "failed_checks": [],
+  "checks": [
+    {
+      "name": "paper_exchange_service_script_exists",
+      "pass": true,
+      "reason": "service script exists",
+      "evidence_paths": [
+        "F:\\Environement\\git-repo\\hummingbot_custo\\hbot\\services\\paper_exchange_service\\main.py"
+      ]
+    },
+    {
+      "name": "paper_exchange_compose_service_wired",
+      "pass": true,
+      "reason": "compose service block + command wiring present",
+      "evidence_paths": [
+        "F:\\Environement\\git-repo\\hummingbot_custo\\hbot\\compose\\docker-compose.yml"
+      ]
+    },
+    {
+      "name": "paper_exchange_stream_contracts",
+      "pass": true,
+      "reason": "stream names + retention entries present",
+      "evidence_paths": [
+        "F:\\Environement\\git-repo\\hummingbot_custo\\hbot\\services\\contracts\\stream_names.py"
+      ]
+    },
+    {
+      "name": "paper_exchange_allowed_connectors_non_empty",
+      "pass": true,
+      "reason": "allowed connectors: bitget_perpetual",
+      "evidence_paths": [
+        "F:\\Environement\\git-repo\\hummingbot_custo\\hbot\\env\\.env"
+      ]
+    },
+    {
+      "name": "paper_exchange_mode_toggle_template_keys_present",
+      "pass": true,
+      "reason": "paper-exchange rollout mode keys present in env template",
+      "evidence_paths": [
+        "F:\\Environement\\git-repo\\hummingbot_custo\\hbot\\env\\.env.template"
+      ]
+    },
+    {
+      "name": "paper_exchange_rollout_runbook_present",
+      "pass": true,
+      "reason": "rollout + rollback runbook sections present",
+      "evidence_paths": [
+        "F:\\Environement\\git-repo\\hummingbot_custo\\hbot\\docs\\ops\\runbooks.md"
+      ]
+    },
+    {
+      "name": "paper_exchange_threshold_evaluator_exists",
+      "pass": true,
+      "reason": "threshold evaluator script exists",
+      "evidence_paths": [
+        "F:\\Environement\\git-repo\\hummingbot_custo\\hbot\\scripts\\release\\check_paper_exchange_thresholds.py"
+      ]
+    },
+    {
+      "name": "paper_exchange_threshold_inputs_builder_exists",
+      "pass": true,
+      "reason": "threshold input builder script exists",
+      "evidence_paths": [
+        "F:\\Environement\\git-repo\\hummingbot_custo\\hbot\\scripts\\release\\build_paper_exchange_threshold_inputs.py"
+      ]
+    },
+    {
+      "name": "paper_exchange_load_check_exists",
+      "pass": true,
+      "reason": "load/backpressure check script exists",
+      "evidence_paths": [
+        "F:\\Environement\\git-repo\\hummingbot_custo\\hbot\\scripts\\release\\check_paper_exchange_load.py"
+      ]
+    },
+    {
+      "name": "paper_exchange_load_harness_exists",
+      "pass": true,
+      "reason": "load harness script exists",
+      "evidence_paths": [
+        "F:\\Environement\\git-repo\\hummingbot_custo\\hbot\\scripts\\release\\run_paper_exchange_load_harness.py"
+      ]
+    },
+    {
+      "name": "paper_exchange_canary_launcher_exists",
+      "pass": true,
+      "reason": "canary launcher script exists",
+      "evidence_paths": [
+        "F:\\Environement\\git-repo\\hummingbot_custo\\hbot\\scripts\\ops\\run_paper_exchange_canary.py"
+      ]
+    }
+  ]
+}

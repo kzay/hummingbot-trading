@@ -7,6 +7,7 @@ Tests the critical accounting rules:
 - V6 position flip test vector.
 - Available balance clamped to zero.
 """
+from datetime import datetime, timezone
 from decimal import Decimal
 import pytest
 
@@ -154,6 +155,14 @@ class TestMarkToMarket:
         pos = p.get_position(BTC_SPOT)
         assert pos.unrealized_pnl > _ZERO  # short profits when price drops
 
+    def test_daily_open_equity_rolls_at_new_utc_day(self):
+        p = make_portfolio(usdt=Decimal("250"))
+        p._daily_open_equity = Decimal("1000")
+        p._daily_open_day_key = "2000-01-01"
+        p.mark_to_market({})
+        assert p.daily_open_equity == Decimal("250")
+        assert p._daily_open_day_key == datetime.now(timezone.utc).strftime("%Y-%m-%d")
+
 
 class TestPerpMaintenanceMargin:
     def test_perp_maintenance_margin_reserved_on_mtm(self):
@@ -194,10 +203,21 @@ class TestRiskGuard:
         assert result == "drawdown_hard_stop"
 
 
+class TestFundingSettlement:
+    def test_negative_funding_charge_credits_quote(self):
+        p = make_portfolio(usdt=Decimal("1000"))
+        settle(p, BTC_PERP, "buy", "1.0", "100", fee="0", leverage=1)
+        before = p.balance("USDT")
+        p.apply_funding(BTC_PERP, Decimal("-0.5"), now_ns=1)
+        assert p.balance("USDT") == before + Decimal("0.5")
+        assert p.get_position(BTC_PERP).funding_paid == Decimal("-0.5")
+
+
 class TestPortfolioSnapshot:
     def test_snapshot_restore_roundtrip(self):
         p = make_portfolio(usdt=Decimal("5000"), btc=Decimal("1"))
         settle(p, BTC_SPOT, "buy", "0.5", "100")
+        p._daily_open_day_key = "2026-03-01"
         snap = p.snapshot()
 
         p2 = make_portfolio(usdt=Decimal("9999"))
@@ -205,3 +225,5 @@ class TestPortfolioSnapshot:
         assert p2.balance("USDT") == p.balance("USDT")
         pos = p2.get_position(BTC_SPOT)
         assert pos.quantity == Decimal("0.5")
+        assert p2.daily_open_equity == p.daily_open_equity
+        assert p2._daily_open_day_key == "2026-03-01"

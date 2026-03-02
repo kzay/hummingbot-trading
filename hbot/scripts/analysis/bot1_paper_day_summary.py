@@ -37,6 +37,10 @@ def _d(x: object) -> Decimal:
         return _ZERO
 
 
+def _safe_bool(x: object) -> bool:
+    return str(x).strip().lower() in {"1", "true", "yes", "y", "on"}
+
+
 @dataclass
 class FillsAgg:
     fills: int = 0
@@ -125,6 +129,28 @@ def _iter_csv_rows(path: Path) -> Iterable[Dict[str, str]]:
             yield row
 
 
+def _collect_minute_rows_for_day(root: Path, day: str) -> List[Dict[str, str]]:
+    """Load minute rows for a day from active + rotated files with dedupe/order."""
+    minute_files = sorted(root.glob("minute.legacy_*.csv"))
+    minute_main = root / "minute.csv"
+    if minute_main.exists():
+        minute_files.append(minute_main)
+
+    rows: List[Dict[str, str]] = []
+    for path in minute_files:
+        rows.extend(_filter_day(_iter_csv_rows(path), day))
+
+    # Deduplicate on timestamp while preferring later files (newer writes),
+    # then return deterministic ts ordering.
+    by_ts: Dict[str, Dict[str, str]] = {}
+    for row in rows:
+        ts = str(row.get("ts", "")).strip()
+        if not ts:
+            continue
+        by_ts[ts] = row
+    return [by_ts[k] for k in sorted(by_ts.keys(), key=lambda t: _parse_ts(t))]
+
+
 def _filter_day(rows: Iterable[Dict[str, str]], day: str) -> List[Dict[str, str]]:
     start, end = _day_window_utc(day)
     out: List[Dict[str, str]] = []
@@ -169,7 +195,7 @@ def main() -> int:
     minute_path = root / "minute.csv"
 
     fills_day = _filter_day(_iter_csv_rows(fills_path), args.day) if fills_path.exists() else []
-    minute_day = _filter_day(_iter_csv_rows(minute_path), args.day) if minute_path.exists() else []
+    minute_day = _collect_minute_rows_for_day(root, args.day)
 
     # Optional column filters (kept strict to avoid mixing runs)
     if args.exchange:
@@ -223,6 +249,8 @@ def main() -> int:
             "fee_source",
             "cancel_per_min",
             "orders_active",
+            "spread_competitiveness_cap_active",
+            "spread_competitiveness_cap_side_pct",
         ):
             if k in last:
                 minute_stats[k] = last[k]
@@ -235,6 +263,15 @@ def main() -> int:
             regimes[r.get("regime", "")] = regimes.get(r.get("regime", ""), 0) + 1
         minute_stats["state_counts"] = states
         minute_stats["regime_counts"] = regimes
+        cap_active_rows = sum(1 for r in minute_day if _safe_bool(r.get("spread_competitiveness_cap_active", False)))
+        cap_side_values = [abs(_d(r.get("spread_competitiveness_cap_side_pct", "0"))) for r in minute_day]
+        cap_side_avg = (sum(cap_side_values, _ZERO) / Decimal(len(cap_side_values))) if cap_side_values else _ZERO
+        minute_stats["spread_competitiveness_cap_active_rows"] = cap_active_rows
+        minute_stats["spread_competitiveness_cap_observed_rows"] = len(minute_day)
+        minute_stats["spread_competitiveness_cap_hit_ratio"] = (
+            float(Decimal(cap_active_rows) / Decimal(len(minute_day))) if minute_day else 0.0
+        )
+        minute_stats["spread_competitiveness_cap_side_pct_avg"] = float(cap_side_avg)
 
     # Optional desk + daily_state snapshots for reconciliation hints
     daily_state_candidates = sorted(root.glob("daily_state_*.json"))
@@ -253,6 +290,7 @@ def main() -> int:
         "paths": {
             "fills_csv": str(fills_path) if fills_path.exists() else None,
             "minute_csv": str(minute_path) if minute_path.exists() else None,
+            "minute_legacy_csv": sorted(str(p) for p in root.glob("minute.legacy_*.csv")),
             "paper_desk_v2_json": str(desk_path) if desk_path.exists() else None,
         },
         "fills_agg": agg.to_dict(),

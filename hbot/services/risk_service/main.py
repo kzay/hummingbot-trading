@@ -177,7 +177,9 @@ def run() -> None:
             "decisions_approved": decisions_approved,
             "decisions_rejected": decisions_rejected,
             "last_decision_ts": last_decision_ts,
-            "redis_connected": client.enabled,
+            "redis_stream_enabled": client.enabled,
+            "redis_connected": client.ping() if client.enabled else False,
+            "note": "redis_stream_enabled=false is expected when EXT_SIGNAL_RISK_ENABLED=false",
         })
         time.sleep(0.05)
 

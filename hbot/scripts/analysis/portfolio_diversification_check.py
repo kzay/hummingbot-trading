@@ -47,18 +47,31 @@ def _iter_rows(path: Path) -> Iterable[Dict[str, str]]:
         yield from csv.DictReader(f)
 
 
+def _minute_bucket_iso(ts: datetime) -> str:
+    ts_utc = ts.astimezone(timezone.utc).replace(second=0, microsecond=0)
+    return ts_utc.isoformat()
+
+
 def _returns_by_ts(minute_path: Path) -> Dict[str, float]:
-    rows: List[Tuple[str, float]] = []
+    rows: List[Tuple[datetime, float]] = []
     for row in _iter_rows(minute_path):
         ts = _parse_ts(str(row.get("ts", "")))
         mid = _safe_float(row.get("mid"), 0.0)
         if ts is None or mid <= 0.0:
             continue
-        rows.append((ts.isoformat(), mid))
+        rows.append((ts, mid))
     rows.sort(key=lambda x: x[0])
+
+    # Collapse sub-minute rows into minute buckets so cross-bot comparisons
+    # do not fail when sources are offset by a few seconds.
+    minute_close: Dict[str, float] = {}
+    for ts, mid in rows:
+        minute_close[_minute_bucket_iso(ts)] = mid
+
+    ordered: List[Tuple[str, float]] = sorted(minute_close.items(), key=lambda x: x[0])
     out: Dict[str, float] = {}
     prev_mid = 0.0
-    for ts, mid in rows:
+    for ts, mid in ordered:
         if prev_mid > 0.0:
             out[ts] = (mid / prev_mid) - 1.0
         prev_mid = mid

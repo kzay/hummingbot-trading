@@ -196,7 +196,7 @@ groups:
 
       - alert: ControlPlaneReportMissing
         expr: |
-          hbot_control_plane_report_present{report=~"reconciliation|parity|portfolio_risk|coordination|coordination_policy|promotion_gate|day2_gate|event_store_integrity|soak"} == 0
+          hbot_control_plane_report_present{report=~"reconciliation|parity|portfolio_risk|market_data|ops_db_writer|coordination|coordination_policy|promotion_gate|day2_gate|event_store_integrity|soak"} == 0
         for: 2m
         labels:
           severity: critical
@@ -206,13 +206,33 @@ groups:
 
       - alert: ControlPlaneReportStale
         expr: |
-          hbot_control_plane_report_fresh{report=~"reconciliation|parity|portfolio_risk|coordination|coordination_policy|promotion_gate|day2_gate|event_store_integrity|soak"} == 0
+          hbot_control_plane_report_fresh{report=~"reconciliation|parity|portfolio_risk|market_data|ops_db_writer|coordination|coordination_policy|promotion_gate|day2_gate|event_store_integrity|soak"} == 0
         for: 5m
         labels:
           severity: critical
         annotations:
           summary: "Control-plane report stale: {{ $labels.report }}"
           description: "Control-plane report {{ $labels.report }} is outside freshness budget."
+
+      - alert: OpsDbWriterNotHealthy
+        expr: |
+          hbot_control_plane_gate_status{gate="ops_db_writer_ok"} == 0
+        for: 5m
+        labels:
+          severity: critical
+        annotations:
+          summary: "Ops DB writer unhealthy"
+          description: "ops_db_writer latest report is failing or missing."
+
+      - alert: MarketDataTrackingNotFresh
+        expr: |
+          hbot_control_plane_gate_status{gate="market_data_fresh"} == 0
+        for: 10m
+        labels:
+          severity: critical
+        annotations:
+          summary: "Market-data tracking not fresh"
+          description: "market_data latest report indicates stale/missing event tracking."
 
       - alert: CoordinationPolicyGateFailed
         expr: |
@@ -330,7 +350,7 @@ groups:
 
       - alert: RealizedPnlNegative
         expr: |
-          hbot_bot_realized_pnl_today_quote < -20
+          hbot_bot_net_realized_pnl_today_quote < -20
         for: 10m
         labels:
           severity: warning
@@ -387,3 +407,13 @@ groups:
         annotations:
           summary: "🚨 Kill switch TRIGGERED on {{ $labels.bot }}"
           description: "Kill switch fired on {{ $labels.bot }}. All orders should be canceled. Immediate review required."
+
+      - alert: DataPlaneConsistencyFailed
+        expr: |
+          hbot_data_plane_consistency < 1
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "⚠️ Data plane consistency check failed"
+          description: "One or more active bots have a stale or incomplete desk snapshot (hbot_data_plane_consistency=0). Telegram and Grafana may be reading inconsistent data. Check desk_snapshot_service logs."

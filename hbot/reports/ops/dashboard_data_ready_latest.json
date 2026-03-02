@@ -1,0 +1,129 @@
+{
+  "ts_utc": "2026-03-02T03:46:00.614852+00:00",
+  "status": "pass",
+  "tradenote_ready": true,
+  "grafana_ready": true,
+  "failed_checks": [],
+  "checks": {
+    "tradenote_sources_discovered": true,
+    "tradenote_required_sources_present": true,
+    "tradenote_fill_schema_ok": true,
+    "tradenote_fill_rows_present": true,
+    "tradenote_fill_fresh": true,
+    "tradenote_sync_report_present": true,
+    "tradenote_sync_ok": true,
+    "tradenote_sync_fresh": true,
+    "grafana_minute_sources_discovered": true,
+    "grafana_required_sources_present": true,
+    "grafana_minute_rows_present": true,
+    "grafana_minute_fresh": true,
+    "ops_db_writer_report_present": true,
+    "ops_db_writer_status_ok": true,
+    "event_store_integrity_present": true,
+    "event_store_integrity_fresh": true,
+    "event_store_events_present": true,
+    "grafana_exporter_snapshots_present": true,
+    "grafana_exporter_core_metrics_present": true,
+    "grafana_exporter_open_trade_metrics_present": true
+  },
+  "details": {
+    "tradenote": {
+      "required_sources": [
+        "bot1:a",
+        "bot3:a"
+      ],
+      "missing_required_sources": [],
+      "fills_sources": [
+        "bot1:a",
+        "bot3:a"
+      ],
+      "fills_analysis": {
+        "bot1:a": {
+          "path": "F:\\Environement\\git-repo\\hummingbot_custo\\hbot\\data\\bot1\\logs\\epp_v24\\bot1_a\\fills.csv",
+          "rows_total": 2081,
+          "rows_valid_tradenote": 2081,
+          "missing_required_columns": [],
+          "last_fill_ts_utc": "2026-03-01T00:43:33.013282+00:00",
+          "last_fill_age_s": 97345.78863286972
+        },
+        "bot3:a": {
+          "path": "F:\\Environement\\git-repo\\hummingbot_custo\\hbot\\data\\bot3\\logs\\epp_v24\\bot3_a\\fills.csv",
+          "rows_total": 715,
+          "rows_valid_tradenote": 715,
+          "missing_required_columns": [],
+          "last_fill_ts_utc": "2026-03-01T16:38:01.927189+00:00",
+          "last_fill_age_s": 40076.874725818634
+        }
+      },
+      "sync_report_path": "F:\\Environement\\git-repo\\hummingbot_custo\\hbot\\reports\\tradenote\\sync_latest.json",
+      "sync_report_age_s": 38.16030764579773,
+      "sync_report_status": "ok",
+      "sync_report_error": ""
+    },
+    "grafana": {
+      "required_sources": [
+        "bot1:a",
+        "bot3:a",
+        "bot4:a"
+      ],
+      "missing_required_sources": [],
+      "minute_sources": [
+        "bot1:a",
+        "bot2:d",
+        "bot3:a",
+        "bot4:a",
+        "bot4:d"
+      ],
+      "minute_analysis": {
+        "bot1:a": {
+          "path": "F:\\Environement\\git-repo\\hummingbot_custo\\hbot\\data\\bot1\\logs\\epp_v24\\bot1_a\\minute.csv",
+          "rows_total": 537,
+          "last_minute_ts_utc": "2026-03-02T03:45:01.178668+00:00",
+          "last_minute_age_s": 57.623246908187866
+        },
+        "bot2:d": {
+          "path": "F:\\Environement\\git-repo\\hummingbot_custo\\hbot\\data\\bot2\\logs\\epp_v24\\bot2_d\\minute.csv",
+          "rows_total": 12,
+          "last_minute_ts_utc": "2026-02-20T00:55:00.514459+00:00",
+          "last_minute_age_s": 874258.2874560356
+        },
+        "bot3:a": {
+          "path": "F:\\Environement\\git-repo\\hummingbot_custo\\hbot\\data\\bot3\\logs\\epp_v24\\bot3_a\\minute.csv",
+          "rows_total": 133,
+          "last_minute_ts_utc": "2026-03-02T03:43:02.940368+00:00",
+          "last_minute_age_s": 175.86154699325562
+        },
+        "bot4:a": {
+          "path": "F:\\Environement\\git-repo\\hummingbot_custo\\hbot\\data\\bot4\\logs\\epp_v24\\bot4_a\\minute.csv",
+          "rows_total": 769,
+          "last_minute_ts_utc": "2026-03-02T03:45:01.162379+00:00",
+          "last_minute_age_s": 57.639535903930664
+        },
+        "bot4:d": {
+          "path": "F:\\Environement\\git-repo\\hummingbot_custo\\hbot\\data\\bot4\\logs\\epp_v24\\bot4_d\\minute.csv",
+          "rows_total": 4,
+          "last_minute_ts_utc": "2026-02-21T03:00:00.548333+00:00",
+          "last_minute_age_s": 780358.2535820007
+        }
+      },
+      "ops_db_writer_report_path": "F:\\Environement\\git-repo\\hummingbot_custo\\hbot\\reports\\ops_db_writer\\latest.json",
+      "ops_db_writer_age_s": 118.68156909942627,
+      "ops_db_writer_status": "pass",
+      "event_store_integrity_path": "F:\\Environement\\git-repo\\hummingbot_custo\\hbot\\reports\\event_store\\integrity_20260302.json",
+      "event_store_integrity_total_events": 5840,
+      "event_store_integrity_age_s": 1.9482946395874023,
+      "metric_presence": {
+        "core:hbot_bot_open_pnl_quote": true,
+        "core:hbot_bot_closed_pnl_quote_total": true,
+        "core:hbot_bot_trades_total": true,
+        "core:hbot_bot_trade_winrate": true,
+        "core:hbot_bot_realized_pnl_week_quote": true,
+        "core:hbot_bot_realized_pnl_month_quote": true,
+        "core:hbot_bot_equity_start_quote": true,
+        "open_trade:hbot_bot_position_quantity_base": true,
+        "open_trade:hbot_bot_position_unrealized_pnl_quote": true
+      },
+      "exporter_error": ""
+    }
+  }
+}

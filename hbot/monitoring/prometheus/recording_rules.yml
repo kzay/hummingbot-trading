@@ -1,0 +1,27 @@
+# ============================================
+# Prometheus Recording Rules (Performance)
+# ============================================
+groups:
+  - name: hbot_bot_derived
+    interval: 15s
+    rules:
+      # Mid price derived from best bid/ask (minute snapshot).
+      - record: hbot_bot_mid_price
+        expr: (hbot_bot_best_bid_price + hbot_bot_best_ask_price) / 2
+
+      # Exposure proxies in quote units (position_base * mid).
+      - record: hbot_bot_exposure_quote
+        expr: hbot_bot_position_base * hbot_bot_mid_price
+
+      - record: hbot_bot_gross_exposure_quote
+        expr: abs(hbot_bot_position_base) * hbot_bot_mid_price
+
+      # Bot "healthy uptime" proxy: running AND fresh minute.csv (<90s).
+      # Used to render desk uptime cheaply (no joins in Grafana queries).
+      - record: hbot_bot_running_fresh
+        expr: max without(state) (hbot_bot_state{state="running"}) * on(bot,variant,mode,accounting,exchange,pair,regime,cluster,environment) (hbot_bot_snapshot_age_seconds < bool 90)
+
+      # Inventory skew proxy (absolute deviation from target, ratio in [0,1]).
+      - record: hbot_bot_inventory_skew_abs
+        expr: abs(hbot_bot_base_pct - hbot_bot_target_base_pct)
+

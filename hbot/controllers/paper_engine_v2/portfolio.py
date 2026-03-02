@@ -18,6 +18,7 @@ from __future__ import annotations
 
 import logging
 from dataclasses import dataclass, field
+from datetime import datetime, timezone
 from decimal import Decimal
 from typing import Any, Dict, List, Optional
 
@@ -62,6 +63,7 @@ class PortfolioConfig:
     leverage_max: int = 20
     margin_ratio_warn_pct: Decimal = Decimal("0.20")
     margin_ratio_critical_pct: Decimal = Decimal("0.10")
+    margin_model_type: str = "leveraged"  # "leveraged"|"standard"
 
 
 # ---------------------------------------------------------------------------
@@ -137,6 +139,10 @@ class RiskGuard:
 
         # Drawdown hard stop
         if self._portfolio.drawdown_pct() > self._cfg.max_drawdown_pct_hard:
+            # Safety valve: allow strictly risk-reducing market orders so the desk
+            # can de-risk out of stressed states instead of deadlocking itself.
+            if self._is_drawdown_reducing_market_order(order, spec):
+                return None
             return "drawdown_hard_stop"
 
         # Position notional cap
@@ -158,6 +164,23 @@ class RiskGuard:
             )
 
         return None
+
+    def _is_drawdown_reducing_market_order(self, order: PaperOrder, spec: InstrumentSpec) -> bool:
+        order_type_text = str(getattr(getattr(order, "order_type", None), "value", "")).lower()
+        if order_type_text != "market":
+            return False
+        pos = self._portfolio.get_position(spec.instrument_id)
+        qty = pos.quantity if pos is not None else _ZERO
+        if qty >= _ZERO and order.side == OrderSide.BUY:
+            return False
+        if qty <= _ZERO and order.side == OrderSide.SELL:
+            return False
+        # Strictly reducing only: do not allow flipping through zero.
+        if qty > _ZERO and order.side == OrderSide.SELL:
+            return order.quantity <= qty + _EPS
+        if qty < _ZERO and order.side == OrderSide.BUY:
+            return order.quantity <= abs(qty) + _EPS
+        return False
 
 
 # ---------------------------------------------------------------------------
@@ -189,6 +212,7 @@ class PaperPortfolio:
         self._position_margin_reserved: Dict[str, Decimal] = {}  # key -> reserved quote
         self._peak_equity: Decimal = _ZERO
         self._daily_open_equity: Optional[Decimal] = None
+        self._daily_open_day_key: Optional[str] = None
         self.risk_guard = RiskGuard(config, self)
         self._config = config
         # Promoted risk engine (parallel to legacy RiskGuard; gradually replaces it).
@@ -209,6 +233,33 @@ class PaperPortfolio:
     @property
     def daily_open_equity(self) -> Optional[Decimal]:
         return self._daily_open_equity
+
+    @staticmethod
+    def _utc_day_key(now_ns: Optional[int] = None) -> str:
+        if now_ns is None:
+            return datetime.now(timezone.utc).strftime("%Y-%m-%d")
+        return datetime.fromtimestamp(float(now_ns) / 1e9, tz=timezone.utc).strftime("%Y-%m-%d")
+
+    def _refresh_daily_open_baseline(self, equity_quote: Decimal, now_ns: Optional[int] = None) -> None:
+        """Keep daily_open_equity aligned to UTC day boundaries."""
+        if equity_quote <= _ZERO:
+            return
+        day_key = self._utc_day_key(now_ns)
+        if self._daily_open_day_key is None:
+            self._daily_open_day_key = day_key
+        if self._daily_open_day_key != day_key:
+            logger.info(
+                "PaperPortfolio day rollover: %s -> %s (daily_open_equity=%s -> %s)",
+                self._daily_open_day_key,
+                day_key,
+                self._daily_open_equity,
+                equity_quote,
+            )
+            self._daily_open_day_key = day_key
+            self._daily_open_equity = equity_quote
+            return
+        if self._daily_open_equity is None:
+            self._daily_open_equity = equity_quote
 
     # -- Balance -----------------------------------------------------------
 
@@ -261,6 +312,10 @@ class PaperPortfolio:
                 continue
             pos.unrealized_pnl = _unrealized_pnl(pos.quantity, pos.avg_entry_price, price)
         self._refresh_position_margin_reserves(prices)
+        eq = self.equity_quote(prices)
+        if eq > self._peak_equity:
+            self._peak_equity = eq
+        self._refresh_daily_open_baseline(eq)
 
     def _refresh_position_margin_reserves(self, prices: Dict[str, Decimal]) -> None:
         """Reserve/release maintenance margin for perp positions (Nautilus-style).
@@ -275,6 +330,8 @@ class PaperPortfolio:
                 continue
             spec = self._spec_by_key.get(key)
             lev = int(self._leverage_by_key.get(key, 1) or 1)
+            if self._config.margin_model_type.lower() != "leveraged":
+                lev = 1
             px = prices.get(key)
             if spec is None or px is None or px <= _ZERO:
                 # If we can't price the position, keep prior reserve to avoid
@@ -314,13 +371,24 @@ class PaperPortfolio:
     def apply_funding(
         self, instrument_id: InstrumentId, charge: Decimal, now_ns: int
     ) -> FundingApplied:
-        """Debit funding charge from portfolio and record on position."""
+        """Apply signed funding transfer and record on position.
+
+        Positive charge debits quote (paid funding).
+        Negative charge credits quote (funding received).
+        """
         pos = self._positions.get(instrument_id.key)
         notional = _ZERO
         if pos is not None:
             pos.funding_paid += charge
             notional = pos.abs_quantity * pos.avg_entry_price
-        self._ledger.debit(instrument_id.quote_asset, charge)
+        if charge >= _ZERO:
+            self._ledger.debit(instrument_id.quote_asset, charge)
+        else:
+            self._ledger.credit(instrument_id.quote_asset, abs(charge))
+        eq = self.equity_quote()
+        if eq > self._peak_equity:
+            self._peak_equity = eq
+        self._refresh_daily_open_baseline(eq, now_ns=now_ns)
         return FundingApplied(
             event_id=_uuid(), timestamp_ns=now_ns,
             instrument_id=instrument_id,
@@ -394,8 +462,7 @@ class PaperPortfolio:
         eq = self.equity_quote()
         if eq > self._peak_equity:
             self._peak_equity = eq
-        if self._daily_open_equity is None and eq > _ZERO:
-            self._daily_open_equity = eq
+        self._refresh_daily_open_baseline(eq, now_ns=now_ns)
 
         self._positions[instrument_id.key] = pos
 
@@ -506,6 +573,7 @@ class PaperPortfolio:
             "positions": {k: v.to_dict() for k, v in self._positions.items()},
             "peak_equity": str(self._peak_equity),
             "daily_open_equity": str(self._daily_open_equity) if self._daily_open_equity else None,
+            "daily_open_day_key": self._daily_open_day_key,
             "leverage_by_key": {k: int(v) for k, v in self._leverage_by_key.items()},
             "position_margin_reserved": {k: str(v) for k, v in self._position_margin_reserved.items()},
         }
@@ -517,6 +585,10 @@ class PaperPortfolio:
             self._peak_equity = Decimal(data["peak_equity"])
         if "daily_open_equity" in data and data["daily_open_equity"]:
             self._daily_open_equity = Decimal(data["daily_open_equity"])
+        if "daily_open_day_key" in data and data["daily_open_day_key"]:
+            self._daily_open_day_key = str(data["daily_open_day_key"])
+        elif self._daily_open_equity is not None:
+            self._daily_open_day_key = self._utc_day_key()
         if "positions" in data:
             for key, pd in data["positions"].items():
                 try:

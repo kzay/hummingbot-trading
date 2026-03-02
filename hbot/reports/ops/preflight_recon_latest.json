@@ -1,0 +1,11 @@
+{
+  "env_path": "F:\\Environement\\git-repo\\hummingbot_custo\\hbot\\env\\.env",
+  "reconciliation_report_path": "F:\\Environement\\git-repo\\hummingbot_custo\\hbot\\reports\\reconciliation\\latest.json",
+  "exchange_snapshot_report_path": "F:\\Environement\\git-repo\\hummingbot_custo\\hbot\\reports\\exchange_snapshots\\latest.json",
+  "env_has_required_bitget_keys": true,
+  "recon_exchange_source_enabled_env": true,
+  "recon_exchange_source_enabled_report": true,
+  "exchange_snapshot_account_probe_status": "ok",
+  "exchange_snapshot_probe_ok": true,
+  "ready": true
+}

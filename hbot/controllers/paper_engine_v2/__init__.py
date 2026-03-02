@@ -9,6 +9,7 @@ from controllers.paper_engine_v2.data_feeds import (
     ReplayDataFeed,
     StaticDataFeed,
 )
+from controllers.paper_engine_v2.config import PaperEngineConfig
 from controllers.paper_engine_v2.desk import DeskConfig, PaperDesk
 from controllers.paper_engine_v2.fee_models import (
     FeeModel,
@@ -17,10 +18,17 @@ from controllers.paper_engine_v2.fee_models import (
     TieredFeeModel,
 )
 from controllers.paper_engine_v2.fill_models import (
+    BestPriceFillModel,
+    CompetitionAwareFillModel,
     FillDecision,
     FillModel,
     LatencyAwareFillModel,
+    MarketHoursAwareFillModel,
+    OneTickSlippageFillModel,
     QueuePositionFillModel,
+    SizeAwareFillModel,
+    ThreeTierFillModel,
+    TwoTierFillModel,
     TopOfBookFillModel,
 )
 from controllers.paper_engine_v2.funding_simulator import FundingSimulator
@@ -81,9 +89,17 @@ __all__ = [
     "PortfolioConfig",
     "PaperDesk",
     "DeskConfig",
+    "PaperEngineConfig",
     # Models
     "FillDecision",
     "FillModel",
+    "BestPriceFillModel",
+    "OneTickSlippageFillModel",
+    "TwoTierFillModel",
+    "ThreeTierFillModel",
+    "CompetitionAwareFillModel",
+    "SizeAwareFillModel",
+    "MarketHoursAwareFillModel",
     "QueuePositionFillModel",
     "TopOfBookFillModel",
     "LatencyAwareFillModel",

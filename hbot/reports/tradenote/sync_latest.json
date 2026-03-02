@@ -1,0 +1,31 @@
+{
+  "ts_utc": "2026-03-02T11:45:14.659185+00:00",
+  "status": "ok",
+  "tradenote_url": "http://tradenote:8080",
+  "selected_broker": "template",
+  "upload_mfe_prices": false,
+  "include_today": false,
+  "lookback_days": 14,
+  "discovered_sources": [
+    "bot1:a",
+    "bot3:a"
+  ],
+  "rows_by_source": {},
+  "candidate_days": [],
+  "skipped_imported_days": [
+    "2026-02-23",
+    "2026-02-24",
+    "2026-02-25",
+    "2026-02-26",
+    "2026-02-27",
+    "2026-02-28",
+    "2026-03-01"
+  ],
+  "imported_days_total_before": 7,
+  "imported_days_total_after": 7,
+  "imported_this_run": [],
+  "rows_posted_by_day": {},
+  "state_path": "/workspace/hbot/reports/tradenote/sync_state.json",
+  "max_rows_per_post": 100,
+  "chunks_posted_by_day": {}
+}

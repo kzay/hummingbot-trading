@@ -87,6 +87,88 @@ These items are derived from the `MODE=BUILD_SPEC` audit and are tracked here so
 
 ---
 
+## BUILD_SPEC — Canonical Data Plane Migration (Timescale) `in-progress (2026-03-02)`
+
+Goal: migrate from CSV-first persistence to a canonical event/database plane suitable for semi-pro reliability, while keeping backward-compatible CSV artifacts during transition.
+
+### [SPEC-TS1] Timescale-capable ops DB baseline `open`
+- Switch compose Postgres runtime to Timescale-capable image (PG16 compatible) via env-configurable image override.
+- Add explicit `.env.template` knobs for DB image, retention windows, compression thresholds, and migration flags.
+- Keep current `postgres-data` volume and `ops-db-writer` service contract unchanged.
+- Acceptance:
+  - `docker compose config` resolves with Timescale image by default.
+  - Existing `ops-db-writer` startup still works when Timescale is unavailable (unless strict flag enabled).
+
+### [SPEC-TS2] Schema bootstrap for Timescale migration `open`
+- Extend `services/ops_db_writer/schema_v1.sql` with canonical raw event table:
+  - `event_envelope_raw` keyed by `(stream, stream_entry_id)` for idempotent replay.
+  - Payload JSONB + key dimensions (`event_id`, `event_type`, `instance_name`, `trading_pair`, `ts_utc`, `ingest_ts_utc`).
+- Add supporting indexes for time/window queries across `bot_snapshot_minute`, `fills`, and `event_envelope_raw`.
+- Acceptance:
+  - Schema apply is idempotent.
+  - Re-running writer does not duplicate raw events for same stream entry IDs.
+
+### [SPEC-TS3] Timescale hypertable + policy bootstrap in writer `open`
+- Add bootstrap logic in `services/ops_db_writer/main.py`:
+  - optional `CREATE EXTENSION IF NOT EXISTS timescaledb`.
+  - convert `bot_snapshot_minute`, `fills`, `event_envelope_raw` to hypertables when extension exists.
+  - apply configurable retention and compression policies (if enabled).
+- Add strict/soft behavior:
+  - strict mode fails run when Timescale is required but unavailable.
+  - soft mode logs warning and continues as plain Postgres.
+- Acceptance:
+  - Writer evidence (`reports/ops_db_writer/latest.json`) includes migration metadata.
+  - Policies are applied idempotently (`if_not_exists` semantics).
+
+### [SPEC-TS4] Event-store dual-write (JSONL + DB raw events) `open`
+- Extend `services/event_store/main.py` with optional DB mirror sink:
+  - write normalized envelopes to `event_envelope_raw` before ACK.
+  - keep JSONL + integrity artifacts as compatibility path.
+  - if DB mirror enabled and write fails, leave stream entries unacked for replay.
+- Acceptance:
+  - With mirror enabled, ACK occurs only after file + stats + DB success.
+  - With mirror disabled, behavior remains identical to current baseline.
+
+### [SPEC-TS5] Backfill and reconciliation utilities `open`
+- Add deterministic backfill flow from existing artifacts:
+  - `reports/event_store/events_*.jsonl` -> `event_envelope_raw`
+  - `data/*/logs/epp_v24/*/fills.csv` + `minute.csv` -> canonical tables (existing writer path).
+- Emit parity artifacts:
+  - row counts by day/source
+  - mismatch list for missing/duplicate rows
+- Acceptance:
+  - Backfill is idempotent.
+  - DB-vs-CSV parity deltas are explicit and machine-readable.
+
+### [SPEC-TS6] DB-first read path with CSV fallback `open`
+- Update downstream consumers (`tradenote_sync`, selected analysis/report scripts) to prefer DB reads when enabled:
+  - fallback to current CSV path if DB unavailable.
+- Add feature flag and evidence in outputs indicating active source (`db` vs `csv`).
+- Acceptance:
+  - No consumer regression when DB-first disabled.
+  - Consumers surface source mode in report metadata.
+
+### [SPEC-TS7] Cutover guardrails and promotion gates `open`
+- Add release gate checks for canonical plane:
+  - DB ingest freshness
+  - DB-vs-CSV parity thresholds
+  - duplicate suppression rate
+  - event-store replay lag under threshold
+- Acceptance:
+  - Strict promotion cycle blocks cutover if canonical-plane checks fail.
+
+### [SPEC-TS8] Backup/restore + rollback drills `open`
+- Define and automate:
+  - Postgres/Timescale backup cadence and verification.
+  - restore drill to fresh instance.
+  - rollback path from `db_primary` to `csv_compat` flags.
+- Evidence outputs in `reports/ops/`.
+- Acceptance:
+  - Restore recovers canonical tables and latest parity state.
+  - Rollback can be performed in < 5 minutes with documented commands.
+
+---
+
 ## P0 — Blocks Live Trading / Safety
 
 ---
@@ -1810,6 +1892,677 @@ by the execution reliability audit.
 
 **Do not**:
 - Do not alter accounting math to fit telemetry output.
+
+---
+
+## BUILD_SPEC — Semi-Pro Paper Exchange Service (exchange mirror) `in-progress (2026-03-01)`
+
+**Objective**: Extract paper execution from controller-local state into a dedicated service that behaves like an exchange adapter while consuming the same real market data connector feed used by each bot.
+
+**Assessment verdict**:
+- **Internal readiness (paper-only desk)**: Amber (usable with safeguards).
+- **Exchange-mirror readiness**: Red until command contracts, durable state, and parity gates are complete.
+
+**Architecture baseline (target)**:
+- **Data layer**: `hb.market_data.v1` remains source of truth from bot connector path (Bitget/other real exchange connectors).
+- **Strategy layer**: controller emits intents/commands only, no direct paper accounting mutation.
+- **Execution simulation layer**: new `paper_exchange_service` owns order lifecycle, matching, fills, balances, and funding simulation.
+- **Risk layer**: existing risk services keep veto/kill authority before commands reach paper exchange.
+- **Ops layer**: heartbeat + SLO + parity reports become promotion gates.
+
+**Impact analysis**:
+- **Controller impact**: medium-high (replace in-process calls with command adapter, shadow run, then cutover).
+- **Contracts impact**: high (new stream names and schema contracts must stay backward compatible).
+- **Ops impact**: medium (new service and dashboards, but existing Redis/Prom stack can be reused).
+- **Risk of regression**: high without replay/parity tests; reduced to medium after phase gates below.
+
+### [P0-PAPER-SVC-20260301-1] Define v1 command/event/heartbeat contracts and service baseline `in-progress (2026-03-01)`
+
+**Why it matters**: Service extraction is unsafe without explicit stream contracts and a standalone process boundary.
+
+**What exists now**:
+- `paper_engine_v2` logic is mostly in-process and coupled to controller flow.
+- No dedicated paper-exchange command stream contract yet.
+
+**Design decision (pre-answered)**: Establish contract-first extraction (`command -> result -> heartbeat`) before full matching migration.
+
+**Implementation steps**:
+1. Add stream constants for paper-exchange command/event/heartbeat.
+2. Add schema models in `event_schemas.py` for command/result/heartbeat.
+3. Create `services/paper_exchange_service/main.py` baseline process:
+   - consume market snapshots from `hb.market_data.v1`,
+   - enforce connector allowlist for real exchange feed provenance,
+   - emit heartbeat and command result events.
+4. Add unit tests for schema and baseline behavior.
+
+**Acceptance criteria**:
+- Service runs independently and publishes heartbeat.
+- Command schema validation works and unsupported actions are explicitly rejected.
+- Unit tests cover contract roundtrip and baseline processing.
+
+**Do not**:
+- Do not route live orders here.
+- Do not fake market data inside paper exchange.
+
+---
+
+### [P0-PAPER-SVC-20260301-2] Enforce exchange-data provenance and freshness contract `open`
+
+**Why it matters**: Exchange-mirroring claims are invalid if market data can silently come from synthetic or stale sources.
+
+**What exists now**:
+- Market snapshots carry connector identity, but provenance fields are not strict enough for hard gating.
+
+**Design decision (pre-answered)**: Add explicit provenance metadata and stale-data hard gate in paper exchange command path.
+
+**Implementation steps**:
+1. Extend market snapshot payload metadata with provenance (`origin`, connector, sequence/reference timestamp).
+2. In `paper_exchange_service`, reject command processing when required pair feed is stale.
+3. Emit structured rejection reasons (`market_data_stale`, `connector_mismatch`, `missing_pair_feed`).
+4. Add tests for freshness boundary and connector mismatch behavior.
+
+**Acceptance criteria**:
+- Every processed command references fresh market data from allowed connector.
+- Rejection reasons are observable in events and dashboards.
+
+**Do not**:
+- Do not silently fallback to last-known data beyond stale threshold.
+
+---
+
+### [P0-PAPER-SVC-20260301-3] Add controller adapter (shadow mode first) `open`
+
+**Why it matters**: Direct in-process paper calls prevent service isolation and realistic exchange-like behavior.
+
+**What exists now**:
+- Controller still owns paper accounting path directly.
+
+**Design decision (pre-answered)**: Introduce adapter with dual-write shadow mode before cutover.
+
+**Implementation steps**:
+1. Add controller-side adapter that emits `paper_exchange_command` events.
+2. Keep current `paper_engine_v2` execution as source-of-truth during shadow phase.
+3. Record parity diffs (fills, balances, position, realized/unrealized PnL, funding).
+4. Add canary toggle per bot (`PAPER_EXCHANGE_MODE=disabled|shadow|active`).
+
+**Acceptance criteria**:
+- Shadow mode runs with parity report artifacts per bot/day.
+- No behavior change to trading decisions while in shadow mode.
+
+**Do not**:
+- Do not switch bot1 directly to active mode before parity thresholds pass.
+
+---
+
+### [P0-PAPER-SVC-20260301-4] Implement deterministic matching and order-state engine `open`
+
+**Why it matters**: Exchange-mirror credibility depends on realistic order lifecycle and deterministic replay.
+
+**What exists now**:
+- Fill models exist, but service-level command/order lifecycle contract is incomplete.
+
+**Design decision (pre-answered)**: Build deterministic core first; advanced microstructure realism can layer later.
+
+**Implementation steps**:
+1. Implement in-service order states (`accepted`, `working`, `partially_filled`, `filled`, `cancelled`, `rejected`, `expired`).
+2. Support `limit`, `market`, `post_only`, `reduce_only`, IOC/FOK policy behavior.
+3. Add deterministic fill clock and sequencing by event timestamp + stream id.
+4. Add unit tests and replay tests for edge cases (crossed quotes, cancel-race, partial fills).
+
+**Acceptance criteria**:
+- Same replay input always yields same fills and states.
+- Order lifecycle is auditable end-to-end with reason codes.
+
+**Do not**:
+- Do not introduce nondeterministic randomness without seeded control and test hooks.
+
+---
+
+### [P0-PAPER-SVC-20260301-5] Add durable persistence and crash recovery `open`
+
+**Why it matters**: Exchange-like service cannot lose order/fill state on restart.
+
+**What exists now**:
+- Core state durability is partial and still tied to controller lifecycle assumptions.
+
+**Design decision (pre-answered)**: Snapshot + append-log recovery with idempotent reprocessing.
+
+**Implementation steps**:
+1. Persist order/fill/account state snapshots on interval and on shutdown.
+2. Maintain append-only journal for commands and execution events.
+3. Implement restart recovery with checksum/version guard.
+4. Add restart simulation tests and idempotency tests.
+
+**Acceptance criteria**:
+- Service restart restores consistent state and resumes processing.
+- No duplicate fills on replay/recovery.
+
+**Do not**:
+- Do not rely solely on in-memory maps for authoritative state.
+
+---
+
+### [P1-PAPER-SVC-20260301-6] Align margin, funding, and fee semantics with current desk accounting `open`
+
+**Why it matters**: PnL and risk drift undermines trust in paper-vs-live promotion gates.
+
+**What exists now**:
+- Portfolio/funding behavior was improved, but service extraction can reintroduce drift if semantics diverge.
+
+**Design decision (pre-answered)**: Keep accounting semantics contract-driven and parity-tested against current portfolio outputs.
+
+**Implementation steps**:
+1. Define explicit fee/funding/margin contract fields in execution events.
+2. Port or wrap current paper accounting logic into service-owned module boundary.
+3. Add parity fixtures for maker/taker, funding positive/negative, leverage and margin modes.
+4. Add regression tests against known vectors from existing `paper_engine_v2` tests.
+
+**Acceptance criteria**:
+- Accounting parity meets tolerance thresholds in replay suite.
+- Funding sign and margin reserve behavior are consistent and documented.
+
+**Do not**:
+- Do not change risk policy thresholds to hide accounting drift.
+
+---
+
+### [P1-PAPER-SVC-20260301-7] Build parity and replay gate for promotion cycle `open`
+
+**Why it matters**: Service cutover needs objective acceptance gates, not subjective observation.
+
+**What exists now**:
+- Some soak and readiness scripts exist, but no dedicated paper-engine service parity gate yet.
+
+**Design decision (pre-answered)**: Add replay and shadow-parity reports as mandatory release checks.
+
+**Implementation steps**:
+1. Create script to compare legacy vs service outputs over same market/intent stream.
+2. Produce machine-readable artifact (`reports/verification/paper_exchange_parity_latest.json`).
+3. Integrate pass/fail thresholds into release scripts.
+4. Add tests covering artifact schema and gate decision logic.
+
+**Acceptance criteria**:
+- Strict promotion cycle fails on parity regression.
+- Artifacts show fill, slippage, position, and equity drift metrics.
+
+**Do not**:
+- Do not bypass parity gate with blanket exemptions.
+
+---
+
+### [P1-PAPER-SVC-20260301-8] Add observability and SLO for service reliability `open`
+
+**Why it matters**: Exchange mirror service must be diagnosable under degraded feed, lag, and redis incidents.
+
+**What exists now**:
+- Existing dashboards and SLO scripts focus on controller-centric flow.
+
+**Design decision (pre-answered)**: Add service-level metrics and alerts before active cutover.
+
+**Implementation steps**:
+1. Export metrics: command latency, rejection reason counts, snapshot freshness, replay lag, restart count.
+2. Add Grafana panels and alert rules for stale feed and high reject rate.
+3. Extend reliability SLO script with paper-exchange heartbeat and freshness checks.
+4. Add tests for metric/report builders where feasible.
+
+**Acceptance criteria**:
+- New SLO checks pass in soak.
+- Alerting catches stale feed and command backlog conditions.
+
+**Do not**:
+- Do not treat missing heartbeat as non-critical.
+
+---
+
+### [P1-PAPER-SVC-20260301-9] Compose integration and controlled rollout plan `open`
+
+**Why it matters**: Safe rollout requires explicit deployment modes and rollback path.
+
+**What exists now**:
+- No dedicated compose service role for paper exchange yet.
+
+**Design decision (pre-answered)**: Deploy service behind feature flags with shadow-first canary.
+
+**Implementation steps**:
+1. Add service block to compose with healthcheck and required env vars.
+2. Introduce per-bot mode flags for disabled/shadow/active.
+3. Add rollback procedure to runbooks and preflight checks.
+4. Run 24h canary (bot3 or bot4), then bot1 after parity pass.
+
+**Acceptance criteria**:
+- Rollout can switch between modes without downtime to other services.
+- Rollback returns to legacy path within one restart cycle.
+
+**Do not**:
+- Do not enable active mode on all bots simultaneously on first rollout.
+
+---
+
+### [P2-PAPER-SVC-20260301-10] NautilusTrader selective reuse and license boundary `open`
+
+**Why it matters**: Reusing proven components can improve robustness, but license and boundary handling must be explicit.
+
+**What exists now**:
+- Team has authorization to use open source components.
+- No tracked decision log for what is copied, wrapped, or reimplemented.
+
+**Design decision (pre-answered)**: Use selective, contract-compatible reuse only for modules that improve determinism and exchange realism; keep integration boundary and attribution auditable.
+
+**Implementation steps**:
+1. Create module-level decision matrix (`adopt`, `adapt`, `reimplement`) with rationale.
+2. Add attribution/license documentation and compliance notes in repo docs.
+3. Port components behind local interface adapters, avoiding broad framework lock-in.
+4. Add regression tests proving behavior parity after each adopted component.
+
+**Acceptance criteria**:
+- Every reused component has provenance, boundary, and tests.
+- No undocumented direct dependency on external framework internals.
+
+**Do not**:
+- Do not bulk-copy large framework sections without contract mapping and tests.
+
+---
+
+### [P0-PAPER-SVC-20260301-11] Preserve Hummingbot executor/runtime compatibility during extraction `open`
+
+**Why it matters**: Current paper mode works because bridge patches strategy and connector behavior expected by Hummingbot executors. Removing this without equivalent adapter will break desk trading flow.
+
+**What exists now**:
+- `hb_bridge` patches strategy `buy/sell/cancel` and maps desk events back into HB events.
+- Connector reads (`get_balance`, `get_available_balance`, `get_position`, `ready`) are overridden in paper mode.
+- Executor fallback paths rely on these behaviors for in-flight order visibility.
+
+**Design decision (pre-answered)**: Keep an explicit compatibility adapter layer until service-native interfaces fully replace monkey patches.
+
+**Implementation steps**:
+1. Define a compatibility contract for order lifecycle callbacks expected by Hummingbot executors.
+2. Implement adapter that converts `paper_exchange_event` stream into HB `OrderFilled/OrderCanceled/OrderRejected` semantics.
+3. Ensure in-flight order tracker parity (order-id mapping, partial fills, cancel/expire states).
+4. Add integration tests that run controller + adapter + simulated service events.
+
+**Acceptance criteria**:
+- Existing executor flows continue to operate in paper mode with service backend.
+- No regression in fills ingestion, minute metrics, and event-store telemetry.
+
+**Do not**:
+- Do not remove compatibility patches before adapter parity is proven.
+
+---
+
+### [P0-PAPER-SVC-20260301-12] Expand market data contract beyond mid-price for exchange-like matching `open`
+
+**Why it matters**: A single mid-price snapshot is insufficient to mirror exchange behavior for spread-sensitive market making.
+
+**What exists now**:
+- `market_snapshot` contains summary metrics but lacks explicit top-of-book, trade ticks, and mark/funding timing fields needed for realistic matching.
+
+**Design decision (pre-answered)**: Introduce a minimal exchange-mirroring market schema (L1 first, optional L2 depth extension) and use it as the sole matching input.
+
+**Implementation steps**:
+1. Add contract fields/events for `best_bid`, `best_ask`, `last_trade`, `mark_price`, `funding_rate`, and source timestamps.
+2. Add sequence/clock fields for deterministic ordering (`exchange_ts_ms`, `ingest_ts_ms`, monotonic sequence).
+3. Update service matcher to consume these fields instead of synthetic mid-only approximations.
+4. Add replay tests validating spread crossing and post-only behavior from L1 data.
+
+**Acceptance criteria**:
+- Matching decisions are explainable from recorded exchange-like input events.
+- Replay from recorded stream reproduces identical fills.
+
+**Do not**:
+- Do not infer book side prices from mid-price only in active mode.
+
+---
+
+### [P0-PAPER-SVC-20260301-13] Guarantee command idempotency and Redis pending-entry recovery `open`
+
+**Why it matters**: Redis Streams are at-least-once; without pending recovery and idempotency, crashes can stall or duplicate order actions.
+
+**What exists now**:
+- Baseline consumer reads new entries and ACKs after processing.
+- No explicit claim/replay workflow for pending entries after consumer crash/restart.
+
+**Design decision (pre-answered)**: Add command journal + idempotency keys + pending-claim loop as mandatory reliability baseline.
+
+**Implementation steps**:
+1. Add `command_event_id` idempotency tracking with persistent dedup storage.
+2. Implement pending-entries reclaim flow (`XPENDING/XAUTOCLAIM` equivalent) with inactivity timeout.
+3. Make command processing idempotent for submit/cancel/cancel_all/sync.
+4. Add crash-restart tests proving no lost commands and no duplicate fills.
+
+**Acceptance criteria**:
+- Restart resumes processing pending commands automatically.
+- Replayed command stream yields exactly one terminal outcome per command id.
+
+**Do not**:
+- Do not depend on best-effort ACK ordering for correctness.
+
+---
+
+### [P0-PAPER-SVC-20260301-14] Add startup sync handshake and hard-fail invariants `open`
+
+**Why it matters**: Desk startup currently relies on in-process assumptions; service extraction needs explicit synchronization boundaries to avoid silent drift.
+
+**What exists now**:
+- Baseline supports a `sync_state` command but has no strict startup gate contract.
+
+**Design decision (pre-answered)**: Require startup handshake (`snapshot_loaded -> sync_ok`) before controller is allowed to quote in active mode.
+
+**Implementation steps**:
+1. Define startup handshake events and timeout policy.
+2. Block order command emission until service confirms sync completion for instance/pair.
+3. On sync failure/timeout, force `HARD_STOP` with explicit audit/dead-letter reason.
+4. Add tests for boot success, timeout, partial state, and mismatched instance routing.
+
+**Acceptance criteria**:
+- Active mode cannot trade before successful sync handshake.
+- Startup failures are explicit, auditable, and recoverable via controlled restart.
+
+**Do not**:
+- Do not silently continue in active mode after sync timeout.
+
+---
+
+### [P1-PAPER-SVC-20260301-15] Enforce bot isolation and multi-instance namespace safety `open`
+
+**Why it matters**: Prior incidents showed cross-bot state contamination risks; service extraction must guarantee strict per-bot segregation.
+
+**What exists now**:
+- Instance/variant separation improved in config, but service-level namespace contract is not yet formalized.
+
+**Design decision (pre-answered)**: Scope all command/state/order keys by `(instance_name, variant, connector_name, trading_pair)` and verify with isolation tests.
+
+**Implementation steps**:
+1. Define canonical namespace key format in contracts and persistence.
+2. Ensure command routing rejects cross-instance writes.
+3. Add multi-bot concurrency tests (`bot1/bot3/bot4`) with mixed symbols and simultaneous commands.
+4. Add ops check that detects namespace collisions in reports.
+
+**Acceptance criteria**:
+- No state bleed across bots under parallel workload.
+- Isolation checks are part of reliability and promotion artifacts.
+
+**Do not**:
+- Do not share mutable order/account state across bot namespaces.
+
+---
+
+### [P1-PAPER-SVC-20260301-16] Define active-mode failure policy and rollback semantics `open`
+
+**Why it matters**: If paper exchange service degrades mid-session, behavior must be deterministic and safe for desk operations.
+
+**What exists now**:
+- Rollout strategy exists, but runtime failover policy is not yet explicit.
+
+**Design decision (pre-answered)**: Default to safety-first (pause/stop), with optional controlled fallback only when parity-safe.
+
+**Implementation steps**:
+1. Define failure matrix for service down, stale feed, command backlog, and recovery loops.
+2. Map each failure class to controller action (`soft_pause`, `hard_stop`, or controlled fallback mode).
+3. Emit standardized audit reasons for each transition.
+4. Add scenario tests and runbook procedures for each failure mode.
+
+**Acceptance criteria**:
+- Failure behavior is deterministic and documented.
+- Recovery path is validated in soak and incident drills.
+
+**Do not**:
+- Do not silently revert to live connector execution path from paper mode.
+
+---
+
+### [P1-PAPER-SVC-20260301-17] Wire paper-exchange checks into service interfaces, preflight, and strict promotion cycle `open`
+
+**Why it matters**: Desk confidence requires paper-exchange behavior to be visible in the same gating framework that controls go/no-go decisions.
+
+**What exists now**:
+- Existing docs/gates focus on current HB bridge + in-process paper engine.
+
+**Design decision (pre-answered)**: Treat paper-exchange service readiness as first-class in docs and release automation.
+
+**Implementation steps**:
+1. Update `docs/techspec/service_interfaces.md` with paper-exchange responsibilities and stream contracts.
+2. Extend preflight checks to validate paper-exchange config, connector allowlist, and stream wiring.
+3. Add strict-cycle gate checks for heartbeat freshness, command lag, and parity artifact freshness.
+4. Add tests for new gate logic and failure diagnostics.
+
+**Acceptance criteria**:
+- Promotion cycle fails when paper-exchange service is unhealthy or parity stale.
+- Operators can trace failures from gate output to concrete remediation steps.
+
+**Do not**:
+- Do not mark paper-exchange checks as informational only once active mode is enabled.
+
+---
+
+### [P0-PAPER-SVC-20260301-18] Build automated threshold evaluator for strict cycle (single source of truth) `open`
+
+**Why it matters**: Numeric thresholds are only reliable if enforced by one deterministic evaluator used by CI and promotion gates.
+
+**What exists now**:
+- Thresholds are documented in backlog, but enforcement logic is not yet centralized.
+
+**Design decision (pre-answered)**: Add one evaluator script that ingests artifacts/metrics and emits explicit GO/NO-GO with failed-threshold reasons.
+
+**Implementation steps**:
+1. Implement `scripts/release/check_paper_exchange_thresholds.py` with machine-readable output.
+2. Consume parity/SLO/preflight artifacts and evaluate all paper-service threshold clauses.
+3. Wire script into `run_promotion_gates.py` and `run_strict_promotion_cycle.py`.
+4. Add tests for pass, single-failure, and multi-failure cases.
+
+**Acceptance criteria**:
+- Strict cycle fails on any breached paper-exchange threshold.
+- Failure output names exact metric, threshold, observed value, and source artifact.
+
+**Do not**:
+- Do not duplicate threshold logic across multiple scripts.
+
+---
+
+### [P1-PAPER-SVC-20260301-19] Add load/backpressure validation for desk-scale concurrency `open`
+
+**Why it matters**: Exchange-like behavior is meaningless if service degrades under realistic multi-bot command and market-event rates.
+
+**What exists now**:
+- Functional tests exist, but no formal throughput/backpressure qualification for service mode.
+
+**Design decision (pre-answered)**: Define desk-scale load profile and require latency/queue thresholds before active rollout.
+
+**Implementation steps**:
+1. Create reproducible load harness (market events + commands + cancels) for bot1/bot3/bot4 profile.
+2. Measure command latency, queue depth growth, and event lag under sustained load.
+3. Add fail-fast alerts when queue depth or latency exceeds budget.
+4. Add release artifact with percentile latencies and backlog behavior.
+
+**Acceptance criteria**:
+- Service remains within latency and queue budgets at target desk load.
+- No unbounded queue growth in 2h sustained stress run.
+
+**Do not**:
+- Do not approve active mode based only on low-load test results.
+
+---
+
+### [P1-PAPER-SVC-20260301-20] Harden command-channel security and operator safety controls `open`
+
+**Why it matters**: A command stream with weak controls can generate unauthorized simulated orders, invalidating test evidence and desk safety.
+
+**What exists now**:
+- Command contracts exist, but explicit command-auth/control policy and audit guarantees are not fully specified.
+
+**Design decision (pre-answered)**: Require producer allowlist + signed/traceable command metadata + explicit operator controls.
+
+**Implementation steps**:
+1. Define approved command producers and enforce source validation in service.
+2. Add required metadata fields (`operator`, `reason`, `change_ticket`, `trace_id`) for privileged commands.
+3. Emit audit events for accept/reject with actor attribution.
+4. Add tests for unauthorized producer rejection and missing-metadata rejection.
+
+**Acceptance criteria**:
+- Unauthorized producer commands are rejected deterministically.
+- All privileged commands are traceable to actor/reason in audit stream.
+
+**Do not**:
+- Do not allow wildcard/implicit producer trust in active mode.
+
+---
+
+### [P1-PAPER-SVC-20260301-21] Validate backup/restore and disaster recovery for service state `open`
+
+**Why it matters**: Exchange-mirror service must survive host loss or volume corruption without losing desk continuity.
+
+**What exists now**:
+- Restart recovery is planned, but full backup/restore drills are not yet a formal gate.
+
+**Design decision (pre-answered)**: Add periodic backup verification and restore drills as a release prerequisite.
+
+**Implementation steps**:
+1. Define backup scope (orders, ledger, journal, snapshots, config version markers).
+2. Implement restore procedure into clean environment and replay verification.
+3. Run recurring DR drill and produce evidence artifact.
+4. Add strict-cycle check for backup freshness and last successful restore drill.
+
+**Acceptance criteria**:
+- Restore reproduces consistent state and resumes processing with no duplicate side effects.
+- DR evidence is fresh and attached to readiness artifacts.
+
+**Do not**:
+- Do not treat untested backups as valid recovery guarantees.
+
+---
+
+### Quantitative Go/No-Go Thresholds (mandatory)
+
+**Hard rule**: a backlog item is **GO** only when **all** thresholds below pass in CI/soak evidence for the required window. Any single breach is **NO-GO**.
+
+**Window defaults**:
+- Unit/integration checks: current CI run.
+- Soak/SLO checks: latest continuous 24h window unless explicitly stated otherwise.
+- Artifact freshness for gate decisions: <= 20 minutes.
+
+1. **[P0-PAPER-SVC-20260301-1] Contracts + baseline service**
+   - `schema_validation_error_rate = 0.00%` over >= 10,000 replayed events.
+   - Heartbeat cadence: `p99_gap_ms <= 5000` and `max_gap_ms <= 15000` over 30m soak.
+   - Unsupported command handling: `reject_rate = 100.00%` with `reason=not_implemented_yet`.
+   - Contract tests in `tests/services/test_event_schemas.py` and `tests/services/test_paper_exchange_service.py`: `pass_rate = 100.00%`.
+
+2. **[P0-PAPER-SVC-20260301-2] Provenance + freshness enforcement**
+   - Commands processed with stale market data: `0`.
+   - Processed commands with allowlisted connector provenance: `100.00%`.
+   - Processed commands with complete provenance fields (`origin`, connector, exchange timestamp/sequence): `100.00%`.
+   - Rejected stale/mismatch command decision latency: `p95 <= 200 ms`.
+
+3. **[P0-PAPER-SVC-20260301-3] Controller adapter shadow mode**
+   - Shadow parity artifact generated for each enabled bot each day: `100.00%`.
+   - `fill_count_delta_pct <= 1.00%`.
+   - `end_equity_delta_pct <= 0.25%`.
+   - `control_state_divergence_count (soft_pause/hard_stop/kill_switch) = 0`.
+
+4. **[P0-PAPER-SVC-20260301-4] Deterministic matching**
+   - Deterministic replay hash equality on identical input: `20/20 identical runs`.
+   - Terminal order-state coverage (`accepted/working/partially_filled/filled/cancelled/rejected/expired`): `100.00%`.
+   - Post-only violation count: `0`.
+   - Cancel-race misclassification rate: `<= 0.10%`.
+
+5. **[P0-PAPER-SVC-20260301-5] Persistence + recovery**
+   - In 50 crash-restart cycles: `lost_commands = 0`, `duplicate_fills = 0`.
+   - Recovery to healthy heartbeat after restart: `<= 30 s`.
+   - Pending stream entries older than 60s after recovery stabilization: `0`.
+
+6. **[P1-PAPER-SVC-20260301-6] Accounting parity (fees/funding/margin)**
+   - Per-fill fee absolute error: `<= max(1e-8 quote, 0.01% of notional)`.
+   - Cumulative realized PnL drift vs reference run: `<= 0.10% of equity`.
+   - Funding sign mismatches: `0`.
+   - Margin reserve drift vs reference run: `<= 0.10% of equity`.
+
+7. **[P1-PAPER-SVC-20260301-7] Promotion parity gate**
+   - Evaluation window size: `>= 24h` and `>= 5000 command events`.
+   - Fill ratio delta: `<= 2.00 percentage points`.
+   - Reject ratio delta: `<= 1.00 percentage point`.
+   - Fill-price delta: `p95 <= 3.0 bps`, `p99 <= 6.0 bps`.
+   - End-of-window equity delta: `<= 0.30%`.
+
+8. **[P1-PAPER-SVC-20260301-8] Reliability SLO**
+   - Heartbeat availability (`age <= 15s`): `>= 99.90%`.
+   - Command processing success (excluding intentional policy rejects): `>= 99.50%`.
+   - Command latency: `p95 <= 250 ms`, `p99 <= 500 ms`.
+   - Critical dead-letter reasons per hour: `0`.
+
+9. **[P1-PAPER-SVC-20260301-9] Rollout + rollback**
+   - Canary run duration before next promotion step: `>= 24h`.
+   - Canary critical alerts: `0`.
+   - Rollback drill: `RTO <= 5 min`, `RPO (lost commands) = 0`.
+   - Active-mode rollout concurrency during first stage: `<= 1 bot` until 72h stability pass.
+
+10. **[P2-PAPER-SVC-20260301-10] Nautilus selective reuse**
+    - Reused module provenance documentation coverage: `100.00%`.
+    - License/compliance check failures: `0`.
+    - Behavior parity tests for each adopted/ported module: `pass_rate = 100.00%`.
+    - Undocumented direct dependency on external framework internals: `0`.
+
+11. **[P0-PAPER-SVC-20260301-11] Hummingbot runtime compatibility**
+    - Adapter integration tests for executor lifecycle paths: `pass_rate = 100.00%`.
+    - HB event count deltas by type (fill/cancel/reject) vs legacy path: `<= 1.00%`.
+    - In-flight order lookup miss rate: `<= 0.10%`.
+    - Runtime adapter exceptions in 24h shadow soak: `0`.
+
+12. **[P0-PAPER-SVC-20260301-12] Exchange-like market data contract**
+    - Snapshots with non-null required L1 fields (`best_bid`, `best_ask`, sequence/timestamps): `>= 99.90%`.
+    - Out-of-order sequence handling error rate: `<= 0.01%`.
+    - Matching decisions with traceable source input fields: `100.00%`.
+    - Active-mode commands executed with mid-only fallback: `0`.
+
+13. **[P0-PAPER-SVC-20260301-13] Idempotency + pending recovery**
+    - Duplicate command side effects in forced redelivery tests (>=100 scenarios): `0`.
+    - Pending reclaim time after consumer restart: `p95 <= 30 s`.
+    - Unacked entries older than 120s in steady state: `0`.
+    - Duplicate command detection by idempotency key: `100.00%`.
+
+14. **[P0-PAPER-SVC-20260301-14] Startup sync handshake**
+    - Quote-before-sync violations: `0`.
+    - Sync handshake completion: `p95 <= 20 s`, `max <= 30 s` (healthy startup).
+    - Sync timeout to hard-stop/audit publication: `<= 5 s`.
+    - Startup sync success over 100 restart trials: `>= 99.00%`.
+
+15. **[P1-PAPER-SVC-20260301-15] Multi-bot isolation**
+    - Cross-instance state mutation/access violations: `0`.
+    - Namespace key collisions in 72h multi-bot soak: `0`.
+    - Command/event routing correctness to target instance in test matrix: `100.00%`.
+
+16. **[P1-PAPER-SVC-20260301-16] Active-mode failure policy**
+    - Service-down detection delay: `<= 5 s`.
+    - Transition to safety state (`soft_pause` or `hard_stop`) after detection: `<= 10 s`.
+    - Silent fallback to live connector execution from paper mode: `0`.
+    - Mean recovery time to controlled running state (with healthy dependencies): `<= 10 min`.
+
+17. **[P1-PAPER-SVC-20260301-17] Gates + preflight + strict cycle wiring**
+    - Strict promotion cycle includes paper-exchange checks and fails on any threshold breach: `100.00%`.
+    - Preflight non-zero exit when service missing or heartbeat stale > 15s: `100.00%`.
+    - Parity/SLO artifact freshness at evaluation time: `<= 20 min`.
+    - New gate-path tests (success and failure paths): `pass_rate = 100.00%`.
+
+18. **[P0-PAPER-SVC-20260301-18] Automated threshold evaluator**
+    - Evaluator output determinism on same artifacts (>=20 reruns): `100.00% identical`.
+    - Threshold clause coverage in evaluator vs backlog matrix: `100.00%`.
+    - False-pass rate in mutation tests (intentional threshold breaches): `0`.
+    - Strict-cycle invocation success with evaluator integrated: `100.00%`.
+
+19. **[P1-PAPER-SVC-20260301-19] Load/backpressure qualification**
+    - Sustained command throughput target: `>= 50 cmds/s` for 2h with no critical failures.
+    - Command latency under load: `p95 <= 500 ms`, `p99 <= 1000 ms`.
+    - Stream backlog growth rate during steady state: `<= 1.0% per 10 min` after warmup.
+    - OOM/restart count during stress window: `0`.
+
+20. **[P1-PAPER-SVC-20260301-20] Command-channel security**
+    - Unauthorized producer acceptance rate: `0.00%`.
+    - Privileged commands with complete attribution metadata: `100.00%`.
+    - Security-policy test suite (allowlist + metadata + audit): `pass_rate = 100.00%`.
+    - Missing-audit event rate for accepted privileged commands: `0.00%`.
+
+21. **[P1-PAPER-SVC-20260301-21] Backup/restore and DR**
+    - Successful restore drills from latest backup (rolling 30 days): `>= 2` successful runs.
+    - Data integrity mismatch after restore/replay: `0`.
+    - Recovery time objective for full restore to healthy heartbeat: `<= 15 min`.
+    - Backup artifact freshness at gate time: `<= 24 h`.
 
 ---
 

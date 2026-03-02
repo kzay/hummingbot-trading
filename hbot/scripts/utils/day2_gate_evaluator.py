@@ -83,7 +83,17 @@ def main() -> None:
     delta_since = latest_compare.get("delta_produced_minus_ingested_since_baseline", {})
     if not isinstance(delta_since, dict):
         delta_since = {}
-    max_delta_observed = max([abs(int(v)) for v in delta_since.values()] or [0])
+    lag_by_stream_abs: Dict[str, int] = {}
+    for stream, value in delta_since.items():
+        try:
+            lag_by_stream_abs[str(stream)] = abs(int(value))
+        except Exception:
+            lag_by_stream_abs[str(stream)] = 0
+    max_delta_observed = max(list(lag_by_stream_abs.values()) or [0])
+    worst_stream = ""
+    if lag_by_stream_abs:
+        worst_stream = max(sorted(lag_by_stream_abs.keys()), key=lambda k: lag_by_stream_abs.get(k, 0))
+    offending_streams = {k: v for k, v in lag_by_stream_abs.items() if v > max_allowed_delta}
 
     checks: List[Dict[str, object]] = []
     checks.append({"name": "elapsed_window", "pass": elapsed_hours >= gate_hours, "value_hours": round(elapsed_hours, 2), "required_hours": gate_hours})
@@ -94,6 +104,8 @@ def main() -> None:
             "pass": max_delta_observed <= max_allowed_delta,
             "max_delta_observed": max_delta_observed,
             "max_allowed_delta": max_allowed_delta,
+            "worst_stream": worst_stream,
+            "offending_streams": offending_streams,
         }
     )
 
@@ -105,8 +117,21 @@ def main() -> None:
         "baseline_file": str(reports / "baseline_counts.json"),
         "integrity_file": str(latest_integrity_path) if latest_integrity_path else "",
         "source_compare_file": str(latest_compare_path) if latest_compare_path else "",
+        "lag_diagnostics": {
+            "max_delta_observed": max_delta_observed,
+            "max_allowed_delta": max_allowed_delta,
+            "worst_stream": worst_stream,
+            "lag_by_stream_abs": lag_by_stream_abs,
+            "offending_streams": offending_streams,
+        },
         "checks": checks,
     }
+    if max_delta_observed > max_allowed_delta:
+        result["remediation"] = [
+            "Run scripts/release/run_bus_recovery_check.py --label strict_cycle --max-delta <tolerance> --enforce-absolute-delta",
+            "Ensure event_store service is running and catching up pending stream entries",
+            "Re-run day2_gate_evaluator after catch-up and verify lag_diagnostics.offending_streams is empty",
+        ]
     out = reports / "day2_gate_eval_latest.json"
     out.write_text(json.dumps(result, indent=2), encoding="utf-8")
     print(str(out))

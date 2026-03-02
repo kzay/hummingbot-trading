@@ -307,6 +307,9 @@ class PaperOrder:
     crossed_at_creation: bool = False
     source_bot: str = ""
     reject_reason: str = ""
+    reduce_only: bool = False
+    contingent_parent_order_id: str = ""
+    contingent_trigger_mode: str = "partial"  # "partial"|"full"
     # Internal: set by engine at acceptance time for release on fill/cancel
     _reserved_asset: str = field(default="", repr=False)
     _reserved_amount: Decimal = field(default_factory=lambda: Decimal("0"), repr=False)

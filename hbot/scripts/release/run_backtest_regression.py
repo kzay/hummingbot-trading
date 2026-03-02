@@ -105,7 +105,7 @@ def _scan_invariants(path: Path) -> Dict[str, object]:
     if not path.exists():
         return stats
 
-    expiry_required_actions = {"soft_pause", "kill_switch", "set_target_base_pct"}
+    expiry_required_actions = {"soft_pause", "kill_switch", "set_target_base_pct", "set_daily_pnl_target_pct"}
     try:
         with path.open("r", encoding="utf-8") as f:
             for line in f:

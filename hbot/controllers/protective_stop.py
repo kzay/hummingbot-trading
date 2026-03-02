@@ -26,9 +26,12 @@ from abc import ABC, abstractmethod
 from decimal import Decimal
 from typing import Any, Dict, Optional
 
+from services.common.rate_limiter import ExchangeRateLimiter
+
 logger = logging.getLogger(__name__)
 
 _ZERO = Decimal("0")
+_RATE_LIMITER = ExchangeRateLimiter()
 
 
 class ProtectiveStopBackend(ABC):
@@ -56,6 +59,7 @@ class BitgetStopBackend(ProtectiveStopBackend):
 
     def place_stop(self, symbol: str, side: str, amount: Decimal, trigger_price: Decimal) -> Optional[str]:
         try:
+            _RATE_LIMITER.get_or_create("bitget").wait_if_needed()
             order = self._exchange.create_order(
                 symbol=symbol,
                 type="market",
@@ -80,6 +84,7 @@ class BitgetStopBackend(ProtectiveStopBackend):
 
     def cancel_stop(self, symbol: str, order_id: str) -> bool:
         try:
+            _RATE_LIMITER.get_or_create("bitget").wait_if_needed()
             self._exchange.cancel_order(order_id, symbol=symbol)
             logger.info("Protective stop canceled: %s", order_id)
             return True
@@ -88,7 +93,28 @@ class BitgetStopBackend(ProtectiveStopBackend):
             return False
 
     def cancel_all_stops(self, symbol: str) -> None:
-        pass
+        try:
+            _RATE_LIMITER.get_or_create("bitget").wait_if_needed()
+            params = {"stop": True} if self._is_perp else {}
+            open_orders = self._exchange.fetch_open_orders(symbol, params=params)
+            if not open_orders:
+                logger.info("cancel_all_stops: no open stop orders for %s", symbol)
+                return
+            cancelled = 0
+            for order in open_orders:
+                order_id = order.get("id")
+                if not order_id:
+                    continue
+                try:
+                    _RATE_LIMITER.get_or_create("bitget").wait_if_needed()
+                    self._exchange.cancel_order(order_id, symbol=symbol)
+                    cancelled += 1
+                    logger.info("cancel_all_stops: cancelled order %s on %s", order_id, symbol)
+                except Exception as exc:
+                    logger.warning("cancel_all_stops: failed to cancel order %s: %s", order_id, exc)
+            logger.info("cancel_all_stops: cancelled %d/%d orders for %s", cancelled, len(open_orders), symbol)
+        except Exception as exc:
+            logger.error("cancel_all_stops: failed to fetch/cancel stop orders for %s: %s", symbol, exc)
 
 
 def _resolve_credentials(exchange_id: str) -> Dict[str, str]:
@@ -140,7 +166,9 @@ def create_stop_backend(exchange_id: str, is_perp: bool) -> Optional[ProtectiveS
         if creds["passphrase"]:
             cfg["password"] = creds["passphrase"]
 
+        _RATE_LIMITER.get_or_create("bitget").wait_if_needed()
         exchange = exchange_cls(cfg)
+        _RATE_LIMITER.get_or_create("bitget").wait_if_needed()
         exchange.load_markets()
         return BitgetStopBackend(exchange, is_perp)
     except Exception as exc:

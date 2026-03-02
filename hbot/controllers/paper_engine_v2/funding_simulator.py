@@ -59,7 +59,10 @@ class FundingSimulator:
                 continue
 
             notional = pos.abs_quantity * pos.avg_entry_price
-            charge = abs(funding_rate) * notional
+            # Exchange convention: positive funding => longs pay shorts.
+            # Signed charge: +debit, -credit.
+            direction = Decimal("1") if pos.quantity > _ZERO else Decimal("-1")
+            charge = funding_rate * notional * direction
 
             try:
                 event = portfolio.apply_funding(spec.instrument_id, charge, now_ns)

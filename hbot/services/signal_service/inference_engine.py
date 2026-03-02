@@ -1,9 +1,11 @@
 from __future__ import annotations
 
 import time
-from typing import Any, Dict, List, Tuple
+from typing import Any, Dict, List, Optional, Tuple
 
 from services.signal_service.model_loader import LoadedModel
+
+REGIME_LABELS = ["neutral_low_vol", "neutral_high_vol", "up", "down", "high_vol_shock"]
 
 
 def run_inference(loaded: LoadedModel, feature_vector: List[float], feature_map: Dict[str, float]) -> Tuple[float, float, int]:
@@ -41,4 +43,70 @@ def run_inference(loaded: LoadedModel, feature_vector: List[float], feature_map:
     latency_ms = int(time.time() * 1000) - start_ms
     confidence = max(0.0, min(1.0, confidence))
     return predicted_return, confidence, latency_ms
+
+
+def predict_regime(
+    loaded: LoadedModel,
+    feature_vector: List[float],
+    regime_labels: Optional[List[str]] = None,
+) -> Tuple[str, float, int]:
+    """Predict regime from a classifier model.
+
+    Returns: (regime_str, confidence, latency_ms)
+
+    For sklearn classifiers: uses predict_proba to get the top class and confidence.
+    Falls back gracefully for non-classifier models.
+    """
+    labels = regime_labels or REGIME_LABELS
+    start_ms = int(time.time() * 1000)
+    regime_str = "neutral_low_vol"
+    confidence = 0.0
+
+    try:
+        model = loaded.model
+        if loaded.runtime == "sklearn_joblib":
+            if hasattr(model, "predict_proba"):
+                proba = model.predict_proba([feature_vector])[0]
+                best_idx = int(max(range(len(proba)), key=lambda i: proba[i]))
+                confidence = float(proba[best_idx])
+                if hasattr(model, "classes_"):
+                    cls = model.classes_[best_idx]
+                    if isinstance(cls, (int, float)):
+                        idx = int(cls)
+                        regime_str = labels[idx] if 0 <= idx < len(labels) else "neutral_low_vol"
+                    else:
+                        regime_str = str(cls)
+                elif best_idx < len(labels):
+                    regime_str = labels[best_idx]
+            elif hasattr(model, "predict"):
+                pred = model.predict([feature_vector])[0]
+                if isinstance(pred, (int, float)):
+                    idx = int(pred)
+                    regime_str = labels[idx] if 0 <= idx < len(labels) else "neutral_low_vol"
+                else:
+                    regime_str = str(pred)
+                confidence = 0.5
+        elif loaded.runtime == "custom_python":
+            if hasattr(model, "predict_regime"):
+                regime_str, confidence = model.predict_regime(feature_vector)
+            elif hasattr(model, "predict"):
+                pred = model.predict(feature_vector)
+                regime_str = str(pred)
+                confidence = 0.5
+    except Exception:
+        regime_str = "neutral_low_vol"
+        confidence = 0.0
+
+    latency_ms = int(time.time() * 1000) - start_ms
+    return regime_str, max(0.0, min(1.0, confidence)), latency_ms
+
+
+def is_classifier(loaded: LoadedModel) -> bool:
+    """Return True if the loaded model is a multi-class classifier."""
+    model = loaded.model
+    if loaded.runtime == "sklearn_joblib":
+        return hasattr(model, "predict_proba") and hasattr(model, "classes_")
+    if loaded.runtime == "custom_python":
+        return hasattr(model, "predict_regime")
+    return False
 

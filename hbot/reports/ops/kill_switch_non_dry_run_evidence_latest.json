@@ -1,0 +1,28 @@
+{
+  "ts_utc": "2026-03-01T13:27:37.849256+00:00",
+  "status": "fail",
+  "max_age_min": 1440.0,
+  "kill_switch_report_ts_utc": "2026-03-01T13:19:56.695691+00:00",
+  "kill_switch_report_age_min": 7.68589275,
+  "kill_switch_result_status": "error",
+  "checks": {
+    "non_dry_run": false,
+    "execution_status_ok": false,
+    "fresh_evidence": true,
+    "entry_id_present": true
+  },
+  "source": {
+    "ts_utc": "2026-03-01T13:19:56.695691+00:00",
+    "trigger": "execution_intent",
+    "instance_name": "bot1",
+    "exchange": "bitget",
+    "trading_pair": null,
+    "dry_run": true,
+    "result": {
+      "status": "error",
+      "error": "missing_credentials",
+      "cancelled": []
+    },
+    "entry_id": "1772371196695-0"
+  }
+}

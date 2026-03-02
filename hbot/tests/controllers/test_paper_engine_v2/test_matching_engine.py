@@ -106,6 +106,28 @@ class TestOrderAcceptance:
         # price_increment=0.01, BUY rounds down
         assert order.price == Decimal("99.95")
 
+    def test_reduce_only_rejects_without_opposite_position(self):
+        engine = make_engine()
+        engine.update_book(make_book())
+        order = make_order("buy", "limit", "99.95", "0.1")
+        order.reduce_only = True
+        event = engine.submit_order(order, _now())
+        assert isinstance(event, OrderRejected)
+        assert "reduce_only_no_short_position" in event.reason
+
+    def test_reduce_only_rejects_if_order_exceeds_position(self):
+        engine = make_engine(fill_model=TopOfBookFillModel())
+        engine.update_book(make_book())
+        short_open = make_order("sell", "market", "100.00", "0.2")
+        short_open.crossed_at_creation = True
+        engine.submit_order(short_open, _now())
+        engine.tick(_now())
+        reducer = make_order("buy", "limit", "100.10", "0.5")
+        reducer.reduce_only = True
+        ev = engine.submit_order(reducer, _now())
+        assert isinstance(ev, OrderRejected)
+        assert "reduce_only_exceeds_position" in ev.reason
+
 
 class TestFillLifecycle:
     def test_fill_generates_order_filled_event(self):
@@ -172,6 +194,26 @@ class TestFillLifecycle:
             engine.tick(now + i * 200_000_000)  # 200ms apart
         assert order.fill_count <= 2
 
+    def test_price_protection_skips_far_worse_fill(self):
+        class _FarWorseFillModel:
+            def evaluate(self, order, book, now_ns):
+                top = book.best_ask if order.side == OrderSide.BUY else book.best_bid
+                return type("D", (), {
+                    "fill_quantity": Decimal("0.1"),
+                    "fill_price": top.price + Decimal("2"),
+                    "is_maker": False,
+                    "queue_delay_ms": 0,
+                })()
+
+        engine = make_engine(fill_model=_FarWorseFillModel())
+        engine._config.price_protection_points = 1
+        engine.update_book(make_book("100.00", "100.05"))
+        order = make_order("buy", "market", "100.10", "0.1")
+        order.crossed_at_creation = True
+        engine.submit_order(order, _now())
+        events = engine.tick(_now())
+        assert not any(isinstance(e, OrderFilled) for e in events)
+
 
 class TestCancellation:
     def test_cancel_returns_event(self):
@@ -207,6 +249,34 @@ class TestCancellation:
         result = engine.cancel_order("nonexistent", _now())
         assert result is None
 
+    def test_cancel_parked_contingent_order(self):
+        engine = make_engine()
+        engine.update_book(make_book())
+        child = make_order("sell", "limit", "100.50", "0.1")
+        child.contingent_parent_order_id = "parent_1"
+        child.contingent_trigger_mode = "full"
+        ev = engine.submit_order(child, _now())
+        assert isinstance(ev, OrderAccepted)
+        cancel_ev = engine.cancel_order(child.order_id, _now())
+        assert isinstance(cancel_ev, OrderCanceled)
+
+
+class TestContingentOrders:
+    def test_full_mode_activates_after_parent_filled(self):
+        engine = make_engine(fill_model=TopOfBookFillModel())
+        engine.update_book(make_book())
+        parent = make_order("buy", "market", "100.10", "0.1")
+        parent.order_id = "parent_full"
+        parent.crossed_at_creation = True
+        child = make_order("sell", "limit", "100.20", "0.1")
+        child.order_id = "child_full"
+        child.contingent_parent_order_id = parent.order_id
+        child.contingent_trigger_mode = "full"
+        engine.submit_order(parent, _now())
+        engine.submit_order(child, _now())
+        events = engine.tick(_now())
+        assert any(isinstance(e, OrderAccepted) and e.order_id == child.order_id for e in events)
+
 
 class TestLatencyQueue:
     def test_latency_delays_acceptance(self):
@@ -226,6 +296,31 @@ class TestLatencyQueue:
         # Tick after latency expires
         events = engine.tick(now + 250_000_000)  # 250ms
         assert any(isinstance(e, OrderAccepted) for e in events)
+
+    def test_cancel_fill_race_with_cancel_latency(self):
+        """Cancel can race with fills: fill may happen before cancel confirm."""
+        latency = LatencyModel.from_ms(base_ms=0, cancel_ms=200)
+        engine = make_engine(
+            fill_model=TopOfBookFillModel(),
+            latency=latency,
+        )
+        engine.update_book(make_book())
+        order = make_order("buy", "market", "100.10", "0.1")
+        order.crossed_at_creation = True
+        now = _now()
+        engine.submit_order(order, now)
+
+        # Cancel requested, but confirm is delayed.
+        cancel_ev = engine.cancel_order(order.order_id, now + 1)
+        assert cancel_ev is None
+
+        # Fill can still occur before cancel confirmation.
+        fill_events = engine.tick(now + 50_000_000)
+        assert any(isinstance(e, OrderFilled) for e in fill_events)
+
+        # Cancel confirm should not crash or emit invalid transition on filled order.
+        post_events = engine.tick(now + 300_000_000)
+        assert isinstance(post_events, list)
 
 
 class TestTimegate:

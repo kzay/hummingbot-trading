@@ -1,0 +1,110 @@
+{
+  "period": {
+    "start": "2026-03-02T00:00:00+00:00",
+    "end": "2026-03-03T00:00:00+00:00"
+  },
+  "overall": {
+    "label": "overall",
+    "fills": 1,
+    "buys": 1,
+    "sells": 0,
+    "adverse_fills": 0,
+    "adverse_selection_rate": 0.0,
+    "avg_implementation_shortfall_bps": 0.3389044264472918,
+    "avg_market_impact_bps": -0.46351016246031196,
+    "total_fees_quote": 0.120389789925,
+    "total_notional_quote": 200.649649875,
+    "fee_rate_bps": 6.0
+  },
+  "by_regime": [
+    {
+      "label": "neutral_low_vol",
+      "fills": 1,
+      "buys": 1,
+      "sells": 0,
+      "adverse_fills": 0,
+      "adverse_selection_rate": 0.0,
+      "avg_implementation_shortfall_bps": 0.3389044264472918,
+      "avg_market_impact_bps": -0.46351016246031196,
+      "total_fees_quote": 0.120389789925,
+      "total_notional_quote": 200.649649875,
+      "fee_rate_bps": 6.0
+    }
+  ],
+  "by_hour": [
+    {
+      "label": "hour_03",
+      "fills": 1,
+      "buys": 1,
+      "sells": 0,
+      "adverse_fills": 0,
+      "adverse_selection_rate": 0.0,
+      "avg_implementation_shortfall_bps": 0.3389044264472918,
+      "avg_market_impact_bps": -0.46351016246031196,
+      "total_fees_quote": 0.120389789925,
+      "total_notional_quote": 200.649649875,
+      "fee_rate_bps": 6.0
+    }
+  ],
+  "by_side": [
+    {
+      "label": "buy",
+      "fills": 1,
+      "buys": 1,
+      "sells": 0,
+      "adverse_fills": 0,
+      "adverse_selection_rate": 0.0,
+      "avg_implementation_shortfall_bps": 0.3389044264472918,
+      "avg_market_impact_bps": -0.46351016246031196,
+      "total_fees_quote": 0.120389789925,
+      "total_notional_quote": 200.649649875,
+      "fee_rate_bps": 6.0
+    }
+  ],
+  "by_spread_level": [
+    {
+      "label": "tight",
+      "fills": 1,
+      "buys": 1,
+      "sells": 0,
+      "adverse_fills": 0,
+      "adverse_selection_rate": 0.0,
+      "avg_implementation_shortfall_bps": 0.3389044264472918,
+      "avg_market_impact_bps": -0.46351016246031196,
+      "total_fees_quote": 0.120389789925,
+      "total_notional_quote": 200.649649875,
+      "fee_rate_bps": 6.0
+    }
+  ],
+  "by_maker_taker": [
+    {
+      "label": "taker",
+      "fills": 1,
+      "buys": 1,
+      "sells": 0,
+      "adverse_fills": 0,
+      "adverse_selection_rate": 0.0,
+      "avg_implementation_shortfall_bps": 0.3389044264472918,
+      "avg_market_impact_bps": -0.46351016246031196,
+      "total_fees_quote": 0.120389789925,
+      "total_notional_quote": 200.649649875,
+      "fee_rate_bps": 6.0
+    }
+  ],
+  "worst_regimes_by_adverse_rate": [
+    {
+      "label": "neutral_low_vol",
+      "fills": 1,
+      "buys": 1,
+      "sells": 0,
+      "adverse_fills": 0,
+      "adverse_selection_rate": 0.0,
+      "avg_implementation_shortfall_bps": 0.3389044264472918,
+      "avg_market_impact_bps": -0.46351016246031196,
+      "total_fees_quote": 0.120389789925,
+      "total_notional_quote": 200.649649875,
+      "fee_rate_bps": 6.0
+    }
+  ],
+  "insights": []
+}

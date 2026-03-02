@@ -10,7 +10,13 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Dict, List, Optional
 
-from services.contracts.stream_names import AUDIT_STREAM, EXECUTION_INTENT_STREAM
+from services.contracts.stream_names import (
+    AUDIT_STREAM,
+    BOT_TELEMETRY_STREAM,
+    EXECUTION_INTENT_STREAM,
+    PORTFOLIO_RISK_STREAM,
+    STREAM_RETENTION_MAXLEN,
+)
 from services.hb_bridge.redis_client import RedisStreamClient
 
 
@@ -124,6 +130,32 @@ def _build_audit_payload(
     return event
 
 
+def _build_portfolio_snapshot_payload(
+    *,
+    portfolio_action: str,
+    status: str,
+    critical_count: int,
+    warning_count: int,
+    risk_scope_bots: List[str],
+    metrics: Dict[str, object],
+) -> Dict[str, object]:
+    event_id = str(uuid.uuid4())
+    return {
+        "schema_version": "1.0",
+        "event_type": "portfolio_risk_snapshot",
+        "event_id": event_id,
+        "correlation_id": event_id,
+        "producer": "portfolio_risk_service",
+        "timestamp_ms": _now_ms(),
+        "portfolio_action": portfolio_action,
+        "status": status,
+        "critical_count": int(critical_count),
+        "warning_count": int(warning_count),
+        "risk_scope_bots": list(risk_scope_bots),
+        "metrics": metrics,
+    }
+
+
 def run(once: bool = False, synthetic_breach: bool = False) -> None:
     root = Path("/workspace/hbot") if Path("/.dockerenv").exists() else Path(__file__).resolve().parents[2]
     data_root = Path(os.getenv("HB_DATA_ROOT", str(root / "data")))
@@ -132,6 +164,10 @@ def run(once: bool = False, synthetic_breach: bool = False) -> None:
     interval_sec = int(os.getenv("PORTFOLIO_RISK_INTERVAL_SEC", "300"))
     limits_path = Path(os.getenv("PORTFOLIO_RISK_LIMITS_PATH", str(root / "config" / "portfolio_limits_v1.json")))
     publish_actions = _safe_bool(os.getenv("PORTFOLIO_RISK_PUBLISH_ACTIONS", "true"), True)
+    realtime_enabled = _safe_bool(os.getenv("PORTFOLIO_RISK_REALTIME_ENABLED", "true"), True)
+    realtime_poll_ms = max(250, int(os.getenv("PORTFOLIO_RISK_REALTIME_POLL_MS", "1000")))
+    telemetry_group = os.getenv("PORTFOLIO_RISK_REALTIME_GROUP", "hb_portfolio_risk_v1")
+    telemetry_consumer = f"portfolio-risk-{os.getenv('SERVICE_INSTANCE_NAME', 'default')}"
     redis_host = os.getenv("REDIS_HOST", "redis")
     redis_port = int(os.getenv("REDIS_PORT", "6379"))
     redis_db = int(os.getenv("REDIS_DB", "0"))
@@ -144,6 +180,8 @@ def run(once: bool = False, synthetic_breach: bool = False) -> None:
         password=redis_password,
         enabled=publish_actions,
     )
+    if realtime_enabled and client.enabled:
+        client.create_group(BOT_TELEMETRY_STREAM, telemetry_group)
 
     while True:
         limits = _load_limits(limits_path)
@@ -332,7 +370,11 @@ def run(once: bool = False, synthetic_breach: bool = False) -> None:
             for row in actions:
                 event = row.get("event", {})
                 if isinstance(event, dict):
-                    client.xadd(stream=EXECUTION_INTENT_STREAM, payload=event)
+                    client.xadd(
+                        stream=EXECUTION_INTENT_STREAM,
+                        payload=event,
+                        maxlen=STREAM_RETENTION_MAXLEN.get(EXECUTION_INTENT_STREAM),
+                    )
 
         report = {
             "ts_utc": _utc_now(),
@@ -362,10 +404,47 @@ def run(once: bool = False, synthetic_breach: bool = False) -> None:
         report_path.write_text(json.dumps(report, indent=2), encoding="utf-8")
         (reports_root / "latest.json").write_text(json.dumps(report, indent=2), encoding="utf-8")
         _append_jsonl(reports_root / f"audit_{_today()}.jsonl", report)
+        if client.enabled:
+            snapshot = _build_portfolio_snapshot_payload(
+                portfolio_action=str(report["portfolio_action"]),
+                status=str(report["status"]),
+                critical_count=int(report["critical_count"]),
+                warning_count=int(report["warning_count"]),
+                risk_scope_bots=list(report["risk_scope_bots"]),
+                metrics=dict(report["metrics"]),
+            )
+            client.xadd(
+                stream=PORTFOLIO_RISK_STREAM,
+                payload=snapshot,
+                maxlen=STREAM_RETENTION_MAXLEN.get(PORTFOLIO_RISK_STREAM),
+            )
 
         if once:
             break
-        time.sleep(max(30, interval_sec))
+        if realtime_enabled and client.enabled:
+            # Near-real-time mode: wake on bot telemetry events, but always
+            # re-evaluate at least once per configured interval.
+            deadline = time.time() + max(1, interval_sec)
+            triggered = False
+            while time.time() < deadline:
+                remaining_ms = int(max(0, (deadline - time.time()) * 1000))
+                block_ms = max(250, min(realtime_poll_ms, remaining_ms))
+                entries = client.read_group(
+                    stream=BOT_TELEMETRY_STREAM,
+                    group=telemetry_group,
+                    consumer=telemetry_consumer,
+                    count=50,
+                    block_ms=block_ms,
+                )
+                for entry_id, _payload in entries:
+                    client.ack(BOT_TELEMETRY_STREAM, telemetry_group, entry_id)
+                if entries:
+                    triggered = True
+                    break
+            if not triggered and time.time() < deadline:
+                time.sleep(max(0.0, deadline - time.time()))
+        else:
+            time.sleep(max(1, interval_sec))
 
 
 if __name__ == "__main__":

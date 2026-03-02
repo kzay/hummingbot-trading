@@ -37,6 +37,14 @@ def _load_policy(path: Path) -> Dict[str, object]:
             "rebalance_cooldown_hours": 24,
             "variance_window_days": 20,
             "min_total_equity_quote": 100.0,
+            "daily_goal": {
+                "enabled": False,
+                "target_pct_total_equity": 0.0,
+                "distribution": "allocation_weighted",
+                "apply_only_portfolio_action_enabled": False,
+                "min_bot_target_pct": 0.0,
+                "max_bot_target_pct": 100.0,
+            },
         },
         "bots": {},
     }
@@ -206,6 +214,135 @@ def _build_proposals(
     return proposals, total_equity
 
 
+def _compute_daily_goal_plan(
+    allocator_cfg: Dict[str, object],
+    proposals: List[Dict[str, object]],
+    total_equity_quote: float,
+) -> Dict[str, object]:
+    daily_cfg = allocator_cfg.get("daily_goal", {}) if isinstance(allocator_cfg, dict) else {}
+    if not isinstance(daily_cfg, dict):
+        daily_cfg = {}
+    enabled = bool(daily_cfg.get("enabled", False))
+    distribution = str(daily_cfg.get("distribution", "allocation_weighted")).strip().lower() or "allocation_weighted"
+    apply_only_action_enabled = bool(daily_cfg.get("apply_only_portfolio_action_enabled", False))
+    target_pct_total = _safe_float(daily_cfg.get("target_pct_total_equity"), 0.0)
+    target_pct_total = max(0.0, min(100.0, target_pct_total))
+    min_bot_target_pct = max(0.0, _safe_float(daily_cfg.get("min_bot_target_pct"), 0.0))
+    max_bot_target_pct = _safe_float(daily_cfg.get("max_bot_target_pct"), 100.0)
+    if max_bot_target_pct < min_bot_target_pct:
+        max_bot_target_pct = min_bot_target_pct
+
+    out: Dict[str, object] = {
+        "enabled": enabled,
+        "status": "disabled" if not enabled else "pass",
+        "reason": "disabled",
+        "distribution": distribution,
+        "apply_only_portfolio_action_enabled": apply_only_action_enabled,
+        "target_pct_total_equity": target_pct_total,
+        "target_quote_total_equity": 0.0,
+        "target_quote_distributed": 0.0,
+        "min_bot_target_pct": min_bot_target_pct,
+        "max_bot_target_pct": max_bot_target_pct,
+        "clamp_applied_count": 0,
+        "rows": [],
+    }
+    if not enabled:
+        return out
+    if target_pct_total <= 0.0:
+        out["status"] = "blocked"
+        out["reason"] = "non_positive_target_pct_total_equity"
+        return out
+    if total_equity_quote <= 0.0:
+        out["status"] = "blocked"
+        out["reason"] = "non_positive_total_equity"
+        return out
+
+    candidates: List[Dict[str, object]] = []
+    for row in proposals:
+        equity_quote = max(0.0, _safe_float(row.get("equity_quote"), 0.0))
+        if equity_quote <= 0.0:
+            continue
+        if apply_only_action_enabled and not bool(row.get("portfolio_action_enabled", False)):
+            continue
+        candidates.append(
+            {
+                "bot": str(row.get("bot", "")),
+                "equity_quote": equity_quote,
+                "allocation_pct": max(0.0, _safe_float(row.get("allocation_pct"), 0.0)),
+                "portfolio_action_enabled": bool(row.get("portfolio_action_enabled", False)),
+            }
+        )
+    if not candidates:
+        out["status"] = "blocked"
+        out["reason"] = "no_eligible_goal_bots"
+        return out
+
+    use_allocation_weights = distribution != "equity_weighted"
+    weighted_candidates: List[Tuple[Dict[str, object], float]] = []
+    if use_allocation_weights:
+        weighted_candidates = [
+            (c, max(0.0, _safe_float(c.get("allocation_pct"), 0.0)))
+            for c in candidates
+        ]
+        total_weight = sum(weight_raw for _, weight_raw in weighted_candidates)
+        if total_weight <= 0.0:
+            # Allocation can be zeroed by hard caps; fall back to equity weighting.
+            use_allocation_weights = False
+    if not use_allocation_weights:
+        weighted_candidates = [
+            (c, max(0.0, _safe_float(c.get("equity_quote"), 0.0)))
+            for c in candidates
+        ]
+        total_weight = sum(weight_raw for _, weight_raw in weighted_candidates)
+        if total_weight <= 0.0:
+            out["status"] = "blocked"
+            out["reason"] = "non_positive_total_weight"
+            return out
+
+    goal_scope_equity_quote = sum(
+        _safe_float(c.get("equity_quote"), 0.0)
+        for c, weight_raw in weighted_candidates
+        if weight_raw > 0.0
+    )
+    if goal_scope_equity_quote <= 0.0:
+        goal_scope_equity_quote = sum(_safe_float(c.get("equity_quote"), 0.0) for c in candidates)
+
+    target_quote_total = goal_scope_equity_quote * (target_pct_total / 100.0)
+    out["goal_scope_equity_quote"] = goal_scope_equity_quote
+    out["target_quote_total_equity"] = target_quote_total
+    out["reason"] = "ok"
+    rows: List[Dict[str, object]] = []
+    clamp_count = 0
+    target_quote_distributed = 0.0
+    for c, weight_raw in sorted(weighted_candidates, key=lambda x: str(x[0].get("bot", ""))):
+        weight = (weight_raw / total_weight) if total_weight > 0.0 else 0.0
+        equity_quote = _safe_float(c.get("equity_quote"), 0.0)
+        target_quote_raw = target_quote_total * weight
+        target_pct_raw = (target_quote_raw / equity_quote * 100.0) if equity_quote > 0.0 else 0.0
+        target_pct = max(min_bot_target_pct, min(max_bot_target_pct, target_pct_raw))
+        if abs(target_pct - target_pct_raw) > 1e-12:
+            clamp_count += 1
+        target_quote = equity_quote * (target_pct / 100.0)
+        target_quote_distributed += target_quote
+        rows.append(
+            {
+                "bot": str(c.get("bot", "")),
+                "weight": weight,
+                "equity_quote": equity_quote,
+                "target_pnl_pct_raw": target_pct_raw,
+                "daily_pnl_target_pct": target_pct,
+                "daily_pnl_target_quote": target_quote,
+                "portfolio_action_enabled": bool(c.get("portfolio_action_enabled", False)),
+            }
+        )
+
+    out["rows"] = rows
+    out["clamp_applied_count"] = clamp_count
+    out["target_quote_distributed"] = target_quote_distributed
+    out["distribution_effective"] = "allocation_weighted" if use_allocation_weights else "equity_weighted"
+    return out
+
+
 def _publish_allocator_intent(
     client: RedisStreamClient, bot: str, allocation_pct: float, target_notional: float
 ) -> None:
@@ -227,6 +364,43 @@ def _publish_allocator_intent(
             "reason": "portfolio_allocation_proposal",
             "allocation_pct": f"{allocation_pct:.6f}",
             "target_notional_quote": f"{target_notional:.6f}",
+        },
+    }
+    client.xadd(
+        EXECUTION_INTENT_STREAM,
+        payload,
+        maxlen=STREAM_RETENTION_MAXLEN.get(EXECUTION_INTENT_STREAM),
+    )
+
+
+def _publish_daily_goal_intent(
+    client: RedisStreamClient,
+    bot: str,
+    daily_pnl_target_pct: float,
+    daily_pnl_target_quote: float,
+    desk_target_pct_total_equity: float,
+    desk_target_quote_total_equity: float,
+) -> None:
+    event_id = str(uuid.uuid4())
+    now_ms = int(time.time() * 1000)
+    payload = {
+        "schema_version": "1.0",
+        "event_type": "execution_intent",
+        "event_id": event_id,
+        "correlation_id": event_id,
+        "producer": "portfolio_allocator_service",
+        "timestamp_ms": now_ms,
+        "instance_name": bot,
+        "controller_id": "epp_v2_4",
+        "action": "set_daily_pnl_target_pct",
+        "target_base_pct": None,
+        "expires_at_ms": now_ms + 300000,
+        "metadata": {
+            "reason": "portfolio_allocator_daily_goal",
+            "daily_pnl_target_pct": f"{daily_pnl_target_pct:.6f}",
+            "daily_pnl_target_quote": f"{daily_pnl_target_quote:.6f}",
+            "desk_daily_goal_pct_total_equity": f"{desk_target_pct_total_equity:.6f}",
+            "desk_daily_goal_quote": f"{desk_target_quote_total_equity:.6f}",
         },
     }
     client.xadd(
@@ -273,6 +447,20 @@ def run(once: bool = False) -> None:
         eligible, diversification_diag = _apply_diversification_variance_overrides(eligible, diversification_report)
         allocations = _compute_inverse_variance_allocations(eligible)
         proposals, total_equity = _build_proposals(eligible, allocations)
+        daily_goal_plan = _compute_daily_goal_plan(allocator_cfg, proposals, total_equity)
+        goal_rows_by_bot = {
+            str(row.get("bot", "")): row
+            for row in (daily_goal_plan.get("rows", []) if isinstance(daily_goal_plan.get("rows"), list) else [])
+            if isinstance(row, dict)
+        }
+        for row in proposals:
+            goal_row = goal_rows_by_bot.get(str(row.get("bot", "")))
+            row["daily_pnl_target_pct"] = (
+                _safe_float(goal_row.get("daily_pnl_target_pct"), 0.0) if isinstance(goal_row, dict) else None
+            )
+            row["daily_pnl_target_quote"] = (
+                _safe_float(goal_row.get("daily_pnl_target_quote"), 0.0) if isinstance(goal_row, dict) else None
+            )
         status = "pass"
         reasons: List[str] = []
         if not allocator_enabled:
@@ -302,6 +490,24 @@ def run(once: bool = False) -> None:
                     allocation_pct=float(row["allocation_pct"]),
                     target_notional=float(row["target_notional_quote"]),
                 )
+            if bool(daily_goal_plan.get("enabled", False)) and str(daily_goal_plan.get("status", "")) == "pass":
+                goal_rows = daily_goal_plan.get("rows", [])
+                if isinstance(goal_rows, list):
+                    for goal_row in goal_rows:
+                        if not isinstance(goal_row, dict):
+                            continue
+                        _publish_daily_goal_intent(
+                            redis_client,
+                            bot=str(goal_row.get("bot", "")),
+                            daily_pnl_target_pct=_safe_float(goal_row.get("daily_pnl_target_pct"), 0.0),
+                            daily_pnl_target_quote=_safe_float(goal_row.get("daily_pnl_target_quote"), 0.0),
+                            desk_target_pct_total_equity=_safe_float(
+                                daily_goal_plan.get("target_pct_total_equity"), 0.0
+                            ),
+                            desk_target_quote_total_equity=_safe_float(
+                                daily_goal_plan.get("target_quote_total_equity"), 0.0
+                            ),
+                        )
 
         report = {
             "ts_utc": _utc_now(),
@@ -315,6 +521,7 @@ def run(once: bool = False) -> None:
             "enforce_diversification": bool(enforce_diversification),
             "diversification": diversification_diag,
             "total_equity_quote": total_equity,
+            "daily_goal": daily_goal_plan,
             "proposals": proposals,
         }
         report_path.parent.mkdir(parents=True, exist_ok=True)

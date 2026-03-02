@@ -1,6 +1,20 @@
 {
   "version": 1,
   "policy_id": "multi_bot_policy_v1",
+  "allocator": {
+    "enabled": true,
+    "rebalance_cooldown_hours": 168,
+    "variance_window_days": 20,
+    "min_total_equity_quote": 100.0,
+    "daily_goal": {
+      "enabled": true,
+      "target_pct_total_equity": 0.6,
+      "distribution": "allocation_weighted",
+      "apply_only_portfolio_action_enabled": false,
+      "min_bot_target_pct": 0.0,
+      "max_bot_target_pct": 3.0
+    }
+  },
   "bots": {
     "bot1": {
       "role": "live_microcap_primary",
@@ -12,6 +26,9 @@
         "BTC-USDT"
       ],
       "max_notional_quote": 100.0,
+      "target_alloc_pct": 1.0,
+      "max_alloc_pct": 1.0,
+      "alloc_variance_proxy": 1.0,
       "compose_profiles": [],
       "failure_isolation": "bot-local restart only; no policy broadening"
     },
@@ -29,15 +46,18 @@
       "failure_isolation": "must remain stopped unless policy + gate update"
     },
     "bot3": {
-      "role": "paper_validation",
+      "role": "paper_eth_mm_secondary",
       "mode": "paper_only",
       "enabled": true,
       "portfolio_action_enabled": false,
-      "exchange": "bitget_paper_trade",
+      "exchange": "bitget_perpetual",
       "allowed_symbols": [
-        "BTC-USDT"
+        "ETH-USDT"
       ],
-      "max_notional_quote": 0.0,
+      "max_notional_quote": 100.0,
+      "target_alloc_pct": 0.0,
+      "max_alloc_pct": 0.0,
+      "alloc_variance_proxy": 1.5,
       "compose_profiles": [
         "test"
       ],
@@ -53,6 +73,8 @@
         "BTC-USDT"
       ],
       "max_notional_quote": 0.0,
+      "max_alloc_pct": 0.0,
+      "alloc_variance_proxy": 5.0,
       "compose_profiles": [
         "test"
       ],

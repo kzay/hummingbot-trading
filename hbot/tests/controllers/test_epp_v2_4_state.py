@@ -9,6 +9,7 @@ import pytest
 pytest.importorskip("hummingbot")
 
 from controllers.core import RegimeSpec
+from controllers.daily_state_store import DailyStateStore
 from controllers.epp_v2_4 import EppV24Controller
 
 
@@ -21,8 +22,10 @@ def _make_dummy(tmp_path: Path, now_ts: float) -> _DummyController:
     dummy.config = SimpleNamespace(
         log_dir=str(tmp_path), instance_name="botx", variant="a",
         override_spread_pct=None, startup_position_sync=True,
+        startup_sync_timeout_s=180,
         connector_name="binance", trading_pair="BTC-USDT",
         position_drift_soft_pause_pct=Decimal("0.05"),
+        bot_mode="paper",
     )
     dummy.market_data_provider = SimpleNamespace(time=lambda: now_ts)
     dummy._daily_key = datetime.now(timezone.utc).strftime("%Y-%m-%d")
@@ -37,9 +40,18 @@ def _make_dummy(tmp_path: Path, now_ts: float) -> _DummyController:
     dummy._avg_entry_price = Decimal("42000")
     dummy._last_daily_state_save_ts = 0.0
     dummy._startup_position_sync_done = False
+    dummy._startup_sync_first_ts = 0.0
+    dummy._startup_sync_retries = 0
     dummy._position_drift_pct = Decimal("0")
     dummy._is_perp = False
     dummy._daily_state_path = lambda: EppV24Controller._daily_state_path(dummy)
+    state_path = EppV24Controller._daily_state_path(dummy)
+    dummy._state_store = DailyStateStore(
+        file_path=state_path,
+        redis_key=f"epp:daily:{dummy.config.instance_name}",
+        redis_url=None,
+        save_throttle_s=30.0,
+    )
     return dummy
 
 
@@ -137,13 +149,20 @@ class _FakeRuntimeAdapter:
 def _make_sync_dummy(tmp_path: Path, local_pos: Decimal, exchange_pos: Decimal):
     """Build a dummy wired for startup sync testing."""
     dummy = _make_dummy(tmp_path, now_ts=1_700_000_000.0)
+    dummy.config.bot_mode = "live"
     dummy._position_base = local_pos
     dummy._avg_entry_price = Decimal("42000") if local_pos != Decimal("0") else Decimal("0")
     dummy._startup_position_sync_done = False
+    dummy._startup_orphan_check_done = False
+    dummy._startup_sync_retries = 0
+    dummy._STARTUP_SYNC_MAX_RETRIES = 3
     dummy._runtime_adapter = _FakeRuntimeAdapter()
-    dummy._connector = lambda: _FakeConnector(exchange_pos)
+    connector = _FakeConnector(exchange_pos)
+    dummy._connector = lambda: connector
     dummy._get_mid_price = lambda: Decimal("65000")
     dummy._save_daily_state = lambda force=False: None
+    dummy._compute_total_base_with_locked = lambda c: c.get_balance("BTC")
+    dummy._ops_guard = SimpleNamespace(force_hard_stop=lambda reason: None)
     return dummy
 
 
@@ -179,6 +198,16 @@ def test_startup_sync_disabled(tmp_path: Path):
     EppV24Controller._run_startup_position_sync(dummy)
     assert dummy._position_base == Decimal("0"), "sync disabled — position must not change"
     assert dummy._startup_position_sync_done is True
+
+
+def test_startup_sync_auto_skipped_in_paper_mode(tmp_path: Path):
+    """Paper mode should auto-skip startup sync even when config flag is True."""
+    dummy = _make_sync_dummy(tmp_path, local_pos=Decimal("0"), exchange_pos=Decimal("0.5"))
+    dummy.config.startup_position_sync = True
+    dummy.config.bot_mode = "paper"
+    EppV24Controller._run_startup_position_sync(dummy)
+    assert dummy._startup_position_sync_done is True
+    assert dummy._position_base == Decimal("0"), "paper-mode auto-skip must not mutate position"
 
 
 def test_startup_sync_both_zero(tmp_path: Path):
@@ -222,3 +251,23 @@ def test_startup_sync_blocks_trading_while_pending(tmp_path: Path):
     if not dummy._startup_position_sync_done:
         risk_reasons.append("startup_position_sync_pending")
     assert "startup_position_sync_pending" in risk_reasons
+
+
+def test_startup_sync_repeated_exceptions_escalate_to_hard_stop(tmp_path: Path):
+    """Persistent connector exceptions should not keep sync pending forever."""
+    dummy = _make_sync_dummy(tmp_path, local_pos=Decimal("0"), exchange_pos=Decimal("0.5"))
+
+    class _ExplodingConnector:
+        def get_position(self, *_args, **_kwargs):
+            raise RuntimeError("connector blew up")
+
+    called: list[str] = []
+    dummy._is_perp = True
+    dummy._connector = lambda: _ExplodingConnector()
+    dummy._ops_guard = SimpleNamespace(force_hard_stop=lambda reason: called.append(reason))
+
+    for _ in range(dummy._STARTUP_SYNC_MAX_RETRIES):
+        EppV24Controller._run_startup_position_sync(dummy)
+
+    assert dummy._startup_position_sync_done is True
+    assert "startup_sync_failed" in called

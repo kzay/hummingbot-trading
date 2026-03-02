@@ -1,0 +1,50 @@
+{
+  "ts_utc": "2026-03-02T03:32:32.228062+00:00",
+  "status": "pass",
+  "failed_checks": [],
+  "checks": {
+    "redis_connected": true,
+    "heartbeat_recent": true,
+    "min_commands_published": true,
+    "publish_success_rate": true,
+    "result_match_rate": true
+  },
+  "metrics": {
+    "published_commands": 3600,
+    "publish_failures": 0,
+    "publish_success_rate_pct": 100.0,
+    "matched_results": 3600,
+    "result_match_rate_pct": 100.0,
+    "achieved_publish_rate_cmds_per_sec": 59.99867262936586,
+    "latency_p95_ms": 5.0,
+    "latency_p99_ms": 29.0,
+    "latency_samples": 3600
+  },
+  "diagnostics": {
+    "run_id": "20260302T033131775841Z",
+    "duration_sec": 60.0,
+    "target_cmd_rate": 60.0,
+    "command_stream": "hb.paper_exchange.command.v1",
+    "event_stream": "hb.paper_exchange.event.v1",
+    "heartbeat_stream": "hb.paper_exchange.heartbeat.v1",
+    "instance_name": "bot1",
+    "connector_name": "bitget_perpetual",
+    "trading_pair": "BTC-USDT",
+    "producer": "hb_bridge_active_adapter",
+    "heartbeat": {
+      "present": true,
+      "timestamp_ms": 1772422290070,
+      "age_s": 1.704,
+      "error": ""
+    },
+    "result_timeout_sec": 30.0,
+    "poll_interval_ms": 300,
+    "scan_count": 20000,
+    "required_heartbeat_fresh": true,
+    "heartbeat_max_age_s": 30.0,
+    "min_commands": 3000,
+    "min_publish_success_rate_pct": 99.0,
+    "min_result_match_rate_pct": 99.0,
+    "output_root": "F:\\Environement\\git-repo\\hummingbot_custo\\hbot"
+  }
+}

@@ -98,10 +98,60 @@ Every item must be PASS before deploying with real capital.
 - [ ] Position mode (ONEWAY) confirmed on exchange
 - **Evidence:** Exchange account settings screenshot
 
+### 15. Framework Patch Audit
+- [ ] `enable_framework_paper_compat_fallbacks()` patches disabled in live mode
+- [ ] Live connector uses unpatched framework paths (no paper compat shims)
+- **Evidence:** Code path audit; live mode does not call `enable_framework_paper_compat_fallbacks()` or patches are gated by `BOT_MODE=paper`
+
+### 16. Connector Health
+- [ ] `connector.ready` returns real health state (not hardcoded `True`)
+- [ ] WS/API connectivity failures reflected in `ready` status
+- **Evidence:** Disconnect test shows `ready=False`; `processed_data.connector_status` reflects actual state
+
+### 17. NTP/Clock Drift
+- [ ] Host clock drift < 2s vs exchange server time
+- [ ] NTP sync verified on deployment host
+- **Evidence:** `ntpdate -q pool.ntp.org` or equivalent; exchange timestamp comparison
+
+### 18. Kill Switch Post-Cancel
+- [ ] Kill switch stops bot container after cancel-all
+- [ ] `KILL_SWITCH_STOP_BOT=true` and `KILL_SWITCH_BOT_CONTAINER` correctly set
+- **Evidence:** Kill switch dry-run then live test; bot container stopped after cancel
+
+### 19. Startup Sync Failure
+- [ ] Startup sync failure → HARD_STOP (verified)
+- [ ] Position/order sync failure on init blocks trading
+- **Evidence:** Synthetic sync failure test triggers HARD_STOP; no orders placed
+
+### 20. Exchange Snapshot Perp Positions
+- [ ] Exchange snapshot fetches perp positions
+- [ ] `FETCH_PERP_POSITIONS=true` (default); `reports/exchange_snapshots/latest.json` includes `positions`
+- **Evidence:** Snapshot JSON contains non-empty `positions` array when perp positions exist
+
+### 21. Rapid Partial Fill Stress Test
+- [ ] Rapid partial fill stress test: 50+ fills/order on testnet
+- [ ] No executor leak, no memory growth, correct PnL accounting
+- **Evidence:** Testnet run with high churn; executor count bounded; fills.csv accurate
+
+### 22. Network Partition Test
+- [ ] Network partition test: 30s disconnect mid-trading
+- [ ] WS reconnect handled; no orphan orders; safe recovery
+- **Evidence:** `iptables` or similar disconnect; log shows reconnect; no duplicate orders
+
+### 23. Redis Outage Test
+- [ ] Redis outage test: 5 min stop, verify safe operation
+- [ ] Bot degrades gracefully (SOFT_PAUSE or equivalent); no crash
+- **Evidence:** `docker stop hbot-redis` for 5 min; bot behavior logged; recovery on Redis restart
+
+### 24. did_fail_order Streak Fix
+- [ ] `did_fail_order` streak fix verified: cancel streak not reset on unrelated failures
+- [ ] Order rejections do not incorrectly reset cancel-budget or executor state
+- **Evidence:** Synthetic `did_fail_order` test; cancel streak preserved per EXEC-E6
+
 ## Sign-Off
 
 | Reviewer | Date | Decision |
 |----------|------|----------|
 | | | GO / NO-GO |
 
-All 14 items must be PASS for GO decision.
+All 24 items must be PASS for GO decision.

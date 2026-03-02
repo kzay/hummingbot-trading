@@ -50,8 +50,12 @@ class ControlPlaneMetricsExporter:
             "reconciliation": self._reports_root / "reconciliation" / "latest.json",
             "parity": self._reports_root / "parity" / "latest.json",
             "portfolio_risk": self._reports_root / "portfolio_risk" / "latest.json",
+            "market_data": self._reports_root / "market_data" / "latest.json",
+            "ops_db_writer": self._reports_root / "ops_db_writer" / "latest.json",
             "coordination": self._reports_root / "coordination" / "latest.json",
             "coordination_policy": self._reports_root / "policy" / "coordination_policy_latest.json",
+            "portfolio_allocator": self._reports_root / "policy" / "portfolio_allocator_latest.json",
+            "reliability_slo": self._reports_root / "ops" / "reliability_slo_latest.json",
             "promotion_gate": self._reports_root / "promotion_gates" / "latest.json",
             "strict_cycle": self._reports_root / "promotion_gates" / "strict_cycle_latest.json",
             "soak": self._reports_root / "soak" / "latest.json",
@@ -154,6 +158,28 @@ class ControlPlaneMetricsExporter:
             "# TYPE hbot_coordination_intents_emitted gauge",
             "# HELP hbot_coordination_allowed_instance_info Coordination policy allowed instances info.",
             "# TYPE hbot_coordination_allowed_instance_info gauge",
+            "# HELP hbot_portfolio_allocator_allocation_pct Allocation percentage by bot from portfolio allocator report.",
+            "# TYPE hbot_portfolio_allocator_allocation_pct gauge",
+            "# HELP hbot_portfolio_allocator_target_notional_quote Target notional quote by bot from portfolio allocator report.",
+            "# TYPE hbot_portfolio_allocator_target_notional_quote gauge",
+            "# HELP hbot_portfolio_allocator_daily_goal_bot_target_pct Daily PnL target percent by bot from allocator daily_goal rows.",
+            "# TYPE hbot_portfolio_allocator_daily_goal_bot_target_pct gauge",
+            "# HELP hbot_portfolio_allocator_daily_goal_bot_target_quote Daily PnL target quote by bot from allocator daily_goal rows.",
+            "# TYPE hbot_portfolio_allocator_daily_goal_bot_target_quote gauge",
+            "# HELP hbot_portfolio_allocator_daily_goal_enabled Whether allocator daily_goal mode is enabled (1/0).",
+            "# TYPE hbot_portfolio_allocator_daily_goal_enabled gauge",
+            "# HELP hbot_portfolio_allocator_daily_goal_ok Whether allocator daily_goal status is pass (1/0).",
+            "# TYPE hbot_portfolio_allocator_daily_goal_ok gauge",
+            "# HELP hbot_portfolio_allocator_daily_goal_target_pct_total_equity Desk daily goal percent of equity from allocator report.",
+            "# TYPE hbot_portfolio_allocator_daily_goal_target_pct_total_equity gauge",
+            "# HELP hbot_portfolio_allocator_daily_goal_target_quote_total_equity Desk daily goal quote target from allocator report.",
+            "# TYPE hbot_portfolio_allocator_daily_goal_target_quote_total_equity gauge",
+            "# HELP hbot_portfolio_allocator_daily_goal_scope_equity_quote Equity scope used for daily goal computation.",
+            "# TYPE hbot_portfolio_allocator_daily_goal_scope_equity_quote gauge",
+            "# HELP hbot_portfolio_allocator_daily_goal_target_quote_distributed Total quote target distributed across bots.",
+            "# TYPE hbot_portfolio_allocator_daily_goal_target_quote_distributed gauge",
+            "# HELP hbot_portfolio_allocator_daily_goal_info Allocator daily goal metadata labels.",
+            "# TYPE hbot_portfolio_allocator_daily_goal_info gauge",
         ]
 
         report_targets = self._report_targets()
@@ -231,6 +257,23 @@ class ControlPlaneMetricsExporter:
                 lines.append(
                     f'hbot_control_plane_finding_count{{report="portfolio_risk_critical_count"}} {float(payload.get("critical_count", 0) or 0)}'
                 )
+            elif report_name == "market_data":
+                lines.append(
+                    f'hbot_control_plane_gate_status{{gate="market_data_fresh"}} {_status_to_bool(str(payload.get("status", "")), ("pass", "ok"))}'
+                )
+                lines.append(
+                    f'hbot_control_plane_finding_count{{report="market_data_event_rows"}} {float(payload.get("market_data_event_rows", 0) or 0)}'
+                )
+            elif report_name == "ops_db_writer":
+                lines.append(
+                    f'hbot_control_plane_gate_status{{gate="ops_db_writer_ok"}} {_status_to_bool(str(payload.get("status", "")), ("pass", "ok"))}'
+                )
+                counts = payload.get("counts", {})
+                if isinstance(counts, dict):
+                    for table_name, value in counts.items():
+                        lines.append(
+                            f'hbot_control_plane_finding_count{{report="ops_db_writer_count",table="{_escape_label(str(table_name))}"}} {float(value or 0)}'
+                        )
             elif report_name == "coordination":
                 lines.append(
                     f'hbot_control_plane_gate_status{{gate="coordination_runtime_ok"}} {_status_to_bool(str(payload.get("status", "")), ("ok", "warning"))}'
@@ -260,6 +303,98 @@ class ControlPlaneMetricsExporter:
                 lines.append(
                     f'hbot_control_plane_finding_count{{report="coordination_policy_error_count"}} {float(len(errors) if isinstance(errors, list) else 0)}'
                 )
+            elif report_name == "portfolio_allocator":
+                alloc_status = str(payload.get("status", "")).strip().lower()
+                lines.append(
+                    f'hbot_control_plane_gate_status{{gate="portfolio_allocator_ok"}} {_status_to_bool(alloc_status, ("pass",))}'
+                )
+                lines.append(
+                    f'hbot_control_plane_finding_count{{report="portfolio_allocator_reason_count"}} {float(len(payload.get("reasons", [])) if isinstance(payload.get("reasons"), list) else 0)}'
+                )
+
+                proposals = payload.get("proposals", [])
+                if isinstance(proposals, list):
+                    for row in proposals:
+                        if not isinstance(row, dict):
+                            continue
+                        bot = str(row.get("bot", "")).strip()
+                        if not bot:
+                            continue
+                        bot_labels = {"bot": bot}
+                        lines.append(
+                            f"hbot_portfolio_allocator_allocation_pct{_fmt_labels(bot_labels)} {_safe_float(row.get('allocation_pct'), 0.0)}"
+                        )
+                        lines.append(
+                            f"hbot_portfolio_allocator_target_notional_quote{_fmt_labels(bot_labels)} {_safe_float(row.get('target_notional_quote'), 0.0)}"
+                        )
+                        lines.append(
+                            f"hbot_portfolio_allocator_daily_goal_bot_target_pct{_fmt_labels(bot_labels)} {_safe_float(row.get('daily_pnl_target_pct'), 0.0)}"
+                        )
+                        lines.append(
+                            f"hbot_portfolio_allocator_daily_goal_bot_target_quote{_fmt_labels(bot_labels)} {_safe_float(row.get('daily_pnl_target_quote'), 0.0)}"
+                        )
+
+                daily_goal = payload.get("daily_goal", {})
+                daily_goal = daily_goal if isinstance(daily_goal, dict) else {}
+                daily_goal_enabled = bool(daily_goal.get("enabled", False))
+                daily_goal_status = str(daily_goal.get("status", "unknown")).strip().lower() or "unknown"
+                distribution = str(daily_goal.get("distribution", "unknown")).strip().lower() or "unknown"
+                distribution_effective = (
+                    str(daily_goal.get("distribution_effective", distribution)).strip().lower() or distribution
+                )
+                lines.append(f"hbot_portfolio_allocator_daily_goal_enabled {1.0 if daily_goal_enabled else 0.0}")
+                lines.append(
+                    f"hbot_portfolio_allocator_daily_goal_ok {_status_to_bool(daily_goal_status, ('pass',))}"
+                )
+                lines.append(
+                    f"hbot_portfolio_allocator_daily_goal_target_pct_total_equity {_safe_float(daily_goal.get('target_pct_total_equity'), 0.0)}"
+                )
+                lines.append(
+                    f"hbot_portfolio_allocator_daily_goal_target_quote_total_equity {_safe_float(daily_goal.get('target_quote_total_equity'), 0.0)}"
+                )
+                lines.append(
+                    f"hbot_portfolio_allocator_daily_goal_scope_equity_quote {_safe_float(daily_goal.get('goal_scope_equity_quote'), 0.0)}"
+                )
+                lines.append(
+                    f"hbot_portfolio_allocator_daily_goal_target_quote_distributed {_safe_float(daily_goal.get('target_quote_distributed'), 0.0)}"
+                )
+                goal_info_labels = {
+                    "status": daily_goal_status,
+                    "distribution": distribution,
+                    "distribution_effective": distribution_effective,
+                }
+                lines.append(f"hbot_portfolio_allocator_daily_goal_info{_fmt_labels(goal_info_labels)} 1")
+            elif report_name == "reliability_slo":
+                rel_status = str(payload.get("status", "")).strip().lower()
+                lines.append(
+                    f'hbot_control_plane_gate_status{{gate="reliability_slo_pass"}} {_status_to_bool(rel_status, ("pass",))}'
+                )
+                failed_checks = payload.get("failed_checks", [])
+                lines.append(
+                    f'hbot_control_plane_finding_count{{report="reliability_slo_failed_checks"}} {float(len(failed_checks) if isinstance(failed_checks, list) else 0)}'
+                )
+                details = payload.get("details", {})
+                if isinstance(details, dict):
+                    dead = details.get("dead_letter", {})
+                    if isinstance(dead, dict):
+                        lines.append(
+                            f'hbot_control_plane_finding_count{{report="reliability_slo_dead_letter_critical"}} {float(dead.get("critical_count", 0) or 0)}'
+                        )
+                    redis_diag = details.get("redis", {})
+                    if isinstance(redis_diag, dict):
+                        groups = redis_diag.get("group_stats", {})
+                        if isinstance(groups, dict):
+                            for group_name, group_stats in groups.items():
+                                if not isinstance(group_stats, dict):
+                                    continue
+                                labels = {"report": "reliability_slo_group_lag", "group": str(group_name)}
+                                lines.append(
+                                    f"hbot_control_plane_finding_count{_fmt_labels(labels)} {float(group_stats.get('lag', 0) or 0)}"
+                                )
+                                labels_pending = {"report": "reliability_slo_group_pending", "group": str(group_name)}
+                                lines.append(
+                                    f"hbot_control_plane_finding_count{_fmt_labels(labels_pending)} {float(group_stats.get('pending', 0) or 0)}"
+                                )
             elif report_name == "soak":
                 lines.append(
                     f'hbot_control_plane_gate_status{{gate="soak_ready"}} {_status_to_bool(str(payload.get("status", "")), ("ready", "pass"))}'

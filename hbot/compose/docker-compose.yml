@@ -28,6 +28,8 @@ volumes:
     driver: local
   postgres-data:
     driver: local
+  tradenote-mongo-data:
+    driver: local
 
 # ---- Logging anchor ----
 x-logging: &default-logging
@@ -98,6 +100,8 @@ services:
   bot1:
     <<: *hbot-base
     container_name: hbot-bot1
+    env_file:
+      - ../env/.env
     volumes:
       # ---- Bot config, data, logs ----
       - ../data/bot1/conf:/home/hummingbot/conf
@@ -111,15 +115,17 @@ services:
       - ../controllers:/home/hummingbot/controllers:ro
       - ../config:/home/hummingbot/project_config:ro
       - ../services:/home/hummingbot/services:ro
-    command: /bin/bash -lc "conda activate hummingbot && python ./bin/headless_start.py 2>> ./logs/errors.log"
+    command: /bin/bash -lc "export CONFIG_PASSWORD=\"$${CONFIG_PASSWORD:-$${BOT1_PASSWORD:-}}\"; if [ -z \"$${CONFIG_PASSWORD}\" ]; then echo '[fatal] BOT1_PASSWORD/CONFIG_PASSWORD missing; refusing interactive startup.' >&2; exit 64; fi; conda activate hummingbot && python ./bin/headless_start.py 2>> ./logs/errors.log"
     environment:
       <<: *hbot-env
       EXT_SIGNAL_RISK_ENABLED: "true"
-      CONFIG_PASSWORD: ${BOT1_PASSWORD:-}
+      REDIS_CONSUMER_GROUP: hb_group_bot1
       CONFIG_FILE_NAME: v2_with_controllers.py
       SCRIPT_CONFIG: v2_epp_v2_4_bot_a.yml
       BOT_MODE: ${BOT1_MODE:-paper}
       HEADLESS_MODE: "true"
+      PAPER_EXCHANGE_MODE: ${PAPER_EXCHANGE_MODE_BOT1:-disabled}
+      PAPER_EXCHANGE_SYNC_TIMEOUT_MS: ${PAPER_EXCHANGE_SYNC_TIMEOUT_MS:-30000}
       BOT_POLICY_ROLE: live_microcap_primary
       BOT_POLICY_MODE: live
       BOT_POLICY_VERSION: multi_bot_policy_v1
@@ -187,6 +193,8 @@ services:
     container_name: hbot-bot3
     profiles:
       - test
+    env_file:
+      - ../env/.env
     volumes:
       - ../data/bot3/conf:/home/hummingbot/conf
       - ../data/bot3/logs:/home/hummingbot/logs
@@ -194,6 +202,7 @@ services:
       - ../data/bot3/scripts:/home/hummingbot/custom_scripts
       - ../scripts/shared/v2_with_controllers.py:/home/hummingbot/custom_scripts/v2_with_controllers.py:ro
       - ../scripts/shared/v2_with_controllers.py:/home/hummingbot/scripts/v2_with_controllers.py:ro
+      - ../scripts/shared/headless_start.py:/home/hummingbot/bin/headless_start.py:ro
       - ../data/bot3/pmm_scripts:/home/hummingbot/pmm_scripts
       # ---- Shared controllers mount (Day 30) ----
       - ../controllers:/home/hummingbot/controllers
@@ -201,9 +210,16 @@ services:
       - ../services:/home/hummingbot/services:ro
       # Mount test script into the scripts dir so `start --script` finds it
       - ../data/bot3/scripts/paper_test.py:/home/hummingbot/scripts/paper_test.py:ro
+    command: /bin/bash -lc "export CONFIG_PASSWORD=\"$${CONFIG_PASSWORD:-$${BOT3_PASSWORD:-$${BOT1_PASSWORD:-}}}\"; if [ -z \"$${CONFIG_PASSWORD}\" ]; then echo '[fatal] BOT3_PASSWORD/BOT1_PASSWORD/CONFIG_PASSWORD missing; refusing interactive startup.' >&2; exit 64; fi; conda activate hummingbot && python ./bin/headless_start.py 2>> ./logs/errors.log"
     environment:
       <<: *hbot-env
-      CONFIG_PASSWORD: ${BOT3_PASSWORD:-${BOT1_PASSWORD:-}}
+      REDIS_CONSUMER_GROUP: hb_group_bot3
+      CONFIG_FILE_NAME: v2_with_controllers.py
+      SCRIPT_CONFIG: v2_epp_v2_4_bot3_eth_paper_smoke.yml
+      BOT_MODE: ${BOT3_MODE:-paper}
+      HEADLESS_MODE: "true"
+      PAPER_EXCHANGE_MODE: ${PAPER_EXCHANGE_MODE_BOT3:-disabled}
+      PAPER_EXCHANGE_SYNC_TIMEOUT_MS: ${PAPER_EXCHANGE_SYNC_TIMEOUT_MS:-30000}
       BOT_POLICY_ROLE: paper_validation
       BOT_POLICY_MODE: paper_only
       BOT_POLICY_VERSION: multi_bot_policy_v1
@@ -224,12 +240,15 @@ services:
     container_name: hbot-bot4
     profiles:
       - test
+    env_file:
+      - ../env/.env
     volumes:
       - ../data/bot4/conf:/home/hummingbot/conf
       - ../data/bot4/logs:/home/hummingbot/logs
       - ../data/bot4/data:/home/hummingbot/data
       - ../data/bot4/scripts:/home/hummingbot/custom_scripts
       - ../scripts/shared/v2_with_controllers.py:/home/hummingbot/scripts/v2_with_controllers.py:ro
+      - ../scripts/shared/headless_start.py:/home/hummingbot/bin/headless_start.py:ro
       - ../data/bot4/conf/bot4_matrix_results.md:/home/hummingbot/conf/bot4_matrix_results.md
       - ../data/bot4/pmm_scripts:/home/hummingbot/pmm_scripts
       - ../scripts/shared/v2_with_controllers.py:/home/hummingbot/custom_scripts/v2_with_controllers.py:ro
@@ -237,9 +256,16 @@ services:
       - ../controllers:/home/hummingbot/controllers:ro
       - ../config:/home/hummingbot/project_config:ro
       - ../services:/home/hummingbot/services:ro
+    command: /bin/bash -lc "export CONFIG_PASSWORD=\"$${CONFIG_PASSWORD:-$${BOT4_PASSWORD:-$${BOT1_PASSWORD:-}}}\"; if [ -z \"$${CONFIG_PASSWORD}\" ]; then echo '[fatal] BOT4_PASSWORD/BOT1_PASSWORD/CONFIG_PASSWORD missing; refusing interactive startup.' >&2; exit 64; fi; conda activate hummingbot && python ./bin/headless_start.py 2>> ./logs/errors.log"
     environment:
       <<: *hbot-env
-      CONFIG_PASSWORD: ${BOT4_PASSWORD:-${BOT1_PASSWORD:-}}
+      REDIS_CONSUMER_GROUP: hb_group_bot4
+      CONFIG_FILE_NAME: v2_with_controllers.py
+      SCRIPT_CONFIG: v2_epp_v2_4_bot4_binance_smoke.yml
+      BOT_MODE: ${BOT4_MODE:-live}
+      HEADLESS_MODE: "true"
+      PAPER_EXCHANGE_MODE: ${PAPER_EXCHANGE_MODE_BOT4:-disabled}
+      PAPER_EXCHANGE_SYNC_TIMEOUT_MS: ${PAPER_EXCHANGE_SYNC_TIMEOUT_MS:-30000}
       BOT_POLICY_ROLE: connector_validation
       BOT_POLICY_MODE: testnet_probe
       BOT_POLICY_VERSION: multi_bot_policy_v1
@@ -272,6 +298,62 @@ services:
       interval: 10s
       timeout: 5s
       retries: 5
+
+  paper-exchange-service:
+    <<: *control-plane-image
+    container_name: hbot-paper-exchange-service
+    profiles:
+      - paper-exchange
+    restart: unless-stopped
+    logging: *default-logging
+    command: >
+      /bin/sh -lc "python /workspace/hbot/services/paper_exchange_service/main.py"
+    environment:
+      - PYTHONPATH=/workspace/hbot
+      - PYTHONPYCACHEPREFIX=/tmp/pycache
+      - REDIS_HOST=${REDIS_HOST:-redis}
+      - REDIS_PORT=${REDIS_PORT:-6379}
+      - REDIS_DB=${REDIS_DB:-0}
+      - REDIS_PASSWORD=${REDIS_PASSWORD:-}
+      - REDIS_STREAMS_ENABLED=${REDIS_STREAMS_ENABLED:-true}
+      - PAPER_EXCHANGE_SERVICE_INSTANCE_NAME=${PAPER_EXCHANGE_SERVICE_INSTANCE_NAME:-paper_exchange}
+      - PAPER_EXCHANGE_CONSUMER_GROUP=${PAPER_EXCHANGE_CONSUMER_GROUP:-hb_group_paper_exchange}
+      - PAPER_EXCHANGE_CONSUMER_NAME=${PAPER_EXCHANGE_CONSUMER_NAME:-paper_exchange_1}
+      - PAPER_EXCHANGE_ALLOWED_CONNECTORS=${PAPER_EXCHANGE_ALLOWED_CONNECTORS:-bitget_perpetual}
+      - PAPER_EXCHANGE_ALLOWED_COMMAND_PRODUCERS=${PAPER_EXCHANGE_ALLOWED_COMMAND_PRODUCERS:-hb_bridge_active_adapter}
+      - PAPER_EXCHANGE_MARKET_STREAM=${PAPER_EXCHANGE_MARKET_STREAM:-hb.market_data.v1}
+      - PAPER_EXCHANGE_COMMAND_STREAM=${PAPER_EXCHANGE_COMMAND_STREAM:-hb.paper_exchange.command.v1}
+      - PAPER_EXCHANGE_EVENT_STREAM=${PAPER_EXCHANGE_EVENT_STREAM:-hb.paper_exchange.event.v1}
+      - PAPER_EXCHANGE_HEARTBEAT_STREAM=${PAPER_EXCHANGE_HEARTBEAT_STREAM:-hb.paper_exchange.heartbeat.v1}
+      - PAPER_EXCHANGE_AUDIT_STREAM=${PAPER_EXCHANGE_AUDIT_STREAM:-hb.audit.v1}
+      - PAPER_EXCHANGE_HEARTBEAT_INTERVAL_MS=${PAPER_EXCHANGE_HEARTBEAT_INTERVAL_MS:-5000}
+      - PAPER_EXCHANGE_MARKET_STALE_AFTER_MS=${PAPER_EXCHANGE_MARKET_STALE_AFTER_MS:-15000}
+      - PAPER_EXCHANGE_READ_COUNT=${PAPER_EXCHANGE_READ_COUNT:-200}
+      - PAPER_EXCHANGE_READ_BLOCK_MS=${PAPER_EXCHANGE_READ_BLOCK_MS:-250}
+      - PAPER_EXCHANGE_PENDING_RECLAIM_ENABLED=${PAPER_EXCHANGE_PENDING_RECLAIM_ENABLED:-true}
+      - PAPER_EXCHANGE_MARKET_PENDING_RECLAIM_ENABLED=${PAPER_EXCHANGE_MARKET_PENDING_RECLAIM_ENABLED:-true}
+      - PAPER_EXCHANGE_PERSIST_SYNC_STATE_RESULTS=${PAPER_EXCHANGE_PERSIST_SYNC_STATE_RESULTS:-false}
+      - PAPER_EXCHANGE_COMMAND_JOURNAL_PATH=${PAPER_EXCHANGE_COMMAND_JOURNAL_PATH:-/workspace/hbot/reports/verification/paper_exchange_command_journal_latest.json}
+      - PAPER_EXCHANGE_STATE_SNAPSHOT_PATH=${PAPER_EXCHANGE_STATE_SNAPSHOT_PATH:-/workspace/hbot/reports/verification/paper_exchange_state_snapshot_latest.json}
+      - PAPER_EXCHANGE_MARKET_FILL_JOURNAL_PATH=${PAPER_EXCHANGE_MARKET_FILL_JOURNAL_PATH:-/workspace/hbot/reports/verification/paper_exchange_market_fill_journal_latest.json}
+    volumes:
+      - ..:/workspace/hbot
+      - ../reports:/workspace/hbot/reports
+    depends_on:
+      redis:
+        condition: service_healthy
+    networks:
+      - trading
+    healthcheck:
+      test:
+        [
+          "CMD-SHELL",
+          'python -c "import os,sys,redis; c=redis.Redis(host=os.getenv(''REDIS_HOST'',''redis''),port=int(os.getenv(''REDIS_PORT'',''6379'')),db=int(os.getenv(''REDIS_DB'',''0'')),password=os.getenv(''REDIS_PASSWORD'') or None,socket_timeout=2); s=os.getenv(''PAPER_EXCHANGE_HEARTBEAT_STREAM'',''hb.paper_exchange.heartbeat.v1''); rows=c.xrevrange(s,''+'',''-'',count=1); sys.exit(0 if c.ping() and bool(rows) else 1)"',
+        ]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 20s
 
   mosquitto:
     image: eclipse-mosquitto:2.0
@@ -453,12 +535,22 @@ services:
       - EVENT_STORE_CONSUMER_GROUP=${EVENT_STORE_CONSUMER_GROUP:-hb_event_store_v1}
       - EVENT_POLL_MS=${EVENT_POLL_MS:-1000}
       - EVENT_STORE_HEALTH_MAX_SEC=${EVENT_STORE_HEALTH_MAX_SEC:-900}
+      - EVENT_STORE_DB_MIRROR_ENABLED=${EVENT_STORE_DB_MIRROR_ENABLED:-false}
+      - EVENT_STORE_DB_MIRROR_REQUIRED=${EVENT_STORE_DB_MIRROR_REQUIRED:-false}
+      - EVENT_STORE_DB_APPEND_RETRIES=${EVENT_STORE_DB_APPEND_RETRIES:-3}
+      - OPS_DB_HOST=${OPS_DB_HOST:-postgres}
+      - OPS_DB_PORT=${OPS_DB_PORT:-5432}
+      - OPS_DB_NAME=${OPS_DB_NAME:-hbot_ops}
+      - OPS_DB_USER=${OPS_DB_USER:-hbot}
+      - OPS_DB_PASSWORD=${OPS_DB_PASSWORD:-hbot_dev_password}
       - HB_INSTANCE_NAME=bot1
       - EVENT_PRODUCER_NAME=event_store_service
     volumes:
       - ..:/workspace/hbot
     depends_on:
       redis:
+        condition: service_healthy
+      postgres:
         condition: service_healthy
     networks:
       - trading
@@ -722,7 +814,7 @@ services:
       - EXCHANGE_SNAPSHOT_PATH=${EXCHANGE_SNAPSHOT_PATH:-/workspace/hbot/reports/exchange_snapshots/latest.json}
       - PORTFOLIO_ALLOCATOR_REPORT_PATH=${PORTFOLIO_ALLOCATOR_REPORT_PATH:-/workspace/hbot/reports/policy/portfolio_allocator_latest.json}
       - PORTFOLIO_ALLOCATOR_INTERVAL_SEC=${PORTFOLIO_ALLOCATOR_INTERVAL_SEC:-300}
-      - PORTFOLIO_ALLOCATOR_PUBLISH_INTENTS=${PORTFOLIO_ALLOCATOR_PUBLISH_INTENTS:-false}
+      - PORTFOLIO_ALLOCATOR_PUBLISH_INTENTS=${PORTFOLIO_ALLOCATOR_PUBLISH_INTENTS:-true}
       - REDIS_HOST=${REDIS_HOST:-redis}
       - REDIS_PORT=${REDIS_PORT:-6379}
       - REDIS_DB=${REDIS_DB:-0}
@@ -1000,10 +1092,11 @@ services:
 
   # ---- PostgreSQL Operational Store (Day 25) ----
   postgres:
-    image: postgres:16-alpine
+    image: ${OPS_DB_IMAGE:-timescale/timescaledb:latest-pg16}
     container_name: hbot-postgres
     restart: unless-stopped
     logging: *default-logging
+    command: ["postgres", "-c", "shared_preload_libraries=${OPS_DB_SHARED_PRELOAD_LIBRARIES:-timescaledb}"]
     environment:
       - POSTGRES_DB=${OPS_DB_NAME:-hbot_ops}
       - POSTGRES_USER=${OPS_DB_USER:-hbot}
@@ -1050,6 +1143,90 @@ services:
     depends_on:
       postgres:
         condition: service_healthy
+
+  # ---- TradeNote (self-hosted trading journal, optional profile) ----
+  tradenote-mongo:
+    image: mongo:7
+    container_name: hbot-tradenote-mongo
+    profiles:
+      - tradenote
+    restart: unless-stopped
+    logging: *default-logging
+    environment:
+      - MONGO_INITDB_ROOT_USERNAME=${TRADENOTE_MONGO_USER:-tradenote}
+      - MONGO_INITDB_ROOT_PASSWORD=${TRADENOTE_MONGO_PASSWORD:-tradenote_change_me}
+      - MONGO_INITDB_DATABASE=${TRADENOTE_MONGO_DB:-tradenote}
+    volumes:
+      - tradenote-mongo-data:/data/db
+    networks:
+      - trading
+
+  tradenote:
+    image: eleventrading/tradenote:latest
+    container_name: hbot-tradenote
+    profiles:
+      - tradenote
+    restart: unless-stopped
+    logging: *default-logging
+    environment:
+      - MONGO_URI=mongodb://${TRADENOTE_MONGO_USER:-tradenote}:${TRADENOTE_MONGO_PASSWORD:-tradenote_change_me}@tradenote-mongo:27017/${TRADENOTE_MONGO_DB:-tradenote}?authSource=admin
+      - TRADENOTE_DATABASE=${TRADENOTE_MONGO_DB:-tradenote}
+      - APP_ID=${TRADENOTE_APP_ID:-replace_me_app_id}
+      - MASTER_KEY=${TRADENOTE_MASTER_KEY:-replace_me_master_key}
+      - TRADENOTE_PORT=8080
+    ports:
+      - "${TRADENOTE_BIND_IP:-127.0.0.1}:${TRADENOTE_PORT:-8080}:8080"
+    depends_on:
+      tradenote-mongo:
+        condition: service_started
+    networks:
+      - trading
+
+  tradenote-sync:
+    <<: *control-plane-image
+    container_name: hbot-tradenote-sync
+    profiles:
+      - tradenote
+    restart: unless-stopped
+    logging: *default-logging
+    command: >
+      /bin/sh -lc "python /workspace/hbot/scripts/ops/tradenote_sync.py --interval-sec ${TRADENOTE_SYNC_INTERVAL_SEC:-1800}"
+    environment:
+      - HB_DATA_ROOT=/workspace/hbot/data
+      - TRADENOTE_URL=${TRADENOTE_URL:-http://tradenote:8080}
+      - TRADENOTE_API_KEY=${TRADENOTE_API_KEY:-}
+      - TRADENOTE_SELECTED_BROKER=${TRADENOTE_SELECTED_BROKER:-template}
+      - TRADENOTE_UPLOAD_MFE=${TRADENOTE_UPLOAD_MFE:-false}
+      - TRADENOTE_SYNC_INCLUDE_TODAY=${TRADENOTE_SYNC_INCLUDE_TODAY:-false}
+      - TRADENOTE_SYNC_LOOKBACK_DAYS=${TRADENOTE_SYNC_LOOKBACK_DAYS:-14}
+      - TRADENOTE_SYNC_BOT_VARIANTS=${TRADENOTE_SYNC_BOT_VARIANTS:-}
+      - TRADENOTE_ACCOUNT_PREFIX=${TRADENOTE_ACCOUNT_PREFIX:-hbot}
+      - TRADENOTE_SECURITY_TYPE=${TRADENOTE_SECURITY_TYPE:-0}
+      - TRADENOTE_SETTLEMENT_DAYS=${TRADENOTE_SETTLEMENT_DAYS:-0}
+      - TRADENOTE_SYNC_MAX_DAYS_PER_RUN=${TRADENOTE_SYNC_MAX_DAYS_PER_RUN:-2}
+      - TRADENOTE_SYNC_MAX_ROWS_PER_POST=${TRADENOTE_SYNC_MAX_ROWS_PER_POST:-100}
+      - TRADENOTE_SYNC_REQUEST_TIMEOUT_SEC=${TRADENOTE_SYNC_REQUEST_TIMEOUT_SEC:-20}
+      - TRADENOTE_SYNC_REQUEST_MAX_ATTEMPTS=${TRADENOTE_SYNC_REQUEST_MAX_ATTEMPTS:-3}
+      - TRADENOTE_SYNC_STATE_PATH=${TRADENOTE_SYNC_STATE_PATH:-/workspace/hbot/reports/tradenote/sync_state.json}
+      - TRADENOTE_SYNC_REPORT_PATH=${TRADENOTE_SYNC_REPORT_PATH:-/workspace/hbot/reports/tradenote/sync_latest.json}
+      - TRADENOTE_SYNC_HEALTH_MAX_SEC=${TRADENOTE_SYNC_HEALTH_MAX_SEC:-5400}
+    volumes:
+      - ..:/workspace/hbot
+    depends_on:
+      tradenote:
+        condition: service_started
+    networks:
+      - trading
+    healthcheck:
+      test:
+        [
+          "CMD-SHELL",
+          'python -c "import os,time,sys; from pathlib import Path; p=Path(os.getenv(''TRADENOTE_SYNC_REPORT_PATH'',''/workspace/hbot/reports/tradenote/sync_latest.json'')); mx=float(os.getenv(''TRADENOTE_SYNC_HEALTH_MAX_SEC'',''5400'')); sys.exit(0 if p.exists() and (time.time()-p.stat().st_mtime)<=mx else 1)"',
+        ]
+      interval: 60s
+      timeout: 10s
+      retries: 3
+      start_period: 30s
 
   # ---- Prometheus ----
   prometheus:

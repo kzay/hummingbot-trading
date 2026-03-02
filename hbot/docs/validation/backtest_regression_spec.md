@@ -26,7 +26,7 @@ Provide a deterministic regression gate for controller/risk/intent behavior usin
 - Pass if fingerprint is generated successfully.
 
 4. `intent_expiry_present_for_active_actions`
-- For `execution_intent` actions in `{soft_pause, kill_switch, set_target_base_pct}`, require non-empty `expires_at_ms`.
+- For `execution_intent` actions in `{soft_pause, kill_switch, set_target_base_pct, set_daily_pnl_target_pct}`, require non-empty `expires_at_ms`.
 
 5. `risk_denied_reason_present`
 - For `risk_decision` events where `approved=false`, require non-empty `reason`.

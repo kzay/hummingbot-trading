@@ -14,7 +14,7 @@
       "enabled": false
     },
     "bot3": {
-      "enabled": false
+      "enabled": true
     }
   }
 }
