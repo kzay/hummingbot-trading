@@ -84,17 +84,31 @@ def _coerce_ts_utc(value: object) -> str:
         return _now_iso()
 
 
+def _stream_entry_id_to_iso(entry_id: str) -> Optional[str]:
+    raw = str(entry_id or "").strip()
+    if not raw:
+        return None
+    ms_part = raw.split("-", 1)[0].strip()
+    if not ms_part or not ms_part.lstrip("-").isdigit():
+        return None
+    try:
+        return datetime.fromtimestamp(int(ms_part) / 1000.0, tz=timezone.utc).isoformat()
+    except Exception:
+        return None
+
+
 def _normalize(payload: Dict[str, object], stream: str, entry_id: str, producer: str) -> Dict[str, object]:
     event_id = str(payload.get("event_id") or uuid.uuid4())
     correlation_id = str(payload.get("correlation_id") or event_id)
     event_type = str(payload.get("event_type") or STREAM_TO_EVENT_TYPE.get(stream, "unknown"))
     event_version = str(payload.get("event_version") or "v1")
     schema_validation_status = str(payload.get("schema_validation_status") or "ok")
+    ts_hint = payload.get("timestamp_ms") or payload.get("ts_utc") or _stream_entry_id_to_iso(entry_id)
     envelope = {
         "event_id": event_id,
         "event_type": event_type,
         "event_version": event_version,
-        "ts_utc": _coerce_ts_utc(payload.get("timestamp_ms") or payload.get("ts_utc")),
+        "ts_utc": _coerce_ts_utc(ts_hint),
         "producer": str(payload.get("producer") or producer),
         "instance_name": str(payload.get("instance_name") or ""),
         "controller_id": str(payload.get("controller_id") or ""),
@@ -265,12 +279,34 @@ def _ensure_db_schema(conn: "psycopg.Connection") -> None:
       payload JSONB NOT NULL,
       ingest_ts_utc TIMESTAMPTZ NOT NULL,
       schema_version INTEGER NOT NULL,
-      PRIMARY KEY (stream, stream_entry_id)
+      PRIMARY KEY (stream, stream_entry_id, ts_utc)
     );
     ALTER TABLE event_envelope_raw ADD COLUMN IF NOT EXISTS event_version TEXT;
     ALTER TABLE event_envelope_raw ADD COLUMN IF NOT EXISTS schema_validation_status TEXT;
+    DO $$
+    DECLARE
+      v_pk_name TEXT;
+      v_pk_def TEXT;
+    BEGIN
+      SELECT c.conname, pg_get_constraintdef(c.oid)
+      INTO v_pk_name, v_pk_def
+      FROM pg_constraint c
+      WHERE c.conrelid = 'event_envelope_raw'::regclass
+        AND c.contype = 'p'
+      LIMIT 1;
+
+      IF v_pk_name IS NULL THEN
+        ALTER TABLE event_envelope_raw ADD CONSTRAINT event_envelope_raw_pkey PRIMARY KEY (stream, stream_entry_id, ts_utc);
+      ELSIF v_pk_def <> 'PRIMARY KEY (stream, stream_entry_id, ts_utc)' THEN
+        EXECUTE format('ALTER TABLE event_envelope_raw DROP CONSTRAINT %I', v_pk_name);
+        ALTER TABLE event_envelope_raw ADD CONSTRAINT event_envelope_raw_pkey PRIMARY KEY (stream, stream_entry_id, ts_utc);
+      END IF;
+    END
+    $$;
     CREATE INDEX IF NOT EXISTS idx_event_envelope_raw_ts_utc ON event_envelope_raw (ts_utc DESC);
+    CREATE INDEX IF NOT EXISTS idx_event_envelope_raw_stream_ts_utc ON event_envelope_raw (stream, ts_utc DESC);
     CREATE INDEX IF NOT EXISTS idx_event_envelope_raw_type_ts_utc ON event_envelope_raw (event_type, ts_utc DESC);
+    CREATE INDEX IF NOT EXISTS idx_event_envelope_raw_instance_pair_ts_utc ON event_envelope_raw (instance_name, trading_pair, ts_utc DESC);
     CREATE INDEX IF NOT EXISTS idx_event_envelope_raw_corr_ts_utc ON event_envelope_raw (correlation_id, ts_utc DESC);
     CREATE INDEX IF NOT EXISTS idx_event_envelope_raw_event_id ON event_envelope_raw (event_id);
     """
@@ -291,7 +327,7 @@ def _append_events_db(conn: "psycopg.Connection", events: List[Dict[str, object]
       %(stream)s, %(stream_entry_id)s, %(event_id)s, %(event_type)s, %(event_version)s, %(ts_utc)s, %(producer)s, %(instance_name)s, %(controller_id)s,
       %(connector_name)s, %(trading_pair)s, %(correlation_id)s, %(schema_validation_status)s, %(payload)s::jsonb, %(ingest_ts_utc)s, %(schema_version)s
     )
-    ON CONFLICT (stream, stream_entry_id) DO NOTHING
+    ON CONFLICT (stream, stream_entry_id, ts_utc) DO NOTHING
     """
     retries = max(1, int(os.getenv("EVENT_STORE_DB_APPEND_RETRIES", "3")))
     for attempt in range(1, retries + 1):
@@ -303,13 +339,14 @@ def _append_events_db(conn: "psycopg.Connection", events: List[Dict[str, object]
                     if not stream_entry_id:
                         # Preserve idempotency for non-redis sources that do not carry stream IDs.
                         stream_entry_id = f"event:{event_id or uuid.uuid4()}"
+                    ts_hint = event.get("ts_utc") or _stream_entry_id_to_iso(stream_entry_id)
                     row = {
                         "stream": str(event.get("stream", "")),
                         "stream_entry_id": stream_entry_id,
                         "event_id": event_id,
                         "event_type": str(event.get("event_type", "")),
                         "event_version": str(event.get("event_version", "v1")),
-                        "ts_utc": str(event.get("ts_utc", _now_iso())),
+                        "ts_utc": _coerce_ts_utc(ts_hint),
                         "producer": str(event.get("producer", "")),
                         "instance_name": str(event.get("instance_name", "")),
                         "controller_id": str(event.get("controller_id", "")),
@@ -423,6 +460,10 @@ def run(once: bool = False) -> None:
 
     group = os.getenv("EVENT_STORE_CONSUMER_GROUP", "hb_event_store_v1").strip() or "hb_event_store_v1"
     consumer = f"event-store-{svc_cfg.instance_name}"
+    read_pending_fn = getattr(client, "read_pending", None)
+    claim_pending_fn = getattr(client, "claim_pending", None)
+    pending_min_idle_ms = max(1, int(os.getenv("EVENT_STORE_PENDING_MIN_IDLE_MS", "30000")))
+    pending_claim_count = max(1, int(os.getenv("EVENT_STORE_PENDING_CLAIM_COUNT", "200")))
     for stream in STREAMS:
         client.create_group(stream, group)
 
@@ -453,6 +494,31 @@ def run(once: bool = False) -> None:
         batch: List[Dict[str, object]] = []
         batch_ack_keys: List[Tuple[str, str]] = []
         for stream in STREAMS:
+            if callable(read_pending_fn):
+                pending = read_pending_fn(
+                    stream=stream,
+                    group=group,
+                    consumer=consumer,
+                    count=pending_claim_count,
+                    block_ms=1,
+                )
+                for entry_id, payload in pending:
+                    normalized = _normalize(payload=payload, stream=stream, entry_id=entry_id, producer=svc_cfg.producer_name)
+                    batch.append(normalized)
+                    batch_ack_keys.append((stream, entry_id))
+            if callable(claim_pending_fn):
+                claimed = claim_pending_fn(
+                    stream=stream,
+                    group=group,
+                    consumer=consumer,
+                    min_idle_ms=pending_min_idle_ms,
+                    count=pending_claim_count,
+                    start_id="0-0",
+                )
+                for entry_id, payload in claimed:
+                    normalized = _normalize(payload=payload, stream=stream, entry_id=entry_id, producer=svc_cfg.producer_name)
+                    batch.append(normalized)
+                    batch_ack_keys.append((stream, entry_id))
             entries = client.read_group(stream=stream, group=group, consumer=consumer, count=200, block_ms=svc_cfg.poll_ms)
             for entry_id, payload in entries:
                 normalized = _normalize(payload=payload, stream=stream, entry_id=entry_id, producer=svc_cfg.producer_name)

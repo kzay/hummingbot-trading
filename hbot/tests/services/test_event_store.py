@@ -30,6 +30,48 @@ def _make_payload(event_type: str = "market_snapshot", instance: str = "bot1") -
     }
 
 
+class _FakeConn:
+    def close(self) -> None:
+        return None
+
+
+class _FakeStreamClient:
+    def __init__(self) -> None:
+        self.enabled = True
+        self._emitted = False
+        self.acked = []
+
+    def create_group(self, _stream: str, _group: str) -> None:
+        return None
+
+    def read_group(self, stream: str, group: str, consumer: str, count: int, block_ms: int):  # noqa: ARG002
+        if stream == "hb.market_data.v1" and not self._emitted:
+            self._emitted = True
+            return [("1-0", {"event_id": "evt-1", "event_type": "market_snapshot", "timestamp_ms": 1700000000000})]
+        return []
+
+    def claim_pending(  # noqa: ARG002
+        self,
+        stream: str,
+        group: str,
+        consumer: str,
+        *,
+        min_idle_ms: int = 30_000,
+        count: int = 100,
+        start_id: str = "0-0",
+    ):
+        return []
+
+    def read_pending(self, stream: str, group: str, consumer: str, count: int, block_ms: int):  # noqa: ARG002
+        return []
+
+    def ack(self, stream: str, group: str, entry_id: str) -> None:
+        self.acked.append((stream, group, entry_id))
+
+    def read_latest(self, _stream: str):
+        return None
+
+
 # ── Stream → JSONL write integrity ──────────────────────────────────
 
 class TestJsonlWriteIntegrity:
@@ -183,3 +225,82 @@ class TestInvalidEvents:
         with patch("services.event_store.main.os.replace", side_effect=OSError("read-only fs")):
             ok = _write_stats(stats_file, batch)
         assert ok is False
+
+
+def test_run_once_leaves_entries_unacked_when_db_mirror_write_fails(monkeypatch, tmp_path):
+    from services.event_store import main as event_store_main
+
+    fake_client = _FakeStreamClient()
+    monkeypatch.setattr(event_store_main, "RedisStreamClient", lambda **kwargs: fake_client)
+    monkeypatch.setattr(event_store_main, "_store_path", lambda _root: tmp_path / "events.jsonl")
+    monkeypatch.setattr(event_store_main, "_stats_path", lambda _root: tmp_path / "stats.json")
+    monkeypatch.setattr(event_store_main, "_append_events", lambda _path, _batch: True)
+    monkeypatch.setattr(event_store_main, "_write_stats", lambda _path, _batch: True)
+    monkeypatch.setattr(event_store_main, "_connect_db", lambda: _FakeConn())
+    monkeypatch.setattr(event_store_main, "_ensure_db_schema", lambda _conn: None)
+    monkeypatch.setattr(event_store_main, "_append_events_db", lambda _conn, _batch: False)
+    monkeypatch.setenv("EXT_SIGNAL_RISK_ENABLED", "true")
+    monkeypatch.setenv("EVENT_STORE_DB_MIRROR_ENABLED", "true")
+    monkeypatch.setenv("EVENT_STORE_DB_MIRROR_REQUIRED", "false")
+    monkeypatch.setenv("EVENT_STORE_BOOTSTRAP_SNAPSHOT_ENABLED", "false")
+    event_store_main.run(once=True)
+    assert fake_client.acked == []
+
+
+def test_run_once_acks_entries_only_after_db_mirror_success(monkeypatch, tmp_path):
+    from services.event_store import main as event_store_main
+
+    fake_client = _FakeStreamClient()
+    monkeypatch.setattr(event_store_main, "RedisStreamClient", lambda **kwargs: fake_client)
+    monkeypatch.setattr(event_store_main, "_store_path", lambda _root: tmp_path / "events.jsonl")
+    monkeypatch.setattr(event_store_main, "_stats_path", lambda _root: tmp_path / "stats.json")
+    monkeypatch.setattr(event_store_main, "_append_events", lambda _path, _batch: True)
+    monkeypatch.setattr(event_store_main, "_write_stats", lambda _path, _batch: True)
+    monkeypatch.setattr(event_store_main, "_connect_db", lambda: _FakeConn())
+    monkeypatch.setattr(event_store_main, "_ensure_db_schema", lambda _conn: None)
+    monkeypatch.setattr(event_store_main, "_append_events_db", lambda _conn, _batch: True)
+    monkeypatch.setenv("EXT_SIGNAL_RISK_ENABLED", "true")
+    monkeypatch.setenv("EVENT_STORE_DB_MIRROR_ENABLED", "true")
+    monkeypatch.setenv("EVENT_STORE_DB_MIRROR_REQUIRED", "false")
+    monkeypatch.setenv("EVENT_STORE_BOOTSTRAP_SNAPSHOT_ENABLED", "false")
+    event_store_main.run(once=True)
+    assert fake_client.acked == [("hb.market_data.v1", "hb_event_store_v1", "1-0")]
+
+
+def test_run_once_claims_and_acks_stale_pending_entries(monkeypatch, tmp_path):
+    from services.event_store import main as event_store_main
+
+    class _PendingOnlyClient(_FakeStreamClient):
+        def __init__(self) -> None:
+            super().__init__()
+            self._pending_emitted = False
+
+        def read_group(self, stream: str, group: str, consumer: str, count: int, block_ms: int):  # noqa: ARG002
+            return []
+
+        def claim_pending(  # noqa: ARG002
+            self,
+            stream: str,
+            group: str,
+            consumer: str,
+            *,
+            min_idle_ms: int = 30_000,
+            count: int = 100,
+            start_id: str = "0-0",
+        ):
+            if stream == "hb.market_data.v1" and not self._pending_emitted:
+                self._pending_emitted = True
+                return [("9-0", {"event_id": "evt-pending", "event_type": "market_snapshot", "timestamp_ms": 1700000000100})]
+            return []
+
+    fake_client = _PendingOnlyClient()
+    monkeypatch.setattr(event_store_main, "RedisStreamClient", lambda **kwargs: fake_client)
+    monkeypatch.setattr(event_store_main, "_store_path", lambda _root: tmp_path / "events.jsonl")
+    monkeypatch.setattr(event_store_main, "_stats_path", lambda _root: tmp_path / "stats.json")
+    monkeypatch.setattr(event_store_main, "_append_events", lambda _path, _batch: True)
+    monkeypatch.setattr(event_store_main, "_write_stats", lambda _path, _batch: True)
+    monkeypatch.setenv("EXT_SIGNAL_RISK_ENABLED", "true")
+    monkeypatch.setenv("EVENT_STORE_DB_MIRROR_ENABLED", "false")
+    monkeypatch.setenv("EVENT_STORE_BOOTSTRAP_SNAPSHOT_ENABLED", "false")
+    event_store_main.run(once=True)
+    assert fake_client.acked == [("hb.market_data.v1", "hb_event_store_v1", "9-0")]

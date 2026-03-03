@@ -68,8 +68,8 @@ def _metric_insufficient(metric_entry: Dict[str, object]) -> bool:
 def _parity_core_insufficient_active_bots(parity: Dict[str, object]) -> Tuple[List[str], List[str]]:
     """Return (insufficient_active_bots, active_bots).
 
-    Active bot scope is inferred from parity summary activity counters and/or
-    non-null equity markers.
+    Active bot scope is inferred from parity summary activity counters that are
+    directly tied to intent/fill/reject behavior.
     """
     bots = parity.get("bots", [])
     if not isinstance(bots, list):
@@ -91,8 +91,6 @@ def _parity_core_insufficient_active_bots(parity: Dict[str, object]) -> Tuple[Li
                     break
             except Exception:
                 continue
-        if summary.get("equity_first") is not None or summary.get("equity_last") is not None:
-            active = True
         if not active:
             continue
         active_bots.append(bot_name)
@@ -138,14 +136,22 @@ def _day2_lag_within_tolerance(
         source_compare_path = candidates[-1] if candidates else None
 
     source_compare = _read_json(source_compare_path, {}) if source_compare_path else {}
-    delta_map_raw = source_compare.get("delta_produced_minus_ingested_since_baseline", {})
+    delta_map_raw = source_compare.get("lag_produced_minus_ingested_since_baseline")
+    if not isinstance(delta_map_raw, dict) or not delta_map_raw:
+        delta_map_raw = source_compare.get("delta_produced_minus_ingested_since_baseline", {})
     delta_map_raw = delta_map_raw if isinstance(delta_map_raw, dict) else {}
 
     lag_by_stream: Dict[str, int] = {}
+    lag_by_stream_signed: Dict[str, int] = {}
     for stream, value in delta_map_raw.items():
         try:
-            lag_by_stream[str(stream)] = abs(int(value))
+            signed = int(value)
+            lag_by_stream_signed[str(stream)] = signed
+            # Positive means produced events are ahead of ingested events (true lag).
+            # Negative means ingested has caught up/ahead (not a lag violation).
+            lag_by_stream[str(stream)] = max(0, signed)
         except Exception:
+            lag_by_stream_signed[str(stream)] = 0
             lag_by_stream[str(stream)] = 0
 
     max_delta_observed = max(lag_by_stream.values()) if lag_by_stream else 0
@@ -156,6 +162,7 @@ def _day2_lag_within_tolerance(
     diagnostics = {
         "source_compare_path": str(source_compare_path) if source_compare_path else "",
         "lag_by_stream": lag_by_stream,
+        "lag_by_stream_signed": lag_by_stream_signed,
         "max_delta_observed": int(max_delta_observed),
         "max_allowed_delta": int(max_allowed_delta),
         "worst_stream": worst_stream,
@@ -289,7 +296,37 @@ def _run_event_store_once(root: Path) -> Tuple[int, str]:
             cmd, cwd=str(root), capture_output=True, text=True, check=False, env=_build_subprocess_env(root)
         )
         msg = (proc.stdout or "") + ("\n" + proc.stderr if proc.stderr else "")
-        return int(proc.returncode), msg.strip()
+        rc = int(proc.returncode)
+        msg = msg.strip()
+        # In local host runs, event_store --once can fail because EXT_SIGNAL_RISK_ENABLED
+        # is intentionally disabled outside the containerized runtime. Fall back to docker
+        # so strict-cycle day2 catch-up reflects real service behavior.
+        host_disabled = "Redis stream client is disabled" in msg
+        if rc != 0 and host_disabled and not Path("/.dockerenv").exists():
+            container = os.getenv("EVENT_STORE_CONTAINER_NAME", "hbot-event-store-service").strip()
+            if not container:
+                container = "hbot-event-store-service"
+            docker_cmd = [
+                "docker",
+                "exec",
+                container,
+                "python",
+                "/workspace/hbot/services/event_store/main.py",
+                "--once",
+            ]
+            docker_proc = subprocess.run(
+                docker_cmd,
+                cwd=str(root),
+                capture_output=True,
+                text=True,
+                check=False,
+            )
+            docker_msg = (docker_proc.stdout or "") + ("\n" + docker_proc.stderr if docker_proc.stderr else "")
+            merged = f"host_rc={rc} host_out={msg[:300]} | docker_rc={int(docker_proc.returncode)}"
+            if docker_msg.strip():
+                merged = f"{merged} docker_out={docker_msg.strip()[:300]}"
+            return int(docker_proc.returncode), merged
+        return rc, msg
     except Exception as e:
         return 2, str(e)
 
@@ -568,6 +605,40 @@ def _run_data_plane_consistency_check(root: Path) -> Tuple[int, str]:
     ]
     try:
         proc = subprocess.run(cmd, cwd=str(root), capture_output=True, text=True, check=False, timeout=30)
+        msg = (proc.stdout or "") + ("\n" + proc.stderr if proc.stderr else "")
+        return int(proc.returncode), msg.strip()
+    except Exception as e:
+        return 2, str(e)
+
+
+def _run_canonical_plane_gate(
+    root: Path,
+    *,
+    max_db_ingest_age_min: float,
+    max_parity_delta_ratio: float,
+    min_duplicate_suppression_rate: float,
+    max_replay_lag_delta: int,
+) -> Tuple[int, str]:
+    cmd = [
+        sys.executable,
+        str(root / "scripts" / "release" / "check_canonical_plane_gate.py"),
+        "--root",
+        str(root),
+        "--data-root",
+        str(root / "data"),
+        "--reports-root",
+        str(root / "reports"),
+        "--max-db-ingest-age-min",
+        str(float(max_db_ingest_age_min)),
+        "--max-parity-delta-ratio",
+        str(float(max_parity_delta_ratio)),
+        "--min-duplicate-suppression-rate",
+        str(float(min_duplicate_suppression_rate)),
+        "--max-replay-lag-delta",
+        str(int(max_replay_lag_delta)),
+    ]
+    try:
+        proc = subprocess.run(cmd, cwd=str(root), capture_output=True, text=True, check=False, env=_build_subprocess_env(root))
         msg = (proc.stdout or "") + ("\n" + proc.stderr if proc.stderr else "")
         return int(proc.returncode), msg.strip()
     except Exception as e:
@@ -959,6 +1030,50 @@ def main() -> int:
         help="Run INFRA-5 data-plane consistency gate (requires desk_snapshot_service running).",
     )
     parser.add_argument(
+        "--check-canonical-plane-gates",
+        action="store_true",
+        default=str(
+            os.getenv(
+                "PROMOTION_CHECK_CANONICAL_PLANE_GATES",
+                "true"
+                if str(os.getenv("OPS_DATA_PLANE_MODE", "")).strip().lower() == "db_primary"
+                else os.getenv("OPS_DB_READ_PREFERRED", "false"),
+            )
+        ).strip().lower()
+        in {"1", "true", "yes", "on"},
+        help="Run canonical-plane cutover guardrails (DB freshness/parity/dup suppression/replay lag).",
+    )
+    parser.add_argument(
+        "--no-check-canonical-plane-gates",
+        action="store_false",
+        dest="check_canonical_plane_gates",
+        help="Skip canonical-plane cutover guardrails.",
+    )
+    parser.add_argument(
+        "--canonical-max-db-ingest-age-min",
+        type=float,
+        default=float(os.getenv("CANONICAL_MAX_DB_INGEST_AGE_MIN", "20")),
+        help="Max allowed age (minutes) for ops_db_writer latest artifact in canonical gate.",
+    )
+    parser.add_argument(
+        "--canonical-max-parity-delta-ratio",
+        type=float,
+        default=float(os.getenv("CANONICAL_MAX_PARITY_DELTA_RATIO", "0.10")),
+        help="Max allowed relative DB-vs-CSV parity delta per table for canonical gate.",
+    )
+    parser.add_argument(
+        "--canonical-min-duplicate-suppression-rate",
+        type=float,
+        default=float(os.getenv("CANONICAL_MIN_DUP_SUPPRESSION_RATE", "0.99")),
+        help="Minimum required duplicate suppression rate in canonical gate.",
+    )
+    parser.add_argument(
+        "--canonical-max-replay-lag-delta",
+        type=int,
+        default=int(os.getenv("CANONICAL_MAX_REPLAY_LAG_DELTA", os.getenv("DAY2_GATE_MAX_DELTA", "5"))),
+        help="Max allowed replay lag delta for canonical gate.",
+    )
+    parser.add_argument(
         "--check-dashboard-readiness",
         action="store_true",
         default=str(os.getenv("PROMOTION_CHECK_DASHBOARD_READINESS", "false")).strip().lower()
@@ -1197,6 +1312,8 @@ def main() -> int:
     paper_exchange_threshold_inputs_msg = ""
     paper_exchange_thresholds_rc = 0
     paper_exchange_thresholds_msg = ""
+    canonical_gate_rc = 0
+    canonical_gate_msg = ""
     day2_catchup_rc = 0
     day2_catchup_msg = ""
     fill_backfill_rc = 0
@@ -1251,6 +1368,14 @@ def main() -> int:
             required_grafana_bot_variants=str(args.dashboard_required_grafana_bot_variants),
             required_tradenote_bot_variants=str(args.dashboard_required_tradenote_bot_variants),
         )
+    if args.check_canonical_plane_gates:
+        canonical_gate_rc, canonical_gate_msg = _run_canonical_plane_gate(
+            root,
+            max_db_ingest_age_min=float(args.canonical_max_db_ingest_age_min),
+            max_parity_delta_ratio=float(args.canonical_max_parity_delta_ratio),
+            min_duplicate_suppression_rate=float(args.canonical_min_duplicate_suppression_rate),
+            max_replay_lag_delta=int(args.canonical_max_replay_lag_delta),
+        )
 
     # 1) Preflight checks
     required_files = [
@@ -1270,6 +1395,7 @@ def main() -> int:
         root / "scripts" / "release" / "check_accounting_integrity_v2.py",
         root / "scripts" / "release" / "check_market_data_freshness.py",
         root / "scripts" / "release" / "check_alerting_health.py",
+        root / "scripts" / "release" / "check_canonical_plane_gate.py",
         root / "scripts" / "release" / "run_paper_exchange_load_harness.py",
         root / "scripts" / "release" / "check_paper_exchange_load.py",
         root / "scripts" / "release" / "build_paper_exchange_threshold_inputs.py",
@@ -1953,6 +2079,28 @@ def main() -> int:
         )
     )
 
+    # 19b) Canonical-plane cutover guardrails (DB freshness/parity/duplicate/replay checks).
+    if args.check_canonical_plane_gates:
+        canonical_path = reports / "ops" / "canonical_plane_gate_latest.json"
+        canonical_report = _read_json(canonical_path, {})
+        canonical_ok = (
+            canonical_gate_rc == 0
+            and str(canonical_report.get("status", "FAIL")).strip().upper() == "PASS"
+        )
+        checks.append(
+            _check(
+                canonical_ok,
+                "canonical_plane_cutover_guardrails",
+                "critical",
+                "canonical-plane guardrails PASS (db freshness/parity/duplicate suppression/replay lag)"
+                if canonical_ok
+                else f"canonical-plane guardrails failed (rc={canonical_gate_rc})",
+                [str(canonical_path), str(reports / "ops_db_writer" / "latest.json"), str(reports / "event_store")],
+            )
+        )
+        if not canonical_ok:
+            critical_failures.append("canonical_plane_cutover_guardrails")
+
     # 20) Market data freshness
     md_path = reports / "market_data" / "latest.json"
     md_rc, md_msg = _run_market_data_freshness_check(root, max_report_age_min)
@@ -2146,6 +2294,13 @@ def main() -> int:
             "dashboard_required_tradenote_bot_variants": str(args.dashboard_required_tradenote_bot_variants),
             "dashboard_tradenote_report_max_age_s": int(args.dashboard_tradenote_report_max_age_s),
             "dashboard_tradenote_fill_max_age_s": int(args.dashboard_tradenote_fill_max_age_s),
+            "check_canonical_plane_gates": bool(args.check_canonical_plane_gates),
+            "canonical_gate_output": canonical_gate_msg[:2000],
+            "canonical_gate_rc": int(canonical_gate_rc),
+            "canonical_max_db_ingest_age_min": float(args.canonical_max_db_ingest_age_min),
+            "canonical_max_parity_delta_ratio": float(args.canonical_max_parity_delta_ratio),
+            "canonical_min_duplicate_suppression_rate": float(args.canonical_min_duplicate_suppression_rate),
+            "canonical_max_replay_lag_delta": int(args.canonical_max_replay_lag_delta),
             "recon_exchange_preflight_output": recon_preflight_msg[:2000],
             "recon_exchange_preflight_rc": recon_preflight_rc,
             "paper_exchange_preflight_output": paper_exchange_preflight_msg[:2000],

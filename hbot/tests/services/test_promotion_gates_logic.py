@@ -4,10 +4,12 @@ import os
 from pathlib import Path
 
 from scripts.release.run_promotion_gates import (
+    _run_event_store_once,
     _day2_freshness,
     _day2_lag_within_tolerance,
     _parity_core_insufficient_active_bots,
     _portfolio_diversification_gate,
+    _run_canonical_plane_gate,
     _run_paper_exchange_preflight_check,
 )
 
@@ -19,7 +21,7 @@ def test_parity_core_insufficient_flags_only_active_bots() -> None:
             {
                 "bot": "bot1",
                 "summary": {
-                    "intents_total": 0,
+                    "intents_total": 2,
                     "actionable_intents": 0,
                     "fills_total": 0,
                     "equity_first": 100.0,
@@ -59,7 +61,13 @@ def test_parity_core_insufficient_passes_when_any_core_metric_has_data() -> None
         "bots": [
             {
                 "bot": "bot1",
-                "summary": {"equity_first": 100.0, "equity_last": 101.0},
+                "summary": {
+                    "intents_total": 1,
+                    "actionable_intents": 1,
+                    "fills_total": 0,
+                    "equity_first": 100.0,
+                    "equity_last": 101.0,
+                },
                 "metrics": [
                     {"metric": "fill_ratio_delta", "note": "insufficient_data", "value": None, "delta": None},
                     {"metric": "slippage_delta_bps", "note": "", "value": 1.2, "delta": -0.3},
@@ -71,6 +79,26 @@ def test_parity_core_insufficient_passes_when_any_core_metric_has_data() -> None
     insufficient, active = _parity_core_insufficient_active_bots(parity)
     assert active == ["bot1"]
     assert insufficient == []
+
+
+def test_day2_lag_within_tolerance_ignores_negative_deltas_as_non_lag(tmp_path: Path) -> None:
+    reports = tmp_path / "event_store"
+    reports.mkdir(parents=True, exist_ok=True)
+    source_compare = reports / "source_compare_20260228T000002Z.json"
+    source_compare.write_text(
+        """{
+  "delta_produced_minus_ingested_since_baseline": {
+    "hb.market_data.v1": -26,
+    "hb.signal.v1": -1
+  }
+}""",
+        encoding="utf-8",
+    )
+    day2 = {"source_compare_file": str(source_compare)}
+    ok, diag = _day2_lag_within_tolerance(day2, reports, max_allowed_delta=5)
+    assert ok is True
+    assert diag["max_delta_observed"] == 0
+    assert diag["offending_streams"] == {}
 
 
 def test_day2_freshness_uses_file_mtime_when_ts_missing(tmp_path: Path) -> None:
@@ -164,4 +192,67 @@ def test_run_paper_exchange_preflight_uses_pythonpath_env(monkeypatch, tmp_path:
     env = captured["env"]
     py_path = str(env.get("PYTHONPATH", ""))
     assert str(tmp_path) in py_path.split(os.pathsep)
+
+
+def test_run_canonical_plane_gate_forwards_threshold_args(monkeypatch, tmp_path: Path) -> None:
+    captured = {}
+
+    class _Proc:
+        returncode = 0
+        stdout = "ok"
+        stderr = ""
+
+    def _fake_run(cmd, cwd, capture_output, text, check, env):
+        captured["cmd"] = cmd
+        captured["cwd"] = cwd
+        captured["env"] = env
+        return _Proc()
+
+    monkeypatch.setattr("scripts.release.run_promotion_gates.subprocess.run", _fake_run)
+
+    rc, msg = _run_canonical_plane_gate(
+        tmp_path,
+        max_db_ingest_age_min=25.0,
+        max_parity_delta_ratio=0.05,
+        min_duplicate_suppression_rate=0.995,
+        max_replay_lag_delta=6,
+    )
+    assert rc == 0
+    assert msg == "ok"
+    assert str(tmp_path) == captured["cwd"]
+    assert str(tmp_path / "scripts" / "release" / "check_canonical_plane_gate.py") in captured["cmd"]
+    assert "--max-db-ingest-age-min" in captured["cmd"]
+    assert "--max-parity-delta-ratio" in captured["cmd"]
+    assert "--min-duplicate-suppression-rate" in captured["cmd"]
+    assert "--max-replay-lag-delta" in captured["cmd"]
+    env = captured["env"]
+    py_path = str(env.get("PYTHONPATH", ""))
+    assert str(tmp_path) in py_path.split(os.pathsep)
+
+
+def test_run_event_store_once_falls_back_to_docker_when_host_client_disabled(monkeypatch, tmp_path: Path) -> None:
+    calls = []
+
+    class _Proc:
+        def __init__(self, returncode: int, stdout: str, stderr: str = "") -> None:
+            self.returncode = returncode
+            self.stdout = stdout
+            self.stderr = stderr
+
+    def _fake_run(cmd, cwd, capture_output, text, check, env=None):  # noqa: ARG001
+        calls.append(cmd)
+        if len(calls) == 1:
+            return _Proc(
+                1,
+                "Redis stream client disabled (enabled=False redis=True)\n"
+                "RuntimeError: Redis stream client is disabled. Set EXT_SIGNAL_RISK_ENABLED=true",
+            )
+        return _Proc(0, "")
+
+    monkeypatch.setattr("scripts.release.run_promotion_gates.subprocess.run", _fake_run)
+    rc, msg = _run_event_store_once(tmp_path)
+    assert rc == 0
+    assert len(calls) == 2
+    assert calls[1][0:3] == ["docker", "exec", "hbot-event-store-service"]
+    assert "docker_rc=0" in msg
 
