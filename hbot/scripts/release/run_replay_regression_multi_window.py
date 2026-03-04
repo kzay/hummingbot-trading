@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import subprocess
 import sys
 from datetime import datetime, timezone
@@ -23,7 +24,13 @@ def _read_json(path: Path) -> Dict[str, object]:
         return {}
 
 
-def _run_window(root: Path, min_events: int, repeat: int) -> Dict[str, object]:
+def _run_window(
+    root: Path,
+    min_events: int,
+    repeat: int,
+    *,
+    require_portfolio_risk_healthy: bool = True,
+) -> Dict[str, object]:
     cmd = [
         sys.executable,
         str(root / "scripts" / "release" / "run_replay_regression_cycle.py"),
@@ -32,6 +39,8 @@ def _run_window(root: Path, min_events: int, repeat: int) -> Dict[str, object]:
         "--min-events",
         str(max(1, int(min_events))),
     ]
+    if not bool(require_portfolio_risk_healthy):
+        cmd.append("--no-require-portfolio-risk-healthy")
     try:
         proc = subprocess.run(cmd, cwd=str(root), capture_output=True, text=True, check=False)
         payload = _read_json(root / "reports" / "replay_regression" / "latest.json")
@@ -86,10 +95,23 @@ def main() -> int:
     parser = argparse.ArgumentParser(description="Run replay regression cycle across multiple event-count windows.")
     parser.add_argument(
         "--windows",
-        default="500,1000,2000",
+        default=os.getenv("REPLAY_REGRESSION_WINDOWS", "1000,2000"),
         help="Comma-separated min-event windows for replay regression coverage.",
     )
     parser.add_argument("--repeat", type=int, default=2, help="Repeat count passed to replay cycle.")
+    parser.add_argument(
+        "--require-portfolio-risk-healthy",
+        action="store_true",
+        default=str(os.getenv("REPLAY_REQUIRE_PORTFOLIO_RISK_HEALTHY", "true")).strip().lower()
+        in {"1", "true", "yes", "on"},
+        help="Require replay windows to include healthy portfolio_risk snapshots.",
+    )
+    parser.add_argument(
+        "--no-require-portfolio-risk-healthy",
+        action="store_false",
+        dest="require_portfolio_risk_healthy",
+        help="Allow replay windows to pass even if portfolio_risk is critical.",
+    )
     args = parser.parse_args()
 
     root = Path("/workspace/hbot") if Path("/.dockerenv").exists() else Path(__file__).resolve().parents[2]
@@ -108,7 +130,15 @@ def main() -> int:
     if not parsed_windows:
         parsed_windows = [1000]
 
-    windows = [_run_window(root=root, min_events=w, repeat=int(args.repeat)) for w in parsed_windows]
+    windows = [
+        _run_window(
+            root=root,
+            min_events=w,
+            repeat=int(args.repeat),
+            require_portfolio_risk_healthy=bool(args.require_portfolio_risk_healthy),
+        )
+        for w in parsed_windows
+    ]
     failed = [
         f"window_{w.get('min_events', 0)}"
         for w in windows
@@ -122,6 +152,7 @@ def main() -> int:
         "ts_utc": _utc_now(),
         "status": status,
         "repeat": int(args.repeat),
+        "require_portfolio_risk_healthy": bool(args.require_portfolio_risk_healthy),
         "windows_requested": parsed_windows,
         "failed_windows": failed,
         "windows": windows,

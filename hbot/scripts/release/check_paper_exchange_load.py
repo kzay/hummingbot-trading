@@ -122,8 +122,9 @@ def _extract_command_timestamps(
     *,
     cutoff_ms: int,
     load_run_id: str = "",
-) -> Dict[str, int]:
+) -> Tuple[Dict[str, int], Dict[str, int]]:
     out: Dict[str, int] = {}
+    counts_by_instance: Dict[str, int] = {}
     run_id_filter = str(load_run_id or "").strip()
     for stream_id, data in rows:
         payload = _decode_stream_payload(data if isinstance(data, dict) else {})
@@ -142,7 +143,9 @@ def _extract_command_timestamps(
         if ts_ms < cutoff_ms:
             continue
         out[event_id] = max(_safe_int(out.get(event_id), 0), ts_ms)
-    return out
+        instance_name = str(payload.get("instance_name", "")).strip() or "__unknown__"
+        counts_by_instance[instance_name] = int(counts_by_instance.get(instance_name, 0)) + 1
+    return out, counts_by_instance
 
 
 def _extract_result_timestamps(
@@ -220,6 +223,14 @@ def build_report(
     sample_count: int = 8000,
     min_latency_samples: int = 200,
     min_window_sec: int = 120,
+    sustained_window_sec: int = 0,
+    min_instance_coverage: int = 1,
+    enforce_budget_checks: bool = False,
+    min_throughput_cmds_per_sec: float = 50.0,
+    max_latency_p95_ms: float = 500.0,
+    max_latency_p99_ms: float = 1000.0,
+    max_backlog_growth_pct_per_10min: float = 1.0,
+    max_restart_count: float = 0.0,
     load_run_id: str = "",
 ) -> Dict[str, object]:
     now_ts = float(now_ts if now_ts is not None else datetime.now(timezone.utc).timestamp())
@@ -246,7 +257,7 @@ def build_report(
         redis_ok = False
         redis_error = "redis_client_unavailable"
 
-    command_ts_by_id = _extract_command_timestamps(
+    command_ts_by_id, command_count_by_instance = _extract_command_timestamps(
         command_rows,
         cutoff_ms=cutoff_ms,
         load_run_id=str(load_run_id or "").strip(),
@@ -271,17 +282,14 @@ def build_report(
         window_sec = 0.0
 
     command_count = len(command_ts_by_id)
+    instance_coverage_count = sum(1 for count in command_count_by_instance.values() if _safe_int(count, 0) > 0)
     processed_count = len(matched_command_ids)
-    throughput_cmds_per_sec = (float(processed_count) / window_sec) if window_sec > 0 else 0.0
-
-    if window_sec <= 0 or command_count <= 0:
-        backlog_growth_rate_pct_per_10min = MISSING_BACKLOG_GROWTH_SENTINEL_PCT
-    else:
-        # Positive imbalance implies queue growth pressure in this stress window.
-        imbalance = max(0.0, float(command_count - processed_count))
-        backlog_growth_rate_pct_per_10min = (
-            (imbalance / max(1.0, float(processed_count))) * (600.0 / max(1.0, window_sec)) * 100.0
-        )
+    requested_sustained_window_sec = int(_safe_int(sustained_window_sec, 0))
+    required_sustained_window_sec = (
+        max(1, requested_sustained_window_sec)
+        if requested_sustained_window_sec > 0
+        else max(1, int(min_window_sec))
+    )
 
     heartbeat_window_start_ms = command_window_start_ms
     heartbeat_window_end_ms = (
@@ -305,8 +313,20 @@ def build_report(
     else:
         restart_count = MISSING_RESTART_SENTINEL_COUNT
 
+    processed_count_from_results = len(matched_command_ids)
+    processed_count_effective = int(processed_count_from_results)
+    if window_sec <= 0 or command_count <= 0:
+        backlog_growth_rate_pct_per_10min = MISSING_BACKLOG_GROWTH_SENTINEL_PCT
+    else:
+        imbalance = max(0.0, float(command_count - processed_count_effective))
+        backlog_growth_rate_pct_per_10min = (
+            (imbalance / max(1.0, float(processed_count_effective))) * (600.0 / max(1.0, window_sec)) * 100.0
+        )
+
     metrics = {
-        "p1_19_sustained_command_throughput_cmds_per_sec": float(throughput_cmds_per_sec),
+        "p1_19_sustained_command_throughput_cmds_per_sec": (
+            float(processed_count_effective) / float(window_sec) if window_sec > 0 else 0.0
+        ),
         "p1_19_command_latency_under_load_p95_ms": (
             float(_percentile(latency_ms_values, 0.95)) if latency_ms_values else MISSING_LATENCY_SENTINEL_MS
         ),
@@ -315,17 +335,40 @@ def build_report(
         ),
         "p1_19_stream_backlog_growth_rate_pct_per_10min": float(backlog_growth_rate_pct_per_10min),
         "p1_19_stress_window_oom_restart_count": float(restart_count),
+        "p1_19_command_instance_coverage_count": float(instance_coverage_count),
+        "p1_19_sustained_window_observed_sec": float(window_sec),
+        "p1_19_sustained_window_required_sec": float(required_sustained_window_sec),
+        "p1_19_sustained_window_qualification_rate_pct": (
+            100.0 if (float(window_sec) + 1.0) >= float(required_sustained_window_sec) else 0.0
+        ),
     }
+    sustained_window_qualified = bool(metrics["p1_19_sustained_window_qualification_rate_pct"] >= 100.0)
+    throughput_cmds_per_sec = float(metrics["p1_19_sustained_command_throughput_cmds_per_sec"])
     checks = {
         "redis_connected": bool(redis_ok),
         "consumer_group_present": str(consumer_group or "").strip() in group_stats,
+        "minimum_instance_coverage": int(instance_coverage_count) >= int(max(1, min_instance_coverage)),
         "minimum_command_samples": int(command_count) >= int(max(1, min_latency_samples)),
         "minimum_latency_samples": int(len(latency_ms_values)) >= int(max(1, min_latency_samples)),
-        "minimum_window_seconds": float(window_sec) >= float(max(1, min_window_sec)),
+        "minimum_window_seconds": (float(window_sec) + 1.0) >= float(max(1, min_window_sec)),
+        "minimum_sustained_window_seconds": bool(sustained_window_qualified),
         "heartbeat_samples_present": len(heartbeat_samples) > 0,
     }
+    budget_checks: Dict[str, bool] = {}
+    if bool(enforce_budget_checks):
+        budget_checks = {
+            "throughput_within_budget": float(throughput_cmds_per_sec) >= float(min_throughput_cmds_per_sec),
+            "latency_p95_within_budget": float(metrics["p1_19_command_latency_under_load_p95_ms"])
+            <= float(max_latency_p95_ms),
+            "latency_p99_within_budget": float(metrics["p1_19_command_latency_under_load_p99_ms"])
+            <= float(max_latency_p99_ms),
+            "backlog_growth_within_budget": float(backlog_growth_rate_pct_per_10min)
+            <= float(max_backlog_growth_pct_per_10min),
+            "restart_count_within_budget": float(restart_count) <= float(max_restart_count),
+        }
+        checks.update(budget_checks)
     failed_checks = sorted([name for name, ok in checks.items() if not ok])
-    status = "pass" if len(failed_checks) == 0 else "warning"
+    status = "pass" if len(failed_checks) == 0 else ("fail" if bool(enforce_budget_checks) else "warning")
 
     current_group = group_stats.get(str(consumer_group or "").strip(), {})
     return {
@@ -345,10 +388,21 @@ def build_report(
             "heartbeat_consumer_group": str(heartbeat_consumer_group or "").strip(),
             "heartbeat_consumer_name": str(heartbeat_consumer_name or "").strip(),
             "window_sec": float(window_sec),
+            "sustained_window_observed_sec": float(window_sec),
+            "sustained_window_required_sec": float(required_sustained_window_sec),
+            "sustained_window_qualified": bool(sustained_window_qualified),
             "window_start_ms": int(command_window_start_ms or 0),
             "window_end_ms": int(command_window_end_ms or 0),
             "command_count": int(command_count),
-            "processed_count": int(processed_count),
+            "command_instance_coverage_count": int(instance_coverage_count),
+            "command_count_by_instance": {
+                str(name): int(_safe_int(count, 0))
+                for name, count in command_count_by_instance.items()
+                if str(name).strip()
+            },
+            "processed_count": int(processed_count_effective),
+            "processed_count_from_result_matches": int(processed_count_from_results),
+            "processed_count_effective": int(processed_count_effective),
             "matched_latency_samples": int(len(latency_ms_values)),
             "heartbeat_sample_count": int(len(heartbeat_samples)),
             "heartbeat_window_start_ms": int(heartbeat_window_start_ms or 0),
@@ -357,6 +411,16 @@ def build_report(
             "consumer_group_pending": _safe_int(current_group.get("pending"), -1),
             "group_stats": group_stats,
             "redis_error": redis_error,
+            "budget_checks_enforced": bool(enforce_budget_checks),
+            "budget_thresholds": {
+                "min_throughput_cmds_per_sec": float(min_throughput_cmds_per_sec),
+                "max_latency_p95_ms": float(max_latency_p95_ms),
+                "max_latency_p99_ms": float(max_latency_p99_ms),
+                "max_backlog_growth_pct_per_10min": float(max_backlog_growth_pct_per_10min),
+                "max_restart_count": float(max_restart_count),
+                "min_instance_coverage": int(max(1, min_instance_coverage)),
+            },
+            "budget_failed_checks": sorted([name for name, ok in budget_checks.items() if not ok]),
         },
     }
 
@@ -378,6 +442,14 @@ def run_check(
     sample_count: int,
     min_latency_samples: int,
     min_window_sec: int,
+    sustained_window_sec: int,
+    min_instance_coverage: int,
+    enforce_budget_checks: bool,
+    min_throughput_cmds_per_sec: float,
+    max_latency_p95_ms: float,
+    max_latency_p99_ms: float,
+    max_backlog_growth_pct_per_10min: float,
+    max_restart_count: float,
     load_run_id: str,
 ) -> int:
     root = Path("/workspace/hbot") if Path("/.dockerenv").exists() else Path(__file__).resolve().parents[2]
@@ -415,11 +487,19 @@ def run_check(
         sample_count=int(sample_count),
         min_latency_samples=int(min_latency_samples),
         min_window_sec=int(min_window_sec),
+        sustained_window_sec=int(sustained_window_sec),
+        min_instance_coverage=int(min_instance_coverage),
+        enforce_budget_checks=bool(enforce_budget_checks),
+        min_throughput_cmds_per_sec=float(min_throughput_cmds_per_sec),
+        max_latency_p95_ms=float(max_latency_p95_ms),
+        max_latency_p99_ms=float(max_latency_p99_ms),
+        max_backlog_growth_pct_per_10min=float(max_backlog_growth_pct_per_10min),
+        max_restart_count=float(max_restart_count),
         load_run_id=str(load_run_id or ""),
     )
     if redis_error:
         report["redis_client_error"] = redis_error
-        report["status"] = "warning"
+        report["status"] = "fail" if bool(enforce_budget_checks) else "warning"
         failed = report.get("failed_checks", [])
         if isinstance(failed, list) and "redis_connected" not in failed:
             failed.append("redis_connected")
@@ -506,6 +586,64 @@ def main() -> int:
         help="Minimum command observation window required for pass-grade evidence.",
     )
     parser.add_argument(
+        "--sustained-window-sec",
+        type=int,
+        default=int(os.getenv("PAPER_EXCHANGE_LOAD_SUSTAINED_WINDOW_SEC", "0")),
+        help=(
+            "Sustained qualification window required for p1_19 sustained-window metric. "
+            "When <= 0, falls back to --min-window-sec."
+        ),
+    )
+    parser.add_argument(
+        "--min-instance-coverage",
+        type=int,
+        default=int(os.getenv("PAPER_EXCHANGE_LOAD_MIN_INSTANCE_COVERAGE", "1")),
+        help="Minimum unique instance_name coverage required in command sample window.",
+    )
+    parser.add_argument(
+        "--enforce-budget-checks",
+        action="store_true",
+        default=str(os.getenv("PAPER_EXCHANGE_LOAD_ENFORCE_BUDGET_CHECKS", "false")).strip().lower()
+        in {"1", "true", "yes", "on"},
+        help="Enable fail-fast budget checks for throughput/latency/backlog/restart thresholds.",
+    )
+    parser.add_argument(
+        "--no-enforce-budget-checks",
+        action="store_false",
+        dest="enforce_budget_checks",
+        help="Disable fail-fast budget checks.",
+    )
+    parser.add_argument(
+        "--min-throughput-cmds-per-sec",
+        type=float,
+        default=float(os.getenv("PAPER_EXCHANGE_LOAD_MIN_THROUGHPUT_CMDS_PER_SEC", "50")),
+        help="Minimum sustained throughput required when budget checks are enforced.",
+    )
+    parser.add_argument(
+        "--max-latency-p95-ms",
+        type=float,
+        default=float(os.getenv("PAPER_EXCHANGE_LOAD_MAX_LATENCY_P95_MS", "500")),
+        help="Maximum p95 command latency allowed when budget checks are enforced.",
+    )
+    parser.add_argument(
+        "--max-latency-p99-ms",
+        type=float,
+        default=float(os.getenv("PAPER_EXCHANGE_LOAD_MAX_LATENCY_P99_MS", "1000")),
+        help="Maximum p99 command latency allowed when budget checks are enforced.",
+    )
+    parser.add_argument(
+        "--max-backlog-growth-pct-per-10min",
+        type=float,
+        default=float(os.getenv("PAPER_EXCHANGE_LOAD_MAX_BACKLOG_GROWTH_PCT_PER_10MIN", "1")),
+        help="Maximum backlog-growth rate allowed when budget checks are enforced.",
+    )
+    parser.add_argument(
+        "--max-restart-count",
+        type=float,
+        default=float(os.getenv("PAPER_EXCHANGE_LOAD_MAX_RESTART_COUNT", "0")),
+        help="Maximum restart-count allowed when budget checks are enforced.",
+    )
+    parser.add_argument(
         "--load-run-id",
         default=os.getenv("PAPER_EXCHANGE_LOAD_RUN_ID", ""),
         help="Optional load_harness run_id filter (metadata.load_run_id) for isolated metric windows.",
@@ -528,6 +666,14 @@ def main() -> int:
         sample_count=max(1, int(args.sample_count)),
         min_latency_samples=max(1, int(args.min_latency_samples)),
         min_window_sec=max(1, int(args.min_window_sec)),
+        sustained_window_sec=int(args.sustained_window_sec),
+        min_instance_coverage=max(1, int(args.min_instance_coverage)),
+        enforce_budget_checks=bool(args.enforce_budget_checks),
+        min_throughput_cmds_per_sec=max(0.0, float(args.min_throughput_cmds_per_sec)),
+        max_latency_p95_ms=max(0.0, float(args.max_latency_p95_ms)),
+        max_latency_p99_ms=max(0.0, float(args.max_latency_p99_ms)),
+        max_backlog_growth_pct_per_10min=max(0.0, float(args.max_backlog_growth_pct_per_10min)),
+        max_restart_count=max(0.0, float(args.max_restart_count)),
         load_run_id=str(args.load_run_id or ""),
     )
 

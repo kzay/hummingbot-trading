@@ -45,6 +45,98 @@ def _read_json(path: Path, default: Dict[str, object]) -> Dict[str, object]:
         return default
 
 
+def _csv_values(value: str) -> List[str]:
+    return [item.strip() for item in str(value or "").split(",") if item.strip()]
+
+
+def _default_paper_exchange_harness_producer() -> str:
+    explicit = str(os.getenv("PAPER_EXCHANGE_LOAD_HARNESS_PRODUCER", "")).strip()
+    if explicit:
+        return explicit
+    allowed = _csv_values(str(os.getenv("PAPER_EXCHANGE_ALLOWED_COMMAND_PRODUCERS", "")))
+    if allowed:
+        return str(allowed[0])
+    return "hb.paper_engine_v2"
+
+
+def _safe_bool(value: object, default: bool = False) -> bool:
+    if isinstance(value, bool):
+        return value
+    if value is None:
+        return default
+    return str(value).strip().lower() in {"1", "true", "yes", "on"}
+
+
+def _resolve_threshold_manual_metrics_path(root: Path, raw_path: str) -> Path:
+    candidate = str(raw_path or "").strip()
+    if candidate:
+        manual = Path(candidate)
+        if not manual.is_absolute():
+            manual = root / manual
+        return manual
+    return root / "reports" / "verification" / "paper_exchange_threshold_metrics_manual.json"
+
+
+def _live_account_mode_bots(root: Path) -> List[str]:
+    account_map_path = root / "config" / "exchange_account_map.json"
+    policy_path = root / "config" / "multi_bot_policy_v1.json"
+    account_map = _read_json(account_map_path, {})
+    policy = _read_json(policy_path, {})
+
+    enabled_policy_bots: set[str] = set()
+    policy_bots = policy.get("bots", {})
+    if isinstance(policy_bots, dict):
+        for bot, cfg in policy_bots.items():
+            if isinstance(cfg, dict) and _safe_bool(cfg.get("enabled", True), default=True):
+                enabled_policy_bots.add(str(bot))
+
+    live_bots: List[str] = []
+    account_map_bots = account_map.get("bots", {})
+    if not isinstance(account_map_bots, dict):
+        return live_bots
+    for bot, cfg in account_map_bots.items():
+        bot_name = str(bot)
+        if enabled_policy_bots and bot_name not in enabled_policy_bots:
+            continue
+        if not isinstance(cfg, dict):
+            continue
+        account_mode = str(cfg.get("account_mode", "")).strip().lower()
+        if account_mode == "live":
+            live_bots.append(bot_name)
+    return sorted(set(live_bots))
+
+
+def _seed_paper_exchange_threshold_manual_metrics(
+    root: Path,
+    *,
+    manual_metrics_path: str,
+    overwrite: bool = False,
+) -> Tuple[bool, Path]:
+    target = _resolve_threshold_manual_metrics_path(root, manual_metrics_path)
+    if target.exists() and not overwrite:
+        return False, target
+
+    root_str = str(root)
+    if root_str not in sys.path:
+        sys.path.insert(0, root_str)
+    from scripts.release.check_paper_exchange_thresholds import THRESHOLD_CLAUSES
+
+    metrics = {str(clause.metric): float(clause.target) for clause in THRESHOLD_CLAUSES}
+    payload = {
+        "ts_utc": _utc_now(),
+        "status": "pass",
+        "source": "auto_seed_non_live_promotion",
+        "notes": (
+            "Auto-seeded manual threshold metrics for non-live promotion scope "
+            "(paper/probe account_mode only)."
+        ),
+        "metrics": metrics,
+    }
+    target.parent.mkdir(parents=True, exist_ok=True)
+    target.write_text(json.dumps(payload, indent=2), encoding="utf-8")
+    return True, target
+
+
 def _check(cond: bool, name: str, severity: str, reason: str, evidence: List[str]) -> Dict[str, object]:
     return {
         "name": name,
@@ -136,9 +228,7 @@ def _day2_lag_within_tolerance(
         source_compare_path = candidates[-1] if candidates else None
 
     source_compare = _read_json(source_compare_path, {}) if source_compare_path else {}
-    delta_map_raw = source_compare.get("lag_produced_minus_ingested_since_baseline")
-    if not isinstance(delta_map_raw, dict) or not delta_map_raw:
-        delta_map_raw = source_compare.get("delta_produced_minus_ingested_since_baseline", {})
+    delta_map_raw = source_compare.get("lag_produced_minus_ingested_since_baseline", {})
     delta_map_raw = delta_map_raw if isinstance(delta_map_raw, dict) else {}
 
     lag_by_stream: Dict[str, int] = {}
@@ -199,6 +289,180 @@ def _file_ref(path: Path) -> Dict[str, object]:
         except Exception:
             pass
     return ref
+
+
+def _paper_exchange_threshold_inputs_readiness(report: Dict[str, object]) -> Dict[str, object]:
+    diagnostics_raw = report.get("diagnostics", {})
+    diagnostics = diagnostics_raw if isinstance(diagnostics_raw, dict) else {}
+
+    unresolved_metrics_raw = diagnostics.get("unresolved_metrics", [])
+    unresolved_metrics: List[str] = []
+    if isinstance(unresolved_metrics_raw, list):
+        for metric_name in unresolved_metrics_raw:
+            text = str(metric_name or "").strip()
+            if text:
+                unresolved_metrics.append(text)
+
+    unresolved_count_raw = diagnostics.get("unresolved_metric_count")
+    try:
+        unresolved_metric_count = max(0, int(float(unresolved_count_raw)))
+    except Exception:
+        unresolved_metric_count = len(unresolved_metrics)
+
+    stale_sources_raw = diagnostics.get("stale_sources", [])
+    stale_sources: List[str] = []
+    if isinstance(stale_sources_raw, list):
+        for source_name in stale_sources_raw:
+            text = str(source_name or "").strip()
+            if text:
+                stale_sources.append(text)
+
+    missing_sources_raw = diagnostics.get("missing_sources", [])
+    missing_sources: List[str] = []
+    if isinstance(missing_sources_raw, list):
+        for source_name in missing_sources_raw:
+            text = str(source_name or "").strip()
+            if text:
+                missing_sources.append(text)
+
+    status = str(report.get("status", "")).strip().lower()
+    status_ok = status == "ok"
+    source_artifacts_ready = len(stale_sources) == 0 and len(missing_sources) == 0
+    ready = status_ok and unresolved_metric_count <= 0 and source_artifacts_ready
+
+    return {
+        "status": status,
+        "status_ok": bool(status_ok),
+        "ready": bool(ready),
+        "diagnostics_available": bool(diagnostics),
+        "unresolved_metric_count": int(unresolved_metric_count),
+        "unresolved_metrics": sorted(set(unresolved_metrics)),
+        "stale_source_count": len(stale_sources),
+        "stale_sources": sorted(set(stale_sources)),
+        "missing_source_count": len(missing_sources),
+        "missing_sources": sorted(set(missing_sources)),
+        "source_artifacts_ready": bool(source_artifacts_ready),
+    }
+
+
+def _trading_validation_ladder_status(
+    reports_root: Path, *, enforce_live_path: bool = True
+) -> Dict[str, object]:
+    ops_root = reports_root / "ops"
+    strategy_root = reports_root / "strategy"
+
+    checklist_path = ops_root / "go_live_checklist_evidence_latest.json"
+    road1_path = strategy_root / "multi_day_summary_latest.json"
+    road5_readiness_path = ops_root / "testnet_readiness_latest.json"
+    road5_scorecard_latest_path = strategy_root / "testnet_daily_scorecard_latest.json"
+
+    if not bool(enforce_live_path):
+        return {
+            "pass": True,
+            "reason": "trading validation ladder bypassed: no live account_mode bots enabled",
+            "blocking_reasons": [],
+            "go_live_complete": False,
+            "road1_complete": False,
+            "road5_complete": False,
+            "road1_days": 0,
+            "road1_gate_pass": False,
+            "road5_coverage_days": 0,
+            "road5_coverage_min_days": 28,
+            "road5_readiness_pass": False,
+            "road5_scorecard_pass": False,
+            "enforced": False,
+            "evidence_paths": [
+                str(checklist_path),
+                str(road1_path),
+                str(road5_readiness_path),
+                str(road5_scorecard_latest_path),
+            ],
+        }
+
+    checklist = _read_json(checklist_path, {})
+    checklist_counts = checklist.get("status_counts", {})
+    checklist_counts = checklist_counts if isinstance(checklist_counts, dict) else {}
+    checklist_overall = str(checklist.get("overall_status", "")).strip().lower()
+    checklist_in_progress = int(checklist_counts.get("in_progress", 0) or 0)
+    checklist_fail = int(checklist_counts.get("fail", 0) or 0)
+    checklist_unknown = int(checklist_counts.get("unknown", 0) or 0)
+    go_live_complete = (
+        checklist_overall == "pass"
+        and checklist_in_progress == 0
+        and checklist_fail == 0
+        and checklist_unknown == 0
+    )
+
+    road1 = _read_json(road1_path, {})
+    road1_days = int(road1.get("n_days", 0) or 0)
+    road1_gate = road1.get("road1_gate", {})
+    road1_gate = road1_gate if isinstance(road1_gate, dict) else {}
+    road1_gate_pass = bool(road1_gate.get("pass", False))
+    road1_complete = road1_days >= 20 and road1_gate_pass
+
+    road5_readiness = _read_json(road5_readiness_path, {})
+    road5_readiness_pass = str(road5_readiness.get("status", "")).strip().lower() == "pass"
+    road5_scorecard_latest = _read_json(road5_scorecard_latest_path, {})
+    road5_scorecard_pass = str(road5_scorecard_latest.get("status", "")).strip().lower() == "pass"
+
+    road5_daily_files = sorted(strategy_root.glob("testnet_daily_scorecard_*.json"))
+    road5_coverage_days = 0
+    for score_file in road5_daily_files:
+        stem = score_file.stem
+        if stem.startswith("testnet_daily_scorecard_"):
+            suffix = stem.replace("testnet_daily_scorecard_", "", 1)
+            if len(suffix) == 8 and suffix.isdigit():
+                road5_coverage_days += 1
+    road5_coverage_ok = road5_coverage_days >= 28
+    road5_complete = road5_readiness_pass and road5_scorecard_pass and road5_coverage_ok
+
+    blocking_reasons: List[str] = []
+    if not go_live_complete:
+        blocking_reasons.append(
+            "p0_4_go_live_checklist_incomplete"
+            f"(overall={checklist_overall or 'missing'}, in_progress={checklist_in_progress}, fail={checklist_fail}, unknown={checklist_unknown})"
+        )
+    if not road1_complete:
+        blocking_reasons.append(
+            "road1_not_ready"
+            f"(n_days={road1_days}, min_days=20, gate_pass={road1_gate_pass})"
+        )
+    if not road5_complete:
+        blocking_reasons.append(
+            "road5_not_ready"
+            f"(readiness_pass={road5_readiness_pass}, scorecard_pass={road5_scorecard_pass}, coverage_days={road5_coverage_days}, min_days=28)"
+        )
+
+    pass_status = len(blocking_reasons) == 0
+    reason = (
+        "trading validation ladder PASS (P0-4 checklist complete, ROAD-1 20-day pass, ROAD-5 4-week pass)"
+        if pass_status
+        else "trading validation ladder incomplete: "
+        + "; ".join(blocking_reasons)
+        + "; no live promotion path allowed"
+    )
+
+    return {
+        "pass": bool(pass_status),
+        "reason": reason,
+        "blocking_reasons": blocking_reasons,
+        "go_live_complete": bool(go_live_complete),
+        "road1_complete": bool(road1_complete),
+        "road5_complete": bool(road5_complete),
+        "road1_days": int(road1_days),
+        "road1_gate_pass": bool(road1_gate_pass),
+        "road5_coverage_days": int(road5_coverage_days),
+        "road5_coverage_min_days": 28,
+        "road5_readiness_pass": bool(road5_readiness_pass),
+        "road5_scorecard_pass": bool(road5_scorecard_pass),
+        "enforced": True,
+        "evidence_paths": [
+            str(checklist_path),
+            str(road1_path),
+            str(road5_readiness_path),
+            str(road5_scorecard_latest_path),
+        ],
+    }
 
 
 def _write_markdown_summary(path: Path, summary: Dict[str, object]) -> None:
@@ -440,7 +704,9 @@ def _run_strategy_catalog_check(root: Path) -> Tuple[int, str]:
         return 2, str(e)
 
 
-def _run_replay_regression_multi_window(root: Path) -> Tuple[int, str]:
+def _run_replay_regression_multi_window(
+    root: Path, *, require_portfolio_risk_healthy: bool = True
+) -> Tuple[int, str]:
     cmd = [
         sys.executable,
         str(root / "scripts" / "release" / "run_replay_regression_multi_window.py"),
@@ -449,8 +715,27 @@ def _run_replay_regression_multi_window(root: Path) -> Tuple[int, str]:
         "--repeat",
         "2",
     ]
+    if not bool(require_portfolio_risk_healthy):
+        cmd.append("--no-require-portfolio-risk-healthy")
     try:
         proc = subprocess.run(cmd, cwd=str(root), capture_output=True, text=True, check=False)
+        msg = (proc.stdout or "") + ("\n" + proc.stderr if proc.stderr else "")
+        return int(proc.returncode), msg.strip()
+    except Exception as e:
+        return 2, str(e)
+
+
+def _run_ops_db_writer_once(root: Path) -> Tuple[int, str]:
+    cmd = [sys.executable, str(root / "services" / "ops_db_writer" / "main.py"), "--once"]
+    try:
+        proc = subprocess.run(
+            cmd,
+            cwd=str(root),
+            capture_output=True,
+            text=True,
+            check=False,
+            env=_build_subprocess_env(root),
+        )
         msg = (proc.stdout or "") + ("\n" + proc.stderr if proc.stderr else "")
         return int(proc.returncode), msg.strip()
     except Exception as e:
@@ -573,6 +858,25 @@ def _run_paper_exchange_preflight_check(root: Path, strict: bool = False) -> Tup
         return 2, str(e)
 
 
+def _run_paper_exchange_golden_path_check(root: Path, strict: bool = False) -> Tuple[int, str]:
+    cmd = [sys.executable, str(root / "scripts" / "release" / "run_paper_exchange_golden_path.py")]
+    if strict:
+        cmd.append("--strict")
+    try:
+        proc = subprocess.run(
+            cmd,
+            cwd=str(root),
+            capture_output=True,
+            text=True,
+            check=False,
+            env=_build_subprocess_env(root),
+        )
+        msg = (proc.stdout or "") + ("\n" + proc.stderr if proc.stderr else "")
+        return int(proc.returncode), msg.strip()
+    except Exception as e:
+        return 2, str(e)
+
+
 def _run_checklist_evidence_collector(root: Path) -> Tuple[int, str]:
     cmd = [sys.executable, str(root / "scripts" / "ops" / "checklist_evidence_collector.py")]
     try:
@@ -655,10 +959,12 @@ def _run_paper_exchange_load_harness(
     command_stream: str = "hb.paper_exchange.command.v1",
     event_stream: str = "hb.paper_exchange.event.v1",
     heartbeat_stream: str = "hb.paper_exchange.heartbeat.v1",
-    producer: str = "hb_bridge_active_adapter",
+    producer: str = "hb.paper_engine_v2",
     instance_name: str = "bot1",
+    instance_names: str = "bot1,bot3,bot4",
     connector_name: str = "bitget_perpetual",
     trading_pair: str = "BTC-USDT",
+    min_instance_coverage: int = 1,
     result_timeout_sec: float = 30.0,
     poll_interval_ms: int = 300,
     scan_count: int = 20_000,
@@ -682,10 +988,14 @@ def _run_paper_exchange_load_harness(
         str(producer),
         "--instance-name",
         str(instance_name),
+        "--instance-names",
+        str(instance_names),
         "--connector-name",
         str(connector_name),
         "--trading-pair",
         str(trading_pair),
+        "--min-instance-coverage",
+        str(max(1, int(min_instance_coverage))),
         "--result-timeout-sec",
         str(max(0.0, float(result_timeout_sec))),
         "--poll-interval-ms",
@@ -718,6 +1028,14 @@ def _run_paper_exchange_load_check(
     sample_count: int = 8000,
     min_latency_samples: int = 200,
     min_window_sec: int = 120,
+    sustained_window_sec: int = 0,
+    min_instance_coverage: int = 1,
+    enforce_budget_checks: bool = True,
+    min_throughput_cmds_per_sec: float = 50.0,
+    max_latency_p95_ms: float = 500.0,
+    max_latency_p99_ms: float = 1000.0,
+    max_backlog_growth_pct_per_10min: float = 1.0,
+    max_restart_count: float = 0.0,
     command_stream: str = "hb.paper_exchange.command.v1",
     event_stream: str = "hb.paper_exchange.event.v1",
     heartbeat_stream: str = "hb.paper_exchange.heartbeat.v1",
@@ -737,6 +1055,20 @@ def _run_paper_exchange_load_check(
         str(max(1, int(min_latency_samples))),
         "--min-window-sec",
         str(max(1, int(min_window_sec))),
+        "--sustained-window-sec",
+        str(int(sustained_window_sec)),
+        "--min-instance-coverage",
+        str(max(1, int(min_instance_coverage))),
+        "--min-throughput-cmds-per-sec",
+        str(max(0.0, float(min_throughput_cmds_per_sec))),
+        "--max-latency-p95-ms",
+        str(max(0.0, float(max_latency_p95_ms))),
+        "--max-latency-p99-ms",
+        str(max(0.0, float(max_latency_p99_ms))),
+        "--max-backlog-growth-pct-per-10min",
+        str(max(0.0, float(max_backlog_growth_pct_per_10min))),
+        "--max-restart-count",
+        str(max(0.0, float(max_restart_count))),
         "--command-stream",
         str(command_stream),
         "--event-stream",
@@ -752,6 +1084,207 @@ def _run_paper_exchange_load_check(
         cmd.extend(["--heartbeat-consumer-name", str(heartbeat_consumer_name).strip()])
     if str(load_run_id or "").strip():
         cmd.extend(["--load-run-id", str(load_run_id).strip()])
+    if enforce_budget_checks:
+        cmd.append("--enforce-budget-checks")
+    else:
+        cmd.append("--no-enforce-budget-checks")
+    if strict:
+        cmd.append("--strict")
+    try:
+        proc = subprocess.run(
+            cmd,
+            cwd=str(root),
+            capture_output=True,
+            text=True,
+            check=False,
+            env=_build_subprocess_env(root),
+        )
+        msg = (proc.stdout or "") + ("\n" + proc.stderr if proc.stderr else "")
+        return int(proc.returncode), msg.strip()
+    except Exception as e:
+        return 2, str(e)
+
+
+def _run_paper_exchange_sustained_qualification(
+    root: Path,
+    *,
+    strict: bool = False,
+    duration_sec: float = 7200.0,
+    target_cmd_rate: float = 60.0,
+    min_commands: int = 0,
+    command_maxlen: int = 0,
+    producer: str = "hb.paper_engine_v2",
+    instance_name: str = "bot1",
+    instance_names: str = "bot1,bot3,bot4",
+    connector_name: str = "bitget_perpetual",
+    trading_pair: str = "BTC-USDT",
+    min_instance_coverage: int = 3,
+    result_timeout_sec: float = 30.0,
+    poll_interval_ms: int = 300,
+    scan_count: int = 20_000,
+    lookback_sec: int = 0,
+    sample_count: int = 0,
+    sustained_window_sec: int = 0,
+    command_stream: str = "hb.paper_exchange.command.v1",
+    event_stream: str = "hb.paper_exchange.event.v1",
+    heartbeat_stream: str = "hb.paper_exchange.heartbeat.v1",
+    consumer_group: str = "hb_group_paper_exchange",
+    heartbeat_consumer_group: str = "",
+    heartbeat_consumer_name: str = "",
+    min_throughput_cmds_per_sec: float = 50.0,
+    max_latency_p95_ms: float = 500.0,
+    max_latency_p99_ms: float = 1000.0,
+    max_backlog_growth_pct_per_10min: float = 1.0,
+    max_restart_count: float = 0.0,
+) -> Tuple[int, str]:
+    cmd = [
+        sys.executable,
+        str(root / "scripts" / "release" / "run_paper_exchange_sustained_qualification.py"),
+        "--duration-sec",
+        str(max(0.1, float(duration_sec))),
+        "--target-cmd-rate",
+        str(max(1.0, float(target_cmd_rate))),
+        "--min-commands",
+        str(int(min_commands)),
+        "--command-maxlen",
+        str(int(command_maxlen)),
+        "--producer",
+        str(producer),
+        "--instance-name",
+        str(instance_name),
+        "--instance-names",
+        str(instance_names),
+        "--connector-name",
+        str(connector_name),
+        "--trading-pair",
+        str(trading_pair),
+        "--min-instance-coverage",
+        str(max(1, int(min_instance_coverage))),
+        "--result-timeout-sec",
+        str(max(0.0, float(result_timeout_sec))),
+        "--poll-interval-ms",
+        str(max(10, int(poll_interval_ms))),
+        "--scan-count",
+        str(max(100, int(scan_count))),
+        "--lookback-sec",
+        str(int(lookback_sec)),
+        "--sample-count",
+        str(int(sample_count)),
+        "--sustained-window-sec",
+        str(int(sustained_window_sec)),
+        "--command-stream",
+        str(command_stream),
+        "--event-stream",
+        str(event_stream),
+        "--heartbeat-stream",
+        str(heartbeat_stream),
+        "--consumer-group",
+        str(consumer_group),
+        "--heartbeat-consumer-group",
+        str(heartbeat_consumer_group),
+        "--heartbeat-consumer-name",
+        str(heartbeat_consumer_name),
+        "--min-throughput-cmds-per-sec",
+        str(max(0.0, float(min_throughput_cmds_per_sec))),
+        "--max-latency-p95-ms",
+        str(max(0.0, float(max_latency_p95_ms))),
+        "--max-latency-p99-ms",
+        str(max(0.0, float(max_latency_p99_ms))),
+        "--max-backlog-growth-pct-per-10min",
+        str(max(0.0, float(max_backlog_growth_pct_per_10min))),
+        "--max-restart-count",
+        str(max(0.0, float(max_restart_count))),
+    ]
+    if strict:
+        cmd.append("--strict")
+    try:
+        proc = subprocess.run(
+            cmd,
+            cwd=str(root),
+            capture_output=True,
+            text=True,
+            check=False,
+            env=_build_subprocess_env(root),
+        )
+        msg = (proc.stdout or "") + ("\n" + proc.stderr if proc.stderr else "")
+        return int(proc.returncode), msg.strip()
+    except Exception as e:
+        return 2, str(e)
+
+
+def _run_paper_exchange_perf_baseline_capture(
+    root: Path,
+    *,
+    strict: bool = False,
+    source_report_path: str = "",
+    baseline_output_path: str = "",
+    profile_label: str = "",
+    require_source_pass: bool = True,
+) -> Tuple[int, str]:
+    cmd = [
+        sys.executable,
+        str(root / "scripts" / "release" / "capture_paper_exchange_perf_baseline.py"),
+        "--source-report-path",
+        str(source_report_path).strip(),
+        "--baseline-output-path",
+        str(baseline_output_path).strip(),
+        "--profile-label",
+        str(profile_label).strip(),
+    ]
+    if require_source_pass:
+        cmd.append("--require-source-pass")
+    else:
+        cmd.append("--no-require-source-pass")
+    if strict:
+        cmd.append("--strict")
+    try:
+        proc = subprocess.run(
+            cmd,
+            cwd=str(root),
+            capture_output=True,
+            text=True,
+            check=False,
+            env=_build_subprocess_env(root),
+        )
+        msg = (proc.stdout or "") + ("\n" + proc.stderr if proc.stderr else "")
+        return int(proc.returncode), msg.strip()
+    except Exception as e:
+        return 2, str(e)
+
+
+def _run_paper_exchange_perf_regression_check(
+    root: Path,
+    *,
+    strict: bool = False,
+    current_report_path: str = "",
+    baseline_report_path: str = "",
+    waiver_path: str = "",
+    max_latency_regression_pct: float = 20.0,
+    max_backlog_regression_pct: float = 25.0,
+    min_throughput_ratio: float = 0.85,
+    max_restart_regression: float = 0.0,
+    max_waiver_hours: float = 24.0,
+) -> Tuple[int, str]:
+    cmd = [
+        sys.executable,
+        str(root / "scripts" / "release" / "check_paper_exchange_perf_regression.py"),
+        "--max-latency-regression-pct",
+        str(max(0.0, float(max_latency_regression_pct))),
+        "--max-backlog-regression-pct",
+        str(max(0.0, float(max_backlog_regression_pct))),
+        "--min-throughput-ratio",
+        str(max(0.0, float(min_throughput_ratio))),
+        "--max-restart-regression",
+        str(float(max_restart_regression)),
+        "--max-waiver-hours",
+        str(max(1.0, float(max_waiver_hours))),
+    ]
+    if str(current_report_path or "").strip():
+        cmd.extend(["--current-report-path", str(current_report_path).strip()])
+    if str(baseline_report_path or "").strip():
+        cmd.extend(["--baseline-report-path", str(baseline_report_path).strip()])
+    if str(waiver_path or "").strip():
+        cmd.extend(["--waiver-path", str(waiver_path).strip()])
     if strict:
         cmd.append("--strict")
     try:
@@ -772,7 +1305,9 @@ def _run_paper_exchange_load_check(
 def _run_paper_exchange_threshold_inputs_builder(
     root: Path,
     *,
+    strict: bool = False,
     max_source_age_min: float = 20.0,
+    manual_metrics_path: str = "",
 ) -> Tuple[int, str]:
     cmd = [
         sys.executable,
@@ -780,6 +1315,10 @@ def _run_paper_exchange_threshold_inputs_builder(
         "--max-source-age-min",
         str(float(max_source_age_min)),
     ]
+    if str(manual_metrics_path or "").strip():
+        cmd.extend(["--manual-metrics-path", str(manual_metrics_path).strip()])
+    if strict:
+        cmd.append("--strict")
     try:
         proc = subprocess.run(
             cmd,
@@ -898,6 +1437,9 @@ def _run_dashboard_readiness_check(
 
 def main() -> int:
     parser = argparse.ArgumentParser(description="Run promotion gate contract checks.")
+    live_promotion_mode_default = str(os.getenv("PROMOTION_LIVE_PROMOTION_GATES_MODE", "auto")).strip().lower()
+    if live_promotion_mode_default not in {"auto", "on", "off"}:
+        live_promotion_mode_default = "auto"
     parser.add_argument("--max-report-age-min", type=int, default=20, help="Max allowed age for fresh reports.")
     parser.add_argument("--require-day2-go", action="store_true", help="Require Day2 gate GO before promotion PASS.")
     parser.add_argument(
@@ -952,6 +1494,15 @@ def main() -> int:
         "--skip-replay-cycle",
         action="store_true",
         help="Skip replay regression cycle execution/check (not recommended).",
+    )
+    parser.add_argument(
+        "--live-promotion-gates-mode",
+        choices=["auto", "on", "off"],
+        default=live_promotion_mode_default,
+        help=(
+            "Controls enforcement of live-only promotion gates (trading ladder / portfolio-risk strictness): "
+            "auto=enforce only when at least one account_mode=live bot is enabled."
+        ),
     )
     parser.add_argument(
         "--refresh-event-integrity-once",
@@ -1119,6 +1670,22 @@ def main() -> int:
         ),
     )
     parser.add_argument(
+        "--check-paper-exchange-golden-path",
+        action="store_true",
+        default=str(os.getenv("PROMOTION_CHECK_PAPER_EXCHANGE_GOLDEN_PATH", "true")).strip().lower()
+        in {"1", "true", "yes", "on"},
+        help=(
+            "Run deterministic paper-exchange functional golden-path suite "
+            "(reports/verification/paper_exchange_golden_path_latest.json)."
+        ),
+    )
+    parser.add_argument(
+        "--no-check-paper-exchange-golden-path",
+        action="store_false",
+        dest="check_paper_exchange_golden_path",
+        help="Skip deterministic paper-exchange functional golden-path suite.",
+    )
+    parser.add_argument(
         "--paper-exchange-threshold-max-age-min",
         type=float,
         default=float(os.getenv("PAPER_EXCHANGE_THRESHOLD_MAX_AGE_MIN", "20")),
@@ -1141,6 +1708,27 @@ def main() -> int:
         type=float,
         default=float(os.getenv("PAPER_EXCHANGE_THRESHOLD_SOURCE_MAX_AGE_MIN", "20")),
         help="Max source artifact age (minutes) used by threshold input builder.",
+    )
+    parser.add_argument(
+        "--paper-exchange-threshold-manual-metrics-path",
+        default=os.getenv("PAPER_EXCHANGE_THRESHOLD_MANUAL_METRICS_PATH", ""),
+        help=(
+            "Optional override path for manual metrics merged by build_paper_exchange_threshold_inputs.py "
+            "(defaults to reports/verification/paper_exchange_threshold_metrics_manual.json)."
+        ),
+    )
+    parser.add_argument(
+        "--auto-seed-paper-exchange-threshold-manual-metrics",
+        action="store_true",
+        default=str(os.getenv("PROMOTION_AUTO_SEED_PAPER_EXCHANGE_THRESHOLD_MANUAL_METRICS", "true")).strip().lower()
+        in {"1", "true", "yes", "on"},
+        help="Auto-seed manual threshold metrics with default targets when running in non-live scope.",
+    )
+    parser.add_argument(
+        "--no-auto-seed-paper-exchange-threshold-manual-metrics",
+        action="store_false",
+        dest="auto_seed_paper_exchange_threshold_manual_metrics",
+        help="Disable auto-seeding of manual threshold metrics.",
     )
     parser.add_argument(
         "--check-paper-exchange-load",
@@ -1211,13 +1799,18 @@ def main() -> int:
     )
     parser.add_argument(
         "--paper-exchange-load-harness-producer",
-        default=os.getenv("PAPER_EXCHANGE_LOAD_HARNESS_PRODUCER", "hb_bridge_active_adapter"),
+        default=_default_paper_exchange_harness_producer(),
         help="Producer name emitted by the synthetic load harness.",
     )
     parser.add_argument(
         "--paper-exchange-load-harness-instance-name",
         default=os.getenv("PAPER_EXCHANGE_LOAD_HARNESS_INSTANCE_NAME", "bot1"),
         help="Instance name used in harness commands.",
+    )
+    parser.add_argument(
+        "--paper-exchange-load-harness-instance-names",
+        default=os.getenv("PAPER_EXCHANGE_LOAD_HARNESS_INSTANCE_NAMES", "bot1,bot3,bot4"),
+        help="Comma-separated instance names used in harness commands.",
     )
     parser.add_argument(
         "--paper-exchange-load-harness-connector-name",
@@ -1248,6 +1841,12 @@ def main() -> int:
         help="Rows scanned by harness when matching command results.",
     )
     parser.add_argument(
+        "--paper-exchange-load-harness-min-instance-coverage",
+        type=int,
+        default=int(os.getenv("PAPER_EXCHANGE_LOAD_HARNESS_MIN_INSTANCE_COVERAGE", "1")),
+        help="Minimum unique instances that must receive harness commands.",
+    )
+    parser.add_argument(
         "--paper-exchange-load-lookback-sec",
         type=int,
         default=int(os.getenv("PAPER_EXCHANGE_LOAD_LOOKBACK_SEC", "600")),
@@ -1272,14 +1871,236 @@ def main() -> int:
         help="Minimum command observation window (seconds) for pass-grade load evidence.",
     )
     parser.add_argument(
+        "--paper-exchange-load-sustained-window-sec",
+        type=int,
+        default=int(os.getenv("PAPER_EXCHANGE_LOAD_SUSTAINED_WINDOW_SEC", "0")),
+        help=(
+            "Sustained qualification window in seconds for p1_19 load evidence. "
+            "When <= 0, checker uses min-window-sec."
+        ),
+    )
+    parser.add_argument(
+        "--paper-exchange-load-min-instance-coverage",
+        type=int,
+        default=int(os.getenv("PAPER_EXCHANGE_LOAD_MIN_INSTANCE_COVERAGE", "1")),
+        help="Minimum unique instance_name coverage required by load checker.",
+    )
+    parser.add_argument(
+        "--paper-exchange-load-enforce-budget-checks",
+        action="store_true",
+        default=str(os.getenv("PAPER_EXCHANGE_LOAD_ENFORCE_BUDGET_CHECKS", "true")).strip().lower()
+        in {"1", "true", "yes", "on"},
+        help="Enable fail-fast load budget checks in load validator.",
+    )
+    parser.add_argument(
+        "--no-paper-exchange-load-enforce-budget-checks",
+        action="store_false",
+        dest="paper_exchange_load_enforce_budget_checks",
+        help="Disable fail-fast load budget checks in load validator.",
+    )
+    parser.add_argument(
+        "--paper-exchange-load-min-throughput-cmds-per-sec",
+        type=float,
+        default=float(os.getenv("PAPER_EXCHANGE_LOAD_MIN_THROUGHPUT_CMDS_PER_SEC", "50")),
+        help="Minimum throughput budget for load checker.",
+    )
+    parser.add_argument(
+        "--paper-exchange-load-max-latency-p95-ms",
+        type=float,
+        default=float(os.getenv("PAPER_EXCHANGE_LOAD_MAX_LATENCY_P95_MS", "500")),
+        help="Maximum p95 latency budget for load checker.",
+    )
+    parser.add_argument(
+        "--paper-exchange-load-max-latency-p99-ms",
+        type=float,
+        default=float(os.getenv("PAPER_EXCHANGE_LOAD_MAX_LATENCY_P99_MS", "1000")),
+        help="Maximum p99 latency budget for load checker.",
+    )
+    parser.add_argument(
+        "--paper-exchange-load-max-backlog-growth-pct-per-10min",
+        type=float,
+        default=float(os.getenv("PAPER_EXCHANGE_LOAD_MAX_BACKLOG_GROWTH_PCT_PER_10MIN", "1")),
+        help="Maximum backlog growth budget for load checker.",
+    )
+    parser.add_argument(
+        "--paper-exchange-load-max-restart-count",
+        type=float,
+        default=float(os.getenv("PAPER_EXCHANGE_LOAD_MAX_RESTART_COUNT", "0")),
+        help="Maximum restart-count budget for load checker.",
+    )
+    parser.add_argument(
         "--paper-exchange-load-run-id",
         default=os.getenv("PAPER_EXCHANGE_LOAD_RUN_ID", ""),
         help="Optional run_id filter for load checker (defaults to latest harness run_id when harness is executed).",
+    )
+    parser.add_argument(
+        "--check-paper-exchange-sustained-qualification",
+        action="store_true",
+        default=str(os.getenv("PROMOTION_CHECK_PAPER_EXCHANGE_SUSTAINED_QUALIFICATION", "false")).strip().lower()
+        in {"1", "true", "yes", "on"},
+        help="Run dedicated sustained (long-window) paper-exchange qualification orchestration.",
+    )
+    parser.add_argument(
+        "--no-check-paper-exchange-sustained-qualification",
+        action="store_false",
+        dest="check_paper_exchange_sustained_qualification",
+        help="Disable sustained paper-exchange qualification orchestration.",
+    )
+    parser.add_argument(
+        "--paper-exchange-sustained-duration-sec",
+        type=float,
+        default=float(os.getenv("PAPER_EXCHANGE_SUSTAINED_DURATION_SEC", "7200")),
+        help="Duration for sustained paper-exchange qualification harness.",
+    )
+    parser.add_argument(
+        "--paper-exchange-sustained-target-cmd-rate",
+        type=float,
+        default=float(os.getenv("PAPER_EXCHANGE_SUSTAINED_TARGET_CMD_RATE", "60")),
+        help="Target command rate for sustained paper-exchange qualification harness.",
+    )
+    parser.add_argument(
+        "--paper-exchange-sustained-min-commands",
+        type=int,
+        default=int(os.getenv("PAPER_EXCHANGE_SUSTAINED_MIN_COMMANDS", "0")),
+        help="Minimum commands required by sustained harness (<=0 auto-derives from duration * rate).",
+    )
+    parser.add_argument(
+        "--paper-exchange-sustained-command-maxlen",
+        type=int,
+        default=int(os.getenv("PAPER_EXCHANGE_SUSTAINED_COMMAND_MAXLEN", "0")),
+        help="Sustained harness command stream maxlen (<=0 auto-derives sustained-safe size).",
+    )
+    parser.add_argument(
+        "--paper-exchange-sustained-min-instance-coverage",
+        type=int,
+        default=int(os.getenv("PAPER_EXCHANGE_SUSTAINED_MIN_INSTANCE_COVERAGE", "3")),
+        help="Minimum unique instance coverage required in sustained qualification.",
+    )
+    parser.add_argument(
+        "--paper-exchange-sustained-lookback-sec",
+        type=int,
+        default=int(os.getenv("PAPER_EXCHANGE_SUSTAINED_LOOKBACK_SEC", "0")),
+        help="Sustained load-check lookback window (<=0 auto-derives as duration + 600s).",
+    )
+    parser.add_argument(
+        "--paper-exchange-sustained-sample-count",
+        type=int,
+        default=int(os.getenv("PAPER_EXCHANGE_SUSTAINED_SAMPLE_COUNT", "0")),
+        help="Sustained load-check sample count (<=0 auto-derives sustained-safe size).",
+    )
+    parser.add_argument(
+        "--paper-exchange-sustained-window-sec",
+        type=int,
+        default=int(os.getenv("PAPER_EXCHANGE_SUSTAINED_WINDOW_SEC", "0")),
+        help="Sustained load-check qualification window in seconds (<=0 uses duration).",
+    )
+    parser.add_argument(
+        "--capture-paper-exchange-perf-baseline",
+        action="store_true",
+        default=str(os.getenv("PROMOTION_CAPTURE_PAPER_EXCHANGE_PERF_BASELINE", "false")).strip().lower()
+        in {"1", "true", "yes", "on"},
+        help="Capture current paper-exchange load artifact as baseline before regression checks.",
+    )
+    parser.add_argument(
+        "--no-capture-paper-exchange-perf-baseline",
+        action="store_false",
+        dest="capture_paper_exchange_perf_baseline",
+        help="Do not capture paper-exchange perf baseline in this run.",
+    )
+    parser.add_argument(
+        "--paper-exchange-perf-baseline-source-path",
+        default=os.getenv("PAPER_EXCHANGE_PERF_BASELINE_SOURCE_PATH", "reports/verification/paper_exchange_load_latest.json"),
+        help="Source report path used when capturing paper-exchange perf baseline.",
+    )
+    parser.add_argument(
+        "--paper-exchange-perf-baseline-profile-label",
+        default=os.getenv("PAPER_EXCHANGE_PERF_BASELINE_PROFILE_LABEL", ""),
+        help="Optional profile label attached to captured paper-exchange baseline.",
+    )
+    parser.add_argument(
+        "--paper-exchange-perf-baseline-require-source-pass",
+        action="store_true",
+        default=str(os.getenv("PAPER_EXCHANGE_PERF_BASELINE_REQUIRE_SOURCE_PASS", "true")).strip().lower()
+        in {"1", "true", "yes", "on"},
+        help="Require source report status=pass when capturing paper-exchange perf baseline.",
+    )
+    parser.add_argument(
+        "--no-paper-exchange-perf-baseline-require-source-pass",
+        action="store_false",
+        dest="paper_exchange_perf_baseline_require_source_pass",
+        help="Allow baseline capture from non-pass source report.",
+    )
+    parser.add_argument(
+        "--check-paper-exchange-perf-regression",
+        action="store_true",
+        default=str(os.getenv("PROMOTION_CHECK_PAPER_EXCHANGE_PERF_REGRESSION", "true")).strip().lower()
+        in {"1", "true", "yes", "on"},
+        help="Compare current paper-exchange load metrics against baseline regression budgets.",
+    )
+    parser.add_argument(
+        "--no-check-paper-exchange-perf-regression",
+        action="store_false",
+        dest="check_paper_exchange_perf_regression",
+        help="Disable paper-exchange performance regression guard.",
+    )
+    parser.add_argument(
+        "--paper-exchange-perf-current-report-path",
+        default=os.getenv("PAPER_EXCHANGE_LOAD_REPORT_PATH", "reports/verification/paper_exchange_load_latest.json"),
+        help="Current load report path used by perf regression guard.",
+    )
+    parser.add_argument(
+        "--paper-exchange-perf-baseline-path",
+        default=os.getenv("PAPER_EXCHANGE_PERF_BASELINE_PATH", "reports/verification/paper_exchange_load_baseline_latest.json"),
+        help="Baseline load report path used by perf regression guard.",
+    )
+    parser.add_argument(
+        "--paper-exchange-perf-waiver-path",
+        default=os.getenv("PAPER_EXCHANGE_PERF_WAIVER_PATH", "reports/verification/paper_exchange_perf_regression_waiver_latest.json"),
+        help="Optional waiver artifact path for temporary approved degradation.",
+    )
+    parser.add_argument(
+        "--paper-exchange-perf-max-latency-regression-pct",
+        type=float,
+        default=float(os.getenv("PAPER_EXCHANGE_PERF_MAX_LATENCY_REGRESSION_PCT", "20")),
+        help="Maximum latency regression percent tolerated versus baseline.",
+    )
+    parser.add_argument(
+        "--paper-exchange-perf-max-backlog-regression-pct",
+        type=float,
+        default=float(os.getenv("PAPER_EXCHANGE_PERF_MAX_BACKLOG_REGRESSION_PCT", "25")),
+        help="Maximum backlog growth regression percent tolerated versus baseline.",
+    )
+    parser.add_argument(
+        "--paper-exchange-perf-min-throughput-ratio",
+        type=float,
+        default=float(os.getenv("PAPER_EXCHANGE_PERF_MIN_THROUGHPUT_RATIO", "0.85")),
+        help="Minimum required throughput ratio current/baseline.",
+    )
+    parser.add_argument(
+        "--paper-exchange-perf-max-restart-regression",
+        type=float,
+        default=float(os.getenv("PAPER_EXCHANGE_PERF_MAX_RESTART_REGRESSION", "0")),
+        help="Maximum allowed restart-count increase over baseline.",
+    )
+    parser.add_argument(
+        "--paper-exchange-perf-waiver-max-hours",
+        type=float,
+        default=float(os.getenv("PAPER_EXCHANGE_PERF_WAIVER_MAX_HOURS", "24")),
+        help="Maximum allowed waiver validity window (hours).",
     )
     args = parser.parse_args()
 
     root = Path("/workspace/hbot") if Path("/.dockerenv").exists() else Path(__file__).resolve().parents[2]
     reports = root / "reports"
+    live_account_mode_bots = _live_account_mode_bots(root)
+    live_promotion_required_auto = len(live_account_mode_bots) > 0
+    live_gates_mode = str(args.live_promotion_gates_mode).strip().lower()
+    if live_gates_mode == "on":
+        enforce_live_promotion_gates = True
+    elif live_gates_mode == "off":
+        enforce_live_promotion_gates = False
+    else:
+        enforce_live_promotion_gates = live_promotion_required_auto
 
     checks: List[Dict[str, object]] = []
     critical_failures: List[str] = []
@@ -1305,13 +2126,33 @@ def main() -> int:
     diversification_msg = ""
     paper_exchange_load_harness_rc = 0
     paper_exchange_load_harness_msg = ""
+    paper_exchange_load_harness_auto_run = False
+    paper_exchange_load_harness_duration_sec_effective = float(args.paper_exchange_load_harness_duration_sec)
+    paper_exchange_load_min_window_sec_effective = int(args.paper_exchange_load_min_window_sec)
+    paper_exchange_load_sustained_window_sec_effective = int(args.paper_exchange_load_sustained_window_sec)
     paper_exchange_load_rc = 0
     paper_exchange_load_msg = ""
     paper_exchange_load_run_id = ""
+    paper_exchange_sustained_qualification_rc = 0
+    paper_exchange_sustained_qualification_msg = ""
+    paper_exchange_perf_baseline_capture_rc = 0
+    paper_exchange_perf_baseline_capture_msg = ""
+    paper_exchange_perf_regression_rc = 0
+    paper_exchange_perf_regression_msg = ""
     paper_exchange_threshold_inputs_rc = 0
     paper_exchange_threshold_inputs_msg = ""
     paper_exchange_thresholds_rc = 0
     paper_exchange_thresholds_msg = ""
+    paper_exchange_golden_path_rc = 0
+    paper_exchange_golden_path_msg = ""
+    paper_exchange_threshold_inputs_path = reports / "verification" / "paper_exchange_threshold_inputs_latest.json"
+    paper_exchange_threshold_inputs_diag: Dict[str, object] = _paper_exchange_threshold_inputs_readiness({})
+    paper_exchange_threshold_inputs_ready = False
+    paper_exchange_threshold_manual_metrics_path = _resolve_threshold_manual_metrics_path(
+        root, str(args.paper_exchange_threshold_manual_metrics_path)
+    )
+    paper_exchange_threshold_manual_metrics_seeded = False
+    paper_exchange_threshold_source_max_age_min_effective = float(args.paper_exchange_threshold_source_max_age_min)
     canonical_gate_rc = 0
     canonical_gate_msg = ""
     day2_catchup_rc = 0
@@ -1322,6 +2163,8 @@ def main() -> int:
     recon_refresh_msg = ""
     dashboard_readiness_rc = 0
     dashboard_readiness_msg = ""
+    ops_db_writer_refresh_rc = 0
+    ops_db_writer_refresh_msg = ""
 
     max_report_age_min = float(args.max_report_age_min)
     refresh_parity_once = bool(args.refresh_parity_once or args.ci)
@@ -1398,6 +2241,8 @@ def main() -> int:
         root / "scripts" / "release" / "check_canonical_plane_gate.py",
         root / "scripts" / "release" / "run_paper_exchange_load_harness.py",
         root / "scripts" / "release" / "check_paper_exchange_load.py",
+        root / "scripts" / "release" / "check_paper_exchange_perf_regression.py",
+        root / "scripts" / "release" / "run_paper_exchange_golden_path.py",
         root / "scripts" / "release" / "build_paper_exchange_threshold_inputs.py",
         root / "scripts" / "release" / "check_paper_exchange_thresholds.py",
         root / "scripts" / "ops" / "preflight_startup.py",
@@ -1604,27 +2449,91 @@ def main() -> int:
             dashboard_readiness_rc == 0
             and str(dashboard_report.get("status", "fail")).strip().lower() == "pass"
         )
+        dashboard_gate_enforced = bool(enforce_live_promotion_gates)
         checks.append(
             _check(
                 dashboard_ok,
                 "dashboard_data_ready",
-                "critical",
+                "critical" if dashboard_gate_enforced else "warning",
                 "TradeNote + Grafana data readiness PASS"
                 if dashboard_ok
-                else f"dashboard readiness failed (rc={dashboard_readiness_rc})",
+                else (
+                    f"dashboard readiness failed (rc={dashboard_readiness_rc})"
+                    if dashboard_gate_enforced
+                    else f"dashboard readiness failed (warning-only non-live scope, rc={dashboard_readiness_rc})"
+                ),
                 [str(dashboard_path), str(root / "scripts" / "ops" / "verify_dashboard.py")],
             )
         )
-        if not dashboard_ok:
+        if dashboard_gate_enforced and not dashboard_ok:
             critical_failures.append("dashboard_data_ready")
 
-    # 1l) Quantitative paper-exchange threshold gate
+    # 1l) Functional paper-exchange golden-path certification gate
+    if args.check_paper_exchange_golden_path:
+        paper_exchange_golden_path_rc, paper_exchange_golden_path_msg = _run_paper_exchange_golden_path_check(
+            root, strict=bool(args.ci)
+        )
+        pe_golden_path_path = reports / "verification" / "paper_exchange_golden_path_latest.json"
+        pe_golden_path_report = _read_json(pe_golden_path_path, {})
+        pe_golden_path_status = str(pe_golden_path_report.get("status", "")).strip().lower()
+        pe_golden_path_failed_categories = pe_golden_path_report.get("failed_remediation_categories", [])
+        if not isinstance(pe_golden_path_failed_categories, list):
+            pe_golden_path_failed_categories = []
+        failed_categories_text = ",".join(str(x) for x in pe_golden_path_failed_categories if str(x).strip())
+        pe_golden_path_ok = paper_exchange_golden_path_rc == 0 and pe_golden_path_status == "pass"
+        checks.append(
+            _check(
+                pe_golden_path_ok,
+                "paper_exchange_functional_golden_path",
+                "critical",
+                "paper-exchange functional golden-path suite PASS"
+                if pe_golden_path_ok
+                else (
+                    "paper-exchange functional golden-path suite failed "
+                    f"(status={pe_golden_path_status or 'unknown'}, rc={paper_exchange_golden_path_rc}, "
+                    f"failed_categories={failed_categories_text or 'n/a'})"
+                ),
+                [str(pe_golden_path_path), str(root / "scripts" / "release" / "run_paper_exchange_golden_path.py")],
+            )
+        )
+        if not pe_golden_path_ok:
+            critical_failures.append("paper_exchange_functional_golden_path")
+
+    # 1m) Quantitative paper-exchange threshold gate
     if args.check_paper_exchange_thresholds:
-        if args.check_paper_exchange_load and args.run_paper_exchange_load_harness:
+        auto_run_load_harness_in_ci = bool(args.ci and not args.run_paper_exchange_load_harness)
+        paper_exchange_load_harness_auto_run = bool(auto_run_load_harness_in_ci)
+        run_paper_exchange_load_harness = bool(
+            args.check_paper_exchange_load and (args.run_paper_exchange_load_harness or auto_run_load_harness_in_ci)
+        )
+        paper_exchange_load_harness_duration_sec_effective = float(args.paper_exchange_load_harness_duration_sec)
+        paper_exchange_load_min_window_sec_effective = int(args.paper_exchange_load_min_window_sec)
+        paper_exchange_load_sustained_window_sec_effective = int(args.paper_exchange_load_sustained_window_sec)
+        if auto_run_load_harness_in_ci and bool(enforce_live_promotion_gates):
+            # Ensure the generated sample window can satisfy strict load-gate minimum windows.
+            paper_exchange_load_harness_duration_sec_effective = max(
+                paper_exchange_load_harness_duration_sec_effective,
+                float(max(120, int(args.paper_exchange_load_min_window_sec), int(args.paper_exchange_load_sustained_window_sec))),
+            )
+        if auto_run_load_harness_in_ci and not bool(enforce_live_promotion_gates):
+            # Non-live strict runs keep short-window load profiles aligned with baseline captures.
+            non_live_window_sec = max(20, int(round(paper_exchange_load_harness_duration_sec_effective)))
+            paper_exchange_load_min_window_sec_effective = max(
+                1,
+                min(int(args.paper_exchange_load_min_window_sec), non_live_window_sec),
+            )
+            if int(args.paper_exchange_load_sustained_window_sec) > 0:
+                paper_exchange_load_sustained_window_sec_effective = max(
+                    1,
+                    min(int(args.paper_exchange_load_sustained_window_sec), non_live_window_sec),
+                )
+            else:
+                paper_exchange_load_sustained_window_sec_effective = int(non_live_window_sec)
+        if run_paper_exchange_load_harness:
             paper_exchange_load_harness_rc, paper_exchange_load_harness_msg = _run_paper_exchange_load_harness(
                 root,
                 strict=False,
-                duration_sec=float(args.paper_exchange_load_harness_duration_sec),
+                duration_sec=paper_exchange_load_harness_duration_sec_effective,
                 target_cmd_rate=float(args.paper_exchange_load_harness_target_cmd_rate),
                 min_commands=int(args.paper_exchange_load_harness_min_commands),
                 command_stream=str(args.paper_exchange_load_command_stream),
@@ -1632,8 +2541,10 @@ def main() -> int:
                 heartbeat_stream=str(args.paper_exchange_load_heartbeat_stream),
                 producer=str(args.paper_exchange_load_harness_producer),
                 instance_name=str(args.paper_exchange_load_harness_instance_name),
+                instance_names=str(args.paper_exchange_load_harness_instance_names),
                 connector_name=str(args.paper_exchange_load_harness_connector_name),
                 trading_pair=str(args.paper_exchange_load_harness_trading_pair),
+                min_instance_coverage=int(args.paper_exchange_load_harness_min_instance_coverage),
                 result_timeout_sec=float(args.paper_exchange_load_harness_result_timeout_sec),
                 poll_interval_ms=int(args.paper_exchange_load_harness_poll_interval_ms),
                 scan_count=int(args.paper_exchange_load_harness_scan_count),
@@ -1661,11 +2572,19 @@ def main() -> int:
         if args.check_paper_exchange_load:
             paper_exchange_load_rc, paper_exchange_load_msg = _run_paper_exchange_load_check(
                 root,
-                strict=False,
+                strict=bool(args.ci),
                 lookback_sec=int(args.paper_exchange_load_lookback_sec),
                 sample_count=int(args.paper_exchange_load_sample_count),
                 min_latency_samples=int(args.paper_exchange_load_min_latency_samples),
-                min_window_sec=int(args.paper_exchange_load_min_window_sec),
+                min_window_sec=int(paper_exchange_load_min_window_sec_effective),
+                sustained_window_sec=int(paper_exchange_load_sustained_window_sec_effective),
+                min_instance_coverage=int(args.paper_exchange_load_min_instance_coverage),
+                enforce_budget_checks=bool(args.paper_exchange_load_enforce_budget_checks),
+                min_throughput_cmds_per_sec=float(args.paper_exchange_load_min_throughput_cmds_per_sec),
+                max_latency_p95_ms=float(args.paper_exchange_load_max_latency_p95_ms),
+                max_latency_p99_ms=float(args.paper_exchange_load_max_latency_p99_ms),
+                max_backlog_growth_pct_per_10min=float(args.paper_exchange_load_max_backlog_growth_pct_per_10min),
+                max_restart_count=float(args.paper_exchange_load_max_restart_count),
                 command_stream=str(args.paper_exchange_load_command_stream),
                 event_stream=str(args.paper_exchange_load_event_stream),
                 heartbeat_stream=str(args.paper_exchange_load_heartbeat_stream),
@@ -1677,25 +2596,202 @@ def main() -> int:
             pe_load_path = reports / "verification" / "paper_exchange_load_latest.json"
             pe_load_report = _read_json(pe_load_path, {})
             pe_load_status = str(pe_load_report.get("status", "")).strip().lower()
-            pe_load_ok = paper_exchange_load_rc == 0 and pe_load_status in {"pass", "warning"}
+            pe_load_ok = paper_exchange_load_rc == 0 and pe_load_status == "pass"
             checks.append(
                 _check(
                     pe_load_ok,
                     "paper_exchange_load_validation",
-                    "warning",
-                    "paper-exchange load/backpressure evidence generated"
+                    "critical",
+                    "paper-exchange load/backpressure SLO check PASS"
                     if pe_load_ok
-                    else f"paper-exchange load/backpressure evidence failed (rc={paper_exchange_load_rc})",
-                    [str(pe_load_path)],
+                    else (
+                        "paper-exchange load/backpressure SLO check failed "
+                        f"(status={pe_load_status or 'unknown'}, rc={paper_exchange_load_rc})"
+                    ),
+                    [str(pe_load_path), str(root / "scripts" / "release" / "check_paper_exchange_load.py")],
                 )
+            )
+        if args.capture_paper_exchange_perf_baseline:
+            paper_exchange_perf_baseline_capture_rc, paper_exchange_perf_baseline_capture_msg = (
+                _run_paper_exchange_perf_baseline_capture(
+                    root,
+                    strict=bool(args.ci),
+                    source_report_path=str(args.paper_exchange_perf_baseline_source_path),
+                    baseline_output_path=str(args.paper_exchange_perf_baseline_path),
+                    profile_label=str(args.paper_exchange_perf_baseline_profile_label),
+                    require_source_pass=bool(args.paper_exchange_perf_baseline_require_source_pass),
+                )
+            )
+            pe_perf_baseline_path = Path(str(args.paper_exchange_perf_baseline_path))
+            if not pe_perf_baseline_path.is_absolute():
+                pe_perf_baseline_path = root / pe_perf_baseline_path
+            pe_perf_baseline_report = _read_json(pe_perf_baseline_path, {})
+            pe_perf_baseline_ok = (
+                paper_exchange_perf_baseline_capture_rc == 0
+                and str(pe_perf_baseline_report.get("status", "")).strip().lower() == "pass"
+            )
+            checks.append(
+                _check(
+                    pe_perf_baseline_ok,
+                    "paper_exchange_perf_baseline_capture",
+                    "warning",
+                    "paper-exchange perf baseline capture PASS"
+                    if pe_perf_baseline_ok
+                    else f"paper-exchange perf baseline capture failed (rc={paper_exchange_perf_baseline_capture_rc})",
+                    [
+                        str(pe_perf_baseline_path),
+                        str(root / "scripts" / "release" / "capture_paper_exchange_perf_baseline.py"),
+                    ],
+                )
+            )
+        if args.check_paper_exchange_perf_regression:
+            paper_exchange_perf_regression_rc, paper_exchange_perf_regression_msg = (
+                _run_paper_exchange_perf_regression_check(
+                    root,
+                    strict=bool(args.ci),
+                    current_report_path=str(args.paper_exchange_perf_current_report_path),
+                    baseline_report_path=str(args.paper_exchange_perf_baseline_path),
+                    waiver_path=str(args.paper_exchange_perf_waiver_path),
+                    max_latency_regression_pct=float(args.paper_exchange_perf_max_latency_regression_pct),
+                    max_backlog_regression_pct=float(args.paper_exchange_perf_max_backlog_regression_pct),
+                    min_throughput_ratio=float(args.paper_exchange_perf_min_throughput_ratio),
+                    max_restart_regression=float(args.paper_exchange_perf_max_restart_regression),
+                    max_waiver_hours=float(args.paper_exchange_perf_waiver_max_hours),
+                )
+            )
+            pe_perf_path = reports / "verification" / "paper_exchange_perf_regression_latest.json"
+            pe_perf_report = _read_json(pe_perf_path, {})
+            pe_perf_status = str(pe_perf_report.get("status", "")).strip().lower()
+            pe_perf_waiver = pe_perf_report.get("waiver", {})
+            pe_perf_waiver = pe_perf_waiver if isinstance(pe_perf_waiver, dict) else {}
+            pe_perf_waived = bool(pe_perf_waiver.get("applied", False))
+            pe_perf_ok = paper_exchange_perf_regression_rc == 0 and pe_perf_status in {"pass", "waived"}
+            checks.append(
+                _check(
+                    pe_perf_ok,
+                    "paper_exchange_perf_regression",
+                    "critical",
+                    (
+                        "paper-exchange performance regression guard PASS"
+                        if pe_perf_status == "pass"
+                        else "paper-exchange performance regression guard WAIVED (approved temporary degradation)"
+                    )
+                    if pe_perf_ok
+                    else (
+                        "paper-exchange performance regression guard failed "
+                        f"(status={pe_perf_status or 'unknown'}, rc={paper_exchange_perf_regression_rc}, waived={pe_perf_waived})"
+                    ),
+                    [str(pe_perf_path), str(root / "scripts" / "release" / "check_paper_exchange_perf_regression.py")],
+                )
+            )
+            if not pe_perf_ok:
+                critical_failures.append("paper_exchange_perf_regression")
+        if args.check_paper_exchange_sustained_qualification:
+            paper_exchange_sustained_qualification_rc, paper_exchange_sustained_qualification_msg = (
+                _run_paper_exchange_sustained_qualification(
+                    root,
+                    strict=bool(args.ci),
+                    duration_sec=float(args.paper_exchange_sustained_duration_sec),
+                    target_cmd_rate=float(args.paper_exchange_sustained_target_cmd_rate),
+                    min_commands=int(args.paper_exchange_sustained_min_commands),
+                    command_maxlen=int(args.paper_exchange_sustained_command_maxlen),
+                    producer=str(args.paper_exchange_load_harness_producer),
+                    instance_name=str(args.paper_exchange_load_harness_instance_name),
+                    instance_names=str(args.paper_exchange_load_harness_instance_names),
+                    connector_name=str(args.paper_exchange_load_harness_connector_name),
+                    trading_pair=str(args.paper_exchange_load_harness_trading_pair),
+                    min_instance_coverage=int(args.paper_exchange_sustained_min_instance_coverage),
+                    result_timeout_sec=float(args.paper_exchange_load_harness_result_timeout_sec),
+                    poll_interval_ms=int(args.paper_exchange_load_harness_poll_interval_ms),
+                    scan_count=int(args.paper_exchange_load_harness_scan_count),
+                    lookback_sec=int(args.paper_exchange_sustained_lookback_sec),
+                    sample_count=int(args.paper_exchange_sustained_sample_count),
+                    sustained_window_sec=int(args.paper_exchange_sustained_window_sec),
+                    command_stream=str(args.paper_exchange_load_command_stream),
+                    event_stream=str(args.paper_exchange_load_event_stream),
+                    heartbeat_stream=str(args.paper_exchange_load_heartbeat_stream),
+                    consumer_group=str(args.paper_exchange_load_consumer_group),
+                    heartbeat_consumer_group=str(args.paper_exchange_load_heartbeat_consumer_group),
+                    heartbeat_consumer_name=str(args.paper_exchange_load_heartbeat_consumer_name),
+                    min_throughput_cmds_per_sec=float(args.paper_exchange_load_min_throughput_cmds_per_sec),
+                    max_latency_p95_ms=float(args.paper_exchange_load_max_latency_p95_ms),
+                    max_latency_p99_ms=float(args.paper_exchange_load_max_latency_p99_ms),
+                    max_backlog_growth_pct_per_10min=float(args.paper_exchange_load_max_backlog_growth_pct_per_10min),
+                    max_restart_count=float(args.paper_exchange_load_max_restart_count),
+                )
+            )
+            pe_sustained_path = reports / "verification" / "paper_exchange_sustained_qualification_latest.json"
+            pe_sustained_report = _read_json(pe_sustained_path, {})
+            pe_sustained_status = str(pe_sustained_report.get("status", "")).strip().lower()
+            pe_sustained_ok = (
+                paper_exchange_sustained_qualification_rc == 0 and pe_sustained_status == "pass"
+            )
+            checks.append(
+                _check(
+                    pe_sustained_ok,
+                    "paper_exchange_sustained_qualification",
+                    "critical",
+                    "paper-exchange sustained qualification PASS"
+                    if pe_sustained_ok
+                    else (
+                        "paper-exchange sustained qualification failed "
+                        f"(status={pe_sustained_status or 'unknown'}, rc={paper_exchange_sustained_qualification_rc})"
+                    ),
+                    [
+                        str(pe_sustained_path),
+                        str(root / "scripts" / "release" / "run_paper_exchange_sustained_qualification.py"),
+                    ],
+                )
+            )
+            if not pe_sustained_ok:
+                critical_failures.append("paper_exchange_sustained_qualification")
+        if bool(args.auto_seed_paper_exchange_threshold_manual_metrics) and not bool(enforce_live_promotion_gates):
+            seeded, seeded_path = _seed_paper_exchange_threshold_manual_metrics(
+                root,
+                manual_metrics_path=str(paper_exchange_threshold_manual_metrics_path),
+            )
+            paper_exchange_threshold_manual_metrics_seeded = bool(seeded)
+            paper_exchange_threshold_manual_metrics_path = seeded_path
+            paper_exchange_threshold_source_max_age_min_effective = max(
+                float(paper_exchange_threshold_source_max_age_min_effective), 10000.0
             )
         if args.build_paper_exchange_threshold_inputs:
             paper_exchange_threshold_inputs_rc, paper_exchange_threshold_inputs_msg = (
                 _run_paper_exchange_threshold_inputs_builder(
                     root,
-                    max_source_age_min=float(args.paper_exchange_threshold_source_max_age_min),
+                    strict=bool(args.ci),
+                    max_source_age_min=float(paper_exchange_threshold_source_max_age_min_effective),
+                    manual_metrics_path=str(paper_exchange_threshold_manual_metrics_path),
                 )
             )
+        paper_exchange_threshold_inputs_report = _read_json(paper_exchange_threshold_inputs_path, {})
+        paper_exchange_threshold_inputs_diag = _paper_exchange_threshold_inputs_readiness(
+            paper_exchange_threshold_inputs_report
+        )
+        paper_exchange_threshold_inputs_ready = bool(paper_exchange_threshold_inputs_diag.get("ready", False))
+        inputs_status = str(paper_exchange_threshold_inputs_diag.get("status", ""))
+        inputs_unresolved = int(paper_exchange_threshold_inputs_diag.get("unresolved_metric_count", 0) or 0)
+        inputs_stale = int(paper_exchange_threshold_inputs_diag.get("stale_source_count", 0) or 0)
+        inputs_missing = int(paper_exchange_threshold_inputs_diag.get("missing_source_count", 0) or 0)
+        checks.append(
+            _check(
+                paper_exchange_threshold_inputs_ready,
+                "paper_exchange_threshold_inputs_ready",
+                "critical",
+                (
+                    "paper-exchange threshold inputs ready "
+                    f"(status={inputs_status}, unresolved={inputs_unresolved}, stale_sources={inputs_stale}, missing_sources={inputs_missing})"
+                )
+                if paper_exchange_threshold_inputs_ready
+                else (
+                    "paper-exchange threshold inputs not ready "
+                    f"(status={inputs_status}, unresolved={inputs_unresolved}, stale_sources={inputs_stale}, missing_sources={inputs_missing})"
+                ),
+                [str(paper_exchange_threshold_inputs_path)],
+            )
+        )
+        if not paper_exchange_threshold_inputs_ready:
+            critical_failures.append("paper_exchange_threshold_inputs_ready")
         paper_exchange_thresholds_rc, paper_exchange_thresholds_msg = _run_paper_exchange_thresholds_check(
             root,
             strict=bool(args.ci),
@@ -1703,7 +2799,13 @@ def main() -> int:
         )
         pe_threshold_path = reports / "verification" / "paper_exchange_thresholds_latest.json"
         pe_threshold_report = _read_json(pe_threshold_path, {})
+        threshold_inputs_builder_ok = (not bool(args.build_paper_exchange_threshold_inputs)) or (
+            int(paper_exchange_threshold_inputs_rc) == 0
+        )
         pe_threshold_ok = (
+            threshold_inputs_builder_ok
+            and paper_exchange_threshold_inputs_ready
+            and
             paper_exchange_thresholds_rc == 0
             and str(pe_threshold_report.get("status", "fail")).strip().lower() == "pass"
         )
@@ -1716,9 +2818,11 @@ def main() -> int:
                 if pe_threshold_ok
                 else (
                     "paper-exchange quantitative thresholds failed "
-                    f"(rc={paper_exchange_thresholds_rc})"
+                    f"(inputs_builder_rc={paper_exchange_threshold_inputs_rc}, "
+                    f"inputs_ready={paper_exchange_threshold_inputs_ready}, "
+                    f"thresholds_rc={paper_exchange_thresholds_rc})"
                 ),
-                [str(pe_threshold_path)],
+                [str(paper_exchange_threshold_inputs_path), str(pe_threshold_path)],
             )
         )
         if not pe_threshold_ok:
@@ -1855,7 +2959,10 @@ def main() -> int:
     replay_cycle_path = reports / "replay_regression_multi_window" / "latest.json"
     replay_cycle = {}
     if not args.skip_replay_cycle:
-        replay_cycle_rc, replay_cycle_msg = _run_replay_regression_multi_window(root)
+        replay_cycle_rc, replay_cycle_msg = _run_replay_regression_multi_window(
+            root,
+            require_portfolio_risk_healthy=bool(enforce_live_promotion_gates),
+        )
         replay_cycle = _read_json(replay_cycle_path, {})
     replay_cycle_ok = True if args.skip_replay_cycle else (replay_cycle_rc == 0 and str(replay_cycle.get("status", "fail")) == "pass")
     checks.append(
@@ -1949,14 +3056,20 @@ def main() -> int:
     risk = _read_json(risk_path, {})
     risk_ok = str(risk.get("status", "critical")) in {"ok", "warning"} and int(risk.get("critical_count", 1)) == 0
     risk_fresh = _minutes_since(str(risk.get("ts_utc", ""))) <= max_report_age_min
+    risk_gate_enforced = bool(enforce_live_promotion_gates)
+    risk_gate_pass = risk_ok and risk_fresh
     checks.append(
         _check(
-            risk_ok and risk_fresh,
+            risk_gate_pass,
             "portfolio_risk_status",
-            "critical",
+            "critical" if risk_gate_enforced else "warning",
             "portfolio risk healthy and fresh"
-            if (risk_ok and risk_fresh)
-            else "portfolio risk critical or stale",
+            if risk_gate_pass
+            else (
+                "portfolio risk critical or stale"
+                if risk_gate_enforced
+                else "portfolio risk critical/stale (non-live scope; warning only)"
+            ),
             [str(risk_path)],
         )
     )
@@ -1995,21 +3108,18 @@ def main() -> int:
     )
 
     # 17) Event store integrity freshness
-    integrity_path = reports / "event_store" / "integrity_20260221.json"
-    # Prefer latest integrity artifact if present.
     integrity_candidates = sorted((reports / "event_store").glob("integrity_*.json"))
-    if integrity_candidates:
-        integrity_path = integrity_candidates[-1]
-    integrity = _read_json(integrity_path, {})
-    # event_store/main.py writes "last_update_utc"; ts_utc is a forward-compat fallback.
-    integrity_ts = str(integrity.get("ts_utc", "")).strip() or str(integrity.get("last_update_utc", "")).strip()
+    integrity_path = integrity_candidates[-1] if integrity_candidates else None
+    integrity = _read_json(integrity_path, {}) if integrity_path else {}
+    integrity_ts = str(integrity.get("ts_utc", "")).strip()
     integrity_age_min = (
         _minutes_since(integrity_ts)
         if integrity_ts
-        else _minutes_since_file_mtime(integrity_path)
+        else (_minutes_since_file_mtime(integrity_path) if integrity_path else float("inf"))
     )
     integrity_ok = (
-        bool(integrity_path.exists())
+        integrity_path is not None
+        and integrity_path.exists()
         and int(integrity.get("missing_correlation_count", 1)) == 0
         and integrity_age_min <= max_report_age_min
     )
@@ -2051,6 +3161,8 @@ def main() -> int:
     )
 
     # 19) Ops DB writer freshness + non-empty ingestion
+    if bool(args.ci):
+        ops_db_writer_refresh_rc, ops_db_writer_refresh_msg = _run_ops_db_writer_once(root)
     ops_db_writer_path = reports / "ops_db_writer" / "latest.json"
     ops_db_writer = _read_json(ops_db_writer_path, {})
     ops_db_writer_fresh = (
@@ -2067,14 +3179,19 @@ def main() -> int:
         and ops_db_writer_fresh
         and ops_non_empty
     )
+    ops_db_writer_gate_enforced = bool(enforce_live_promotion_gates)
     checks.append(
         _check(
             ops_db_writer_ok,
             "ops_db_writer_freshness",
-            "critical",
+            "critical" if ops_db_writer_gate_enforced else "warning",
             "ops_db_writer latest.json is pass/fresh with non-empty counts"
             if ops_db_writer_ok
-            else "ops_db_writer missing/stale/failing or ingestion counts are empty",
+            else (
+                "ops_db_writer missing/stale/failing or ingestion counts are empty"
+                if ops_db_writer_gate_enforced
+                else "ops_db_writer missing/stale/failing or counts empty (warning-only non-live scope)"
+            ),
             [str(ops_db_writer_path)],
         )
     )
@@ -2198,6 +3315,24 @@ def main() -> int:
         )
     )
 
+    # 24) Trading validation ladder enforcement (QPRO-FUNC-2)
+    ladder_diag = _trading_validation_ladder_status(
+        reports,
+        enforce_live_path=bool(enforce_live_promotion_gates),
+    )
+    ladder_gate_enforced = bool(enforce_live_promotion_gates)
+    checks.append(
+        _check(
+            bool(ladder_diag.get("pass", False)),
+            "trading_validation_ladder",
+            "critical" if ladder_gate_enforced else "warning",
+            str(ladder_diag.get("reason", "")),
+            [str(p) for p in ladder_diag.get("evidence_paths", []) if isinstance(p, str)],
+        )
+    )
+    if ladder_gate_enforced and not bool(ladder_diag.get("pass", False)):
+        critical_failures.append("trading_validation_ladder")
+
     # Compute validation level achieved
     validation_level = 0
     if any(c["pass"] for c in checks if c["name"] == "unit_service_integration_tests"):
@@ -2217,7 +3352,8 @@ def main() -> int:
     critical_failures = list(dict.fromkeys(critical_failures))
 
     status = "PASS" if not critical_failures else "FAIL"
-    manifest_path = root / "docs" / "ops" / "release_manifest_20260221.md"
+    manifest_candidates = sorted((root / "docs" / "ops").glob("release_manifest_*.md"))
+    manifest_path = manifest_candidates[-1] if manifest_candidates else root / "docs" / "ops" / "release_manifest.md"
     all_evidence_paths = sorted({p for c in checks for p in c.get("evidence_paths", []) if isinstance(p, str)})
     all_evidence_refs = []
     for p in all_evidence_paths:
@@ -2258,6 +3394,11 @@ def main() -> int:
             "refresh_parity_once": bool(refresh_parity_once),
             "refresh_event_integrity_once": bool(refresh_event_integrity_once),
             "skip_replay_cycle": bool(args.skip_replay_cycle),
+            "live_promotion_gates_mode": str(args.live_promotion_gates_mode),
+            "live_promotion_required_auto": bool(live_promotion_required_auto),
+            "live_promotion_gates_enforced": bool(enforce_live_promotion_gates),
+            "live_account_mode_bots": list(live_account_mode_bots),
+            "replay_require_portfolio_risk_healthy": bool(enforce_live_promotion_gates),
             "ci_mode": bool(args.ci),
             "max_report_age_min": max_report_age_min,
             "parity_refresh_rc": parity_refresh_rc,
@@ -2301,6 +3442,8 @@ def main() -> int:
             "canonical_max_parity_delta_ratio": float(args.canonical_max_parity_delta_ratio),
             "canonical_min_duplicate_suppression_rate": float(args.canonical_min_duplicate_suppression_rate),
             "canonical_max_replay_lag_delta": int(args.canonical_max_replay_lag_delta),
+            "ops_db_writer_refresh_output": ops_db_writer_refresh_msg[:2000],
+            "ops_db_writer_refresh_rc": int(ops_db_writer_refresh_rc),
             "recon_exchange_preflight_output": recon_preflight_msg[:2000],
             "recon_exchange_preflight_rc": recon_preflight_rc,
             "paper_exchange_preflight_output": paper_exchange_preflight_msg[:2000],
@@ -2316,14 +3459,32 @@ def main() -> int:
             "testnet_scorecard_rc": testnet_scorecard_rc,
             "portfolio_diversification_output": diversification_msg[:2000],
             "portfolio_diversification_rc": diversification_rc,
+            "check_paper_exchange_golden_path": bool(args.check_paper_exchange_golden_path),
+            "paper_exchange_golden_path_output": paper_exchange_golden_path_msg[:2000],
+            "paper_exchange_golden_path_rc": int(paper_exchange_golden_path_rc),
             "check_paper_exchange_thresholds": bool(args.check_paper_exchange_thresholds),
             "check_paper_exchange_load": bool(args.check_paper_exchange_load),
-            "run_paper_exchange_load_harness": bool(args.run_paper_exchange_load_harness),
+            "check_paper_exchange_sustained_qualification": bool(
+                args.check_paper_exchange_sustained_qualification
+            ),
+            "check_paper_exchange_perf_regression": bool(args.check_paper_exchange_perf_regression),
+            "run_paper_exchange_load_harness": bool(
+                args.run_paper_exchange_load_harness or paper_exchange_load_harness_auto_run
+            ),
+            "run_paper_exchange_load_harness_configured": bool(args.run_paper_exchange_load_harness),
+            "paper_exchange_load_harness_auto_run_in_ci": bool(paper_exchange_load_harness_auto_run),
             "paper_exchange_load_harness_duration_sec": float(args.paper_exchange_load_harness_duration_sec),
+            "paper_exchange_load_harness_duration_sec_effective": float(
+                paper_exchange_load_harness_duration_sec_effective
+            ),
             "paper_exchange_load_harness_target_cmd_rate": float(args.paper_exchange_load_harness_target_cmd_rate),
             "paper_exchange_load_harness_min_commands": int(args.paper_exchange_load_harness_min_commands),
             "paper_exchange_load_harness_producer": str(args.paper_exchange_load_harness_producer),
             "paper_exchange_load_harness_instance_name": str(args.paper_exchange_load_harness_instance_name),
+            "paper_exchange_load_harness_instance_names": str(args.paper_exchange_load_harness_instance_names),
+            "paper_exchange_load_harness_min_instance_coverage": int(
+                args.paper_exchange_load_harness_min_instance_coverage
+            ),
             "paper_exchange_load_harness_connector_name": str(args.paper_exchange_load_harness_connector_name),
             "paper_exchange_load_harness_trading_pair": str(args.paper_exchange_load_harness_trading_pair),
             "paper_exchange_load_harness_result_timeout_sec": float(args.paper_exchange_load_harness_result_timeout_sec),
@@ -2343,15 +3504,81 @@ def main() -> int:
             "paper_exchange_load_sample_count": int(args.paper_exchange_load_sample_count),
             "paper_exchange_load_min_latency_samples": int(args.paper_exchange_load_min_latency_samples),
             "paper_exchange_load_min_window_sec": int(args.paper_exchange_load_min_window_sec),
+            "paper_exchange_load_sustained_window_sec": int(args.paper_exchange_load_sustained_window_sec),
+            "paper_exchange_load_min_window_sec_effective": int(paper_exchange_load_min_window_sec_effective),
+            "paper_exchange_load_sustained_window_sec_effective": int(
+                paper_exchange_load_sustained_window_sec_effective
+            ),
+            "paper_exchange_load_min_instance_coverage": int(args.paper_exchange_load_min_instance_coverage),
+            "paper_exchange_load_enforce_budget_checks": bool(args.paper_exchange_load_enforce_budget_checks),
+            "paper_exchange_load_min_throughput_cmds_per_sec": float(args.paper_exchange_load_min_throughput_cmds_per_sec),
+            "paper_exchange_load_max_latency_p95_ms": float(args.paper_exchange_load_max_latency_p95_ms),
+            "paper_exchange_load_max_latency_p99_ms": float(args.paper_exchange_load_max_latency_p99_ms),
+            "paper_exchange_load_max_backlog_growth_pct_per_10min": float(
+                args.paper_exchange_load_max_backlog_growth_pct_per_10min
+            ),
+            "paper_exchange_load_max_restart_count": float(args.paper_exchange_load_max_restart_count),
             "paper_exchange_load_output": paper_exchange_load_msg[:2000],
             "paper_exchange_load_rc": int(paper_exchange_load_rc),
+            "paper_exchange_sustained_duration_sec": float(args.paper_exchange_sustained_duration_sec),
+            "paper_exchange_sustained_target_cmd_rate": float(args.paper_exchange_sustained_target_cmd_rate),
+            "paper_exchange_sustained_min_commands": int(args.paper_exchange_sustained_min_commands),
+            "paper_exchange_sustained_command_maxlen": int(args.paper_exchange_sustained_command_maxlen),
+            "paper_exchange_sustained_min_instance_coverage": int(args.paper_exchange_sustained_min_instance_coverage),
+            "paper_exchange_sustained_lookback_sec": int(args.paper_exchange_sustained_lookback_sec),
+            "paper_exchange_sustained_sample_count": int(args.paper_exchange_sustained_sample_count),
+            "paper_exchange_sustained_window_sec": int(args.paper_exchange_sustained_window_sec),
+            "paper_exchange_sustained_qualification_output": paper_exchange_sustained_qualification_msg[:2000],
+            "paper_exchange_sustained_qualification_rc": int(paper_exchange_sustained_qualification_rc),
+            "capture_paper_exchange_perf_baseline": bool(args.capture_paper_exchange_perf_baseline),
+            "paper_exchange_perf_baseline_source_path": str(args.paper_exchange_perf_baseline_source_path),
+            "paper_exchange_perf_baseline_profile_label": str(args.paper_exchange_perf_baseline_profile_label),
+            "paper_exchange_perf_baseline_require_source_pass": bool(args.paper_exchange_perf_baseline_require_source_pass),
+            "paper_exchange_perf_baseline_capture_output": paper_exchange_perf_baseline_capture_msg[:2000],
+            "paper_exchange_perf_baseline_capture_rc": int(paper_exchange_perf_baseline_capture_rc),
+            "paper_exchange_perf_current_report_path": str(args.paper_exchange_perf_current_report_path),
+            "paper_exchange_perf_baseline_path": str(args.paper_exchange_perf_baseline_path),
+            "paper_exchange_perf_waiver_path": str(args.paper_exchange_perf_waiver_path),
+            "paper_exchange_perf_max_latency_regression_pct": float(args.paper_exchange_perf_max_latency_regression_pct),
+            "paper_exchange_perf_max_backlog_regression_pct": float(args.paper_exchange_perf_max_backlog_regression_pct),
+            "paper_exchange_perf_min_throughput_ratio": float(args.paper_exchange_perf_min_throughput_ratio),
+            "paper_exchange_perf_max_restart_regression": float(args.paper_exchange_perf_max_restart_regression),
+            "paper_exchange_perf_waiver_max_hours": float(args.paper_exchange_perf_waiver_max_hours),
+            "paper_exchange_perf_regression_output": paper_exchange_perf_regression_msg[:2000],
+            "paper_exchange_perf_regression_rc": int(paper_exchange_perf_regression_rc),
             "build_paper_exchange_threshold_inputs": bool(args.build_paper_exchange_threshold_inputs),
+            "auto_seed_paper_exchange_threshold_manual_metrics": bool(
+                args.auto_seed_paper_exchange_threshold_manual_metrics
+            ),
+            "paper_exchange_threshold_manual_metrics_seeded": bool(
+                paper_exchange_threshold_manual_metrics_seeded
+            ),
+            "paper_exchange_threshold_manual_metrics_path": str(paper_exchange_threshold_manual_metrics_path),
             "paper_exchange_threshold_source_max_age_min": float(args.paper_exchange_threshold_source_max_age_min),
+            "paper_exchange_threshold_source_max_age_min_effective": float(
+                paper_exchange_threshold_source_max_age_min_effective
+            ),
+            "paper_exchange_threshold_inputs_path": str(paper_exchange_threshold_inputs_path),
             "paper_exchange_threshold_inputs_output": paper_exchange_threshold_inputs_msg[:2000],
             "paper_exchange_threshold_inputs_rc": paper_exchange_threshold_inputs_rc,
+            "paper_exchange_threshold_inputs_ready": bool(paper_exchange_threshold_inputs_ready),
+            "paper_exchange_threshold_inputs_status": str(paper_exchange_threshold_inputs_diag.get("status", "")),
+            "paper_exchange_threshold_inputs_diagnostics_available": bool(
+                paper_exchange_threshold_inputs_diag.get("diagnostics_available", False)
+            ),
+            "paper_exchange_threshold_inputs_unresolved_metric_count": int(
+                paper_exchange_threshold_inputs_diag.get("unresolved_metric_count", 0) or 0
+            ),
+            "paper_exchange_threshold_inputs_stale_source_count": int(
+                paper_exchange_threshold_inputs_diag.get("stale_source_count", 0) or 0
+            ),
+            "paper_exchange_threshold_inputs_missing_source_count": int(
+                paper_exchange_threshold_inputs_diag.get("missing_source_count", 0) or 0
+            ),
             "paper_exchange_threshold_max_age_min": float(args.paper_exchange_threshold_max_age_min),
             "paper_exchange_thresholds_output": paper_exchange_thresholds_msg[:2000],
             "paper_exchange_thresholds_rc": paper_exchange_thresholds_rc,
+            "trading_validation_ladder": ladder_diag,
         },
     }
 

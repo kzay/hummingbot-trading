@@ -134,7 +134,11 @@ def _collect_snapshot(root: Path) -> Dict[str, object]:
     }
 
 
-def _evaluate_snapshot(snapshot: Dict[str, object]) -> Tuple[bool, List[str]]:
+def _evaluate_snapshot(
+    snapshot: Dict[str, object],
+    *,
+    require_portfolio_risk_healthy: bool = True,
+) -> Tuple[bool, List[str]]:
     failures: List[str] = []
     reg = snapshot.get("regression", {}) if isinstance(snapshot.get("regression"), dict) else {}
     recon = snapshot.get("reconciliation", {}) if isinstance(snapshot.get("reconciliation"), dict) else {}
@@ -149,7 +153,10 @@ def _evaluate_snapshot(snapshot: Dict[str, object]) -> Tuple[bool, List[str]]:
         failures.append("reconciliation_not_healthy")
     if str(parity.get("status", "fail")) != "pass":
         failures.append("parity_not_pass")
-    if str(risk.get("status", "critical")) not in {"ok", "warning"} or int(risk.get("critical_count", 1)) > 0:
+    if require_portfolio_risk_healthy and (
+        str(risk.get("status", "critical")) not in {"ok", "warning"}
+        or int(risk.get("critical_count", 1)) > 0
+    ):
         failures.append("portfolio_risk_not_healthy")
     return (len(failures) == 0), failures
 
@@ -226,6 +233,19 @@ def main() -> int:
     parser = argparse.ArgumentParser(description="Run deterministic replay->reconcile->parity->risk regression cycle.")
     parser.add_argument("--repeat", type=int, default=2, help="How many consecutive cycles to run for stability check.")
     parser.add_argument("--min-events", type=int, default=1000, help="Minimum events for backtest regression step.")
+    parser.add_argument(
+        "--require-portfolio-risk-healthy",
+        action="store_true",
+        default=str(os.getenv("REPLAY_REQUIRE_PORTFOLIO_RISK_HEALTHY", "true")).strip().lower()
+        in {"1", "true", "yes", "on"},
+        help="Require portfolio_risk latest artifact to be healthy (ok/warning) for replay pass.",
+    )
+    parser.add_argument(
+        "--no-require-portfolio-risk-healthy",
+        action="store_false",
+        dest="require_portfolio_risk_healthy",
+        help="Do not fail replay cycle on portfolio_risk critical status.",
+    )
     args = parser.parse_args()
 
     root = Path("/workspace/hbot") if Path("/.dockerenv").exists() else Path(__file__).resolve().parents[2]
@@ -276,7 +296,10 @@ def main() -> int:
         ]
         step_failures = [str(s.get("name")) for s in steps if int(s.get("rc", 1)) != 0]
         snapshot = _collect_snapshot(root)
-        snapshot_ok, snapshot_failures = _evaluate_snapshot(snapshot)
+        snapshot_ok, snapshot_failures = _evaluate_snapshot(
+            snapshot,
+            require_portfolio_risk_healthy=bool(args.require_portfolio_risk_healthy),
+        )
         all_runs.append(
             {
                 "steps": steps,
@@ -314,6 +337,7 @@ def main() -> int:
         "ts_utc": _utc_now(),
         "status": status,
         "repeat_runs": repeat,
+        "require_portfolio_risk_healthy": bool(args.require_portfolio_risk_healthy),
         "deterministic_repeat_pass": deterministic_repeat_pass,
         "signature_baseline": baseline_sig,
         "blockers": blockers,
