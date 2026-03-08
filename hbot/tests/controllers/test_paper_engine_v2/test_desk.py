@@ -134,6 +134,33 @@ class TestStatePersistence:
         desk2 = make_desk(tmp_path, usdt="9999")
         assert desk2.portfolio.balance("USDT") == Decimal("5000")
 
+    def test_order_counter_persists_across_restart(self, tmp_path):
+        desk = make_desk(tmp_path, usdt="5000")
+        spec = make_spec(BTC_SPOT)
+        desk.register_instrument(spec, StaticDataFeed(make_book()))
+
+        first = desk.submit_order(
+            BTC_SPOT, OrderSide.BUY, PaperOrderType.LIMIT_MAKER, Decimal("99.95"), Decimal("0.1")
+        )
+        second = desk.submit_order(
+            BTC_SPOT, OrderSide.BUY, PaperOrderType.LIMIT_MAKER, Decimal("99.90"), Decimal("0.1")
+        )
+        assert isinstance(first, OrderAccepted)
+        assert isinstance(second, OrderAccepted)
+        pre_restart_counter = int(str(second.order_id).split("_")[-1])
+        assert desk.snapshot()["order_counter"] == pre_restart_counter
+
+        desk._state_store.save(desk.snapshot(), now_ts=0.0, force=True)
+
+        restored = make_desk(tmp_path, usdt="9999")
+        restored.register_instrument(spec, StaticDataFeed(make_book()))
+        third = restored.submit_order(
+            BTC_SPOT, OrderSide.BUY, PaperOrderType.LIMIT_MAKER, Decimal("99.85"), Decimal("0.1")
+        )
+        assert isinstance(third, OrderAccepted)
+        post_restart_counter = int(str(third.order_id).split("_")[-1])
+        assert post_restart_counter > pre_restart_counter
+
 
 class TestDeterminism:
     def test_same_seed_same_events(self, tmp_path):
@@ -227,9 +254,30 @@ class TestLatencyDefaultFromConfig:
         assert paper_cfg.variant == "z"
         assert paper_cfg.log_dir == str(tmp_path)
 
+    def test_paper_engine_config_defaults_artifact_namespace_from_controller_name(self):
+        class _RuntimeCfg:
+            controller_name = "bot5_ift_jota_v1"
+            paper_engine = {
+                "paper_fill_model": "three_tier",
+                "paper_latency_ms": 77,
+            }
+
+        class _LegacyCfg:
+            controller_name = "epp_v2_4_bot5"
+            paper_engine = {
+                "paper_fill_model": "three_tier",
+                "paper_latency_ms": 77,
+            }
+
+        runtime_cfg = PaperEngineConfig.from_controller_config(_RuntimeCfg())
+        legacy_cfg = PaperEngineConfig.from_controller_config(_LegacyCfg())
+        assert runtime_cfg.artifact_namespace == "runtime_v24"
+        assert legacy_cfg.artifact_namespace == "epp_v24"
+
     def test_from_paper_config_uses_new_config_model(self, tmp_path):
         paper_cfg = PaperEngineConfig(
             paper_equity_quote=Decimal("700"),
+            paper_reset_state_on_startup=True,
             paper_seed=11,
             paper_fill_model="three_tier",
             paper_latency_model="configured_latency_ms",
@@ -242,6 +290,7 @@ class TestLatencyDefaultFromConfig:
             instance_name="botx",
             variant="a",
             log_dir=str(tmp_path),
+            artifact_namespace="runtime_v24",
         )
         desk = PaperDesk.from_paper_config(paper_cfg)
         cfg = desk._config
@@ -249,8 +298,10 @@ class TestLatencyDefaultFromConfig:
         assert cfg.default_engine_config.latency_ms == 130
         assert cfg.default_engine_config.price_protection_points == 5
         assert cfg.portfolio_config.margin_model_type == "standard"
+        assert cfg.reset_state_on_startup is True
+        assert "/runtime_v24/" in cfg.state_file_path.replace("\\", "/")
 
-    def test_from_epp_config_uses_configured_latency_model(self, tmp_path):
+    def test_from_controller_config_uses_configured_latency_model(self, tmp_path):
         class _Cfg:
             paper_engine = {
                 "paper_equity_quote": Decimal("500"),
@@ -262,10 +313,10 @@ class TestLatencyDefaultFromConfig:
                 "log_dir": str(tmp_path),
             }
 
-        desk = PaperDesk.from_epp_config(_Cfg())
+        desk = PaperDesk.from_controller_config(_Cfg())
         assert desk._config.default_latency_model == "configured_latency_ms"
 
-    def test_from_epp_config_maps_fill_and_liquidity_knobs(self, tmp_path):
+    def test_from_controller_config_maps_fill_and_liquidity_knobs(self, tmp_path):
         class _Cfg:
             paper_engine = {
                 "paper_equity_quote": Decimal("500"),
@@ -278,6 +329,8 @@ class TestLatencyDefaultFromConfig:
                 "paper_queue_participation": Decimal("0.40"),
                 "paper_slippage_bps": Decimal("0.8"),
                 "paper_adverse_selection_bps": Decimal("1.2"),
+                "paper_prob_fill_on_limit": 0.55,
+                "paper_prob_slippage": 0.10,
                 "paper_partial_fill_min_ratio": Decimal("0.2"),
                 "paper_partial_fill_max_ratio": Decimal("0.9"),
                 "paper_depth_levels": 5,
@@ -290,7 +343,7 @@ class TestLatencyDefaultFromConfig:
                 "log_dir": str(tmp_path),
             }
 
-        desk = PaperDesk.from_epp_config(_Cfg())
+        desk = PaperDesk.from_controller_config(_Cfg())
         cfg = desk._config
         assert cfg.default_fill_model == "two_tier"
         assert cfg.default_latency_model == "configured_latency_ms"
@@ -299,6 +352,8 @@ class TestLatencyDefaultFromConfig:
         assert cfg.fill_depth_levels == 5
         assert cfg.fill_depth_decay == Decimal("0.6")
         assert cfg.fill_queue_position_enabled is False
+        assert cfg.fill_prob_fill_on_limit == pytest.approx(0.55)
+        assert cfg.fill_prob_slippage == pytest.approx(0.10)
         assert cfg.default_engine_config.liquidity_consumption is True
         assert cfg.default_engine_config.max_fills_per_order == 9
 
@@ -328,7 +383,7 @@ class TestLatencyDefaultFromConfig:
                 "log_dir": str(tmp_path),
             }
 
-        desk = PaperDesk.from_epp_config(_Cfg())
+        desk = PaperDesk.from_controller_config(_Cfg())
         cfg = desk._config
         assert cfg.default_fill_model == "latency_aware"
         assert cfg.default_latency_model == "configured_latency_ms"
@@ -337,6 +392,23 @@ class TestLatencyDefaultFromConfig:
         assert cfg.cancel_latency_ms == 80
         assert cfg.fill_depth_levels == 5
         assert cfg.fill_queue_position_enabled is True
+        assert cfg.fill_prob_fill_on_limit == pytest.approx(0.40)
+        assert cfg.fill_prob_slippage == pytest.approx(0.02)
         assert cfg.default_engine_config.price_protection_points == 8
         assert cfg.portfolio_config.margin_model_type == "leveraged"
         assert cfg.default_engine_config.liquidity_consumption is True
+
+    def test_from_epp_config_aliases_controller_constructor(self, tmp_path):
+        class _Cfg:
+            paper_engine = {
+                "paper_equity_quote": Decimal("500"),
+                "paper_seed": 7,
+                "paper_latency_ms": 150,
+                "paper_max_fills_per_order": 8,
+                "instance_name": "botx",
+                "variant": "a",
+                "log_dir": str(tmp_path),
+            }
+
+        desk = PaperDesk.from_epp_config(_Cfg())
+        assert desk._config.default_latency_model == "configured_latency_ms"

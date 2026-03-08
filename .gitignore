@@ -1,0 +1,32 @@
+# ============================================
+# Root .gitignore — hummingbot_custo repo
+# ============================================
+
+# ---- Legacy source dumps (never runtime code) ----
+_hb_src_dump/
+_tradenote_src/
+
+# ---- OS files ----
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# ---- IDE ----
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# ---- Python ----
+__pycache__/
+*.pyc
+*.pyo
+.venv/
+venv/
+.coverage
+htmlcov/
+
+# ---- Temp / debug artifacts ----
+*.tmp
+*.bak

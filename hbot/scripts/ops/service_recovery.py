@@ -2,8 +2,8 @@
 """Service dependency recovery — restart Redis/risk-service when unhealthy.
 
 Checks:
-  - Redis: ping fails → restart hbot-redis
-  - risk-service: report stale > threshold → restart hbot-risk-service
+  - Redis: ping fails -> restart redis
+  - risk-service: report stale > threshold -> restart risk-service
 
 Usage:
   python scripts/ops/service_recovery.py
@@ -85,18 +85,18 @@ def main() -> int:
     if not _redis_ping():
         print("[service-recovery] Redis unreachable")
         if not args.dry_run:
-            if _docker_restart("hbot-redis"):
-                print("[service-recovery] Restarted hbot-redis")
+            if _docker_restart("redis"):
+                print("[service-recovery] Restarted redis")
                 time.sleep(5)
                 if _redis_ping():
                     print("[service-recovery] Redis recovered")
                 else:
                     rc = 2
             else:
-                print("[service-recovery] Failed to restart hbot-redis")
+                print("[service-recovery] Failed to restart redis")
                 rc = 2
         else:
-            print("[service-recovery] (dry-run) would restart hbot-redis")
+            print("[service-recovery] (dry-run) would restart redis")
     else:
         print("[service-recovery] Redis OK")
 
@@ -105,13 +105,13 @@ def main() -> int:
         if not _risk_report_fresh(root, args.risk_stale_min):
             print(f"[service-recovery] risk-service report stale >{args.risk_stale_min}min")
             if not args.dry_run:
-                if _docker_restart("hbot-risk-service"):
-                    print("[service-recovery] Restarted hbot-risk-service")
+                if _docker_restart("risk-service"):
+                    print("[service-recovery] Restarted risk-service")
                 else:
-                    print("[service-recovery] Failed to restart hbot-risk-service")
+                    print("[service-recovery] Failed to restart risk-service")
                     rc = 2
             else:
-                print("[service-recovery] (dry-run) would restart hbot-risk-service")
+                print("[service-recovery] (dry-run) would restart risk-service")
     else:
         print("[service-recovery] risk-service check skipped (EXT_SIGNAL_RISK_ENABLED=false)")
 

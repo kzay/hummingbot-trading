@@ -17,8 +17,8 @@ from pathlib import Path
 from typing import Dict, List
 
 _SCRIPT_DIR = Path(__file__).resolve().parent
-_HBOT_ROOT = _SCRIPT_DIR.parents[1]
-sys.path.insert(0, str(_HBOT_ROOT))
+_PROJECT_ROOT = _SCRIPT_DIR.parents[1]
+sys.path.insert(0, str(_PROJECT_ROOT))
 
 from services.common.utils import safe_float, utc_now, write_json
 
@@ -107,7 +107,9 @@ def main() -> None:
     parser = argparse.ArgumentParser(description="Daily edge report")
     parser.add_argument("--bot", default="bot1")
     parser.add_argument("--variant", default="a")
-    parser.add_argument("--data-root", default=str(_HBOT_ROOT / "data"))
+    parser.add_argument("--data-root", default=str(_PROJECT_ROOT / "data"))
+    parser.add_argument("--output-dir", default=str(_PROJECT_ROOT / "reports" / "analysis"))
+    parser.add_argument("--output-name", default="edge_report.json")
     args = parser.parse_args()
 
     fills_path = Path(args.data_root) / args.bot / "logs" / "epp_v24" / f"{args.bot}_{args.variant}" / "fills.csv"
@@ -117,9 +119,11 @@ def main() -> None:
     result["bot"] = args.bot
     result["variant"] = args.variant
 
-    out_dir = _HBOT_ROOT / "reports" / "analysis"
+    out_dir = Path(args.output_dir)
+    if not out_dir.is_absolute():
+        out_dir = _PROJECT_ROOT / out_dir
     out_dir.mkdir(parents=True, exist_ok=True)
-    write_json(out_dir / "edge_report.json", result)
+    write_json(out_dir / str(args.output_name).strip(), result)
 
     print(f"[edge] verdict={result.get('verdict')}")
     print(f"[edge] fills={result.get('fill_count')} notional={result.get('total_notional_quote')}")

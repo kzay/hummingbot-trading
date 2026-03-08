@@ -1,8 +1,8 @@
-"""Tests for the fill WAL in epp_logging."""
+"""Tests for the fill WAL in shared controller logging."""
 import json
 from pathlib import Path
 
-from controllers.epp_logging import CsvSplitLogger
+from controllers.runtime.logging import CsvSplitLogger
 
 
 def test_fill_wal_replay_on_startup(tmp_path: Path):

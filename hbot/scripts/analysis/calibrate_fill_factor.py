@@ -20,8 +20,8 @@ from pathlib import Path
 from typing import Dict, List, Optional
 
 _SCRIPT_DIR = Path(__file__).resolve().parent
-_HBOT_ROOT = _SCRIPT_DIR.parents[1]
-sys.path.insert(0, str(_HBOT_ROOT))
+_PROJECT_ROOT = _SCRIPT_DIR.parents[1]
+sys.path.insert(0, str(_PROJECT_ROOT))
 
 from services.common.utils import safe_float, utc_now, write_json
 
@@ -96,7 +96,7 @@ def main() -> None:
     parser = argparse.ArgumentParser(description="Calibrate fill_factor from fills.csv")
     parser.add_argument("--bot", default="bot1")
     parser.add_argument("--variant", default="a")
-    parser.add_argument("--data-root", default=str(_HBOT_ROOT / "data"))
+    parser.add_argument("--data-root", default=str(_PROJECT_ROOT / "data"))
     args = parser.parse_args()
 
     fills_path = Path(args.data_root) / args.bot / "logs" / "epp_v24" / f"{args.bot}_{args.variant}" / "fills.csv"
@@ -107,7 +107,7 @@ def main() -> None:
     result["variant"] = args.variant
     result["fills_path"] = str(fills_path)
 
-    out_dir = _HBOT_ROOT / "reports" / "analysis"
+    out_dir = _PROJECT_ROOT / "reports" / "analysis"
     out_dir.mkdir(parents=True, exist_ok=True)
     write_json(out_dir / "fill_factor_calibration.json", result)
 

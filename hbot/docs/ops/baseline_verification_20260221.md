@@ -35,10 +35,10 @@ Track Day 1 verification outcomes for Option 4 baseline freeze.
   - Metrics endpoint for bot exporter reachable
   - Loki ingestion active
 - Evidence file/link: compose `ps` output (2026-02-21)
-  - `hbot-prometheus`: healthy
-  - `hbot-grafana`: healthy
-  - `hbot-loki`: healthy
-  - `hbot-bot-metrics-exporter`: healthy
+  - `kzay-capital-prometheus`: healthy
+  - `kzay-capital-grafana`: healthy
+  - `kzay-capital-loki`: healthy
+  - `kzay-capital-bot-metrics-exporter`: healthy
 
 ### 4) Alert Delivery Path
 - Status: PASS

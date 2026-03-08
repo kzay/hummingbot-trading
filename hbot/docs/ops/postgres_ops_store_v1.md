@@ -13,7 +13,7 @@ Provide a persistent operational datastore for desk analytics and dashboards (bl
 ## Environment Contract
 - `OPS_DB_HOST` (default `postgres`)
 - `OPS_DB_PORT` (default `5432`)
-- `OPS_DB_NAME` (default `hbot_ops`)
+- `OPS_DB_NAME` (default `kzay_capital_ops`)
 - `OPS_DB_USER` (default `hbot`)
 - `OPS_DB_PASSWORD` (must be overridden outside local dev)
 - Optional pgAdmin:
@@ -30,13 +30,23 @@ Provide a persistent operational datastore for desk analytics and dashboards (bl
 
 ## Sanity Query
 Run a basic SQL check:
-- `docker compose --env-file env/.env --profile ops -f compose/docker-compose.yml exec -T postgres psql -U ${OPS_DB_USER:-hbot} -d ${OPS_DB_NAME:-hbot_ops} -c "select now() as ts_utc;"`
+- `docker compose --env-file env/.env --profile ops -f compose/docker-compose.yml exec -T postgres psql -U ${OPS_DB_USER:-kzay_capital} -d ${OPS_DB_NAME:-kzay_capital_ops} -c "select now() as ts_utc;"`
 
-## Backup/Restore (Minimum)
-- Backup (logical dump):
-  - `docker compose --env-file env/.env --profile ops -f compose/docker-compose.yml exec -T postgres pg_dump -U ${OPS_DB_USER:-hbot} ${OPS_DB_NAME:-hbot_ops} > reports/ops_db/postgres_dump_latest.sql`
-- Restore (manual, controlled):
-  - `psql` restore into an empty/recovery DB during maintenance window.
+## Backup/Restore + Drill (TS8)
+- Automated backup cadence + verification:
+  - `python scripts/ops/pg_backup.py --interval-hours ${OPS_DB_BACKUP_INTERVAL_HOURS:-24} --retention-count ${OPS_DB_BACKUP_RETENTION_COUNT:-7}`
+  - Evidence: `reports/ops/ops_db_backup_latest.json`
+- One-shot backup:
+  - `python scripts/ops/pg_backup.py --once`
+- Fresh-instance restore drill (canonical tables + parity sidecar validation):
+  - `python scripts/ops/ops_db_restore_drill.py`
+  - Evidence: `reports/ops/ops_db_restore_drill_latest.json`
+- End-to-end drill runner (backup + restore + rollback timing):
+  - `python scripts/ops/run_ops_db_drills.py`
+  - Evidence: `reports/ops/ops_db_drills_latest.json`
+- Rollback drill (`db_primary` -> `csv_compat`):
+  - `python scripts/ops/data_plane_rollback_drill.py --env-file env/.env --apply`
+  - Evidence: `reports/ops/data_plane_rollback_drill_latest.json`
 
 ## Retention and Access
 - Persistence volume: `postgres-data` (survives container restart/recreate).
@@ -45,6 +55,9 @@ Run a basic SQL check:
   - Grafana uses datasource-level credentials for read/query panels.
 
 ## Rollback
-- Stop `ops` profile services:
+- Fast mode rollback from canonical DB primary to CSV compatibility:
+  1. `python scripts/ops/data_plane_rollback_drill.py --env-file env/.env --apply --from-mode db_primary --to-mode csv_compat`
+  2. `python scripts/release/run_promotion_gates.py --max-report-age-min 20`
+- Stop `ops` profile services when needed:
   - `docker compose --env-file env/.env --profile ops -f compose/docker-compose.yml down`
 - Monitoring stack remains functional without Postgres-backed panels.

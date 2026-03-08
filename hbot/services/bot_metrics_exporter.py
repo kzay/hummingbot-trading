@@ -4,6 +4,8 @@ import csv
 import json
 import logging
 import os
+import threading
+import time
 from dataclasses import dataclass, field
 from datetime import datetime, timezone, timedelta
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -31,6 +33,14 @@ _HARD_GATE_REASONS = {
     "drawdown_hard_limit",
     "margin_ratio_critical",
     "cancel_fail_hard_limit",
+}
+_DERISK_WATCHDOG_REASONS = {
+    "base_pct_above_max",
+    "base_pct_below_min",
+    "eod_close_pending",
+    "derisk_only",
+    "derisk_force_taker",
+    "derisk_hard_stop_flatten",
 }
 
 
@@ -140,6 +150,10 @@ class PortfolioSnapshot:
     """Aggregated portfolio data from paper_desk_v2.json."""
     open_pnl_quote: float = 0.0
     positions: List[PositionSnapshot] = field(default_factory=list)
+    paper_margin_call_events_total: float = 0.0
+    paper_liquidation_events_total: float = 0.0
+    paper_liquidation_actions_total: float = 0.0
+    paper_margin_level: str = "unknown"
 
 
 @dataclass
@@ -148,6 +162,8 @@ class MinuteHistoryStats:
     equity_start_quote: float = 0.0          # equity_quote of first minute row
     realized_pnl_week_quote: float = 0.0     # 7-day day-boundary aggregation
     realized_pnl_month_quote: float = 0.0    # 30-day day-boundary aggregation
+    derisk_stall_seconds: float = 0.0        # continuous derisk/hard-stop stall window
+    derisk_stall_active: float = 0.0         # 1 when derisk stall is currently active
 
 
 @dataclass
@@ -223,7 +239,18 @@ class BotSnapshot:
     spread_competitiveness_cap_side_pct: float = 0.0
     pnl_governor_target_mode: str = "disabled"
     position_base: float = 0.0
+    position_gross_base: float = 0.0
+    position_long_base: float = 0.0
+    position_short_base: float = 0.0
     avg_entry_price: float = 0.0
+    avg_entry_price_long: float = 0.0
+    avg_entry_price_short: float = 0.0
+    bot6_signal_score_active: float = 0.0
+    bot6_cvd_divergence_ratio: float = 0.0
+    bot6_delta_spike_ratio: float = 0.0
+    bot7_cvd: float = 0.0
+    bot7_grid_levels: float = 0.0
+    bot7_hedge_target_base_pct: float = 0.0
     market_spread_bps: float = 0.0
     best_bid_price: float = 0.0
     best_ask_price: float = 0.0
@@ -234,6 +261,8 @@ class BotSnapshot:
     fill_stats: Optional[FillStats] = None
     portfolio: Optional[PortfolioSnapshot] = None
     minute_history: Optional[MinuteHistoryStats] = None
+    derisk_stall_seconds: float = 0.0
+    derisk_stall_active: float = 0.0
     minute_rows_total: float = 0.0
     minute_last_timestamp_seconds: float = 0.0
     minute_last_age_seconds: float = 0.0
@@ -247,9 +276,18 @@ class BotSnapshot:
 
 
 class BotMetricsExporter:
-    def __init__(self, data_root: Path, log_tail_lines: int = 200):
+    def __init__(
+        self,
+        data_root: Path,
+        log_tail_lines: int = 200,
+        cache_ttl_seconds: int = 10,
+    ):
         self._data_root = data_root
         self._log_tail_lines = log_tail_lines
+        self._cache_ttl_seconds = max(1, int(cache_ttl_seconds))
+        self._render_lock = threading.Lock()
+        self._last_render_cache = ""
+        self._last_render_monotonic = 0.0
 
     def collect(self) -> List[BotSnapshot]:
         snapshots: List[BotSnapshot] = []
@@ -386,10 +424,23 @@ class BotMetricsExporter:
                     spread_competitiveness_cap_side_pct=_safe_float(latest_minute.get("spread_competitiveness_cap_side_pct")),
                     pnl_governor_target_mode=str(latest_minute.get("pnl_governor_target_mode", "disabled")),
                     position_base=_safe_float(latest_minute.get("position_base")),
+                    position_gross_base=_safe_float(latest_minute.get("position_gross_base")),
+                    position_long_base=_safe_float(latest_minute.get("position_long_base")),
+                    position_short_base=_safe_float(latest_minute.get("position_short_base")),
                     avg_entry_price=_safe_float(latest_minute.get("avg_entry_price")),
+                    avg_entry_price_long=_safe_float(latest_minute.get("avg_entry_price_long")),
+                    avg_entry_price_short=_safe_float(latest_minute.get("avg_entry_price_short")),
+                    bot6_signal_score_active=_safe_float(latest_minute.get("bot6_signal_score_active")),
+                    bot6_cvd_divergence_ratio=_safe_float(latest_minute.get("bot6_cvd_divergence_ratio")),
+                    bot6_delta_spike_ratio=_safe_float(latest_minute.get("bot6_delta_spike_ratio")),
+                    bot7_cvd=_safe_float(latest_minute.get("bot7_cvd")),
+                    bot7_grid_levels=_safe_float(latest_minute.get("bot7_grid_levels")),
+                    bot7_hedge_target_base_pct=_safe_float(latest_minute.get("bot7_hedge_target_base_pct")),
                     fill_stats=fill_stats,
                     portfolio=portfolio,
                     minute_history=minute_history,
+                    derisk_stall_seconds=minute_history.derisk_stall_seconds if minute_history else 0.0,
+                    derisk_stall_active=minute_history.derisk_stall_active if minute_history else 0.0,
                     minute_rows_total=float(self._count_csv_rows(minute_file)),
                     minute_last_timestamp_seconds=ts_epoch,
                     minute_last_age_seconds=max(0.0, datetime.now(timezone.utc).timestamp() - ts_epoch) if ts_epoch > 0 else 1e9,
@@ -408,12 +459,40 @@ class BotMetricsExporter:
             )
         return snapshots
 
-    _last_render_cache: str = ""
-
     def render_prometheus(self) -> str:
+        now = time.monotonic()
+        cache_is_fresh = (
+            bool(self._last_render_cache)
+            and (now - self._last_render_monotonic) <= self._cache_ttl_seconds
+        )
+        if cache_is_fresh:
+            return self._last_render_cache
+
+        # Serve stale cache while another thread refreshes to avoid request pileups.
+        if self._last_render_cache and not self._render_lock.acquire(blocking=False):
+            return self._last_render_cache
+        if self._last_render_cache:
+            try:
+                return self._render_and_update_cache()
+            finally:
+                self._render_lock.release()
+
+        # First request after startup should block until the first payload is ready.
+        with self._render_lock:
+            now = time.monotonic()
+            cache_is_fresh = (
+                bool(self._last_render_cache)
+                and (now - self._last_render_monotonic) <= self._cache_ttl_seconds
+            )
+            if cache_is_fresh:
+                return self._last_render_cache
+            return self._render_and_update_cache()
+
+    def _render_and_update_cache(self) -> str:
         try:
             result = self._render_prometheus_impl()
             self._last_render_cache = result
+            self._last_render_monotonic = time.monotonic()
             return result
         except Exception:
             _LOGGER.exception("bot_metrics_exporter render failure; serving cached payload")
@@ -504,8 +583,30 @@ class BotMetricsExporter:
                 "# TYPE hbot_bot_recent_error_lines gauge",
                 "# HELP hbot_bot_position_base Current position size in base asset (signed: >0 long, <0 short).",
                 "# TYPE hbot_bot_position_base gauge",
+                "# HELP hbot_bot_position_gross_base Gross open position size in base asset (long + short legs).",
+                "# TYPE hbot_bot_position_gross_base gauge",
+                "# HELP hbot_bot_position_long_base Open long-leg base size.",
+                "# TYPE hbot_bot_position_long_base gauge",
+                "# HELP hbot_bot_position_short_base Open short-leg base size.",
+                "# TYPE hbot_bot_position_short_base gauge",
                 "# HELP hbot_bot_avg_entry_price Average entry price of the current position.",
                 "# TYPE hbot_bot_avg_entry_price gauge",
+                "# HELP hbot_bot_avg_entry_price_long Average entry price of the long leg.",
+                "# TYPE hbot_bot_avg_entry_price_long gauge",
+                "# HELP hbot_bot_avg_entry_price_short Average entry price of the short leg.",
+                "# TYPE hbot_bot_avg_entry_price_short gauge",
+                "# HELP hbot_bot7_cvd Bot7 cumulative volume delta from recent public trades.",
+                "# TYPE hbot_bot7_cvd gauge",
+                "# HELP hbot_bot7_grid_levels Active bot7 grid-leg count target.",
+                "# TYPE hbot_bot7_grid_levels gauge",
+                "# HELP hbot_bot7_hedge_target_base_pct Bot7 hedge target as pct of equity/base budget.",
+                "# TYPE hbot_bot7_hedge_target_base_pct gauge",
+                "# HELP hbot_bot6_signal_score_active Bot6 active directional signal score.",
+                "# TYPE hbot_bot6_signal_score_active gauge",
+                "# HELP hbot_bot6_cvd_divergence_ratio Bot6 spot-vs-futures CVD divergence ratio.",
+                "# TYPE hbot_bot6_cvd_divergence_ratio gauge",
+                "# HELP hbot_bot6_delta_spike_ratio Bot6 liquidation-like delta spike ratio.",
+                "# TYPE hbot_bot6_delta_spike_ratio gauge",
                 "# HELP hbot_bot_fill_slippage_bps_sum Cumulative sum of fill price vs mid_ref in bps (positive = worse execution).",
                 "# TYPE hbot_bot_fill_slippage_bps_sum gauge",
                 "# HELP hbot_bot_fill_slippage_bps_count Count of fills contributing to hbot_bot_fill_slippage_bps_sum.",
@@ -525,6 +626,14 @@ class BotMetricsExporter:
                 # FreqText header / table metrics
                 "# HELP hbot_bot_open_pnl_quote Sum of unrealized_pnl across all open positions (from paper_desk_v2.json).",
                 "# TYPE hbot_bot_open_pnl_quote gauge",
+                "# HELP hbot_bot_paper_margin_call_events_total Total paper margin call events observed by paper desk risk counters.",
+                "# TYPE hbot_bot_paper_margin_call_events_total gauge",
+                "# HELP hbot_bot_paper_liquidation_events_total Total paper liquidation event groups observed by paper desk risk counters.",
+                "# TYPE hbot_bot_paper_liquidation_events_total gauge",
+                "# HELP hbot_bot_paper_liquidation_actions_total Total paper liquidation actions observed by paper desk risk counters.",
+                "# TYPE hbot_bot_paper_liquidation_actions_total gauge",
+                "# HELP hbot_bot_paper_margin_level_info Margin level label exported from paper desk risk counters.",
+                "# TYPE hbot_bot_paper_margin_level_info gauge",
                 "# HELP hbot_bot_closed_pnl_quote_total Total realized PnL (sum realized_pnl_quote across fills.csv).",
                 "# TYPE hbot_bot_closed_pnl_quote_total gauge",
                 "# HELP hbot_bot_trades_total Total number of fills rows in fills.csv.",
@@ -589,6 +698,10 @@ class BotMetricsExporter:
                 "# TYPE hbot_bot_derisk_runtime_recovered gauge",
                 "# HELP hbot_bot_derisk_runtime_recovery_count Cumulative count of derisk runtime sizing recoveries.",
                 "# TYPE hbot_bot_derisk_runtime_recovery_count gauge",
+                "# HELP hbot_bot_derisk_stall_seconds Continuous seconds with unchanged non-zero position during derisk/hard-stop flatten context.",
+                "# TYPE hbot_bot_derisk_stall_seconds gauge",
+                "# HELP hbot_bot_derisk_stall_active 1 when derisk/hard-stop flatten context is active and position is unchanged.",
+                "# TYPE hbot_bot_derisk_stall_active gauge",
                 "# HELP hbot_bot_pnl_governor_target_effective_pct Effective daily pnl target as pct of opening equity.",
                 "# TYPE hbot_bot_pnl_governor_target_effective_pct gauge",
                 "# HELP hbot_bot_pnl_governor_size_mult_applied Runtime sizing multiplier applied after clamps.",
@@ -748,6 +861,8 @@ class BotMetricsExporter:
             lines.append(f"hbot_bot_order_book_stale{_fmt_labels(base_labels)} {snapshot.order_book_stale}")
             lines.append(f"hbot_bot_derisk_runtime_recovered{_fmt_labels(base_labels)} {snapshot.derisk_runtime_recovered}")
             lines.append(f"hbot_bot_derisk_runtime_recovery_count{_fmt_labels(base_labels)} {snapshot.derisk_runtime_recovery_count}")
+            lines.append(f"hbot_bot_derisk_stall_seconds{_fmt_labels(base_labels)} {snapshot.derisk_stall_seconds}")
+            lines.append(f"hbot_bot_derisk_stall_active{_fmt_labels(base_labels)} {snapshot.derisk_stall_active}")
             lines.append(
                 f"hbot_bot_pnl_governor_target_effective_pct{_fmt_labels(base_labels)} {snapshot.pnl_governor_target_effective_pct}"
             )
@@ -765,7 +880,26 @@ class BotMetricsExporter:
             lines.append(f"hbot_bot_pnl_governor_target_mode_info{_fmt_labels(target_mode_labels)} 1")
             # Position metrics — always exported regardless of fill_stats
             lines.append(f"hbot_bot_position_base{_fmt_labels(base_labels)} {snapshot.position_base}")
+            lines.append(f"hbot_bot_position_gross_base{_fmt_labels(base_labels)} {snapshot.position_gross_base}")
+            lines.append(f"hbot_bot_position_long_base{_fmt_labels(base_labels)} {snapshot.position_long_base}")
+            lines.append(f"hbot_bot_position_short_base{_fmt_labels(base_labels)} {snapshot.position_short_base}")
             lines.append(f"hbot_bot_avg_entry_price{_fmt_labels(base_labels)} {snapshot.avg_entry_price}")
+            lines.append(f"hbot_bot_avg_entry_price_long{_fmt_labels(base_labels)} {snapshot.avg_entry_price_long}")
+            lines.append(f"hbot_bot_avg_entry_price_short{_fmt_labels(base_labels)} {snapshot.avg_entry_price_short}")
+            lines.append(
+                f"hbot_bot6_signal_score_active{_fmt_labels(base_labels)} {snapshot.bot6_signal_score_active}"
+            )
+            lines.append(
+                f"hbot_bot6_cvd_divergence_ratio{_fmt_labels(base_labels)} {snapshot.bot6_cvd_divergence_ratio}"
+            )
+            lines.append(
+                f"hbot_bot6_delta_spike_ratio{_fmt_labels(base_labels)} {snapshot.bot6_delta_spike_ratio}"
+            )
+            lines.append(f"hbot_bot7_cvd{_fmt_labels(base_labels)} {snapshot.bot7_cvd}")
+            lines.append(f"hbot_bot7_grid_levels{_fmt_labels(base_labels)} {snapshot.bot7_grid_levels}")
+            lines.append(
+                f"hbot_bot7_hedge_target_base_pct{_fmt_labels(base_labels)} {snapshot.bot7_hedge_target_base_pct}"
+            )
             if snapshot.fill_stats:
                 fs = snapshot.fill_stats
                 lines.append(f"hbot_bot_fills_buy_count{_fmt_labels(base_labels)} {fs.buys}")
@@ -805,6 +939,18 @@ class BotMetricsExporter:
             if snapshot.portfolio is not None:
                 pf = snapshot.portfolio
                 lines.append(f"hbot_bot_open_pnl_quote{_fmt_labels(base_labels)} {pf.open_pnl_quote}")
+                lines.append(
+                    f"hbot_bot_paper_margin_call_events_total{_fmt_labels(base_labels)} {pf.paper_margin_call_events_total}"
+                )
+                lines.append(
+                    f"hbot_bot_paper_liquidation_events_total{_fmt_labels(base_labels)} {pf.paper_liquidation_events_total}"
+                )
+                lines.append(
+                    f"hbot_bot_paper_liquidation_actions_total{_fmt_labels(base_labels)} {pf.paper_liquidation_actions_total}"
+                )
+                margin_level_labels = dict(base_labels)
+                margin_level_labels["margin_level"] = pf.paper_margin_level or "unknown"
+                lines.append(f"hbot_bot_paper_margin_level_info{_fmt_labels(margin_level_labels)} 1")
                 for pos in pf.positions:
                     pos_labels = dict(base_labels)
                     pos_labels["instrument_id"] = pos.instrument_id
@@ -826,6 +972,12 @@ class BotMetricsExporter:
                     lines.append(f"hbot_bot_position_side_info{_fmt_labels(side_labels)} 1")
             else:
                 lines.append(f"hbot_bot_open_pnl_quote{_fmt_labels(base_labels)} 0")
+                lines.append(f"hbot_bot_paper_margin_call_events_total{_fmt_labels(base_labels)} 0")
+                lines.append(f"hbot_bot_paper_liquidation_events_total{_fmt_labels(base_labels)} 0")
+                lines.append(f"hbot_bot_paper_liquidation_actions_total{_fmt_labels(base_labels)} 0")
+                margin_level_labels = dict(base_labels)
+                margin_level_labels["margin_level"] = "unknown"
+                lines.append(f"hbot_bot_paper_margin_level_info{_fmt_labels(margin_level_labels)} 1")
             # Minute history metrics (equity start + weekly/monthly PnL)
             if snapshot.minute_history is not None:
                 mh = snapshot.minute_history
@@ -972,6 +1124,7 @@ class BotMetricsExporter:
         try:
             data = json.loads(portfolio_path.read_text(encoding="utf-8"))
             positions_raw = data.get("portfolio", {}).get("positions", {})
+            risk_counters = data.get("risk_counters", {}) if isinstance(data.get("risk_counters"), dict) else {}
             total_unrealized = 0.0
             positions: List[PositionSnapshot] = []
             for key, pos in positions_raw.items():
@@ -996,7 +1149,14 @@ class BotMetricsExporter:
                     opened_at_seconds=opened_s,
                     total_fees_paid_quote=_safe_float(pos.get("total_fees_paid")),
                 ))
-            return PortfolioSnapshot(open_pnl_quote=total_unrealized, positions=positions)
+            return PortfolioSnapshot(
+                open_pnl_quote=total_unrealized,
+                positions=positions,
+                paper_margin_call_events_total=float(risk_counters.get("margin_call_events_total", 0.0) or 0.0),
+                paper_liquidation_events_total=float(risk_counters.get("liquidation_events_total", 0.0) or 0.0),
+                paper_liquidation_actions_total=float(risk_counters.get("liquidation_actions_total", 0.0) or 0.0),
+                paper_margin_level=str(risk_counters.get("last_margin_level", "unknown") or "unknown").strip().lower(),
+            )
         except Exception:
             return None
 
@@ -1043,10 +1203,47 @@ class BotMetricsExporter:
                 pnl += prev_pnl_today
                 return pnl
 
+            derisk_stall_seconds = 0.0
+            derisk_stall_active = 0.0
+            latest_row = rows[-1]
+            latest_dt = parse_iso_ts(latest_row.get("ts", ""))
+            latest_position_base = _safe_float(latest_row.get("position_base"))
+            latest_position_gross = _safe_float(latest_row.get("position_gross_base"), abs(latest_position_base))
+            if latest_dt is not None and abs(latest_position_gross) > 1e-12:
+                stall_start_dt = None
+                for row in reversed(rows):
+                    row_dt = parse_iso_ts(row.get("ts", ""))
+                    if row_dt is None:
+                        break
+                    row_state = str(row.get("state", "")).strip().lower()
+                    row_reasons = set(_split_reasons(str(row.get("risk_reasons", ""))))
+                    row_position_base = _safe_float(row.get("position_base"))
+                    row_position_gross = _safe_float(row.get("position_gross_base"), abs(row_position_base))
+                    same_position = (
+                        abs(row_position_base - latest_position_base) <= 1e-10
+                        and abs(row_position_gross - latest_position_gross) <= 1e-10
+                    )
+                    # SOFT_PAUSE requires explicit derisk reason.
+                    soft_pause_derisk = (
+                        row_state == "soft_pause"
+                        and bool(row_reasons.intersection(_DERISK_WATCHDOG_REASONS))
+                    )
+                    # HARD_STOP with non-zero position is treated as forced flatten context.
+                    hard_stop_flatten = row_state == "hard_stop" and abs(row_position_gross) > 1e-12
+                    if same_position and (soft_pause_derisk or hard_stop_flatten):
+                        stall_start_dt = row_dt
+                        continue
+                    break
+                if stall_start_dt is not None:
+                    derisk_stall_seconds = max(0.0, (latest_dt - stall_start_dt).total_seconds())
+                    derisk_stall_active = 1.0 if derisk_stall_seconds > 0 else 0.0
+
             return MinuteHistoryStats(
                 equity_start_quote=equity_start,
                 realized_pnl_week_quote=_pnl_since(7),
                 realized_pnl_month_quote=_pnl_since(30),
+                derisk_stall_seconds=derisk_stall_seconds,
+                derisk_stall_active=derisk_stall_active,
             )
         except Exception:
             return None
@@ -1264,12 +1461,19 @@ class MetricsHandler(BaseHTTPRequestHandler):
     exporter: BotMetricsExporter
     metrics_path: str = "/metrics"
 
+    def _safe_write(self, body: bytes) -> None:
+        try:
+            self.wfile.write(body)
+        except (BrokenPipeError, ConnectionResetError):
+            # Client disconnected while we were responding; nothing to do.
+            return
+
     def do_GET(self):
         import json as _json
         if self.path == "/health":
             self.send_response(200)
             self.end_headers()
-            self.wfile.write(b'{"status":"ok"}')
+            self._safe_write(b'{"status":"ok"}')
             return
         if self.path.startswith("/fills"):
             bot_filter = None
@@ -1295,19 +1499,19 @@ class MetricsHandler(BaseHTTPRequestHandler):
             self.send_header("Content-Length", str(len(body)))
             self.send_header("Access-Control-Allow-Origin", "*")
             self.end_headers()
-            self.wfile.write(body)
+            self._safe_write(body)
             return
         if self.path != self.metrics_path:
             self.send_response(404)
             self.end_headers()
-            self.wfile.write(b"not found")
+            self._safe_write(b"not found")
             return
         body = self.exporter.render_prometheus().encode("utf-8")
         self.send_response(200)
         self.send_header("Content-Type", "text/plain; version=0.0.4; charset=utf-8")
         self.send_header("Content-Length", str(len(body)))
         self.end_headers()
-        self.wfile.write(body)
+        self._safe_write(body)
 
     def log_message(self, format: str, *args: object) -> None:
         return
@@ -1318,8 +1522,13 @@ def main() -> None:
     port = _env_int("METRICS_PORT", 9400)
     metrics_path = os.getenv("METRICS_PATH", "/metrics")
     log_tail_lines = _env_int("EXPORTER_LOG_TAIL_LINES", 200)
+    cache_ttl_seconds = _env_int("EXPORTER_CACHE_TTL_S", 10)
 
-    exporter = BotMetricsExporter(data_root=data_root, log_tail_lines=log_tail_lines)
+    exporter = BotMetricsExporter(
+        data_root=data_root,
+        log_tail_lines=log_tail_lines,
+        cache_ttl_seconds=cache_ttl_seconds,
+    )
     MetricsHandler.exporter = exporter
     MetricsHandler.metrics_path = metrics_path
 

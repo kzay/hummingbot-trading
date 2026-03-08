@@ -6,6 +6,7 @@ as a parameter to avoid circular imports with hb_bridge.
 from __future__ import annotations
 
 import logging
+import time
 from typing import Any, Optional
 
 logger = logging.getLogger(__name__)
@@ -146,11 +147,13 @@ def _check_hard_stop_transitions(strategy: Any, bridge_state: Any) -> None:
                 )
                 try:
                     from services.contracts.event_schemas import ExecutionIntentEvent
+                    kill_ttl_ms = 300_000
                     intent = ExecutionIntentEvent(
                         producer="hb_bridge",
                         instance_name=instance_name,
                         controller_id=controller_id,
                         action="kill_switch",
+                        expires_at_ms=int(time.time() * 1000) + kill_ttl_ms,
                         metadata={
                             "reason": "hard_stop_transition",
                             "details": "controller entered HARD_STOP",
@@ -166,6 +169,7 @@ def _check_hard_stop_transitions(strategy: Any, bridge_state: Any) -> None:
                         "instance_name": instance_name,
                         "controller_id": controller_id,
                         "action": "kill_switch",
+                        "expires_at_ms": int(time.time() * 1000) + 300_000,
                         "metadata": {
                             "reason": "hard_stop_transition",
                             "details": "controller entered HARD_STOP",

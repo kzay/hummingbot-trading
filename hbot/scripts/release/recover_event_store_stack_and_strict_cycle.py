@@ -87,10 +87,10 @@ def main() -> int:
 
     root = _root()
     containers = {
-        "redis": "hbot-redis",
-        "event_store_service": "hbot-event-store-service",
-        "event_store_monitor": "hbot-event-store-monitor",
-        "day2_gate_monitor": "hbot-day2-gate-monitor",
+        "redis": "redis",
+        "event_store_service": "event-store-service",
+        "event_store_monitor": "event-store-monitor",
+        "day2_gate_monitor": "day2-gate-monitor",
     }
 
     docker_info = _run_cmd(root, ["docker", "info"], timeout_sec=30)

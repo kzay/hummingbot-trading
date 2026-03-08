@@ -156,6 +156,7 @@ def test_build_report_computes_load_metrics_from_stream_samples(tmp_path: Path) 
     assert float(metrics["p1_19_command_latency_under_load_p99_ms"]) == 300.0
     assert float(metrics["p1_19_stream_backlog_growth_rate_pct_per_10min"]) == 0.0
     assert float(metrics["p1_19_stress_window_oom_restart_count"]) == 1.0
+    assert float(metrics["p1_19_sustained_window_qualification_rate_pct"]) == 100.0
 
 
 def test_build_report_uses_fail_closed_sentinels_without_redis(tmp_path: Path) -> None:
@@ -332,3 +333,162 @@ def test_build_report_scopes_restart_counter_to_command_window(tmp_path: Path) -
     assert report["status"] == "pass"
     assert diagnostics["heartbeat_sample_count"] == 2
     assert float(metrics["p1_19_stress_window_oom_restart_count"]) == 0.0
+
+
+def test_build_report_fail_fast_budget_checks_when_enabled(tmp_path: Path) -> None:
+    fake_redis = _FakeRedis(
+        command_rows=[
+            ("1000-0", _payload({"event_type": "paper_exchange_command", "event_id": "cmd-1", "timestamp_ms": 1_000})),
+            ("2000-0", _payload({"event_type": "paper_exchange_command", "event_id": "cmd-2", "timestamp_ms": 2_000})),
+        ],
+        result_rows=[
+            ("1500-0", _payload({"event_type": "paper_exchange_event", "command_event_id": "cmd-1", "timestamp_ms": 1_500})),
+            ("2600-0", _payload({"event_type": "paper_exchange_event", "command_event_id": "cmd-2", "timestamp_ms": 2_600})),
+        ],
+        heartbeat_rows=[
+            (
+                "1000-1",
+                _payload(
+                    {
+                        "event_type": "paper_exchange_heartbeat",
+                        "timestamp_ms": 1_000,
+                        "metadata": {"processed_commands": "10"},
+                    }
+                ),
+            ),
+            (
+                "2000-1",
+                _payload(
+                    {
+                        "event_type": "paper_exchange_heartbeat",
+                        "timestamp_ms": 2_000,
+                        "metadata": {"processed_commands": "5"},
+                    }
+                ),
+            ),
+        ],
+        groups=[["name", "hb_group_paper_exchange", "pending", 0, "lag", 0]],
+    )
+
+    report = build_report(
+        tmp_path,
+        now_ts=5.0,
+        redis_client=fake_redis,
+        lookback_sec=3600,
+        sample_count=100,
+        min_latency_samples=1,
+        min_window_sec=1,
+        enforce_budget_checks=True,
+        min_throughput_cmds_per_sec=5.0,
+        max_latency_p95_ms=200.0,
+        max_latency_p99_ms=250.0,
+        max_backlog_growth_pct_per_10min=1.0,
+        max_restart_count=0.0,
+    )
+    assert report["status"] == "fail"
+    assert "throughput_within_budget" in report["failed_checks"]
+    assert "latency_p95_within_budget" in report["failed_checks"]
+    assert "restart_count_within_budget" in report["failed_checks"]
+
+
+def test_build_report_marks_sustained_window_unqualified_when_below_target(tmp_path: Path) -> None:
+    fake_redis = _FakeRedis(
+        command_rows=[
+            ("1000-0", _payload({"event_type": "paper_exchange_command", "event_id": "cmd-1", "timestamp_ms": 1_000})),
+            ("2000-0", _payload({"event_type": "paper_exchange_command", "event_id": "cmd-2", "timestamp_ms": 2_000})),
+        ],
+        result_rows=[
+            ("1100-0", _payload({"event_type": "paper_exchange_event", "command_event_id": "cmd-1", "timestamp_ms": 1_100})),
+            ("2200-0", _payload({"event_type": "paper_exchange_event", "command_event_id": "cmd-2", "timestamp_ms": 2_200})),
+        ],
+        heartbeat_rows=[
+            (
+                "1000-1",
+                _payload(
+                    {
+                        "event_type": "paper_exchange_heartbeat",
+                        "timestamp_ms": 1_000,
+                        "metadata": {"processed_commands": "1"},
+                    }
+                ),
+            ),
+            (
+                "2000-1",
+                _payload(
+                    {
+                        "event_type": "paper_exchange_heartbeat",
+                        "timestamp_ms": 2_000,
+                        "metadata": {"processed_commands": "2"},
+                    }
+                ),
+            ),
+        ],
+        groups=[["name", "hb_group_paper_exchange", "pending", 0, "lag", 0]],
+    )
+
+    report = build_report(
+        tmp_path,
+        now_ts=5.0,
+        redis_client=fake_redis,
+        lookback_sec=3600,
+        sample_count=100,
+        min_latency_samples=1,
+        min_window_sec=1,
+        sustained_window_sec=180,
+    )
+    metrics = report["metrics"]
+    diagnostics = report["diagnostics"]
+    assert report["status"] == "warning"
+    assert "minimum_sustained_window_seconds" in report["failed_checks"]
+    assert float(metrics["p1_19_sustained_window_required_sec"]) == 180.0
+    assert float(metrics["p1_19_sustained_window_observed_sec"]) == 1.0
+    assert float(metrics["p1_19_sustained_window_qualification_rate_pct"]) == 0.0
+    assert diagnostics["sustained_window_qualified"] is False
+
+
+def test_build_report_fails_when_instance_coverage_below_minimum(tmp_path: Path) -> None:
+    fake_redis = _FakeRedis(
+        command_rows=[
+            (
+                "1000-0",
+                _payload(
+                    {
+                        "event_type": "paper_exchange_command",
+                        "event_id": "cmd-1",
+                        "timestamp_ms": 1_000,
+                        "instance_name": "bot1",
+                    }
+                ),
+            ),
+        ],
+        result_rows=[
+            ("1100-0", _payload({"event_type": "paper_exchange_event", "command_event_id": "cmd-1", "timestamp_ms": 1_100})),
+        ],
+        heartbeat_rows=[
+            (
+                "1000-1",
+                _payload(
+                    {
+                        "event_type": "paper_exchange_heartbeat",
+                        "timestamp_ms": 1_000,
+                        "metadata": {"processed_commands": "1"},
+                    }
+                ),
+            ),
+        ],
+        groups=[["name", "hb_group_paper_exchange", "pending", 0, "lag", 0]],
+    )
+
+    report = build_report(
+        tmp_path,
+        now_ts=5.0,
+        redis_client=fake_redis,
+        lookback_sec=3600,
+        sample_count=100,
+        min_latency_samples=1,
+        min_window_sec=1,
+        min_instance_coverage=2,
+    )
+    assert report["status"] == "warning"
+    assert "minimum_instance_coverage" in report["failed_checks"]
+    assert float(report["metrics"]["p1_19_command_instance_coverage_count"]) == 1.0

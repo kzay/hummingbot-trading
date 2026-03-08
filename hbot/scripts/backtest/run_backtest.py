@@ -17,8 +17,8 @@ from decimal import Decimal
 from pathlib import Path
 
 _SCRIPT_DIR = Path(__file__).resolve().parent
-_HBOT_ROOT = _SCRIPT_DIR.parents[1]
-sys.path.insert(0, str(_HBOT_ROOT))
+_PROJECT_ROOT = _SCRIPT_DIR.parents[1]
+sys.path.insert(0, str(_PROJECT_ROOT))
 
 from scripts.backtest.adapters.epp_v24_adapter import EppV24Adapter
 from scripts.backtest.harness.data_provider import EventStoreProvider
@@ -37,7 +37,7 @@ def main() -> None:
     parser.add_argument("--initial-quote", type=str, default="1000", help="Initial quote balance")
     parser.add_argument("--maker-fee", type=str, default="0.001", help="Maker fee rate")
     parser.add_argument("--taker-fee", type=str, default="0.001", help="Taker fee rate")
-    parser.add_argument("--output-dir", default=str(_HBOT_ROOT / "reports" / "backtest" / "runs"))
+    parser.add_argument("--output-dir", default=str(_PROJECT_ROOT / "reports" / "backtest" / "runs"))
     args = parser.parse_args()
 
     if args.strategy == "epp_v2_4":

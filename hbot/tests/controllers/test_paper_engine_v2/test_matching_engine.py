@@ -148,6 +148,18 @@ class TestFillLifecycle:
         pos_events = [e for e in events if isinstance(e, PositionChanged)]
         assert len(pos_events) > 0
 
+    def test_market_buy_fill_uses_best_ask_and_taker_fee(self):
+        engine = make_engine(fill_model=TopOfBookFillModel())
+        engine.update_book(make_book("100.00", "100.05", ask_size="5.0"))
+        order = make_order("buy", "market", "100.10", "1.0")
+        order.crossed_at_creation = True
+        engine.submit_order(order, _now())
+        events = engine.tick(_now())
+        fill = next(e for e in events if isinstance(e, OrderFilled))
+        assert fill.fill_price == Decimal("100.05")
+        assert fill.is_maker is False
+        assert fill.fee == Decimal("100.05") * Decimal("0.0006")
+
     def test_order_fully_filled_removed_from_open(self):
         engine = make_engine(fill_model=TopOfBookFillModel())
         engine.update_book(make_book())
@@ -194,7 +206,26 @@ class TestFillLifecycle:
             engine.tick(now + i * 200_000_000)  # 200ms apart
         assert order.fill_count <= 2
 
-    def test_price_protection_skips_far_worse_fill(self):
+    def test_price_protection_skips_far_worse_fill_for_non_market_orders(self):
+        class _FarWorseFillModel:
+            def evaluate(self, order, book, now_ns):
+                top = book.best_ask if order.side == OrderSide.BUY else book.best_bid
+                return type("D", (), {
+                    "fill_quantity": Decimal("0.1"),
+                    "fill_price": top.price + Decimal("2"),
+                    "is_maker": False,
+                    "queue_delay_ms": 0,
+                })()
+
+        engine = make_engine(fill_model=_FarWorseFillModel())
+        engine._config.price_protection_points = 1
+        engine.update_book(make_book("100.00", "100.05"))
+        order = make_order("buy", "limit_maker", "100.04", "0.1")
+        engine.submit_order(order, _now())
+        events = engine.tick(_now())
+        assert not any(isinstance(e, OrderFilled) for e in events)
+
+    def test_price_protection_does_not_block_market_orders(self):
         class _FarWorseFillModel:
             def evaluate(self, order, book, now_ns):
                 top = book.best_ask if order.side == OrderSide.BUY else book.best_bid
@@ -212,7 +243,46 @@ class TestFillLifecycle:
         order.crossed_at_creation = True
         engine.submit_order(order, _now())
         events = engine.tick(_now())
-        assert not any(isinstance(e, OrderFilled) for e in events)
+        assert any(isinstance(e, OrderFilled) for e in events)
+
+    def test_price_protection_does_not_block_maker_fills(self):
+        class _MakerFarFromTopFillModel:
+            def evaluate(self, order, book, now_ns):
+                top = book.best_bid if order.side == OrderSide.SELL else book.best_ask
+                fill_price = (top.price - Decimal("2")) if order.side == OrderSide.SELL else (top.price + Decimal("2"))
+                return type("D", (), {
+                    "fill_quantity": Decimal("0.1"),
+                    "fill_price": fill_price,
+                    "is_maker": True,
+                    "queue_delay_ms": 0,
+                })()
+
+        engine = make_engine(fill_model=_MakerFarFromTopFillModel())
+        engine._config.price_protection_points = 1
+        engine.update_book(make_book("100.00", "100.05"))
+        order = make_order("sell", "limit_maker", "100.20", "0.1")
+        engine.submit_order(order, _now())
+        events = engine.tick(_now())
+        assert any(isinstance(e, OrderFilled) for e in events)
+
+    def test_liquidity_consumption_does_not_zero_maker_fills(self):
+        """Regression: maker fills should not be clipped to zero by exact-level book lookup."""
+        class _MakerFillAtLimitPrice:
+            def evaluate(self, order, book, now_ns):
+                return type("D", (), {
+                    "fill_quantity": Decimal("0.1"),
+                    "fill_price": order.price,
+                    "is_maker": True,
+                    "queue_delay_ms": 0,
+                })()
+
+        engine = make_engine(fill_model=_MakerFillAtLimitPrice())
+        engine._config.liquidity_consumption = True
+        engine.update_book(make_book("100.00", "100.05"))
+        order = make_order("buy", "limit_maker", "99.94", "0.1")
+        engine.submit_order(order, _now())
+        events = engine.tick(_now())
+        assert any(isinstance(e, OrderFilled) for e in events)
 
 
 class TestCancellation:

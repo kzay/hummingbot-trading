@@ -132,7 +132,7 @@ def _max_replay_lag_from_day2(day2_payload: Dict[str, object], reports_root: Pat
     source_compare = _read_json(source_compare_path, {})
     delta_map = source_compare.get("lag_produced_minus_ingested_since_baseline")
     if not isinstance(delta_map, dict) or not delta_map:
-        delta_map = source_compare.get("delta_produced_minus_ingested_since_baseline", {})
+        delta_map = source_compare.get("delta_produced_minus_ingested_since_baseline")
     if not isinstance(delta_map, dict):
         return 10**9
     values: List[int] = []
@@ -150,9 +150,9 @@ def _connect_db():
     return psycopg.connect(
         host=os.getenv("OPS_DB_HOST", "postgres"),
         port=int(os.getenv("OPS_DB_PORT", "5432")),
-        dbname=os.getenv("OPS_DB_NAME", "hbot_ops"),
+        dbname=os.getenv("OPS_DB_NAME", "kzay_capital_ops"),
         user=os.getenv("OPS_DB_USER", "hbot"),
-        password=os.getenv("OPS_DB_PASSWORD", "hbot_dev_password"),
+        password=os.getenv("OPS_DB_PASSWORD", "kzay_capital_dev_password"),
     )
 
 
@@ -236,6 +236,38 @@ def run(
             }
         )
     else:
+        evidence_present = (
+            csv_counts["minute"] > 0
+            and csv_counts["events_unique"] > 0
+            and db_counts["minute"] > 0
+            and db_counts["events"] > 0
+        )
+        checks.append(
+            {
+                "name": "nonzero_ingestion_evidence",
+                "severity": "critical",
+                "pass": evidence_present,
+                "reason": (
+                    "canonical plane has non-zero csv and db evidence"
+                    if evidence_present
+                    else (
+                        "canonical plane missing non-zero evidence "
+                        f"(csv_minute={csv_counts['minute']} csv_events={csv_counts['events_unique']} "
+                        f"db_minute={db_counts['minute']} db_events={db_counts['events']})"
+                    )
+                ),
+                "metrics": {
+                    "csv_minute": int(csv_counts["minute"]),
+                    "csv_events_unique": int(csv_counts["events_unique"]),
+                    "db_minute": int(db_counts["minute"]),
+                    "db_events": int(db_counts["events"]),
+                },
+                "evidence_paths": [
+                    str(reports_root / "ops_db_writer" / "latest.json"),
+                    str(reports_root / "event_store"),
+                ],
+            }
+        )
         parity = {
             "minute_delta_ratio": _parity_delta_ratio(db_counts["minute"], csv_counts["minute"]),
             "fills_delta_ratio": _parity_delta_ratio(db_counts["fills"], csv_counts["fills"]),

@@ -1,0 +1,70 @@
+{
+  "ts_utc": "2026-03-05T20:28:39.377567+00:00",
+  "period": {
+    "start": "2026-02-27",
+    "end": "2026-02-27",
+    "requested_start": "",
+    "requested_end": ""
+  },
+  "coverage_days": 1,
+  "trading_days_count": 1,
+  "passing_days_count": 1,
+  "warnings": [
+    "slippage_delta_unavailable",
+    "sharpe_ratio_vs_paper_unavailable_or_invalid"
+  ],
+  "metrics": {
+    "total_testnet_fills": 138,
+    "total_paper_fills": 0,
+    "total_rejections": 0,
+    "rejection_rate": 0.0,
+    "weighted_avg_testnet_slippage_bps": 0.0,
+    "weighted_avg_paper_slippage_bps": null,
+    "slippage_delta_bps": null,
+    "hard_stop_incident_days": 0,
+    "hard_stop_incident_total": 0,
+    "testnet_sharpe_annualized": 0.0,
+    "paper_sharpe_annualized": 0.0,
+    "sharpe_ratio_vs_paper": null
+  },
+  "road5_gate": {
+    "pass": false,
+    "required_gate_criteria": [
+      "calendar_coverage_days_gte_28",
+      "trading_days_gte_20",
+      "no_hard_stop_incidents",
+      "slippage_delta_lt_2bps",
+      "rejection_rate_lt_0_5pct",
+      "testnet_sharpe_gte_0_8x_paper"
+    ],
+    "criteria": {
+      "calendar_coverage_days_gte_28": false,
+      "trading_days_gte_20": false,
+      "no_hard_stop_incidents": true,
+      "slippage_delta_lt_2bps": false,
+      "rejection_rate_lt_0_5pct": true,
+      "testnet_sharpe_gte_0_8x_paper": false
+    },
+    "failed_criteria": [
+      "calendar_coverage_days_gte_28",
+      "trading_days_gte_20",
+      "slippage_delta_lt_2bps",
+      "testnet_sharpe_gte_0_8x_paper"
+    ]
+  },
+  "daily_breakdown": [
+    {
+      "day": "2026-02-27",
+      "status": "pass",
+      "path": "F:\\Environement\\git-repo\\hummingbot_custo\\hbot\\reports\\strategy\\testnet_daily_scorecard_20260227.json",
+      "testnet_fill_count": 138,
+      "paper_fill_count": 0,
+      "rejection_count": 0,
+      "avg_testnet_slippage_bps": 0.0,
+      "avg_paper_slippage_bps": 0.0,
+      "hard_stop_incident_count": 0,
+      "testnet_net_pnl_quote": -0.31580877218800474,
+      "paper_net_pnl_quote": 0.0
+    }
+  ]
+}

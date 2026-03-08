@@ -72,6 +72,25 @@ def _percentile(sorted_vals: List[float], p: float) -> float:
     return float(sorted_vals[idx])
 
 
+def _csv_values(value: str) -> List[str]:
+    out: List[str] = []
+    for token in str(value or "").split(","):
+        text = str(token or "").strip()
+        if text:
+            out.append(text)
+    return out
+
+
+def _default_harness_producer() -> str:
+    explicit = str(os.getenv("PAPER_EXCHANGE_LOAD_HARNESS_PRODUCER", "")).strip()
+    if explicit:
+        return explicit
+    allowed = _csv_values(str(os.getenv("PAPER_EXCHANGE_ALLOWED_COMMAND_PRODUCERS", "")))
+    if allowed:
+        return str(allowed[0])
+    return "hb.paper_engine_v2"
+
+
 def _heartbeat_info(r: Any, heartbeat_stream: str, now_ms: int) -> Dict[str, object]:
     try:
         rows = r.xrevrange(heartbeat_stream, "+", "-", count=1)
@@ -132,15 +151,19 @@ def _publish_sync_state_burst(
     duration_sec: float,
     target_cmd_rate: float,
     producer: str,
-    instance_name: str,
+    instance_names: List[str],
     connector_name: str,
     trading_pair: str,
 ) -> Dict[str, object]:
     start_perf = time.perf_counter()
     end_perf = start_perf + max(0.1, float(duration_sec))
     interval_s = 1.0 / max(1.0, float(target_cmd_rate))
+    active_instances = [name for name in instance_names if str(name).strip()]
+    if not active_instances:
+        active_instances = ["bot1"]
 
     sent_ts_by_event_id: Dict[str, int] = {}
+    published_count_by_instance: Dict[str, int] = {}
     publish_failures = 0
     seq = 0
     next_emit = start_perf
@@ -153,6 +176,7 @@ def _publish_sync_state_burst(
             continue
         event_id = f"pe-load-{run_id}-{seq}"
         ts_ms = int(time.time() * 1000)
+        instance_name = str(active_instances[seq % len(active_instances)])
         payload = _build_sync_state_command(
             event_id=event_id,
             producer=producer,
@@ -173,6 +197,7 @@ def _publish_sync_state_burst(
                 publish_failures += 1
             else:
                 sent_ts_by_event_id[event_id] = ts_ms
+                published_count_by_instance[instance_name] = int(published_count_by_instance.get(instance_name, 0)) + 1
         except Exception:
             publish_failures += 1
         seq += 1
@@ -181,6 +206,7 @@ def _publish_sync_state_burst(
     elapsed_sec = max(1e-6, time.perf_counter() - start_perf)
     return {
         "sent_ts_by_event_id": sent_ts_by_event_id,
+        "published_count_by_instance": published_count_by_instance,
         "publish_failures": int(publish_failures),
         "elapsed_sec": float(elapsed_sec),
     }
@@ -231,6 +257,7 @@ def build_report(
     target_cmd_rate: float,
     producer: str,
     instance_name: str,
+    instance_names: str,
     connector_name: str,
     trading_pair: str,
     result_timeout_sec: float,
@@ -239,6 +266,7 @@ def build_report(
     require_heartbeat_fresh: bool,
     heartbeat_max_age_s: float,
     min_commands: int,
+    min_instance_coverage: int,
     min_publish_success_rate_pct: float,
     min_result_match_rate_pct: float,
 ) -> Dict[str, object]:
@@ -253,10 +281,16 @@ def build_report(
     run_id = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%S%fZ")
     publish_result = {
         "sent_ts_by_event_id": {},
+        "published_count_by_instance": {},
         "publish_failures": 0,
         "elapsed_sec": 0.0,
     }
     result_ts_by_command_id: Dict[str, int] = {}
+    configured_instance_names = _csv_values(str(instance_names or ""))
+    if not configured_instance_names:
+        configured_instance_names = _csv_values(str(instance_name or ""))
+    if not configured_instance_names:
+        configured_instance_names = ["bot1"]
     if redis_client is not None:
         publish_result = _publish_sync_state_burst(
             r=redis_client,
@@ -266,7 +300,7 @@ def build_report(
             duration_sec=float(duration_sec),
             target_cmd_rate=float(target_cmd_rate),
             producer=producer,
-            instance_name=instance_name,
+            instance_names=configured_instance_names,
             connector_name=connector_name,
             trading_pair=trading_pair,
         )
@@ -283,6 +317,11 @@ def build_report(
 
     sent_ts = publish_result["sent_ts_by_event_id"]
     sent_ts = sent_ts if isinstance(sent_ts, dict) else {}
+    published_count_by_instance_raw = publish_result.get("published_count_by_instance", {})
+    published_count_by_instance = (
+        published_count_by_instance_raw if isinstance(published_count_by_instance_raw, dict) else {}
+    )
+    instance_coverage_count = sum(1 for value in published_count_by_instance.values() if _safe_int(value, 0) > 0)
     published_count = len(sent_ts)
     publish_failures = _safe_int(publish_result.get("publish_failures"), 0)
     elapsed_sec = max(1e-6, _safe_float(publish_result.get("elapsed_sec"), 0.0))
@@ -306,6 +345,7 @@ def build_report(
             (not require_heartbeat_fresh)
             or (bool(heartbeat.get("present", False)) and float(heartbeat.get("age_s", 1e9)) <= heartbeat_max_age_s)
         ),
+        "minimum_instance_coverage": int(instance_coverage_count) >= int(max(1, min_instance_coverage)),
         "min_commands_published": int(published_count) >= int(max(1, min_commands)),
         "publish_success_rate": float(publish_success_rate_pct) >= float(min_publish_success_rate_pct),
         "result_match_rate": float(result_match_rate_pct) >= float(min_result_match_rate_pct),
@@ -320,6 +360,7 @@ def build_report(
         "checks": checks,
         "metrics": {
             "published_commands": int(published_count),
+            "instance_coverage_count": int(instance_coverage_count),
             "publish_failures": int(publish_failures),
             "publish_success_rate_pct": float(publish_success_rate_pct),
             "matched_results": int(matched_count),
@@ -337,6 +378,12 @@ def build_report(
             "event_stream": event_stream,
             "heartbeat_stream": heartbeat_stream,
             "instance_name": instance_name,
+            "instance_names": configured_instance_names,
+            "published_count_by_instance": {
+                str(name): int(_safe_int(count, 0))
+                for name, count in published_count_by_instance.items()
+                if str(name).strip()
+            },
             "connector_name": connector_name,
             "trading_pair": trading_pair,
             "producer": producer,
@@ -347,6 +394,7 @@ def build_report(
             "required_heartbeat_fresh": bool(require_heartbeat_fresh),
             "heartbeat_max_age_s": float(heartbeat_max_age_s),
             "min_commands": int(min_commands),
+            "min_instance_coverage": int(max(1, min_instance_coverage)),
             "min_publish_success_rate_pct": float(min_publish_success_rate_pct),
             "min_result_match_rate_pct": float(min_result_match_rate_pct),
             "output_root": str(root),
@@ -369,6 +417,7 @@ def run_harness(
     target_cmd_rate: float,
     producer: str,
     instance_name: str,
+    instance_names: str,
     connector_name: str,
     trading_pair: str,
     result_timeout_sec: float,
@@ -377,6 +426,7 @@ def run_harness(
     require_heartbeat_fresh: bool,
     heartbeat_max_age_s: float,
     min_commands: int,
+    min_instance_coverage: int,
     min_publish_success_rate_pct: float,
     min_result_match_rate_pct: float,
 ) -> int:
@@ -413,6 +463,7 @@ def run_harness(
         target_cmd_rate=float(target_cmd_rate),
         producer=producer,
         instance_name=instance_name,
+        instance_names=instance_names,
         connector_name=connector_name,
         trading_pair=trading_pair,
         result_timeout_sec=float(result_timeout_sec),
@@ -421,6 +472,7 @@ def run_harness(
         require_heartbeat_fresh=bool(require_heartbeat_fresh),
         heartbeat_max_age_s=float(heartbeat_max_age_s),
         min_commands=int(min_commands),
+        min_instance_coverage=int(min_instance_coverage),
         min_publish_success_rate_pct=float(min_publish_success_rate_pct),
         min_result_match_rate_pct=float(min_result_match_rate_pct),
     )
@@ -494,13 +546,18 @@ def main() -> int:
     )
     parser.add_argument(
         "--producer",
-        default=os.getenv("PAPER_EXCHANGE_LOAD_HARNESS_PRODUCER", "hb_bridge_active_adapter"),
+        default=_default_harness_producer(),
         help="Producer name used by harness commands.",
     )
     parser.add_argument(
         "--instance-name",
         default=os.getenv("PAPER_EXCHANGE_LOAD_HARNESS_INSTANCE_NAME", "bot1"),
         help="Instance name used by harness commands.",
+    )
+    parser.add_argument(
+        "--instance-names",
+        default=os.getenv("PAPER_EXCHANGE_LOAD_HARNESS_INSTANCE_NAMES", "bot1,bot3,bot4"),
+        help="Comma-separated instance names for multi-instance load profile.",
     )
     parser.add_argument(
         "--connector-name",
@@ -555,6 +612,12 @@ def main() -> int:
         help="Minimum published commands required for pass-grade evidence.",
     )
     parser.add_argument(
+        "--min-instance-coverage",
+        type=int,
+        default=int(os.getenv("PAPER_EXCHANGE_LOAD_HARNESS_MIN_INSTANCE_COVERAGE", "1")),
+        help="Minimum unique instances that must have published commands.",
+    )
+    parser.add_argument(
         "--min-publish-success-rate-pct",
         type=float,
         default=float(os.getenv("PAPER_EXCHANGE_LOAD_HARNESS_MIN_PUBLISH_SUCCESS_RATE_PCT", "99.0")),
@@ -582,6 +645,7 @@ def main() -> int:
         target_cmd_rate=max(1.0, float(args.target_cmd_rate)),
         producer=str(args.producer),
         instance_name=str(args.instance_name),
+        instance_names=str(args.instance_names),
         connector_name=str(args.connector_name),
         trading_pair=str(args.trading_pair),
         result_timeout_sec=max(0.0, float(args.result_timeout_sec)),
@@ -590,6 +654,7 @@ def main() -> int:
         require_heartbeat_fresh=bool(args.require_heartbeat_fresh),
         heartbeat_max_age_s=max(1.0, float(args.heartbeat_max_age_s)),
         min_commands=max(1, int(args.min_commands)),
+        min_instance_coverage=max(1, int(args.min_instance_coverage)),
         min_publish_success_rate_pct=max(0.0, min(100.0, float(args.min_publish_success_rate_pct))),
         min_result_match_rate_pct=max(0.0, min(100.0, float(args.min_result_match_rate_pct))),
     )

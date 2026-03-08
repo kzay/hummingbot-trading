@@ -149,6 +149,56 @@ def test_gate_diagnostics_metrics_are_exported(tmp_path) -> None:
     assert "hbot_bot_gate_current_value" in text
 
 
+def test_bot6_directional_metrics_are_exported(tmp_path) -> None:
+    minute_file = tmp_path / "bot6" / "logs" / "epp_v24" / "bot6_a" / "minute.csv"
+    minute_file.parent.mkdir(parents=True, exist_ok=True)
+    headers = [
+        "ts",
+        "bot_variant",
+        "bot_mode",
+        "accounting_source",
+        "exchange",
+        "trading_pair",
+        "state",
+        "regime",
+        "equity_quote",
+        "fills_count_today",
+        "realized_pnl_today_quote",
+        "funding_cost_today_quote",
+        "bot6_signal_score_active",
+        "bot6_cvd_divergence_ratio",
+        "bot6_delta_spike_ratio",
+    ]
+    values = {
+        "ts": "2026-02-27T22:00:00+00:00",
+        "bot_variant": "a",
+        "bot_mode": "paper",
+        "accounting_source": "paper_desk_v2",
+        "exchange": "bitget_perpetual",
+        "trading_pair": "BTC-USDT",
+        "state": "running",
+        "regime": "up",
+        "equity_quote": "500",
+        "fills_count_today": "4",
+        "realized_pnl_today_quote": "12.5",
+        "funding_cost_today_quote": "1.5",
+        "bot6_signal_score_active": "8",
+        "bot6_cvd_divergence_ratio": "0.21",
+        "bot6_delta_spike_ratio": "3.6",
+    }
+    minute_file.write_text(
+        ",".join(headers) + "\n" + ",".join(values[h] for h in headers) + "\n",
+        encoding="utf-8",
+    )
+
+    exporter = BotMetricsExporter(data_root=tmp_path)
+    text = exporter.render_prometheus()
+
+    assert "hbot_bot6_signal_score_active" in text
+    assert "hbot_bot6_cvd_divergence_ratio" in text
+    assert "hbot_bot6_delta_spike_ratio" in text
+
+
 def test_open_and_closed_trade_table_metrics_are_exported(tmp_path) -> None:
     base_dir = tmp_path / "bot1" / "logs" / "epp_v24" / "bot1_a"
     minute_file = base_dir / "minute.csv"
@@ -213,3 +263,52 @@ def test_data_plane_consistency_fails_when_minute_age_is_stale(tmp_path) -> None
     text = exporter.render_prometheus()
 
     assert "hbot_data_plane_consistency 0.0" in text
+
+
+def test_derisk_stall_watchdog_metrics_exported_for_soft_pause_derisk(tmp_path) -> None:
+    minute_file = tmp_path / "bot1" / "logs" / "epp_v24" / "bot1_a" / "minute.csv"
+    minute_file.parent.mkdir(parents=True, exist_ok=True)
+    minute_file.write_text(
+        "\n".join(
+            [
+                "ts,bot_variant,bot_mode,accounting_source,exchange,trading_pair,state,regime,equity_quote,fills_count_today,realized_pnl_today_quote,funding_cost_today_quote,position_base,risk_reasons",
+                "2026-02-27T22:00:00+00:00,a,paper,paper_desk_v2,bitget_perpetual,BTC-USDT,soft_pause,neutral_low_vol,500,4,12.5,1.5,0.020,base_pct_above_max|eod_close_pending",
+                "2026-02-27T22:10:00+00:00,a,paper,paper_desk_v2,bitget_perpetual,BTC-USDT,soft_pause,neutral_low_vol,500,4,12.5,1.5,0.020,base_pct_above_max|eod_close_pending",
+                "2026-02-27T22:20:00+00:00,a,paper,paper_desk_v2,bitget_perpetual,BTC-USDT,soft_pause,neutral_low_vol,500,4,12.5,1.5,0.020,base_pct_above_max|eod_close_pending",
+            ]
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+
+    exporter = BotMetricsExporter(data_root=tmp_path)
+    text = exporter.render_prometheus()
+
+    stall_seconds_lines = [line for line in text.splitlines() if line.startswith("hbot_bot_derisk_stall_seconds{")]
+    stall_active_lines = [line for line in text.splitlines() if line.startswith("hbot_bot_derisk_stall_active{")]
+    assert stall_seconds_lines
+    assert stall_active_lines
+    assert any(line.endswith(" 1200.0") for line in stall_seconds_lines)
+    assert any(line.endswith(" 1.0") for line in stall_active_lines)
+
+
+def test_render_uses_cache_until_ttl_expires(tmp_path) -> None:
+    minute_file = tmp_path / "bot1" / "logs" / "epp_v24" / "bot1_a" / "minute.csv"
+    _write_minute_csv(minute_file, include_net=True)
+
+    class _CountingExporter(BotMetricsExporter):
+        def __init__(self, *args, **kwargs):
+            super().__init__(*args, **kwargs)
+            self.render_calls = 0
+
+        def _render_prometheus_impl(self) -> str:
+            self.render_calls += 1
+            return super()._render_prometheus_impl()
+
+    exporter = _CountingExporter(data_root=tmp_path, cache_ttl_seconds=60)
+    first = exporter.render_prometheus()
+    second = exporter.render_prometheus()
+
+    assert first
+    assert second
+    assert exporter.render_calls == 1

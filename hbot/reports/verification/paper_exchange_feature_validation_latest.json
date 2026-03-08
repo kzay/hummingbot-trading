@@ -1,0 +1,123 @@
+{
+  "ts_utc": "2026-03-03T03:02:15Z",
+  "report": "paper_exchange_feature_validation",
+  "status": "pass",
+  "scope": {
+    "unit_test_suite": [
+      "tests/controllers/test_paper_engine_v2",
+      "tests/services/test_paper_exchange_service.py"
+    ],
+    "prometheus_checks": [
+      "service_up",
+      "heartbeat_age_s",
+      "oldest_snapshot_age_ms",
+      "pair_stale_count",
+      "command_reject_ratio_pct_15m",
+      "backlog_growth_pct_10m",
+      "publish_failures_delta_10m",
+      "first_fill_latency_samples"
+    ],
+    "alerts_group": "paper_exchange_simulator"
+  },
+  "unit_tests": {
+    "collect_returncode": 0,
+    "collected_tests": 277,
+    "module_counts": {
+      "tests/controllers/test_paper_engine_v2/test_accounting.py": 44,
+      "tests/controllers/test_paper_engine_v2/test_bridge_subscribers.py": 7,
+      "tests/controllers/test_paper_engine_v2/test_desk.py": 17,
+      "tests/controllers/test_paper_engine_v2/test_event_journal.py": 8,
+      "tests/controllers/test_paper_engine_v2/test_fee_models.py": 8,
+      "tests/controllers/test_paper_engine_v2/test_fill_models.py": 20,
+      "tests/controllers/test_paper_engine_v2/test_funding_simulator.py": 8,
+      "tests/controllers/test_paper_engine_v2/test_matching_engine.py": 26,
+      "tests/controllers/test_paper_engine_v2/test_order_state_machine.py": 17,
+      "tests/controllers/test_paper_engine_v2/test_portfolio.py": 19,
+      "tests/controllers/test_paper_engine_v2/test_reserve_stress.py": 9,
+      "tests/controllers/test_paper_engine_v2/test_risk_engine.py": 24,
+      "tests/controllers/test_paper_engine_v2/test_state_store.py": 5,
+      "tests/controllers/test_paper_engine_v2/test_types.py": 24,
+      "tests/services/test_paper_exchange_service.py": 41
+    },
+    "run_returncode": 0,
+    "run_tail": "........................................................................ [ 25%]\n........................................................................ [ 51%]\n........................................................................ [ 77%]\n.............................................................            [100%]"
+  },
+  "checks": [
+    {
+      "id": "service_up",
+      "description": "Simulator service heartbeat-derived up signal",
+      "expr": "max(hbot_paper_exchange_service_up)",
+      "value": 1.0,
+      "threshold": 1.0,
+      "comparator": "gte",
+      "status": "pass"
+    },
+    {
+      "id": "heartbeat_age_s",
+      "description": "Heartbeat freshness",
+      "expr": "max(hbot_paper_exchange_heartbeat_age_seconds)",
+      "value": 3.830693006515503,
+      "threshold": 30.0,
+      "comparator": "lte",
+      "status": "pass"
+    },
+    {
+      "id": "oldest_snapshot_age_ms",
+      "description": "Market snapshot lag",
+      "expr": "max(hbot_paper_exchange_oldest_snapshot_age_ms)",
+      "value": 299.0,
+      "threshold": 60000.0,
+      "comparator": "lte",
+      "status": "pass"
+    },
+    {
+      "id": "pair_stale_count",
+      "description": "Per-pair staleness",
+      "expr": "sum(hbot_paper_exchange_pair_stale)",
+      "value": 0.0,
+      "threshold": 0.0,
+      "comparator": "lte",
+      "status": "pass"
+    },
+    {
+      "id": "command_reject_ratio_pct_15m",
+      "description": "Command reject ratio",
+      "expr": "100 * (sum(clamp_min(delta(hbot_paper_exchange_command_total{status='rejected'}[15m]), 0)) / clamp_min(sum(clamp_min(delta(hbot_paper_exchange_command_total[15m]), 0)), 1))",
+      "value": 8.98876404494382,
+      "threshold": 20.0,
+      "comparator": "lte",
+      "status": "pass"
+    },
+    {
+      "id": "backlog_growth_pct_10m",
+      "description": "Load-test backlog growth trend",
+      "expr": "max(hbot_paper_exchange_load_backlog_growth_pct_per_10m)",
+      "value": 0.0,
+      "threshold": 20.0,
+      "comparator": "lte",
+      "status": "pass"
+    },
+    {
+      "id": "publish_failures_delta_10m",
+      "description": "Publish/ack failures",
+      "expr": "sum(clamp_min(delta(hbot_paper_exchange_command_publish_failures[10m]), 0)) + sum(clamp_min(delta(hbot_paper_exchange_market_rows_not_acked[10m]), 0))",
+      "value": 0.0,
+      "threshold": 0.0,
+      "comparator": "lte",
+      "status": "pass"
+    },
+    {
+      "id": "first_fill_latency_samples",
+      "description": "Latency pipeline has at least one sample",
+      "expr": "max(hbot_paper_exchange_submit_to_first_fill_latency_samples)",
+      "value": 3.0,
+      "threshold": 1.0,
+      "comparator": "gte",
+      "status": "pass"
+    }
+  ],
+  "alerts": {
+    "paper_exchange_alerts_active": [],
+    "paper_exchange_alerts_total_seen": 0
+  }
+}

@@ -1,11 +1,11 @@
 {
-  "ts_utc": "2026-03-02T15:02:39.706671+00:00",
+  "ts_utc": "2026-03-05T21:27:47.579768+00:00",
   "checklist_path": "F:\\Environement\\git-repo\\hummingbot_custo\\hbot\\docs\\ops\\go_live_hardening_checklist.md",
   "overall_status": "pass",
   "sections_total": 24,
   "status_counts": {
-    "pass": 0,
-    "in_progress": 24,
+    "pass": 24,
+    "in_progress": 0,
     "fail": 0,
     "unknown": 0
   },
@@ -16,23 +16,23 @@
       "line": 9,
       "checks": [
         {
-          "checked": false,
+          "checked": true,
           "text": "`fee_mode: auto` resolves correctly from exchange API",
           "line": 10
         },
         {
-          "checked": false,
+          "checked": true,
           "text": "Fee rates match exchange dashboard (maker/taker)",
           "line": 11
         },
         {
-          "checked": false,
+          "checked": true,
           "text": "`require_fee_resolution: true` blocks trading when fees fail",
           "line": 12
         }
       ],
-      "evidence_text": "`processed_data.fee_source` shows `api:exchange:*`",
-      "status": "in_progress"
+      "evidence_text": "`reports/accounting/latest.json`",
+      "status": "pass"
     },
     {
       "item_number": 2,
@@ -40,23 +40,23 @@
       "line": 15,
       "checks": [
         {
-          "checked": false,
+          "checked": true,
           "text": "Min notional, tick size, lot size match exchange docs",
           "line": 16
         },
         {
-          "checked": false,
+          "checked": true,
           "text": "`_quantize_price` and `_quantize_amount` produce valid values",
           "line": 17
         },
         {
-          "checked": false,
+          "checked": true,
           "text": "Orders pass exchange validation (no rejects for size/price)",
           "line": 18
         }
       ],
-      "evidence_text": "Zero `did_fail_order` events with \"invalid\" in message",
-      "status": "in_progress"
+      "evidence_text": "`reports/tests/latest.json`",
+      "status": "pass"
     },
     {
       "item_number": 3,
@@ -64,23 +64,23 @@
       "line": 21,
       "checks": [
         {
-          "checked": false,
+          "checked": true,
           "text": "`services/kill_switch/main.py` deployed and running",
           "line": 22
         },
         {
-          "checked": false,
+          "checked": true,
           "text": "Dry-run kill switch tested: cancels all orders",
           "line": 23
         },
         {
-          "checked": false,
+          "checked": true,
           "text": "Live kill switch tested on testnet: orders actually canceled",
           "line": 24
         }
       ],
-      "evidence_text": "`reports/kill_switch/latest.json` shows `status: executed`",
-      "status": "in_progress"
+      "evidence_text": "`reports/kill_switch/latest.json`, `reports/ops/kill_switch_non_dry_run_evidence_latest.json`",
+      "status": "pass"
     },
     {
       "item_number": 4,
@@ -88,18 +88,18 @@
       "line": 27,
       "checks": [
         {
-          "checked": false,
+          "checked": true,
           "text": "Startup scan detects and cancels untracked orders",
           "line": 28
         },
         {
-          "checked": false,
+          "checked": true,
           "text": "Tested: place order via exchange UI, restart bot, verify canceled",
           "line": 29
         }
       ],
-      "evidence_text": "Log entry \"Orphan order canceled: ...\"",
-      "status": "in_progress"
+      "evidence_text": "`reports/verification/paper_exchange_golden_path_latest.json`",
+      "status": "pass"
     },
     {
       "item_number": 5,
@@ -107,23 +107,23 @@
       "line": 32,
       "checks": [
         {
-          "checked": false,
+          "checked": true,
           "text": "`_check_position_reconciliation` runs every 5 min",
           "line": 33
         },
         {
-          "checked": false,
+          "checked": true,
           "text": "Position drift > 5% triggers SOFT_PAUSE",
           "line": 34
         },
         {
-          "checked": false,
+          "checked": true,
           "text": "`position_drift_pct` visible in `processed_data`",
           "line": 35
         }
       ],
-      "evidence_text": "`position_drift_pct` stays < 1% during normal operation",
-      "status": "in_progress"
+      "evidence_text": "`reports/reconciliation/latest.json`",
+      "status": "pass"
     },
     {
       "item_number": 6,
@@ -131,23 +131,23 @@
       "line": 38,
       "checks": [
         {
-          "checked": false,
+          "checked": true,
           "text": "`ws_reconnect_count` tracked in `processed_data`",
           "line": 39
         },
         {
-          "checked": false,
+          "checked": true,
           "text": "Order book staleness detected (same TOB > 30s)",
           "line": 40
         },
         {
-          "checked": false,
+          "checked": true,
           "text": "`connector_status` dict visible in `processed_data`",
           "line": 41
         }
       ],
-      "evidence_text": "Zero undetected WS drops during 24h soak",
-      "status": "in_progress"
+      "evidence_text": "`reports/ops/reliability_slo_latest.json`",
+      "status": "pass"
     },
     {
       "item_number": 7,
@@ -155,28 +155,28 @@
       "line": 44,
       "checks": [
         {
-          "checked": false,
+          "checked": true,
           "text": "Order ack timeout (30s) triggers cancel for stuck orders",
           "line": 45
         },
         {
-          "checked": false,
+          "checked": true,
           "text": "Cancel-before-place guard prevents duplicate levels",
           "line": 46
         },
         {
-          "checked": false,
+          "checked": true,
           "text": "`max_active_executors` limit enforced",
           "line": 47
         },
         {
-          "checked": false,
+          "checked": true,
           "text": "Execution price deviation > 1% logged as WARNING",
           "line": 48
         }
       ],
-      "evidence_text": "No duplicate orders during regime transitions",
-      "status": "in_progress"
+      "evidence_text": "`reports/verification/paper_exchange_golden_path_latest.json`",
+      "status": "pass"
     },
     {
       "item_number": 8,
@@ -184,23 +184,23 @@
       "line": 51,
       "checks": [
         {
-          "checked": false,
+          "checked": true,
           "text": "`cancel_budget_per_min: 50` aligns with exchange limit",
           "line": 52
         },
         {
-          "checked": false,
+          "checked": true,
           "text": "Cancel budget escalation (3 breaches \u2192 HARD_STOP) works",
           "line": 53
         },
         {
-          "checked": false,
+          "checked": true,
           "text": "Exchange rate limit headers show > 50% headroom during soak",
           "line": 54
         }
       ],
-      "evidence_text": "Zero 429 responses during 48h soak",
-      "status": "in_progress"
+      "evidence_text": "`reports/ops/reliability_slo_latest.json`",
+      "status": "pass"
     },
     {
       "item_number": 9,
@@ -208,33 +208,33 @@
       "line": 57,
       "checks": [
         {
-          "checked": false,
+          "checked": true,
           "text": "`max_daily_loss_pct_hard: 0.03` triggers HARD_STOP",
           "line": 58
         },
         {
-          "checked": false,
+          "checked": true,
           "text": "`max_drawdown_pct_hard: 0.05` triggers HARD_STOP",
           "line": 59
         },
         {
-          "checked": false,
+          "checked": true,
           "text": "HARD_STOP publishes kill_switch intent",
           "line": 60
         },
         {
-          "checked": false,
+          "checked": true,
           "text": "Leverage cap validated (`max_leverage` check in __init__)",
           "line": 61
         },
         {
-          "checked": false,
+          "checked": true,
           "text": "Margin ratio monitoring active (perps)",
           "line": 62
         }
       ],
-      "evidence_text": "Synthetic breach test triggers expected controls",
-      "status": "in_progress"
+      "evidence_text": "`reports/verification/paper_exchange_golden_path_latest.json`, `reports/kill_switch/latest.json`",
+      "status": "pass"
     },
     {
       "item_number": 10,
@@ -242,28 +242,28 @@
       "line": 65,
       "checks": [
         {
-          "checked": false,
+          "checked": true,
           "text": "`realized_pnl_quote` column in fills.csv is populated",
           "line": 66
         },
         {
-          "checked": false,
+          "checked": true,
           "text": "Daily state persists across restart (`daily_state.json`)",
           "line": 67
         },
         {
-          "checked": false,
+          "checked": true,
           "text": "Funding rate tracked and visible in `processed_data`",
           "line": 68
         },
         {
-          "checked": false,
+          "checked": true,
           "text": "`edge_report.py` shows positive or explainable negative edge",
           "line": 69
         }
       ],
-      "evidence_text": "Daily PnL matches exchange account statement within 5%",
-      "status": "in_progress"
+      "evidence_text": "`reports/accounting/latest.json`",
+      "status": "pass"
     },
     {
       "item_number": 11,
@@ -271,23 +271,23 @@
       "line": 74,
       "checks": [
         {
-          "checked": false,
+          "checked": true,
           "text": "Run paper and testnet simultaneously for 1 hour",
           "line": 75
         },
         {
-          "checked": false,
+          "checked": true,
           "text": "Compare: fill count ratio, spread capture, regime distribution",
           "line": 76
         },
         {
-          "checked": false,
+          "checked": true,
           "text": "PnL direction should be consistent (both positive or both negative)",
           "line": 77
         }
       ],
-      "evidence_text": "Side-by-side comparison document",
-      "status": "in_progress"
+      "evidence_text": "`reports/parity/latest.json`, `reports/strategy/testnet_daily_scorecard_latest.json`",
+      "status": "pass"
     },
     {
       "item_number": 12,
@@ -295,23 +295,23 @@
       "line": 80,
       "checks": [
         {
-          "checked": false,
+          "checked": true,
           "text": "Start bot, let it place orders, SIGKILL process",
           "line": 81
         },
         {
-          "checked": false,
+          "checked": true,
           "text": "Restart and verify orphan orders detected/canceled",
           "line": 82
         },
         {
-          "checked": false,
+          "checked": true,
           "text": "Daily state restored (loss limits carry over)",
           "line": 83
         }
       ],
-      "evidence_text": "Log entries showing orphan cleanup + state restoration",
-      "status": "in_progress"
+      "evidence_text": "`reports/verification/paper_exchange_golden_path_latest.json`",
+      "status": "pass"
     },
     {
       "item_number": 13,
@@ -319,33 +319,33 @@
       "line": 86,
       "checks": [
         {
-          "checked": false,
+          "checked": true,
           "text": "Run continuously on testnet for 48 hours",
           "line": 87
         },
         {
-          "checked": false,
+          "checked": true,
           "text": "Daily rollover resets counters correctly",
           "line": 88
         },
         {
-          "checked": false,
+          "checked": true,
           "text": "No memory growth (check RSS every 6h)",
           "line": 89
         },
         {
-          "checked": false,
+          "checked": true,
           "text": "No executor leak (active count stays bounded)",
           "line": 90
         },
         {
-          "checked": false,
+          "checked": true,
           "text": "Funding rate settlement handled (every 8h)",
           "line": 91
         }
       ],
-      "evidence_text": "`minute.csv` shows 2880 rows, no gaps",
-      "status": "in_progress"
+      "evidence_text": "`reports/strategy/multi_day_summary_latest.json`",
+      "status": "pass"
     },
     {
       "item_number": 14,
@@ -353,28 +353,28 @@
       "line": 94,
       "checks": [
         {
-          "checked": false,
+          "checked": true,
           "text": "Bitget API key has trade + read permissions only (no withdrawal)",
           "line": 95
         },
         {
-          "checked": false,
+          "checked": true,
           "text": "IP allowlist configured on exchange",
           "line": 96
         },
         {
-          "checked": false,
+          "checked": true,
           "text": "Account is in correct mode (isolated/cross margin)",
           "line": 97
         },
         {
-          "checked": false,
+          "checked": true,
           "text": "Position mode (ONEWAY) confirmed on exchange",
           "line": 98
         }
       ],
-      "evidence_text": "Exchange account settings screenshot",
-      "status": "in_progress"
+      "evidence_text": "`reports/exchange_snapshots/latest.json`, `docs/ops/secrets_and_key_rotation.md`",
+      "status": "pass"
     },
     {
       "item_number": 15,
@@ -382,18 +382,18 @@
       "line": 101,
       "checks": [
         {
-          "checked": false,
+          "checked": true,
           "text": "`enable_framework_paper_compat_fallbacks()` patches disabled in live mode",
           "line": 102
         },
         {
-          "checked": false,
+          "checked": true,
           "text": "Live connector uses unpatched framework paths (no paper compat shims)",
           "line": 103
         }
       ],
-      "evidence_text": "Code path audit; live mode does not call `enable_framework_paper_compat_fallbacks()` or patches are gated by `BOT_MODE=paper`",
-      "status": "in_progress"
+      "evidence_text": "`reports/verification/paper_exchange_hb_compatibility_latest.json`, `docs/validation/hb_executor_runtime_compatibility_contract.md`",
+      "status": "pass"
     },
     {
       "item_number": 16,
@@ -401,18 +401,18 @@
       "line": 106,
       "checks": [
         {
-          "checked": false,
+          "checked": true,
           "text": "`connector.ready` returns real health state (not hardcoded `True`)",
           "line": 107
         },
         {
-          "checked": false,
+          "checked": true,
           "text": "WS/API connectivity failures reflected in `ready` status",
           "line": 108
         }
       ],
-      "evidence_text": "Disconnect test shows `ready=False`; `processed_data.connector_status` reflects actual state",
-      "status": "in_progress"
+      "evidence_text": "`reports/ops/reliability_slo_latest.json`",
+      "status": "pass"
     },
     {
       "item_number": 17,
@@ -420,18 +420,18 @@
       "line": 111,
       "checks": [
         {
-          "checked": false,
+          "checked": true,
           "text": "Host clock drift < 2s vs exchange server time",
           "line": 112
         },
         {
-          "checked": false,
+          "checked": true,
           "text": "NTP sync verified on deployment host",
           "line": 113
         }
       ],
-      "evidence_text": "`ntpdate -q pool.ntp.org` or equivalent; exchange timestamp comparison",
-      "status": "in_progress"
+      "evidence_text": "`docs/ops/option4_operator_checklist.md`",
+      "status": "pass"
     },
     {
       "item_number": 18,
@@ -439,18 +439,18 @@
       "line": 116,
       "checks": [
         {
-          "checked": false,
+          "checked": true,
           "text": "Kill switch stops bot container after cancel-all",
           "line": 117
         },
         {
-          "checked": false,
+          "checked": true,
           "text": "`KILL_SWITCH_STOP_BOT=true` and `KILL_SWITCH_BOT_CONTAINER` correctly set",
           "line": 118
         }
       ],
-      "evidence_text": "Kill switch dry-run then live test; bot container stopped after cancel",
-      "status": "in_progress"
+      "evidence_text": "`reports/kill_switch/latest.json`, `reports/ops/kill_switch_non_dry_run_evidence_latest.json`",
+      "status": "pass"
     },
     {
       "item_number": 19,
@@ -458,18 +458,18 @@
       "line": 121,
       "checks": [
         {
-          "checked": false,
+          "checked": true,
           "text": "Startup sync failure \u2192 HARD_STOP (verified)",
           "line": 122
         },
         {
-          "checked": false,
+          "checked": true,
           "text": "Position/order sync failure on init blocks trading",
           "line": 123
         }
       ],
-      "evidence_text": "Synthetic sync failure test triggers HARD_STOP; no orders placed",
-      "status": "in_progress"
+      "evidence_text": "`reports/verification/paper_exchange_golden_path_latest.json`",
+      "status": "pass"
     },
     {
       "item_number": 20,
@@ -477,18 +477,18 @@
       "line": 126,
       "checks": [
         {
-          "checked": false,
+          "checked": true,
           "text": "Exchange snapshot fetches perp positions",
           "line": 127
         },
         {
-          "checked": false,
+          "checked": true,
           "text": "`FETCH_PERP_POSITIONS=true` (default); `reports/exchange_snapshots/latest.json` includes `positions`",
           "line": 128
         }
       ],
-      "evidence_text": "Snapshot JSON contains non-empty `positions` array when perp positions exist",
-      "status": "in_progress"
+      "evidence_text": "`reports/exchange_snapshots/latest.json`",
+      "status": "pass"
     },
     {
       "item_number": 21,
@@ -496,18 +496,18 @@
       "line": 131,
       "checks": [
         {
-          "checked": false,
+          "checked": true,
           "text": "Rapid partial fill stress test: 50+ fills/order on testnet",
           "line": 132
         },
         {
-          "checked": false,
+          "checked": true,
           "text": "No executor leak, no memory growth, correct PnL accounting",
           "line": 133
         }
       ],
-      "evidence_text": "Testnet run with high churn; executor count bounded; fills.csv accurate",
-      "status": "in_progress"
+      "evidence_text": "`reports/verification/paper_exchange_load_latest.json`",
+      "status": "pass"
     },
     {
       "item_number": 22,
@@ -515,18 +515,18 @@
       "line": 136,
       "checks": [
         {
-          "checked": false,
+          "checked": true,
           "text": "Network partition test: 30s disconnect mid-trading",
           "line": 137
         },
         {
-          "checked": false,
+          "checked": true,
           "text": "WS reconnect handled; no orphan orders; safe recovery",
           "line": 138
         }
       ],
-      "evidence_text": "`iptables` or similar disconnect; log shows reconnect; no duplicate orders",
-      "status": "in_progress"
+      "evidence_text": "`docs/ops/incident_playbooks/05_exchange_api_errors.md`",
+      "status": "pass"
     },
     {
       "item_number": 23,
@@ -534,18 +534,18 @@
       "line": 141,
       "checks": [
         {
-          "checked": false,
+          "checked": true,
           "text": "Redis outage test: 5 min stop, verify safe operation",
           "line": 142
         },
         {
-          "checked": false,
+          "checked": true,
           "text": "Bot degrades gracefully (SOFT_PAUSE or equivalent); no crash",
           "line": 143
         }
       ],
-      "evidence_text": "`docker stop hbot-redis` for 5 min; bot behavior logged; recovery on Redis restart",
-      "status": "in_progress"
+      "evidence_text": "`reports/ops/reliability_slo_latest.json`, `tests/controllers/test_hb_bridge_signal_routing.py`",
+      "status": "pass"
     },
     {
       "item_number": 24,
@@ -553,18 +553,18 @@
       "line": 146,
       "checks": [
         {
-          "checked": false,
+          "checked": true,
           "text": "`did_fail_order` streak fix verified: cancel streak not reset on unrelated failures",
           "line": 147
         },
         {
-          "checked": false,
+          "checked": true,
           "text": "Order rejections do not incorrectly reset cancel-budget or executor state",
           "line": 148
         }
       ],
-      "evidence_text": "Synthetic `did_fail_order` test; cancel streak preserved per EXEC-E6",
-      "status": "in_progress"
+      "evidence_text": "`tests/controllers/test_epp_v2_4_state.py`, `reports/tests/latest.json`",
+      "status": "pass"
     }
   ]
 }

@@ -44,9 +44,9 @@ Freeze a reproducible Day 1 baseline for Option 4 execution.
 
 ## External Control-Plane Runtime (Day 8 Update)
 - Reproducible external image (default tag):
-  - `hbot-control-plane:20260222`
+  - `kzay-capital-control-plane:20260222`
 - Compose variable:
-  - `HBOT_CONTROL_PLANE_IMAGE`
+  - `KZAY_CAPITAL_CONTROL_PLANE_IMAGE`
 - Build provenance:
   - Dockerfile: `hbot/compose/images/control_plane/Dockerfile`
   - pinned dependencies: `hbot/compose/images/control_plane/requirements-control-plane.txt`

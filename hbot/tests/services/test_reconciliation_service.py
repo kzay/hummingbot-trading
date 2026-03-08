@@ -9,6 +9,7 @@ from pathlib import Path
 from unittest.mock import patch
 
 from services.reconciliation_service.main import (
+    _apply_fill_reconciliation_report,
     _critical_action_name,
     _derive_reconciliation_actions,
     _apply_exchange_snapshot_check,
@@ -20,6 +21,7 @@ from services.reconciliation_service.main import (
     _severity,
     _write_json,
 )
+from services.reconciliation_service.fill_reconciler import reconcile_fills
 
 
 # ── helpers ──────────────────────────────────────────────────────────
@@ -132,6 +134,57 @@ class TestReportShape:
         assert set(result.keys()) == {"severity", "check", "message", "bot", "details"}
         assert result["severity"] == "warning"
         assert result["bot"] == "bot1"
+
+    def test_fill_reconciler_tracks_amount_fee_and_timestamp_mismatches(self):
+        local = [
+            {
+                "order_id": "oid-1",
+                "price": "100.0",
+                "amount_base": "1.0",
+                "fee_quote": "0.10",
+                "ts": "2026-03-05T00:00:00Z",
+            }
+        ]
+        exchange = [
+            {
+                "order": "oid-1",
+                "price": 100.0,
+                "amount": 1.3,
+                "fee": {"cost": 0.25},
+                "timestamp": "2026-03-05T00:01:10Z",
+            }
+        ]
+        report = reconcile_fills(local, exchange, amount_tolerance_pct=0.05, fee_tolerance_pct=0.05, timestamp_tolerance_ms=5_000)
+        assert report["matched_count"] == 1
+        assert report["amount_mismatch_count"] == 1
+        assert report["fee_mismatch_count"] == 1
+        assert report["timestamp_mismatch_count"] == 1
+
+    def test_apply_fill_reconciliation_report_surfaces_new_mismatch_counts(self):
+        findings = []
+        _apply_fill_reconciliation_report(
+            findings,
+            {
+                "exchange": "bitget",
+                "bots": [
+                    {
+                        "bot": "bot1",
+                        "status": "critical",
+                        "missing_local_count": 0,
+                        "missing_exchange_count": 1,
+                        "price_mismatch_count": 1,
+                        "amount_mismatch_count": 2,
+                        "fee_mismatch_count": 3,
+                        "timestamp_mismatch_count": 4,
+                    }
+                ],
+            },
+        )
+        assert len(findings) == 1
+        details = findings[0]["details"]
+        assert details["amount_mismatch_count"] == 2
+        assert details["fee_mismatch_count"] == 3
+        assert details["timestamp_mismatch_count"] == 4
 
 
 # ── Thresholds and config loading ────────────────────────────────────
@@ -265,16 +318,37 @@ class TestEventFillCounting:
 
 class TestRunLoopRegression:
     def test_run_once_single_row_fill_parity_does_not_crash(self, tmp_path):
+        event_store_root = tmp_path / "reports" / "event_store"
+        event_store_root.mkdir(parents=True, exist_ok=True)
         data_root = tmp_path / "data"
         minute_dir = data_root / "bot1" / "logs" / "epp_v24" / "bot1_a"
         minute_dir.mkdir(parents=True, exist_ok=True)
-        minute_file = minute_dir / "minute.csv"
+        minute_dir.joinpath("minute.csv").write_text(
+            "ts,state,connector_name,trading_pair,fills_count_today,fees_paid_today_quote,turnover_today_x,maker_fee_pct,taker_fee_pct,fee_source\n"
+            f"{datetime.now(timezone.utc).strftime('%Y-%m-%dT%H:%M:%SZ')},running,bitget_perpetual,BTC-USDT,2,0,0,0.0002,0.0006,vip0\n",
+            encoding="utf-8",
+        )
         ts_utc = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
-        minute_file.write_text(
-            (
-                "ts,equity_quote,base_pct,target_base_pct,exchange,fills_count_today,"
-                "fees_paid_today_quote,turnover_today_x,maker_fee_pct,taker_fee_pct,fee_source\n"
-                f"{ts_utc},1000,0.5,0.5,bitget_perpetual,2,0,0,0.0002,0.0006,vip0\n"
+        (event_store_root / f"events_{datetime.now(timezone.utc).strftime('%Y%m%d')}.jsonl").write_text(
+            json.dumps(
+                {
+                    "event_type": "bot_minute_snapshot",
+                    "instance_name": "bot1",
+                    "payload": {
+                        "instance_name": "bot1",
+                        "ts": ts_utc,
+                        "equity_quote": 1000,
+                        "base_pct": 0.5,
+                        "target_base_pct": 0.5,
+                        "connector_name": "bitget_perpetual",
+                        "fills_count_today": 2,
+                        "fees_paid_today_quote": 0,
+                        "turnover_today_x": 0,
+                        "maker_fee_pct": 0.0002,
+                        "taker_fee_pct": 0.0006,
+                        "fee_source": "vip0",
+                    },
+                }
             ),
             encoding="utf-8",
         )
@@ -282,8 +356,8 @@ class TestRunLoopRegression:
         with patch.dict(
             os.environ,
             {
+                "RECON_EVENT_STORE_ROOT": str(event_store_root),
                 "HB_DATA_ROOT": str(data_root),
-                "RECON_EVENT_STORE_ROOT": str(tmp_path / "reports" / "event_store"),
             },
             clear=False,
         ):
@@ -302,18 +376,39 @@ class TestRunLoopRegression:
         ]
         assert parity_findings, "expected fill parity finding for active day with missing event fills"
         assert all(f.get("severity") == "critical" for f in parity_findings)
+        report_payloads = [payload for payload in payloads if isinstance(payload, dict) and "checked_bots" in payload]
+        assert report_payloads
+        latest_report = report_payloads[-1]
+        assert latest_report["active_bots"] == ["bot1"]
+        assert latest_report["covered_active_bots"] == ["bot1"]
+        assert latest_report["active_bots_unchecked"] == []
 
     def test_fill_parity_missing_events_not_flagged_for_non_active_day(self, tmp_path):
+        event_store_root = tmp_path / "reports" / "event_store"
+        event_store_root.mkdir(parents=True, exist_ok=True)
         data_root = tmp_path / "data"
-        minute_dir = data_root / "bot1" / "logs" / "epp_v24" / "bot1_a"
-        minute_dir.mkdir(parents=True, exist_ok=True)
-        minute_file = minute_dir / "minute.csv"
+        data_root.mkdir(parents=True, exist_ok=True)
         ts_utc = (datetime.now(timezone.utc) - timedelta(days=1)).strftime("%Y-%m-%dT%H:%M:%SZ")
-        minute_file.write_text(
-            (
-                "ts,equity_quote,base_pct,target_base_pct,exchange,fills_count_today,"
-                "fees_paid_today_quote,turnover_today_x,maker_fee_pct,taker_fee_pct,fee_source\n"
-                f"{ts_utc},1000,0.5,0.5,bitget_perpetual,2,0,0,0.0002,0.0006,vip0\n"
+        (event_store_root / f"events_{(datetime.now(timezone.utc) - timedelta(days=1)).strftime('%Y%m%d')}.jsonl").write_text(
+            json.dumps(
+                {
+                    "event_type": "bot_minute_snapshot",
+                    "instance_name": "bot1",
+                    "payload": {
+                        "instance_name": "bot1",
+                        "ts": ts_utc,
+                        "equity_quote": 1000,
+                        "base_pct": 0.5,
+                        "target_base_pct": 0.5,
+                        "connector_name": "bitget_perpetual",
+                        "fills_count_today": 2,
+                        "fees_paid_today_quote": 0,
+                        "turnover_today_x": 0,
+                        "maker_fee_pct": 0.0002,
+                        "taker_fee_pct": 0.0006,
+                        "fee_source": "vip0",
+                    },
+                }
             ),
             encoding="utf-8",
         )
@@ -321,8 +416,8 @@ class TestRunLoopRegression:
         with patch.dict(
             os.environ,
             {
+                "RECON_EVENT_STORE_ROOT": str(event_store_root),
                 "HB_DATA_ROOT": str(data_root),
-                "RECON_EVENT_STORE_ROOT": str(tmp_path / "reports" / "event_store"),
             },
             clear=False,
         ):

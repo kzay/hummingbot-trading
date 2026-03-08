@@ -213,7 +213,7 @@ def cmd_compose(root: Path, profile: str, action: str) -> int:
 
 
 def cmd_clear_pyc(root: Path, bot: str) -> int:
-    container = f"hbot-{bot}"
+    container = bot
     cmd = [
         "docker",
         "exec",

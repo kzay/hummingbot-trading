@@ -12,7 +12,7 @@ COMPOSE_DIR="${PROJECT_DIR}/compose"
 ENV_FILE="${PROJECT_DIR}/env/.env"
 
 echo "============================================"
-echo " Hummingbot Infrastructure Status"
+echo " Kzay Capital Trading Infrastructure Status"
 echo " $(date)"
 echo "============================================"
 echo ""
@@ -26,7 +26,7 @@ echo ""
 
 # ---- Resource Usage ----
 echo "---- Resource Usage ----"
-docker stats --no-stream --format "table {{.Name}}\t{{.CPUPerc}}\t{{.MemUsage}}\t{{.NetIO}}" $(docker ps --filter "name=hbot-" -q 2>/dev/null) 2>/dev/null || echo "No running containers"
+docker stats --no-stream --format "table {{.Name}}\t{{.CPUPerc}}\t{{.MemUsage}}\t{{.NetIO}}" $(docker ps --filter "label=com.docker.compose.project=kzay-capital" -q 2>/dev/null) 2>/dev/null || echo "No running containers"
 echo ""
 
 # ---- Disk Usage ----
@@ -68,7 +68,7 @@ echo ""
 
 # ---- Health Checks ----
 echo "---- Health Checks ----"
-for container in $(docker ps --filter "name=hbot-" --format "{{.Names}}" 2>/dev/null); do
+for container in $(docker ps --filter "label=com.docker.compose.project=kzay-capital" --format "{{.Names}}" 2>/dev/null); do
     health=$(docker inspect --format='{{.State.Health.Status}}' "$container" 2>/dev/null || echo "no-healthcheck")
     status=$(docker inspect --format='{{.State.Status}}' "$container" 2>/dev/null || echo "unknown")
     echo "  ${container}: ${status} (health: ${health})"

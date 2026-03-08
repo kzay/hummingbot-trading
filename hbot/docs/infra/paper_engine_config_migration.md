@@ -1,6 +1,6 @@
 # Paper Engine Config Migration
 
-This project now uses a nested `paper_engine` block in `EppV24Config`.
+This project now uses a nested `paper_engine` block in the shared runtime config.
 
 Legacy top-level `paper_*` keys are no longer migrated automatically.
 
@@ -51,9 +51,11 @@ Context keys are also copied into the nested block when creating explicit config
 - `instance_name` -> `paper_engine.instance_name`
 - `variant` -> `paper_engine.variant`
 - `log_dir` -> `paper_engine.log_dir`
+- `artifact_namespace` -> `paper_engine.artifact_namespace`
 
 ## Validation behavior
 
 - Missing `paper_engine` in runtime controller wiring now fails fast.
-- `PaperDesk.from_epp_config(...)` expects `cfg.paper_engine` to exist.
+- `PaperDesk.from_controller_config(...)` expects `cfg.paper_engine` to exist.
+- `PaperDesk.from_epp_config(...)` remains a compatibility alias.
 - `PaperDesk.from_paper_config(...)` remains the recommended constructor.

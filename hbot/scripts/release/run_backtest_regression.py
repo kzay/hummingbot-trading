@@ -1,9 +1,11 @@
 from __future__ import annotations
 
 import argparse
+import os
 import hashlib
 import json
 import sys
+from collections import deque
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Dict, List
@@ -95,17 +97,19 @@ def _fingerprint_event_file(path: Path, sample_size: int = 200) -> Dict[str, obj
     return {"ok": True, "event_count": event_count, "fingerprint": fp, "first_event_ids": first_ids[:10], "first_event_types": first_types[:10]}
 
 
-def _scan_invariants(path: Path) -> Dict[str, object]:
+def _scan_invariants(path: Path, tail_events: int = 5000) -> Dict[str, object]:
     stats = {
         "execution_intent_count": 0,
         "risk_decision_count": 0,
         "intent_missing_expiry_count": 0,
         "risk_denied_missing_reason_count": 0,
+        "invariant_scan_event_count": 0,
     }
     if not path.exists():
         return stats
 
     expiry_required_actions = {"soft_pause", "kill_switch", "set_target_base_pct", "set_daily_pnl_target_pct"}
+    window = deque(maxlen=max(1, int(tail_events)))
     try:
         with path.open("r", encoding="utf-8") as f:
             for line in f:
@@ -116,21 +120,26 @@ def _scan_invariants(path: Path) -> Dict[str, object]:
                     event = json.loads(line)
                 except Exception:
                     continue
-                event_type = str(event.get("event_type", "")).strip()
-                payload = event.get("payload", {}) if isinstance(event.get("payload"), dict) else {}
-                if event_type == "execution_intent":
-                    stats["execution_intent_count"] += 1
-                    action = str(payload.get("action", "")).strip().lower()
-                    if action in expiry_required_actions and payload.get("expires_at_ms") in (None, ""):
-                        stats["intent_missing_expiry_count"] += 1
-                elif event_type == "risk_decision":
-                    stats["risk_decision_count"] += 1
-                    approved = payload.get("approved", True)
-                    reason = str(payload.get("reason", "")).strip()
-                    if approved is False and not reason:
-                        stats["risk_denied_missing_reason_count"] += 1
+                if isinstance(event, dict):
+                    window.append(event)
     except Exception:
         return stats
+
+    stats["invariant_scan_event_count"] = len(window)
+    for event in window:
+        event_type = str(event.get("event_type", "")).strip()
+        payload = event.get("payload", {}) if isinstance(event.get("payload"), dict) else {}
+        if event_type == "execution_intent":
+            stats["execution_intent_count"] += 1
+            action = str(payload.get("action", "")).strip().lower()
+            if action in expiry_required_actions and payload.get("expires_at_ms") in (None, ""):
+                stats["intent_missing_expiry_count"] += 1
+        elif event_type == "risk_decision":
+            stats["risk_decision_count"] += 1
+            approved = payload.get("approved", True)
+            reason = str(payload.get("reason", "")).strip()
+            if approved is False and not reason:
+                stats["risk_denied_missing_reason_count"] += 1
     return stats
 
 
@@ -150,6 +159,12 @@ def main() -> int:
         default="",
         help="Optional explicit integrity file path to pin deterministic input.",
     )
+    parser.add_argument(
+        "--invariant-tail-events",
+        type=int,
+        default=max(100, int(os.getenv("BACKTEST_REGRESSION_INVARIANT_TAIL_EVENTS", "5000"))),
+        help="Evaluate invariants on the latest N events to avoid stale legacy violations.",
+    )
     args = parser.parse_args()
 
     root = Path("/workspace/hbot") if Path("/.dockerenv").exists() else Path(__file__).resolve().parents[2]
@@ -168,7 +183,7 @@ def main() -> int:
     reports_root.mkdir(parents=True, exist_ok=True)
 
     fp = _fingerprint_event_file(event_file, sample_size=max(10, args.sample_size)) if event_file else {"ok": False, "event_count": 0, "fingerprint": "", "first_event_ids": [], "first_event_types": []}
-    inv = _scan_invariants(event_file)
+    inv = _scan_invariants(event_file, tail_events=max(1, int(args.invariant_tail_events)))
     integrity = _read_json(integrity_file, {}) if integrity_file else {}
     missing_corr = int(integrity.get("missing_correlation_count", 0))
 
@@ -218,6 +233,9 @@ def main() -> int:
             "sample_event_types": fp.get("first_event_types", []),
         },
         "invariants": inv,
+        "inputs": {
+            "invariant_tail_events": max(1, int(args.invariant_tail_events)),
+        },
     }
 
     stamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")

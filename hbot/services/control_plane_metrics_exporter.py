@@ -6,9 +6,10 @@ import os
 from datetime import datetime, timezone
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
-from typing import Dict, List, Optional, Tuple
+from typing import Any, Dict, List, Optional, Tuple
 
 
+from services.hb_bridge.redis_client import RedisStreamClient
 from services.common.utils import (
     env_int as _env_int,
     parse_iso_ts as _safe_parse_iso_ts,
@@ -32,11 +33,70 @@ def _status_to_bool(status: str, good_values: Tuple[str, ...]) -> float:
     return 1.0 if str(status).strip().lower() in good_values else 0.0
 
 
+def _safe_int(value: object, default: int = 0) -> int:
+    try:
+        if value is None:
+            return default
+        return int(value)
+    except Exception:
+        return default
+
+
+def _percentile(sorted_values: List[float], p: float) -> float:
+    if not sorted_values:
+        return 0.0
+    idx = int(max(0, min(len(sorted_values) - 1, (len(sorted_values) - 1) * p)))
+    return float(sorted_values[idx])
+
+
 class ControlPlaneMetricsExporter:
-    def __init__(self, reports_root: Path, data_root: Path, freshness_max_sec: int = 1800):
+    def __init__(
+        self,
+        reports_root: Path,
+        data_root: Path,
+        freshness_max_sec: int = 1800,
+        *,
+        redis_host: str = "redis",
+        redis_port: int = 6379,
+        redis_db: int = 0,
+        redis_password: str = "",
+        redis_enabled: bool = True,
+        paper_exchange_heartbeat_stream: str = "hb.paper_exchange.heartbeat.v1",
+        paper_exchange_heartbeat_max_age_sec: int = 30,
+        paper_exchange_load_report_path: str = "verification/paper_exchange_load_latest.json",
+        paper_exchange_threshold_inputs_path: str = "verification/paper_exchange_threshold_inputs_latest.json",
+        paper_exchange_command_journal_path: str = "verification/paper_exchange_command_journal_latest.json",
+        paper_exchange_state_snapshot_path: str = "verification/paper_exchange_state_snapshot_latest.json",
+        paper_exchange_pair_snapshot_path: str = "verification/paper_exchange_pair_snapshot_latest.json",
+        paper_exchange_market_fill_journal_path: str = "verification/paper_exchange_market_fill_journal_latest.json",
+    ):
         self._reports_root = reports_root
         self._data_root = data_root
         self._freshness_max_sec = freshness_max_sec
+        self._paper_exchange_heartbeat_stream = str(paper_exchange_heartbeat_stream or "").strip() or "hb.paper_exchange.heartbeat.v1"
+        self._paper_exchange_heartbeat_max_age_sec = max(1, int(paper_exchange_heartbeat_max_age_sec))
+        self._paper_exchange_load_report_path = self._resolve_reports_path(paper_exchange_load_report_path)
+        self._paper_exchange_threshold_inputs_path = self._resolve_reports_path(paper_exchange_threshold_inputs_path)
+        self._paper_exchange_command_journal_path = self._resolve_reports_path(paper_exchange_command_journal_path)
+        self._paper_exchange_state_snapshot_path = self._resolve_reports_path(paper_exchange_state_snapshot_path)
+        self._paper_exchange_pair_snapshot_path = self._resolve_reports_path(paper_exchange_pair_snapshot_path)
+        self._paper_exchange_market_fill_journal_path = self._resolve_reports_path(paper_exchange_market_fill_journal_path)
+        self._redis_client = RedisStreamClient(
+            host=str(redis_host),
+            port=int(redis_port),
+            db=int(redis_db),
+            password=str(redis_password or "") or None,
+            enabled=bool(redis_enabled),
+        )
+
+    def _resolve_reports_path(self, path_value: str) -> Path:
+        path = Path(str(path_value or "").strip())
+        if not path.is_absolute():
+            parts = list(path.parts)
+            if parts and str(parts[0]).strip().lower() == "reports":
+                path = Path(*parts[1:]) if len(parts) > 1 else Path(".")
+            path = self._reports_root / path
+        return path
 
     def _latest_integrity_file(self) -> Path:
         event_store_root = self._reports_root / "event_store"
@@ -125,6 +185,241 @@ class ControlPlaneMetricsExporter:
             )
         return out
 
+    @staticmethod
+    def _stream_entry_ts_ms(entry_id: str) -> int:
+        text = str(entry_id or "").strip()
+        if "-" not in text:
+            return 0
+        try:
+            return max(0, int(text.split("-", 1)[0]))
+        except Exception:
+            return 0
+
+    def _paper_exchange_service_metrics(self, now: datetime) -> List[str]:
+        labels = {"stream": self._paper_exchange_heartbeat_stream}
+        redis_up = 1.0 if self._redis_client.ping() else 0.0
+        latest = self._redis_client.read_latest(self._paper_exchange_heartbeat_stream) if redis_up > 0 else None
+
+        present = 1.0 if latest else 0.0
+        heartbeat_age_sec = 1e9
+        heartbeat_status = "missing"
+        instance_name = ""
+        service_name = "paper_exchange_service"
+        market_pairs_total = 0
+        stale_pairs = 0
+        newest_snapshot_age_ms = 0
+        oldest_snapshot_age_ms = 0
+        metadata: Dict[str, Any] = {}
+
+        if latest is not None:
+            entry_id, payload = latest
+            payload = payload if isinstance(payload, dict) else {}
+            instance_name = str(payload.get("instance_name", "")).strip()
+            service_name = str(payload.get("service_name", service_name)).strip() or service_name
+            heartbeat_status = str(payload.get("status", "unknown")).strip().lower() or "unknown"
+            market_pairs_total = _safe_int(payload.get("market_pairs_total"), 0)
+            stale_pairs = _safe_int(payload.get("stale_pairs"), 0)
+            newest_snapshot_age_ms = _safe_int(payload.get("newest_snapshot_age_ms"), 0)
+            oldest_snapshot_age_ms = _safe_int(payload.get("oldest_snapshot_age_ms"), 0)
+            metadata = payload.get("metadata", {}) if isinstance(payload.get("metadata", {}), dict) else {}
+            ts_ms = 0
+            try:
+                ts_ms = int(payload.get("timestamp_ms", 0) or 0)
+            except Exception:
+                ts_ms = 0
+            if ts_ms <= 0:
+                ts_ms = self._stream_entry_ts_ms(entry_id)
+            if ts_ms > 0:
+                heartbeat_age_sec = max(0.0, now.timestamp() - (float(ts_ms) / 1000.0))
+
+        heartbeat_fresh = 1.0 if (present > 0 and heartbeat_age_sec <= float(self._paper_exchange_heartbeat_max_age_sec)) else 0.0
+        service_up = 1.0 if (redis_up > 0 and heartbeat_fresh > 0) else 0.0
+
+        out = [
+            f"hbot_paper_exchange_redis_up{_fmt_labels(labels)} {redis_up}",
+            f"hbot_paper_exchange_heartbeat_present{_fmt_labels(labels)} {present}",
+            f"hbot_paper_exchange_heartbeat_age_seconds{_fmt_labels(labels)} {heartbeat_age_sec}",
+            f"hbot_paper_exchange_heartbeat_fresh{_fmt_labels(labels)} {heartbeat_fresh}",
+            f"hbot_paper_exchange_service_up{_fmt_labels(labels)} {service_up}",
+            f"hbot_paper_exchange_market_pairs_total{_fmt_labels(labels)} {float(market_pairs_total)}",
+            f"hbot_paper_exchange_stale_pairs_total{_fmt_labels(labels)} {float(stale_pairs)}",
+            f"hbot_paper_exchange_newest_snapshot_age_ms{_fmt_labels(labels)} {float(newest_snapshot_age_ms)}",
+            f"hbot_paper_exchange_oldest_snapshot_age_ms{_fmt_labels(labels)} {float(oldest_snapshot_age_ms)}",
+        ]
+        metadata_int_fields = [
+            "processed_commands",
+            "rejected_commands",
+            "orders_active",
+            "orders_total",
+            "command_latency_samples",
+            "command_latency_avg_ms",
+            "command_latency_max_ms",
+            "generated_fill_events",
+            "generated_partial_fill_events",
+            "market_rows_not_acked",
+            "command_publish_failures",
+        ]
+        for field_name in metadata_int_fields:
+            value = float(_safe_int(metadata.get(field_name), 0))
+            out.append(f"hbot_paper_exchange_{field_name}{_fmt_labels(labels)} {value}")
+        status_labels = {
+            "stream": self._paper_exchange_heartbeat_stream,
+            "status": heartbeat_status,
+            "instance_name": instance_name,
+            "service_name": service_name,
+        }
+        out.append(f"hbot_paper_exchange_heartbeat_status_info{_fmt_labels(status_labels)} 1")
+        return out
+
+    def _paper_exchange_load_report_metrics(self, now: datetime) -> List[str]:
+        payload = _read_json(self._paper_exchange_load_report_path)
+        present = 1.0 if self._paper_exchange_load_report_path.exists() else 0.0
+        ts = _safe_parse_iso_ts(payload.get("ts_utc")) if payload else None
+        age_sec = (now - ts).total_seconds() if ts else 1e9
+        if age_sec < 0:
+            age_sec = 0.0
+        labels = {"artifact": "paper_exchange_load_latest"}
+        lines = [
+            f"hbot_paper_exchange_load_report_present{_fmt_labels(labels)} {present}",
+            f"hbot_paper_exchange_load_report_age_seconds{_fmt_labels(labels)} {age_sec}",
+        ]
+        metrics = payload.get("metrics", {}) if isinstance(payload.get("metrics", {}), dict) else {}
+        key_map = {
+            "p1_19_sustained_command_throughput_cmds_per_sec": "hbot_paper_exchange_load_throughput_cmds_per_sec",
+            "p1_19_command_latency_under_load_p95_ms": "hbot_paper_exchange_load_command_latency_p95_ms",
+            "p1_19_command_latency_under_load_p99_ms": "hbot_paper_exchange_load_command_latency_p99_ms",
+            "p1_19_stream_backlog_growth_rate_pct_per_10min": "hbot_paper_exchange_load_backlog_growth_pct_per_10m",
+        }
+        for src_key, metric_name in key_map.items():
+            lines.append(f"{metric_name}{_fmt_labels(labels)} {_safe_float(metrics.get(src_key), 0.0)}")
+        return lines
+
+    def _paper_exchange_threshold_metrics(self, now: datetime) -> List[str]:
+        payload = _read_json(self._paper_exchange_threshold_inputs_path)
+        present = 1.0 if self._paper_exchange_threshold_inputs_path.exists() else 0.0
+        ts = _safe_parse_iso_ts(payload.get("ts_utc")) if payload else None
+        age_sec = (now - ts).total_seconds() if ts else 1e9
+        if age_sec < 0:
+            age_sec = 0.0
+        labels = {"artifact": "paper_exchange_threshold_inputs_latest"}
+        lines = [
+            f"hbot_paper_exchange_threshold_inputs_present{_fmt_labels(labels)} {present}",
+            f"hbot_paper_exchange_threshold_inputs_age_seconds{_fmt_labels(labels)} {age_sec}",
+        ]
+        diagnostics = payload.get("diagnostics", {}) if isinstance(payload.get("diagnostics", {}), dict) else {}
+        lines.append(
+            f"hbot_paper_exchange_threshold_unresolved_metrics_total{_fmt_labels(labels)} {float(_safe_int(diagnostics.get('unresolved_metric_count'), 0))}"
+        )
+        metrics = payload.get("metrics", {}) if isinstance(payload.get("metrics", {}), dict) else {}
+        for metric_name, value in metrics.items():
+            mlabels = {"metric": str(metric_name)}
+            lines.append(f"hbot_paper_exchange_threshold_metric{_fmt_labels(mlabels)} {_safe_float(value, 0.0)}")
+        return lines
+
+    def _paper_exchange_command_journal_metrics(self, now: datetime) -> List[str]:
+        payload = _read_json(self._paper_exchange_command_journal_path)
+        present = 1.0 if self._paper_exchange_command_journal_path.exists() else 0.0
+        ts = _safe_parse_iso_ts(payload.get("ts_utc")) if payload else None
+        age_sec = (now - ts).total_seconds() if ts else 1e9
+        if age_sec < 0:
+            age_sec = 0.0
+        lines = [
+            f"hbot_paper_exchange_command_journal_present {present}",
+            f"hbot_paper_exchange_command_journal_age_seconds {age_sec}",
+        ]
+        commands = payload.get("commands", {}) if isinstance(payload.get("commands", {}), dict) else {}
+        lines.append(f"hbot_paper_exchange_command_journal_entries_total {float(len(commands))}")
+        command_status_counts: Dict[Tuple[str, str], int] = {}
+        reject_reason_counts: Dict[str, int] = {}
+        for _event_id, row in commands.items():
+            if not isinstance(row, dict):
+                continue
+            command_name = str(row.get("command", "unknown")).strip().lower() or "unknown"
+            status = str(row.get("status", "unknown")).strip().lower() or "unknown"
+            reason = str(row.get("reason", "unknown")).strip().lower() or "unknown"
+            key = (command_name, status)
+            command_status_counts[key] = command_status_counts.get(key, 0) + 1
+            if status == "rejected":
+                reject_reason_counts[reason] = reject_reason_counts.get(reason, 0) + 1
+        for (command_name, status), count in sorted(command_status_counts.items()):
+            labels = {"command": command_name, "status": status}
+            lines.append(f"hbot_paper_exchange_command_total{_fmt_labels(labels)} {float(count)}")
+        for reason, count in sorted(reject_reason_counts.items()):
+            labels = {"reason": reason}
+            lines.append(f"hbot_paper_exchange_command_reject_reason_total{_fmt_labels(labels)} {float(count)}")
+
+        state_snapshot = _read_json(self._paper_exchange_state_snapshot_path)
+        orders = state_snapshot.get("orders", {}) if isinstance(state_snapshot.get("orders", {}), dict) else {}
+        state_counts: Dict[str, int] = {}
+        submit_to_first_fill_latencies_ms: List[float] = []
+        for _order_id, row in orders.items():
+            if not isinstance(row, dict):
+                continue
+            state = str(row.get("state", "unknown")).strip().lower() or "unknown"
+            state_counts[state] = state_counts.get(state, 0) + 1
+            created_ts_ms = _safe_int(row.get("created_ts_ms"), 0)
+            first_fill_ts_ms = _safe_int(row.get("first_fill_ts_ms"), 0)
+            if created_ts_ms > 0 and first_fill_ts_ms > 0:
+                submit_to_first_fill_latencies_ms.append(float(max(0, first_fill_ts_ms - created_ts_ms)))
+        lines.append(f"hbot_paper_exchange_order_snapshot_total {float(len(orders))}")
+        for state, count in sorted(state_counts.items()):
+            labels = {"state": state}
+            lines.append(f"hbot_paper_exchange_order_state_total{_fmt_labels(labels)} {float(count)}")
+        sorted_latencies = sorted(submit_to_first_fill_latencies_ms)
+        lines.append(f"hbot_paper_exchange_submit_to_first_fill_latency_samples {float(len(sorted_latencies))}")
+        lines.append(f"hbot_paper_exchange_submit_to_first_fill_latency_p95_ms {_percentile(sorted_latencies, 0.95)}")
+        lines.append(f"hbot_paper_exchange_submit_to_first_fill_latency_p99_ms {_percentile(sorted_latencies, 0.99)}")
+
+        fill_journal = _read_json(self._paper_exchange_market_fill_journal_path)
+        fill_present = 1.0 if self._paper_exchange_market_fill_journal_path.exists() else 0.0
+        fill_ts = _safe_parse_iso_ts(fill_journal.get("ts_utc")) if fill_journal else None
+        fill_age_sec = (now - fill_ts).total_seconds() if fill_ts else 1e9
+        if fill_age_sec < 0:
+            fill_age_sec = 0.0
+        lines.append(f"hbot_paper_exchange_market_fill_journal_present {fill_present}")
+        lines.append(f"hbot_paper_exchange_market_fill_journal_age_seconds {fill_age_sec}")
+        lines.append(
+            f"hbot_paper_exchange_market_fill_events_total {float(_safe_int(fill_journal.get('event_count'), 0))}"
+        )
+        return lines
+
+    def _paper_exchange_pair_snapshot_metrics(self, now: datetime) -> List[str]:
+        payload = _read_json(self._paper_exchange_pair_snapshot_path)
+        present = 1.0 if self._paper_exchange_pair_snapshot_path.exists() else 0.0
+        ts = _safe_parse_iso_ts(payload.get("ts_utc")) if payload else None
+        age_sec = (now - ts).total_seconds() if ts else 1e9
+        if age_sec < 0:
+            age_sec = 0.0
+        lines = [
+            f"hbot_paper_exchange_pair_snapshot_present {present}",
+            f"hbot_paper_exchange_pair_snapshot_artifact_age_seconds {age_sec}",
+        ]
+        pairs = payload.get("pairs", {}) if isinstance(payload.get("pairs", {}), dict) else {}
+        lines.append(f"hbot_paper_exchange_pair_snapshot_total {float(len(pairs))}")
+        now_ts_ms = int(now.timestamp() * 1000)
+        stale_after_ms = int(self._paper_exchange_heartbeat_max_age_sec * 1000)
+        for _pair_key, row in pairs.items():
+            if not isinstance(row, dict):
+                continue
+            labels = {
+                "connector": str(row.get("connector_name", "")).strip() or "unknown",
+                "pair": str(row.get("trading_pair", "")).strip() or "unknown",
+                "instance_name": str(row.get("instance_name", "")).strip() or "unknown",
+            }
+            snapshot_ts_ms = _safe_int(row.get("timestamp_ms"), 0)
+            reference_ts_ms = _safe_int(row.get("reference_ts_ms"), 0)
+            snapshot_age_seconds = (
+                float(max(0, now_ts_ms - snapshot_ts_ms)) / 1000.0 if snapshot_ts_ms > 0 else 1e9
+            )
+            reference_age_seconds = (
+                float(max(0, now_ts_ms - reference_ts_ms)) / 1000.0 if reference_ts_ms > 0 else 1e9
+            )
+            is_stale = 1.0 if (snapshot_ts_ms <= 0 or (now_ts_ms - snapshot_ts_ms) > stale_after_ms) else 0.0
+            lines.append(f"hbot_paper_exchange_pair_snapshot_age_seconds{_fmt_labels(labels)} {snapshot_age_seconds}")
+            lines.append(f"hbot_paper_exchange_pair_reference_age_seconds{_fmt_labels(labels)} {reference_age_seconds}")
+            lines.append(f"hbot_paper_exchange_pair_stale{_fmt_labels(labels)} {is_stale}")
+        return lines
+
     def render_prometheus(self) -> str:
         now = datetime.now(timezone.utc)
         lines: List[str] = [
@@ -180,6 +475,106 @@ class ControlPlaneMetricsExporter:
             "# TYPE hbot_portfolio_allocator_daily_goal_target_quote_distributed gauge",
             "# HELP hbot_portfolio_allocator_daily_goal_info Allocator daily goal metadata labels.",
             "# TYPE hbot_portfolio_allocator_daily_goal_info gauge",
+            "# HELP hbot_paper_exchange_redis_up Redis availability for paper exchange heartbeat stream.",
+            "# TYPE hbot_paper_exchange_redis_up gauge",
+            "# HELP hbot_paper_exchange_heartbeat_present Whether a heartbeat entry is available.",
+            "# TYPE hbot_paper_exchange_heartbeat_present gauge",
+            "# HELP hbot_paper_exchange_heartbeat_age_seconds Age of latest paper exchange heartbeat.",
+            "# TYPE hbot_paper_exchange_heartbeat_age_seconds gauge",
+            "# HELP hbot_paper_exchange_heartbeat_fresh Whether heartbeat age is within threshold.",
+            "# TYPE hbot_paper_exchange_heartbeat_fresh gauge",
+            "# HELP hbot_paper_exchange_service_up Service liveness from redis + heartbeat freshness.",
+            "# TYPE hbot_paper_exchange_service_up gauge",
+            "# HELP hbot_paper_exchange_market_pairs_total Count of pairs tracked by paper exchange service.",
+            "# TYPE hbot_paper_exchange_market_pairs_total gauge",
+            "# HELP hbot_paper_exchange_stale_pairs_total Count of stale pairs in latest heartbeat.",
+            "# TYPE hbot_paper_exchange_stale_pairs_total gauge",
+            "# HELP hbot_paper_exchange_newest_snapshot_age_ms Newest market snapshot age in ms from heartbeat.",
+            "# TYPE hbot_paper_exchange_newest_snapshot_age_ms gauge",
+            "# HELP hbot_paper_exchange_oldest_snapshot_age_ms Oldest market snapshot age in ms from heartbeat.",
+            "# TYPE hbot_paper_exchange_oldest_snapshot_age_ms gauge",
+            "# HELP hbot_paper_exchange_processed_commands Commands processed by service.",
+            "# TYPE hbot_paper_exchange_processed_commands gauge",
+            "# HELP hbot_paper_exchange_rejected_commands Commands rejected by service.",
+            "# TYPE hbot_paper_exchange_rejected_commands gauge",
+            "# HELP hbot_paper_exchange_orders_active Active tracked order count in service.",
+            "# TYPE hbot_paper_exchange_orders_active gauge",
+            "# HELP hbot_paper_exchange_orders_total Total tracked orders in service.",
+            "# TYPE hbot_paper_exchange_orders_total gauge",
+            "# HELP hbot_paper_exchange_command_latency_samples Latency samples count in heartbeat metadata.",
+            "# TYPE hbot_paper_exchange_command_latency_samples gauge",
+            "# HELP hbot_paper_exchange_command_latency_avg_ms Mean command handling latency in ms.",
+            "# TYPE hbot_paper_exchange_command_latency_avg_ms gauge",
+            "# HELP hbot_paper_exchange_command_latency_max_ms Max command handling latency in ms.",
+            "# TYPE hbot_paper_exchange_command_latency_max_ms gauge",
+            "# HELP hbot_paper_exchange_generated_fill_events Generated fill events total.",
+            "# TYPE hbot_paper_exchange_generated_fill_events gauge",
+            "# HELP hbot_paper_exchange_generated_partial_fill_events Generated partial fill events total.",
+            "# TYPE hbot_paper_exchange_generated_partial_fill_events gauge",
+            "# HELP hbot_paper_exchange_market_rows_not_acked Market rows not acknowledged counter.",
+            "# TYPE hbot_paper_exchange_market_rows_not_acked gauge",
+            "# HELP hbot_paper_exchange_command_publish_failures Command publish failure counter.",
+            "# TYPE hbot_paper_exchange_command_publish_failures gauge",
+            "# HELP hbot_paper_exchange_heartbeat_status_info Last heartbeat status labels.",
+            "# TYPE hbot_paper_exchange_heartbeat_status_info gauge",
+            "# HELP hbot_paper_exchange_load_report_present Whether load report artifact exists.",
+            "# TYPE hbot_paper_exchange_load_report_present gauge",
+            "# HELP hbot_paper_exchange_load_report_age_seconds Age of load report artifact in seconds.",
+            "# TYPE hbot_paper_exchange_load_report_age_seconds gauge",
+            "# HELP hbot_paper_exchange_load_throughput_cmds_per_sec Sustained command throughput from load report.",
+            "# TYPE hbot_paper_exchange_load_throughput_cmds_per_sec gauge",
+            "# HELP hbot_paper_exchange_load_command_latency_p95_ms P95 command latency under load.",
+            "# TYPE hbot_paper_exchange_load_command_latency_p95_ms gauge",
+            "# HELP hbot_paper_exchange_load_command_latency_p99_ms P99 command latency under load.",
+            "# TYPE hbot_paper_exchange_load_command_latency_p99_ms gauge",
+            "# HELP hbot_paper_exchange_load_backlog_growth_pct_per_10m Stream backlog growth trend from load report.",
+            "# TYPE hbot_paper_exchange_load_backlog_growth_pct_per_10m gauge",
+            "# HELP hbot_paper_exchange_threshold_inputs_present Whether threshold artifact exists.",
+            "# TYPE hbot_paper_exchange_threshold_inputs_present gauge",
+            "# HELP hbot_paper_exchange_threshold_inputs_age_seconds Age of threshold artifact in seconds.",
+            "# TYPE hbot_paper_exchange_threshold_inputs_age_seconds gauge",
+            "# HELP hbot_paper_exchange_threshold_unresolved_metrics_total Unresolved threshold metrics count.",
+            "# TYPE hbot_paper_exchange_threshold_unresolved_metrics_total gauge",
+            "# HELP hbot_paper_exchange_threshold_metric Threshold metric value keyed by metric label.",
+            "# TYPE hbot_paper_exchange_threshold_metric gauge",
+            "# HELP hbot_paper_exchange_command_journal_present Whether command journal artifact exists.",
+            "# TYPE hbot_paper_exchange_command_journal_present gauge",
+            "# HELP hbot_paper_exchange_command_journal_age_seconds Age of command journal artifact in seconds.",
+            "# TYPE hbot_paper_exchange_command_journal_age_seconds gauge",
+            "# HELP hbot_paper_exchange_command_journal_entries_total Number of command entries in journal artifact.",
+            "# TYPE hbot_paper_exchange_command_journal_entries_total gauge",
+            "# HELP hbot_paper_exchange_command_total Command totals by command and status.",
+            "# TYPE hbot_paper_exchange_command_total gauge",
+            "# HELP hbot_paper_exchange_command_reject_reason_total Rejected commands grouped by reason.",
+            "# TYPE hbot_paper_exchange_command_reject_reason_total gauge",
+            "# HELP hbot_paper_exchange_order_snapshot_total Number of orders in service state snapshot.",
+            "# TYPE hbot_paper_exchange_order_snapshot_total gauge",
+            "# HELP hbot_paper_exchange_order_state_total Count of orders by state.",
+            "# TYPE hbot_paper_exchange_order_state_total gauge",
+            "# HELP hbot_paper_exchange_submit_to_first_fill_latency_samples Samples count for submit-to-first-fill latency.",
+            "# TYPE hbot_paper_exchange_submit_to_first_fill_latency_samples gauge",
+            "# HELP hbot_paper_exchange_submit_to_first_fill_latency_p95_ms P95 submit-to-first-fill latency in ms.",
+            "# TYPE hbot_paper_exchange_submit_to_first_fill_latency_p95_ms gauge",
+            "# HELP hbot_paper_exchange_submit_to_first_fill_latency_p99_ms P99 submit-to-first-fill latency in ms.",
+            "# TYPE hbot_paper_exchange_submit_to_first_fill_latency_p99_ms gauge",
+            "# HELP hbot_paper_exchange_market_fill_journal_present Whether market fill journal artifact exists.",
+            "# TYPE hbot_paper_exchange_market_fill_journal_present gauge",
+            "# HELP hbot_paper_exchange_market_fill_journal_age_seconds Age of market fill journal artifact in seconds.",
+            "# TYPE hbot_paper_exchange_market_fill_journal_age_seconds gauge",
+            "# HELP hbot_paper_exchange_market_fill_events_total Total market fill events in artifact.",
+            "# TYPE hbot_paper_exchange_market_fill_events_total gauge",
+            "# HELP hbot_paper_exchange_pair_snapshot_present Whether pair snapshot artifact exists.",
+            "# TYPE hbot_paper_exchange_pair_snapshot_present gauge",
+            "# HELP hbot_paper_exchange_pair_snapshot_artifact_age_seconds Age of pair snapshot artifact.",
+            "# TYPE hbot_paper_exchange_pair_snapshot_artifact_age_seconds gauge",
+            "# HELP hbot_paper_exchange_pair_snapshot_total Number of pair snapshots in artifact.",
+            "# TYPE hbot_paper_exchange_pair_snapshot_total gauge",
+            "# HELP hbot_paper_exchange_pair_snapshot_age_seconds Snapshot age per connector/pair/instance.",
+            "# TYPE hbot_paper_exchange_pair_snapshot_age_seconds gauge",
+            "# HELP hbot_paper_exchange_pair_reference_age_seconds Reference timestamp age per connector/pair/instance.",
+            "# TYPE hbot_paper_exchange_pair_reference_age_seconds gauge",
+            "# HELP hbot_paper_exchange_pair_stale Stale flag per connector/pair/instance.",
+            "# TYPE hbot_paper_exchange_pair_stale gauge",
         ]
 
         report_targets = self._report_targets()
@@ -271,8 +666,16 @@ class ControlPlaneMetricsExporter:
                 counts = payload.get("counts", {})
                 if isinstance(counts, dict):
                     for table_name, value in counts.items():
+                        if isinstance(value, dict):
+                            for metric_name, metric_value in value.items():
+                                if isinstance(metric_value, dict):
+                                    continue
+                                lines.append(
+                                    f'hbot_control_plane_finding_count{{report="ops_db_writer_count",table="{_escape_label(str(table_name))}",metric="{_escape_label(str(metric_name))}"}} {_safe_float(metric_value, 0.0)}'
+                                )
+                            continue
                         lines.append(
-                            f'hbot_control_plane_finding_count{{report="ops_db_writer_count",table="{_escape_label(str(table_name))}"}} {float(value or 0)}'
+                            f'hbot_control_plane_finding_count{{report="ops_db_writer_count",table="{_escape_label(str(table_name))}"}} {_safe_float(value, 0.0)}'
                         )
             elif report_name == "coordination":
                 lines.append(
@@ -450,6 +853,12 @@ class ControlPlaneMetricsExporter:
             lines.append(f"hbot_bot_blotter_last_fill_timestamp_seconds{_fmt_labels(bot_labels)} {last_fill_ts}")
             lines.append(f"hbot_bot_blotter_last_fill_age_seconds{_fmt_labels(bot_labels)} {age_sec}")
 
+        lines.extend(self._paper_exchange_service_metrics(now))
+        lines.extend(self._paper_exchange_load_report_metrics(now))
+        lines.extend(self._paper_exchange_threshold_metrics(now))
+        lines.extend(self._paper_exchange_command_journal_metrics(now))
+        lines.extend(self._paper_exchange_pair_snapshot_metrics(now))
+
         return "\n".join(lines) + "\n"
 
 
@@ -485,15 +894,61 @@ def main() -> None:
     port = _env_int("CONTROL_PLANE_METRICS_PORT", 9401)
     metrics_path = os.getenv("CONTROL_PLANE_METRICS_PATH", "/metrics")
     freshness_max_sec = _env_int("CONTROL_PLANE_FRESHNESS_MAX_SEC", 1800)
+    redis_host = os.getenv("REDIS_HOST", "redis")
+    redis_port = _env_int("REDIS_PORT", 6379)
+    redis_db = _env_int("REDIS_DB", 0)
+    redis_password = os.getenv("REDIS_PASSWORD", "")
+    redis_enabled = str(os.getenv("REDIS_ENABLED", "true")).strip().lower() not in {"0", "false", "no"}
+    paper_exchange_heartbeat_stream = os.getenv(
+        "PAPER_EXCHANGE_HEARTBEAT_STREAM", "hb.paper_exchange.heartbeat.v1"
+    )
+    paper_exchange_heartbeat_max_age_sec = _env_int("PAPER_EXCHANGE_HEARTBEAT_MAX_AGE_SEC", 30)
+    paper_exchange_load_report_path = os.getenv(
+        "PAPER_EXCHANGE_LOAD_REPORT_PATH", "verification/paper_exchange_load_latest.json"
+    )
+    paper_exchange_threshold_inputs_path = os.getenv(
+        "PAPER_EXCHANGE_THRESHOLD_INPUTS_PATH", "verification/paper_exchange_threshold_inputs_latest.json"
+    )
+    paper_exchange_command_journal_path = os.getenv(
+        "PAPER_EXCHANGE_COMMAND_JOURNAL_PATH", "verification/paper_exchange_command_journal_latest.json"
+    )
+    paper_exchange_state_snapshot_path = os.getenv(
+        "PAPER_EXCHANGE_STATE_SNAPSHOT_PATH", "verification/paper_exchange_state_snapshot_latest.json"
+    )
+    paper_exchange_pair_snapshot_path = os.getenv(
+        "PAPER_EXCHANGE_PAIR_SNAPSHOT_PATH", "verification/paper_exchange_pair_snapshot_latest.json"
+    )
+    paper_exchange_market_fill_journal_path = os.getenv(
+        "PAPER_EXCHANGE_MARKET_FILL_JOURNAL_PATH", "verification/paper_exchange_market_fill_journal_latest.json"
+    )
 
-    exporter = ControlPlaneMetricsExporter(reports_root=reports_root, data_root=data_root, freshness_max_sec=freshness_max_sec)
+    exporter = ControlPlaneMetricsExporter(
+        reports_root=reports_root,
+        data_root=data_root,
+        freshness_max_sec=freshness_max_sec,
+        redis_host=redis_host,
+        redis_port=redis_port,
+        redis_db=redis_db,
+        redis_password=redis_password,
+        redis_enabled=redis_enabled,
+        paper_exchange_heartbeat_stream=paper_exchange_heartbeat_stream,
+        paper_exchange_heartbeat_max_age_sec=paper_exchange_heartbeat_max_age_sec,
+        paper_exchange_load_report_path=paper_exchange_load_report_path,
+        paper_exchange_threshold_inputs_path=paper_exchange_threshold_inputs_path,
+        paper_exchange_command_journal_path=paper_exchange_command_journal_path,
+        paper_exchange_state_snapshot_path=paper_exchange_state_snapshot_path,
+        paper_exchange_pair_snapshot_path=paper_exchange_pair_snapshot_path,
+        paper_exchange_market_fill_journal_path=paper_exchange_market_fill_journal_path,
+    )
     MetricsHandler.exporter = exporter
     MetricsHandler.metrics_path = metrics_path
 
     server = ThreadingHTTPServer(("0.0.0.0", port), MetricsHandler)
     print(
         f"control_plane_metrics_exporter listening on :{port}{metrics_path}, "
-        f"reports_root={reports_root}, data_root={data_root}, freshness_max_sec={freshness_max_sec}"
+        f"reports_root={reports_root}, data_root={data_root}, freshness_max_sec={freshness_max_sec}, "
+        f"redis_host={redis_host}, redis_port={redis_port}, stream={paper_exchange_heartbeat_stream}, "
+        f"heartbeat_max_age_sec={paper_exchange_heartbeat_max_age_sec}"
     )
     server.serve_forever()
 

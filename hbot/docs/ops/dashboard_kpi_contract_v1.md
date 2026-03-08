@@ -5,7 +5,7 @@ Define the desk performance KPIs shown in Grafana and the source metric for each
 
 ## Dashboard
 - `monitoring/grafana/dashboards/trading_overview.json`
-- Title: `Hummingbot Trading Desk Overview`
+- Title: `Kzay Capital Trading Desk`
 
 ## KPI Contract
 - `Aggregate Equity (Quote)`

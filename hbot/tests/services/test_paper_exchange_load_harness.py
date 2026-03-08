@@ -60,6 +60,7 @@ def test_build_report_passes_with_fresh_heartbeat_and_matched_results(tmp_path: 
         target_cmd_rate=40.0,
         producer="hb_bridge_active_adapter",
         instance_name="bot1",
+        instance_names="bot1,bot3,bot4",
         connector_name="bitget_perpetual",
         trading_pair="BTC-USDT",
         result_timeout_sec=0.2,
@@ -68,6 +69,7 @@ def test_build_report_passes_with_fresh_heartbeat_and_matched_results(tmp_path: 
         require_heartbeat_fresh=False,
         heartbeat_max_age_s=30.0,
         min_commands=1,
+        min_instance_coverage=1,
         min_publish_success_rate_pct=90.0,
         min_result_match_rate_pct=90.0,
     )
@@ -94,6 +96,7 @@ def test_build_report_fails_when_heartbeat_required_but_missing(tmp_path: Path) 
         target_cmd_rate=20.0,
         producer="hb_bridge_active_adapter",
         instance_name="bot1",
+        instance_names="bot1",
         connector_name="bitget_perpetual",
         trading_pair="BTC-USDT",
         result_timeout_sec=0.1,
@@ -102,8 +105,39 @@ def test_build_report_fails_when_heartbeat_required_but_missing(tmp_path: Path) 
         require_heartbeat_fresh=True,
         heartbeat_max_age_s=30.0,
         min_commands=1,
+        min_instance_coverage=1,
         min_publish_success_rate_pct=90.0,
         min_result_match_rate_pct=90.0,
     )
     assert report["status"] == "fail"
     assert "heartbeat_recent" in report["failed_checks"]
+
+
+def test_build_report_enforces_minimum_instance_coverage(tmp_path: Path) -> None:
+    fake_redis = _FakeRedis(heartbeat_present=True, result_latency_ms=20, auto_result=True)
+    report = build_report(
+        tmp_path,
+        redis_client=fake_redis,
+        command_stream="hb.paper_exchange.command.v1",
+        event_stream="hb.paper_exchange.event.v1",
+        heartbeat_stream="hb.paper_exchange.heartbeat.v1",
+        command_maxlen=1000,
+        duration_sec=0.2,
+        target_cmd_rate=20.0,
+        producer="hb_bridge_active_adapter",
+        instance_name="bot1",
+        instance_names="bot1",
+        connector_name="bitget_perpetual",
+        trading_pair="BTC-USDT",
+        result_timeout_sec=0.2,
+        poll_interval_ms=10,
+        scan_count=1000,
+        require_heartbeat_fresh=False,
+        heartbeat_max_age_s=30.0,
+        min_commands=1,
+        min_instance_coverage=2,
+        min_publish_success_rate_pct=90.0,
+        min_result_match_rate_pct=90.0,
+    )
+    assert report["status"] == "fail"
+    assert "minimum_instance_coverage" in report["failed_checks"]

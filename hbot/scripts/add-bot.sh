@@ -48,8 +48,8 @@ cat << COMPOSE_BLOCK
   # ${BOT_NAME^^} - Bitget Spot
   # ==========================================
   ${BOT_NAME}:
-    <<: *hbot-base
-    container_name: hbot-${BOT_NAME}
+    <<: *kzay-base
+    container_name: ${BOT_NAME}
     profiles:
       - multi
     volumes:

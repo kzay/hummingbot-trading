@@ -1,7 +1,9 @@
 from __future__ import annotations
 
+import csv
 import json
 import logging
+import math
 import os
 import time as _time_mod
 from collections import deque
@@ -24,7 +26,7 @@ from hummingbot.strategy_v2.controllers.market_making_controller_base import (
 from hummingbot.strategy_v2.executors.position_executor.data_types import PositionExecutorConfig
 
 from controllers.connector_runtime_adapter import ConnectorRuntimeAdapter
-from controllers.core import (  # noqa: F401 — re-exported for backward compat
+from controllers.runtime.market_making_types import (
     MarketConditions,
     RegimeSpec,
     RuntimeLevelState,
@@ -33,7 +35,7 @@ from controllers.core import (  # noqa: F401 — re-exported for backward compat
 )
 from controllers.daily_state_store import DailyStateStore
 from controllers.types import ProcessedState
-from controllers.epp_logging import CsvSplitLogger
+from controllers.runtime.logging import CsvSplitLogger
 from controllers.ops_guard import GuardState, OpsGuard, OpsSnapshot
 from controllers.price_buffer import MidPriceBuffer
 from controllers.regime_detector import RegimeDetector
@@ -58,6 +60,24 @@ _MIN_SPREAD = Decimal("0.0001")
 _MIN_SKEW_CAP = Decimal("0.0005")
 _FILL_FACTOR_LO = Decimal("0.05")
 _BALANCE_EPSILON = Decimal("1e-8")
+_INVENTORY_DERISK_REASONS = frozenset({"base_pct_above_max", "base_pct_below_min", "eod_close_pending"})
+_BOT_MODE_WARNED_INVALID = False
+
+
+def _runtime_bot_mode() -> str:
+    """Return canonical runtime mode (`paper`|`live`) from BOT_MODE env."""
+    global _BOT_MODE_WARNED_INVALID
+    mode = str(os.environ.get("BOT_MODE", "") or "").strip().lower()
+    if mode in {"paper", "live"}:
+        return mode
+    if not _BOT_MODE_WARNED_INVALID:
+        logger.warning(
+            "Invalid BOT_MODE=%s; defaulting to paper mode. "
+            "Deprecated internal_paper_enabled is ignored.",
+            mode or "<empty>",
+        )
+        _BOT_MODE_WARNED_INVALID = True
+    return "paper"
 
 
 def _canonical_connector_name(connector_name: str) -> str:
@@ -71,8 +91,67 @@ def _canonical_connector_name(connector_name: str) -> str:
     return connector_name[:-12]
 
 
+def _config_is_paper(config: Any) -> bool:
+    explicit = getattr(config, "is_paper", None)
+    if explicit is not None:
+        return bool(explicit)
+    return str(getattr(config, "bot_mode", "")).strip().lower() == "paper"
+
+
+def _paper_reset_state_on_startup_enabled(config: Any) -> bool:
+    paper_engine = getattr(config, "paper_engine", None)
+    if isinstance(paper_engine, dict):
+        return bool(paper_engine.get("paper_reset_state_on_startup", False))
+    if paper_engine is None:
+        return False
+    return bool(getattr(paper_engine, "paper_reset_state_on_startup", False))
+
+
+def _sanitize_namespace(raw: Any, fallback: str) -> str:
+    text = str(raw or "").strip()
+    if not text:
+        return fallback
+    text = text.replace("\\", "_").replace("/", "_").replace(" ", "_")
+    while "__" in text:
+        text = text.replace("__", "_")
+    text = text.strip("_")
+    return text or fallback
+
+
+def _default_artifact_namespace(config: Any) -> str:
+    controller_name = str(getattr(config, "controller_name", "") or "").strip().lower()
+    if controller_name.startswith("epp_"):
+        return "epp_v24"
+    return "runtime_v24"
+
+
+def _artifact_namespace(config: Any) -> str:
+    default_ns = _default_artifact_namespace(config)
+    explicit = getattr(config, "artifact_namespace", "")
+    return _sanitize_namespace(explicit, default_ns)
+
+
+def _daily_state_store_prefix(config: Any) -> str:
+    namespace = _artifact_namespace(config)
+    if namespace == "epp_v24":
+        return "epp"
+    return namespace
+
+
+def _telemetry_producer_prefix(config: Any) -> str:
+    controller_name = str(getattr(config, "controller_name", "") or "").strip().lower()
+    if controller_name.startswith("epp_"):
+        return "hb.epp_v2_4"
+    runtime_tag = _sanitize_namespace(controller_name or "strategy_runtime_v24", "strategy_runtime_v24")
+    return f"hb.{runtime_tag}"
+
+
 class EppV24Config(MarketMakingControllerConfigBase):
     """Configuration for EPP v2.4 controller.
+
+    Historical note: "EPP" started as the bot1 strategy label. This config and
+    controller now serve as shared v2.4 market-making infrastructure used by
+    multiple strategy lanes.
 
     Variants: a = live trading, b/c = disabled stubs, d = no-trade observation.
     """
@@ -92,6 +171,13 @@ class EppV24Config(MarketMakingControllerConfigBase):
     enabled: bool = Field(default=True, description="Master enable switch for this controller", json_schema_extra={"prompt": "Enabled (true/false): ", "prompt_on_new": True})
     no_trade: bool = Field(default=False, description="When True, run all logic but place zero orders", json_schema_extra={"prompt": "No-trade mode: ", "prompt_on_new": True})
     instance_name: str = Field(default="bot1", description="Bot instance identifier for logging and multi-bot policies", json_schema_extra={"prompt": "Instance name: ", "prompt_on_new": True})
+    artifact_namespace: str = Field(
+        default="",
+        description=(
+            "Optional namespace for persisted runtime artifacts (logs/state/keys). "
+            "Empty uses legacy `epp_v24` for `epp_*` controllers and `runtime_v24` otherwise."
+        ),
+    )
     log_dir: str = Field(default="/home/hummingbot/logs", description="Root directory for CSV logs")
     candles_connector: Optional[str] = Field(default=None, description="Override connector for candle data")
     candles_trading_pair: Optional[str] = Field(default=None, description="Override trading pair for candle data")
@@ -115,7 +201,13 @@ class EppV24Config(MarketMakingControllerConfigBase):
 
     # Runtime controls
     sample_interval_s: int = Field(default=10, ge=5, le=30)
-    spread_floor_recalc_s: int = Field(default=0, description="DEPRECATED: spread floor now recomputed every tick for consistency with edge gate. Kept for config compat.")
+    spread_floor_recalc_s: int = Field(
+        default=0,
+        description=(
+            "DEPRECATED: spread floor now recomputed every tick for consistency with edge gate. "
+            "Kept for config compatibility."
+        ),
+    )
     daily_rollover_hour_utc: int = Field(default=0, ge=0, le=23)
     cancel_budget_per_min: int = Field(default=50)
     min_net_edge_bps: Decimal = Field(default=Decimal("1"))
@@ -337,6 +429,16 @@ class EppV24Config(MarketMakingControllerConfigBase):
         default=Decimal("1.8"),
         description="Maximum spread multiplier applied when drift excess hits or exceeds drift_spike_threshold_bps. E.g. 1.8 = spread widens up to 80% during a spike.",
     )
+    neutral_trend_guard_pct: Decimal = Field(
+        default=Decimal("0"),
+        ge=Decimal("0"),
+        le=Decimal("0.01"),
+        description=(
+            "In neutral_low_vol only, suppress the counter-trend side when mid deviates "
+            "from EMA by at least this signed pct, even before a full up/down regime flip. "
+            "Example: 0.0002 = 2 bps. Set 0 to disable."
+        ),
+    )
 
     # Regime / spread tuning (previously hardcoded magic numbers)
     ema_period: int = Field(default=50, ge=5, le=500, description="EMA lookback (in 1-min bars) for trend regime detection. At 10s ticks this spans ~50 min. Lower values (e.g. 20) react faster to trend changes but may flap in chop. The regime_hold_ticks setting provides anti-flap protection.")
@@ -352,6 +454,125 @@ class EppV24Config(MarketMakingControllerConfigBase):
         description="Spread multiplier when realized fill edge EWMA is persistently negative",
     )
     adverse_fill_count_threshold: int = Field(default=20, ge=5, le=200)
+    adverse_fill_soft_pause_enabled: bool = Field(
+        default=False,
+        description=(
+            "When enabled, force SOFT_PAUSE when realized fill-edge EWMA stays "
+            "below configured cost-floor threshold with enough samples."
+        ),
+    )
+    adverse_fill_soft_pause_min_fills: int = Field(
+        default=120,
+        ge=1,
+        le=20_000,
+        description="Minimum fill observations required before adverse-fill soft-pause may trigger.",
+    )
+    adverse_fill_soft_pause_cost_floor_mult: Decimal = Field(
+        default=Decimal("1.0"),
+        description=(
+            "Multiplier applied to fee+slippage cost floor for adverse-fill soft-pause trigger "
+            "(1.0 = trigger when fill-edge is below estimated execution cost)."
+        ),
+    )
+    edge_confidence_soft_pause_enabled: bool = Field(
+        default=False,
+        description=(
+            "When enabled, pause quoting if the upper confidence bound of realized fill-edge "
+            "remains below the configured cost floor."
+        ),
+    )
+    edge_confidence_soft_pause_min_fills: int = Field(
+        default=120,
+        ge=1,
+        le=20_000,
+        description="Minimum fill observations required before edge-confidence soft-pause may trigger.",
+    )
+    edge_confidence_soft_pause_z_score: Decimal = Field(
+        default=Decimal("1.96"),
+        description="Z-score used for fill-edge confidence bound (1.96 ~= 95% one-sided interval).",
+    )
+    edge_confidence_soft_pause_cost_floor_mult: Decimal = Field(
+        default=Decimal("1.0"),
+        description="Cost-floor multiplier applied when evaluating edge-confidence soft-pause trigger.",
+    )
+    slippage_soft_pause_enabled: bool = Field(
+        default=False,
+        description=(
+            "When enabled, pause quoting if recent realized slippage p95 exceeds configured threshold."
+        ),
+    )
+    slippage_soft_pause_window_fills: int = Field(
+        default=300,
+        ge=1,
+        le=20_000,
+        description="Rolling fill window used for slippage soft-pause p95 evaluation.",
+    )
+    slippage_soft_pause_min_fills: int = Field(
+        default=100,
+        ge=1,
+        le=20_000,
+        description="Minimum fills required in slippage window before soft-pause may trigger.",
+    )
+    slippage_soft_pause_p95_bps: Decimal = Field(
+        default=Decimal("25"),
+        description="Soft-pause trigger threshold for rolling p95 slippage in bps.",
+    )
+    selective_quoting_enabled: bool = Field(
+        default=False,
+        description="Enable stronger selective market-making filters based on recent realized quote quality.",
+    )
+    selective_quality_min_fills: int = Field(
+        default=40,
+        ge=1,
+        le=20_000,
+        description="Minimum fills required before selective quote-quality filters can activate.",
+    )
+    selective_quality_reduce_threshold: Decimal = Field(
+        default=Decimal("0.45"),
+        description="Quote-quality score threshold that reduces participation without fully pausing.",
+    )
+    selective_quality_block_threshold: Decimal = Field(
+        default=Decimal("0.85"),
+        description="Quote-quality score threshold that fail-closes quoting via soft pause.",
+    )
+    selective_quality_edge_tighten_max_bps: Decimal = Field(
+        default=Decimal("2.0"),
+        description="Maximum extra min-edge tightening applied by selective quote-quality filters.",
+    )
+    selective_neutral_extra_edge_bps: Decimal = Field(
+        default=Decimal("1.0"),
+        description="Additional fixed edge tightening in neutral_low_vol when selective mode is active.",
+    )
+    selective_side_bias_pct: Decimal = Field(
+        default=Decimal("0.00025"),
+        description="EMA displacement required before selective mode allows one-sided quoting.",
+    )
+    selective_max_levels_per_side: int = Field(
+        default=1,
+        ge=1,
+        le=10,
+        description="Maximum levels per side to keep when selective mode reduces participation.",
+    )
+    alpha_policy_enabled: bool = Field(
+        default=True,
+        description="Enable forward-looking alpha policy states on top of selective quote quality.",
+    )
+    alpha_policy_no_trade_threshold: Decimal = Field(
+        default=Decimal("0.35"),
+        description="Minimum maker score required to quote in neutral_low_vol.",
+    )
+    alpha_policy_aggressive_threshold: Decimal = Field(
+        default=Decimal("0.78"),
+        description="Score threshold required before bounded aggressive entry is allowed.",
+    )
+    alpha_policy_inventory_relief_threshold: Decimal = Field(
+        default=Decimal("0.55"),
+        description="Inventory urgency needed before biasing strongly toward inventory relief.",
+    )
+    alpha_policy_cross_spread_mult: Decimal = Field(
+        default=Decimal("1.05"),
+        description="Multiplier on market side-spread floor used for bounded aggressive entry pricing.",
+    )
     close_position_at_rollover: bool = Field(default=True, description="Force position close at daily rollover (UTC midnight)")
 
     # Order book imbalance signal (ROAD-3)
@@ -428,6 +649,15 @@ class EppV24Config(MarketMakingControllerConfigBase):
     margin_ratio_hard_stop_pct: Decimal = Field(default=Decimal("0.10"), description="Margin ratio below this triggers HARD_STOP (perps only)")
     position_recon_interval_s: int = Field(default=300, ge=30, le=3600, description="Seconds between position reconciliation checks")
     position_drift_soft_pause_pct: Decimal = Field(default=Decimal("0.05"), description="Position drift > this triggers SOFT_PAUSE")
+    position_rebalance_min_base_mult: Decimal = Field(
+        default=Decimal("1.0"),
+        ge=Decimal("0"),
+        le=Decimal("100"),
+        description=(
+            "Multiplier over exchange min-base amount used as a floor for position rebalance "
+            "trigger size. Higher values suppress dust-sized taker rebalances."
+        ),
+    )
     startup_position_sync: bool = Field(default=True, description="Query exchange on first tick and adopt actual position if local state disagrees")
     startup_sync_timeout_s: int = Field(
         default=180, ge=30, le=3600,
@@ -437,6 +667,15 @@ class EppV24Config(MarketMakingControllerConfigBase):
     protective_stop_loss_pct: Decimal = Field(default=Decimal("0.03"), description="Stop-loss distance from avg entry price (0.03 = 3%)")
     protective_stop_refresh_s: int = Field(default=60, ge=10, le=600, description="Seconds between protective stop updates")
     order_ack_timeout_s: int = Field(default=30, ge=5, le=120, description="Seconds before an unacked order is considered stuck")
+    paper_executor_min_lifetime_s: int = Field(
+        default=120,
+        ge=0,
+        le=3600,
+        description=(
+            "In paper mode, minimum age before passive active executors are considered stale for refresh "
+            "cancels. Keeps makers resting long enough to fill under simulated latency/queue effects."
+        ),
+    )
     stuck_executor_escalation_ticks: int = Field(default=5, ge=2, le=20, description="Consecutive ticks with stuck executors before OpsGuard escalation")
     reconnect_cooldown_s: float = Field(default=5.0, ge=0, le=60, description="Seconds to suppress quoting after WS reconnect")
     max_active_executors: int = Field(default=10, ge=1, le=50, description="Maximum concurrent active executors")
@@ -466,8 +705,58 @@ class EppV24Config(MarketMakingControllerConfigBase):
             "Example: 0.02 means 2% shrink of abs(position_base)."
         ),
     )
+    derisk_force_taker_min_base_mult: Decimal = Field(
+        default=Decimal("2.0"),
+        ge=Decimal("0"),
+        le=Decimal("100"),
+        description=(
+            "Minimum absolute position (in multiples of exchange min-base amount) "
+            "required before derisk force-taker escalation can activate."
+        ),
+    )
+    derisk_force_taker_expectancy_guard_enabled: bool = Field(
+        default=False,
+        description=(
+            "When enabled, block force-taker derisk escalation when recent taker expectancy "
+            "is below threshold, unless large-inventory override applies."
+        ),
+    )
+    derisk_force_taker_expectancy_window_fills: int = Field(
+        default=300,
+        ge=1,
+        le=20_000,
+        description="Rolling fill window used to estimate taker expectancy for force-derisk guard.",
+    )
+    derisk_force_taker_expectancy_min_taker_fills: int = Field(
+        default=40,
+        ge=1,
+        le=20_000,
+        description="Minimum taker fills required before force-derisk expectancy guard can block.",
+    )
+    derisk_force_taker_expectancy_min_quote: Decimal = Field(
+        default=Decimal("-0.02"),
+        description=(
+            "Minimum acceptable mean net quote PnL per taker fill for force-derisk escalation. "
+            "Force mode is blocked when observed taker expectancy is lower."
+        ),
+    )
+    derisk_force_taker_expectancy_override_base_mult: Decimal = Field(
+        default=Decimal("10"),
+        ge=Decimal("0"),
+        le=Decimal("1000"),
+        description=(
+            "Large inventory override for expectancy guard in multiples of force-min-base. "
+            "Set 0 to disable override."
+        ),
+    )
     # Paper engine simulation params (only active when BOT_MODE=paper)
-    internal_paper_enabled: bool = Field(default=False, description="DEPRECATED: use BOT_MODE env var. Kept for backward compat — overridden at runtime.")
+    internal_paper_enabled: bool = Field(
+        default=False,
+        description=(
+            "DEPRECATED and ignored at runtime. Use BOT_MODE env var only. "
+            "Kept temporarily for backward-compatible config parsing."
+        ),
+    )
     paper_engine: PaperEngineConfig = Field(
         default_factory=PaperEngineConfig,
         description="Nested paper-engine simulation configuration.",
@@ -531,10 +820,7 @@ class EppV24Config(MarketMakingControllerConfigBase):
     @property
     def bot_mode(self) -> str:
         """Canonical mode: 'paper' or 'live'. Single source of truth from BOT_MODE env var."""
-        env_mode = os.environ.get("BOT_MODE", "").strip().lower()
-        if env_mode in ("paper", "live"):
-            return env_mode
-        return "paper" if self.internal_paper_enabled else "live"
+        return _runtime_bot_mode()
 
     @property
     def is_paper(self) -> bool:
@@ -588,6 +874,10 @@ class EppV24Config(MarketMakingControllerConfigBase):
 
 class EppV24Controller(MarketMakingControllerBase):
     """EPP v2.4 — VIP0 Survival Yield Engine.
+
+    Historical note: "EPP" is a legacy name retained for compatibility with
+    existing controller IDs, configs, and artifacts. The implementation is a
+    shared market-making base used by bot1 and bot-specific wrappers.
 
     A regime-aware market-making controller that dynamically adjusts spread,
     inventory skew, and order sizing based on detected market conditions.
@@ -717,9 +1007,10 @@ class EppV24Controller(MarketMakingControllerBase):
                 "Ensure the PaperDesk bridge is installed and no live trading keys are at risk.",
                 config.connector_name,
             )
-        if self._bot_mode == "live" and config.internal_paper_enabled:
+        if config.internal_paper_enabled:
             logger.warning(
-                "BOT_MODE=live overrides internal_paper_enabled=True. Running in LIVE mode."
+                "internal_paper_enabled is deprecated and ignored at runtime. "
+                "Set BOT_MODE=paper|live via environment."
             )
         if int(config.leverage) > config.max_leverage:
             raise ValueError(
@@ -777,7 +1068,13 @@ class EppV24Controller(MarketMakingControllerBase):
         )
         self._price_buffer = MidPriceBuffer(sample_interval_sec=config.sample_interval_s)
         self._ops_guard = OpsGuard()
-        self._csv = CsvSplitLogger(config.log_dir, config.instance_name, config.variant)
+        self._artifact_namespace = _artifact_namespace(config)
+        self._csv = CsvSplitLogger(
+            config.log_dir,
+            config.instance_name,
+            config.variant,
+            namespace=self._artifact_namespace,
+        )
         self._tick_emitter = TickEmitter(self._csv)
         self._last_floor_recalc_ts: float = 0
         self._spread_floor_pct: Decimal = Decimal("0.0025")
@@ -826,6 +1123,22 @@ class EppV24Controller(MarketMakingControllerBase):
         self._pending_regime: str = "neutral_low_vol"
         self._regime_source: str = "price_buffer"
         self._regime_hold_counter: int = 0
+        self._regime_ema_value: Optional[Decimal] = None
+        self._quote_side_mode: str = "off"
+        self._quote_side_reason: str = "regime"
+        self._selective_quote_score: Decimal = _ZERO
+        self._selective_quote_state: str = "inactive"
+        self._selective_quote_reason: str = "disabled"
+        self._selective_quote_adverse_ratio: Decimal = _ZERO
+        self._selective_quote_slippage_p95_bps: Decimal = _ZERO
+        self._alpha_policy_state: str = "maker_two_sided"
+        self._alpha_policy_reason: str = "startup"
+        self._alpha_maker_score: Decimal = _ZERO
+        self._alpha_aggressive_score: Decimal = _ZERO
+        self._alpha_cross_allowed: bool = False
+        self._alpha_no_trade_last_paper_cancel_ts: float = 0.0
+        self._inventory_urgency_score: Decimal = _ZERO
+        self._last_spread_state: Optional[SpreadEdgeState] = None
         self._pending_stale_cancel_actions: List[Any] = []
         self._recently_issued_levels: Dict[str, float] = {}
         self._fill_edge_ewma: Optional[Decimal] = None
@@ -841,6 +1154,10 @@ class EppV24Controller(MarketMakingControllerBase):
         self._derisk_cycle_started_ts: float = 0.0
         self._derisk_cycle_start_abs_base: Decimal = _ZERO
         self._derisk_force_taker: bool = False
+        self._derisk_force_taker_expectancy_guard_blocked: bool = False
+        self._derisk_force_taker_expectancy_guard_reason: str = "inactive"
+        self._derisk_force_taker_expectancy_mean_quote: Decimal = _ZERO
+        self._derisk_force_taker_expectancy_taker_fills: int = 0
         self._derisk_trace_enabled: bool = os.getenv("HB_DERISK_TRACE_ENABLED", "true").lower() in {"1", "true", "yes"}
         self._derisk_trace_cooldown_s: float = max(
             1.0,
@@ -891,6 +1208,11 @@ class EppV24Controller(MarketMakingControllerBase):
         self._cancel_budget_breach_count: int = 0
         self._avg_entry_price: Decimal = _ZERO
         self._position_base: Decimal = _ZERO
+        self._position_gross_base: Decimal = _ZERO
+        self._position_long_base: Decimal = _ZERO
+        self._position_short_base: Decimal = _ZERO
+        self._avg_entry_price_long: Decimal = _ZERO
+        self._avg_entry_price_short: Decimal = _ZERO
         self._realized_pnl_today: Decimal = _ZERO
         self._last_position_recon_ts: float = 0.0
         self._position_recon_fail_count: int = 0
@@ -921,9 +1243,16 @@ class EppV24Controller(MarketMakingControllerBase):
                 redis_url = f"redis://{rh}:{rp}/0"
         self._state_store = DailyStateStore(
             file_path=self._daily_state_path(),
-            redis_key=f"epp:daily_state:{config.instance_name}:{config.variant}",
+            redis_key=f"{_daily_state_store_prefix(config)}:daily_state:{config.instance_name}:{config.variant}",
             redis_url=redis_url,
         )
+        if _config_is_paper(self.config) and _paper_reset_state_on_startup_enabled(self.config):
+            logger.warning(
+                "Clearing controller daily state on startup for %s:%s",
+                config.instance_name,
+                config.variant,
+            )
+            self._state_store.clear()
         self._telemetry_redis: Optional[Any] = None
         self._telemetry_redis_init_done: bool = False
         self._last_portfolio_risk_check_ts: float = 0.0
@@ -932,6 +1261,12 @@ class EppV24Controller(MarketMakingControllerBase):
         self._startup_sync_retries: int = 0
         self._startup_sync_first_ts: float = 0.0
         self._startup_orphan_check_done: bool = False
+        self._seen_fill_order_ids: set[str] = set()
+        self._seen_fill_order_ids_fifo: Deque[str] = deque()
+        self._seen_fill_order_ids_cap: int = 50_000
+        self._seen_fill_event_keys: set[str] = set()
+        self._seen_fill_event_keys_fifo: Deque[str] = deque()
+        self._seen_fill_event_keys_cap: int = 120_000
         self._protective_stop = None
         if self.config.protective_stop_enabled and not self.config.no_trade:
             from controllers.protective_stop import ProtectiveStopManager
@@ -945,20 +1280,23 @@ class EppV24Controller(MarketMakingControllerBase):
                 logger.warning("Protective stop manager failed to initialize — continuing without")
                 self._protective_stop = None
         self._load_daily_state()
+        self._hydrate_seen_fill_order_ids_from_csv()
+        cfg_is_paper = _config_is_paper(self.config)
 
         logger.info(
-            "═══ EPP v2.4 STARTUP ═══  mode=%s  connector=%s  type=%s  pair=%s  "
+            "═══ Runtime v2.4 STARTUP ═══  mode=%s  connector=%s  type=%s  pair=%s  "
             "instance=%s  variant=%s  equity=%s  leverage=%d  "
-            "paper_equity=%s  state_path=%s",
+            "paper_equity=%s  artifact_ns=%s  state_path=%s",
             self._bot_mode.upper(),
             self.config.connector_name,
             self.config.resolved_connector_type,
             self.config.trading_pair,
             self.config.instance_name,
             self.config.variant,
-            self.config.paper_engine.paper_equity_quote if self.config.is_paper else "REAL",
+            self.config.paper_engine.paper_equity_quote if cfg_is_paper else "REAL",
             int(self.config.leverage),
-            self.config.paper_engine.paper_equity_quote if self.config.is_paper else "N/A",
+            self.config.paper_engine.paper_equity_quote if cfg_is_paper else "N/A",
+            self._artifact_namespace,
             self._daily_state_path(),
         )
         if self._bot_mode == "live":
@@ -1009,8 +1347,15 @@ class EppV24Controller(MarketMakingControllerBase):
 
         market = self._evaluate_market_conditions(now_ts=now, band_pct=spread_state.band_pct)
         self._update_adaptive_history(market_spread_pct=market.market_spread_pct)
+        self._compute_alpha_policy(
+            regime_name=regime_name,
+            spread_state=spread_state,
+            market=market,
+            target_net_base_pct=target_net_base_pct,
+            base_pct_net=base_pct_net,
+        )
         buy_spreads, sell_spreads, projected_total_quote, size_mult = self._compute_levels_and_sizing(
-            regime_spec, spread_state, equity_quote, mid, market,
+            regime_name, regime_spec, spread_state, equity_quote, mid, market,
         )
         risk_reasons, risk_hard_stop, daily_loss_pct, drawdown_pct = self._evaluate_all_risk(
             spread_state, base_pct_gross, equity_quote, projected_total_quote, market,
@@ -1049,7 +1394,7 @@ class EppV24Controller(MarketMakingControllerBase):
 
     def _expire_external_intent_overrides(self, now_ts: float) -> None:
         """Expire stale external execution-intent overrides to prevent sticky state."""
-        ttl_s = int(max(0, int(getattr(self.config, "execution_intent_override_ttl_s", 0))))
+        ttl_s = int(max(0, int(self.config.execution_intent_override_ttl_s)))
         ttl = float(ttl_s)
 
         base_override = getattr(self, "_external_target_base_pct_override", None)
@@ -1133,39 +1478,60 @@ class EppV24Controller(MarketMakingControllerBase):
         Paper bypass: when paper_edge_gate_bypass=True and is_paper=True,
         the edge gate is disabled so paper fills can occur regardless of edge.
         """
-        if self.config.is_paper and self.config.paper_edge_gate_bypass:
+        if _config_is_paper(self.config) and self.config.paper_edge_gate_bypass:
             self._soft_pause_edge = False
             self._edge_gate_blocked = False
             return
-        net_edge_gate = spread_state.net_edge
+        raw_net_edge = spread_state.net_edge
+        net_edge_gate = raw_net_edge
         period = max(1, int(self.config.edge_gate_ewma_period))
         if period > 1:
             alpha = _TWO / Decimal(period + 1)
             if self._net_edge_ewma is None:
-                self._net_edge_ewma = spread_state.net_edge
+                self._net_edge_ewma = raw_net_edge
             else:
-                self._net_edge_ewma = alpha * spread_state.net_edge + (_ONE - alpha) * self._net_edge_ewma
-            net_edge_gate = self._net_edge_ewma
+                self._net_edge_ewma = alpha * raw_net_edge + (_ONE - alpha) * self._net_edge_ewma
+            # Keep EWMA as the smoothing baseline, but do not let a stale average
+            # force a soft-pause when the current edge already clears the live bar.
+            net_edge_gate = max(self._net_edge_ewma, raw_net_edge)
         self._net_edge_gate = net_edge_gate
         self._edge_gate_update(now, net_edge_gate, spread_state.min_edge_threshold, spread_state.edge_resume_threshold)
         self._soft_pause_edge = self._edge_gate_blocked
 
     def _compute_levels_and_sizing(
-        self, regime_spec: RegimeSpec, spread_state: SpreadEdgeState,
+        self, regime_name: str, regime_spec: RegimeSpec, spread_state: SpreadEdgeState,
         equity_quote: Decimal, mid: Decimal, market: MarketConditions,
     ) -> Tuple[List[Decimal], List[Decimal], Decimal, Decimal]:
         """Pick levels, build per-side spreads, and project total notional."""
         levels = self._pick_levels(regime_spec, spread_state.turnover_x)
         self._runtime_levels.executor_refresh_time = int(regime_spec.refresh_s)
+        one_sided = self._resolve_quote_side_mode(
+            mid=mid,
+            regime_name=regime_name,
+            regime_spec=regime_spec,
+        )
         buy_spreads, sell_spreads = self._build_side_spreads(
             spread_state.spread_pct, spread_state.skew,
-            levels, regime_spec.one_sided, market.side_spread_floor,
+            levels, one_sided, market.side_spread_floor,
         )
         buy_spreads, sell_spreads = self._apply_spread_competitiveness_cap(
             buy_spreads=buy_spreads,
             sell_spreads=sell_spreads,
             market=market,
         )
+        alpha_state = str(getattr(self, "_alpha_policy_state", "maker_two_sided"))
+        if alpha_state == "no_trade":
+            buy_spreads = []
+            sell_spreads = []
+        elif alpha_state in {"aggressive_buy", "aggressive_sell"}:
+            cross_mult = max(_ONE, to_decimal(getattr(self.config, "alpha_policy_cross_spread_mult", Decimal("1.05"))))
+            aggressive_spread = max(market.side_spread_floor * cross_mult, Decimal("0.000001"))
+            if alpha_state == "aggressive_buy" and buy_spreads:
+                buy_spreads = [min(buy_spreads[0], aggressive_spread)]
+                sell_spreads = []
+            elif alpha_state == "aggressive_sell" and sell_spreads:
+                sell_spreads = [min(sell_spreads[0], aggressive_spread)]
+                buy_spreads = []
         size_mult = self._compute_pnl_governor_size_mult(
             equity_quote=equity_quote,
             turnover_x=spread_state.turnover_x,
@@ -1177,6 +1543,89 @@ class EppV24Controller(MarketMakingControllerBase):
             size_mult=size_mult,
         )
         return buy_spreads, sell_spreads, projected_total_quote, size_mult
+
+    def _resolve_quote_side_mode(
+        self,
+        *,
+        mid: Decimal,
+        regime_name: str,
+        regime_spec: RegimeSpec,
+    ) -> str:
+        """Resolve effective quote side mode, including neutral pre-trend filtering."""
+        one_sided = regime_spec.one_sided
+        reason = "regime"
+        alpha_state = str(getattr(self, "_alpha_policy_state", "maker_two_sided"))
+        if alpha_state == "no_trade":
+            one_sided = "off"
+            reason = "alpha_no_trade"
+        elif alpha_state in {"maker_bias_buy", "aggressive_buy"}:
+            one_sided = "buy_only"
+            reason = "alpha_buy_bias"
+        elif alpha_state in {"maker_bias_sell", "aggressive_sell"}:
+            one_sided = "sell_only"
+            reason = "alpha_sell_bias"
+
+        neutral_guard_pct = max(_ZERO, to_decimal(getattr(self.config, "neutral_trend_guard_pct", _ZERO)))
+        ema_val = getattr(self, "_regime_ema_value", None)
+        ema_val = None if ema_val is None else to_decimal(ema_val)
+
+        if (
+            regime_name == "neutral_low_vol"
+            and one_sided == "off"
+            and alpha_state not in {"no_trade", "maker_bias_buy", "maker_bias_sell", "aggressive_buy", "aggressive_sell"}
+            and neutral_guard_pct > _ZERO
+            and ema_val is not None
+            and ema_val > _ZERO
+            and mid > _ZERO
+        ):
+            displacement_pct = (mid - ema_val) / ema_val
+            if displacement_pct >= neutral_guard_pct:
+                one_sided = "buy_only"
+                reason = "neutral_trend_guard_up"
+            elif displacement_pct <= -neutral_guard_pct:
+                one_sided = "sell_only"
+                reason = "neutral_trend_guard_down"
+        if (
+            regime_name == "neutral_low_vol"
+            and one_sided == "off"
+            and alpha_state not in {"no_trade", "maker_bias_buy", "maker_bias_sell", "aggressive_buy", "aggressive_sell"}
+            and str(getattr(self, "_selective_quote_state", "inactive")) == "reduced"
+            and ema_val is not None
+            and ema_val > _ZERO
+            and mid > _ZERO
+        ):
+            selective_bias_pct = max(
+                neutral_guard_pct,
+                to_decimal(getattr(self.config, "selective_side_bias_pct", neutral_guard_pct)),
+            )
+            displacement_pct = (mid - ema_val) / ema_val
+            if displacement_pct >= selective_bias_pct:
+                one_sided = "buy_only"
+                reason = "selective_with_trend_up"
+            elif displacement_pct <= -selective_bias_pct:
+                one_sided = "sell_only"
+                reason = "selective_with_trend_down"
+
+        previous_mode = str(getattr(self, "_quote_side_mode", "off") or "off")
+        if previous_mode != one_sided:
+            self._pending_stale_cancel_actions.extend(
+                self._cancel_stale_side_executors(previous_mode, one_sided)
+            )
+        if alpha_state == "no_trade":
+            # Fail-closed for alpha no-trade: ensure already-placed quote executors
+            # are canceled immediately instead of waiting for refresh cadence.
+            self._pending_stale_cancel_actions.extend(
+                EppV24Controller._cancel_active_quote_executors(self)
+            )
+            EppV24Controller._cancel_alpha_no_trade_paper_orders(self)
+        else:
+            requested_ids = getattr(self, "_alpha_no_trade_cancel_requested_ids", None)
+            if isinstance(requested_ids, set):
+                requested_ids.clear()
+            self._alpha_no_trade_last_paper_cancel_ts = 0.0
+        self._quote_side_mode = one_sided
+        self._quote_side_reason = reason
+        return one_sided
 
     def _apply_spread_competitiveness_cap(
         self,
@@ -1247,6 +1696,13 @@ class EppV24Controller(MarketMakingControllerBase):
             self._pnl_governor_size_boost_reason = reason
             EppV24Controller._increment_governor_reason_count(self, "_pnl_governor_size_boost_reason_counts", reason)
             return _ONE
+        if EppV24Controller._fill_edge_below_cost_floor(self):
+            reason = "fill_edge_below_cost_floor"
+            self._pnl_governor_size_boost_reason = reason
+            EppV24Controller._increment_governor_reason_count(
+                self, "_pnl_governor_size_boost_reason_counts", reason
+            )
+            return _ONE
         normalized = _clip((deficit_ratio - activation) / max(Decimal("0.0001"), (_ONE - activation)), _ZERO, _ONE)
         size_mult = _ONE + (normalized * max_boost_pct)
         size_mult = _clip(size_mult, _ONE, _ONE + max_boost_pct)
@@ -1256,6 +1712,369 @@ class EppV24Controller(MarketMakingControllerBase):
         self._pnl_governor_size_boost_reason = reason
         EppV24Controller._increment_governor_reason_count(self, "_pnl_governor_size_boost_reason_counts", reason)
         return size_mult
+
+    def _fill_edge_below_cost_floor(self) -> bool:
+        """Return True when realized fill edge is worse than estimated maker cost floor."""
+        fill_edge_ewma = getattr(self, "_fill_edge_ewma", None)
+        if fill_edge_ewma is None:
+            return False
+        cost_floor_bps = (
+            max(_ZERO, to_decimal(getattr(self, "_maker_fee_pct", _ZERO)))
+            + max(_ZERO, to_decimal(getattr(self.config, "slippage_est_pct", _ZERO)))
+        ) * _10K
+        return to_decimal(fill_edge_ewma) < -cost_floor_bps
+
+    def _adverse_fill_soft_pause_active(self) -> bool:
+        """Return True when realized fill-edge quality warrants temporary no-trade pause."""
+        if not bool(getattr(self.config, "adverse_fill_soft_pause_enabled", False)):
+            return False
+        if self._fill_edge_ewma is None:
+            return False
+        min_fills = max(1, int(getattr(self.config, "adverse_fill_soft_pause_min_fills", 120)))
+        if int(getattr(self, "_fill_count_for_kelly", 0)) < min_fills:
+            return False
+        adverse_threshold = max(1, int(getattr(self.config, "adverse_fill_count_threshold", 20)))
+        if int(getattr(self, "_adverse_fill_count", 0)) < adverse_threshold:
+            return False
+        cost_floor_mult = max(_ZERO, to_decimal(getattr(self.config, "adverse_fill_soft_pause_cost_floor_mult", _ONE)))
+        if cost_floor_mult == _ONE:
+            return EppV24Controller._fill_edge_below_cost_floor(self)
+        cost_floor_bps = (
+            max(_ZERO, to_decimal(getattr(self, "_maker_fee_pct", _ZERO)))
+            + max(_ZERO, to_decimal(getattr(self.config, "slippage_est_pct", _ZERO)))
+        ) * _10K * cost_floor_mult
+        return self._fill_edge_ewma < -cost_floor_bps
+
+    def _edge_confidence_soft_pause_active(self) -> bool:
+        """Pause when the confidence-adjusted edge upper bound remains below cost floor."""
+        if not bool(getattr(self.config, "edge_confidence_soft_pause_enabled", False)):
+            return False
+        edge_mean_bps = self._fill_edge_ewma
+        edge_var_bps2 = self._fill_edge_variance
+        if edge_mean_bps is None or edge_var_bps2 is None:
+            return False
+        n_fills = max(0, int(getattr(self, "_fill_count_for_kelly", 0)))
+        min_fills = max(1, int(getattr(self.config, "edge_confidence_soft_pause_min_fills", 120)))
+        if n_fills < min_fills:
+            return False
+        safe_var = max(_ZERO, to_decimal(edge_var_bps2))
+        if safe_var <= _ZERO:
+            return False
+
+        z_score = max(_ZERO, to_decimal(getattr(self.config, "edge_confidence_soft_pause_z_score", Decimal("1.96"))))
+        std_err = Decimal(str(math.sqrt(float(safe_var)) / max(1.0, math.sqrt(float(n_fills)))))
+        upper_edge_bps = to_decimal(edge_mean_bps) + (z_score * std_err)
+
+        cost_floor_mult = max(
+            _ZERO,
+            to_decimal(getattr(self.config, "edge_confidence_soft_pause_cost_floor_mult", _ONE)),
+        )
+        cost_floor_bps = (
+            max(_ZERO, to_decimal(getattr(self, "_maker_fee_pct", _ZERO)))
+            + max(_ZERO, to_decimal(getattr(self.config, "slippage_est_pct", _ZERO)))
+        ) * _10K * cost_floor_mult
+        return upper_edge_bps < -cost_floor_bps
+
+    def _slippage_soft_pause_active(self) -> bool:
+        """Pause when recent realized slippage p95 exceeds a configured budget."""
+        if not bool(getattr(self.config, "slippage_soft_pause_enabled", False)):
+            return False
+        fill_history = getattr(self, "_auto_calibration_fill_history", None)
+        if fill_history is None:
+            return False
+        min_fills = max(1, int(getattr(self.config, "slippage_soft_pause_min_fills", 100)))
+        window_fills = max(
+            min_fills,
+            int(getattr(self.config, "slippage_soft_pause_window_fills", 300)),
+        )
+        window = list(fill_history)[-window_fills:]
+        if len(window) < min_fills:
+            return False
+        positive_slippage_bps = [
+            max(_ZERO, to_decimal(row.get("slippage_bps", _ZERO)))
+            for row in window
+            if isinstance(row, dict)
+        ]
+        if len(positive_slippage_bps) < min_fills:
+            return False
+        p95_slippage_bps = EppV24Controller._auto_calibration_p95(positive_slippage_bps)
+        trigger_bps = max(_ZERO, to_decimal(getattr(self.config, "slippage_soft_pause_p95_bps", Decimal("25"))))
+        return p95_slippage_bps >= trigger_bps
+
+    def _recent_positive_slippage_p95_bps(
+        self,
+        *,
+        window_fills: Optional[int] = None,
+        min_fills: Optional[int] = None,
+    ) -> Decimal:
+        fill_history = getattr(self, "_auto_calibration_fill_history", None)
+        if fill_history is None:
+            return _ZERO
+        min_fills_resolved = max(
+            1,
+            int(
+                min_fills
+                if min_fills is not None
+                else getattr(self.config, "slippage_soft_pause_min_fills", 100)
+            ),
+        )
+        window_fills_resolved = max(
+            min_fills_resolved,
+            int(
+                window_fills
+                if window_fills is not None
+                else getattr(self.config, "slippage_soft_pause_window_fills", 300)
+            ),
+        )
+        window = list(fill_history)[-window_fills_resolved:]
+        if len(window) < min_fills_resolved:
+            return _ZERO
+        positive_slippage_bps = [
+            max(_ZERO, to_decimal(row.get("slippage_bps", _ZERO)))
+            for row in window
+            if isinstance(row, dict)
+        ]
+        if len(positive_slippage_bps) < min_fills_resolved:
+            return _ZERO
+        return EppV24Controller._auto_calibration_p95(positive_slippage_bps)
+
+    def _compute_selective_quote_quality(self, regime_name: str) -> Dict[str, Decimal | str]:
+        if not bool(getattr(self.config, "selective_quoting_enabled", False)):
+            metrics: Dict[str, Decimal | str] = {
+                "score": _ZERO,
+                "state": "inactive",
+                "reason": "disabled",
+                "adverse_ratio": _ZERO,
+                "slippage_p95_bps": _ZERO,
+            }
+        else:
+            min_fills = max(1, int(getattr(self.config, "selective_quality_min_fills", 40)))
+            fill_count = max(0, int(getattr(self, "_fill_count_for_kelly", 0)))
+            if fill_count < min_fills:
+                metrics = {
+                    "score": _ZERO,
+                    "state": "inactive",
+                    "reason": "insufficient_history",
+                    "adverse_ratio": _ZERO,
+                    "slippage_p95_bps": _ZERO,
+                }
+            else:
+                cost_floor_bps = (
+                    max(_ZERO, to_decimal(getattr(self, "_maker_fee_pct", _ZERO)))
+                    + max(_ZERO, to_decimal(getattr(self.config, "slippage_est_pct", _ZERO)))
+                ) * _10K
+                fill_edge_ewma = getattr(self, "_fill_edge_ewma", None)
+                fill_edge_ewma = None if fill_edge_ewma is None else to_decimal(fill_edge_ewma)
+                negative_edge_ratio = _ZERO
+                if (
+                    fill_edge_ewma is not None
+                    and cost_floor_bps > _ZERO
+                    and fill_edge_ewma < -cost_floor_bps
+                ):
+                    negative_edge_ratio = _clip(
+                        ((-fill_edge_ewma) - cost_floor_bps) / cost_floor_bps,
+                        _ZERO,
+                        _ONE,
+                    )
+
+                adverse_threshold = max(1, int(getattr(self.config, "adverse_fill_count_threshold", 20)))
+                adverse_ratio = _clip(
+                    Decimal(int(getattr(self, "_adverse_fill_count", 0))) / Decimal(adverse_threshold),
+                    _ZERO,
+                    _ONE,
+                )
+                slippage_p95_bps = EppV24Controller._recent_positive_slippage_p95_bps(
+                    self,
+                    min_fills=min_fills,
+                )
+                slippage_trigger_bps = max(
+                    Decimal("0.1"),
+                    to_decimal(getattr(self.config, "slippage_soft_pause_p95_bps", Decimal("25"))),
+                )
+                slippage_ratio = _clip(slippage_p95_bps / slippage_trigger_bps, _ZERO, _ONE)
+
+                score = (
+                    negative_edge_ratio * Decimal("0.50")
+                    + adverse_ratio * Decimal("0.25")
+                    + slippage_ratio * Decimal("0.25")
+                )
+                if regime_name == "neutral_low_vol" and fill_edge_ewma is not None and fill_edge_ewma < _ZERO:
+                    score += Decimal("0.10")
+                score = _clip(score, _ZERO, _ONE)
+
+                reduce_threshold = _clip(
+                    to_decimal(getattr(self.config, "selective_quality_reduce_threshold", Decimal("0.45"))),
+                    _ZERO,
+                    _ONE,
+                )
+                block_threshold = _clip(
+                    to_decimal(getattr(self.config, "selective_quality_block_threshold", Decimal("0.85"))),
+                    reduce_threshold,
+                    _ONE,
+                )
+                state = "inactive"
+                if score >= block_threshold:
+                    state = "blocked"
+                elif score >= reduce_threshold:
+                    state = "reduced"
+
+                reason = "healthy"
+                if state != "inactive":
+                    if slippage_ratio >= max(negative_edge_ratio, adverse_ratio) and slippage_ratio > _ZERO:
+                        reason = "slippage_shock"
+                    elif negative_edge_ratio >= adverse_ratio and negative_edge_ratio > _ZERO:
+                        reason = "negative_fill_edge"
+                    elif adverse_ratio > _ZERO:
+                        reason = "adverse_fill_streak"
+                    elif regime_name == "neutral_low_vol":
+                        reason = "neutral_low_vol_filter"
+
+                metrics = {
+                    "score": score,
+                    "state": state,
+                    "reason": reason,
+                    "adverse_ratio": adverse_ratio,
+                    "slippage_p95_bps": slippage_p95_bps,
+                }
+
+        self._selective_quote_score = to_decimal(metrics["score"])
+        self._selective_quote_state = str(metrics["state"])
+        self._selective_quote_reason = str(metrics["reason"])
+        self._selective_quote_adverse_ratio = to_decimal(metrics["adverse_ratio"])
+        self._selective_quote_slippage_p95_bps = to_decimal(metrics["slippage_p95_bps"])
+        return metrics
+
+    def _compute_alpha_policy(
+        self,
+        *,
+        regime_name: str,
+        spread_state: SpreadEdgeState,
+        market: MarketConditions,
+        target_net_base_pct: Decimal,
+        base_pct_net: Decimal,
+    ) -> Dict[str, Decimal | str | bool]:
+        if not bool(getattr(self.config, "alpha_policy_enabled", True)):
+            metrics: Dict[str, Decimal | str | bool] = {
+                "state": "maker_two_sided",
+                "reason": "disabled",
+                "maker_score": _ONE,
+                "aggressive_score": _ZERO,
+                "cross_allowed": False,
+            }
+        else:
+            inv_error = target_net_base_pct - base_pct_net
+            max_base = max(
+                Decimal("0.05"),
+                to_decimal(getattr(self.config, "max_base_pct", Decimal("0.45"))),
+            )
+            inventory_urgency = _clip(abs(inv_error) / max_base, _ZERO, _ONE)
+            self._inventory_urgency_score = inventory_urgency
+
+            edge_buffer = max(_ZERO, spread_state.net_edge - spread_state.min_edge_threshold)
+            edge_buffer_score = _clip(
+                edge_buffer / max(Decimal("0.0001"), spread_state.min_edge_threshold),
+                _ZERO,
+                _ONE,
+            )
+            drift_penalty = _clip(
+                max(_ZERO, spread_state.adverse_drift - spread_state.smooth_drift) * Decimal("4000"),
+                _ZERO,
+                _ONE,
+            )
+            market_health = _ONE - drift_penalty
+            imbalance_abs = _clip(abs(getattr(self, "_ob_imbalance", _ZERO)), _ZERO, _ONE)
+            imbalance_alignment = _ZERO
+            if inv_error > _ZERO:
+                imbalance_alignment = _clip(max(_ZERO, to_decimal(getattr(self, "_ob_imbalance", _ZERO))), _ZERO, _ONE)
+            elif inv_error < _ZERO:
+                imbalance_alignment = _clip(max(_ZERO, -to_decimal(getattr(self, "_ob_imbalance", _ZERO))), _ZERO, _ONE)
+
+            selective_penalty = _clip(to_decimal(getattr(self, "_selective_quote_score", _ZERO)), _ZERO, _ONE)
+            maker_score = _clip(
+                edge_buffer_score * Decimal("0.45")
+                + market_health * Decimal("0.25")
+                + imbalance_abs * Decimal("0.10")
+                + imbalance_alignment * Decimal("0.10")
+                + inventory_urgency * Decimal("0.10")
+                - selective_penalty * Decimal("0.25"),
+                _ZERO,
+                _ONE,
+            )
+            aggressive_score = _clip(
+                maker_score * Decimal("0.55")
+                + imbalance_alignment * Decimal("0.20")
+                + inventory_urgency * Decimal("0.25"),
+                _ZERO,
+                _ONE,
+            )
+
+            state = "maker_two_sided"
+            reason = "maker_baseline"
+            cross_allowed = False
+            urgency_threshold = _clip(
+                to_decimal(getattr(self.config, "alpha_policy_inventory_relief_threshold", Decimal("0.55"))),
+                _ZERO,
+                _ONE,
+            )
+            no_trade_threshold = _clip(
+                to_decimal(getattr(self.config, "alpha_policy_no_trade_threshold", Decimal("0.35"))),
+                _ZERO,
+                _ONE,
+            )
+            aggressive_threshold = _clip(
+                to_decimal(getattr(self.config, "alpha_policy_aggressive_threshold", Decimal("0.78"))),
+                no_trade_threshold,
+                _ONE,
+            )
+            bias_state = ""
+            if inv_error > _ZERO and inventory_urgency >= urgency_threshold:
+                bias_state = "buy"
+            elif inv_error < _ZERO and inventory_urgency >= urgency_threshold:
+                bias_state = "sell"
+            else:
+                imbalance = to_decimal(getattr(self, "_ob_imbalance", _ZERO))
+                if imbalance >= Decimal("0.25"):
+                    bias_state = "buy"
+                elif imbalance <= Decimal("-0.25"):
+                    bias_state = "sell"
+
+            if market.order_book_stale:
+                state = "no_trade"
+                reason = "order_book_stale"
+            elif market.market_spread_too_small:
+                state = "no_trade"
+                reason = "market_spread_too_small"
+            elif (
+                regime_name == "neutral_low_vol"
+                and maker_score < no_trade_threshold
+                and spread_state.net_edge < spread_state.edge_resume_threshold
+            ):
+                state = "no_trade"
+                reason = "neutral_low_edge"
+            elif aggressive_score >= aggressive_threshold and bias_state:
+                state = f"aggressive_{bias_state}"
+                reason = "inventory_relief" if inventory_urgency >= urgency_threshold else "imbalance_alignment"
+                cross_allowed = True
+            elif bias_state:
+                state = f"maker_bias_{bias_state}"
+                reason = "inventory_relief" if inventory_urgency >= urgency_threshold else "imbalance_alignment"
+
+            metrics = {
+                "state": state,
+                "reason": reason,
+                "maker_score": maker_score,
+                "aggressive_score": aggressive_score,
+                "cross_allowed": cross_allowed,
+            }
+
+        self._alpha_policy_state = str(metrics["state"])
+        self._alpha_policy_reason = str(metrics["reason"])
+        self._alpha_maker_score = to_decimal(metrics["maker_score"])
+        self._alpha_aggressive_score = to_decimal(metrics["aggressive_score"])
+        self._alpha_cross_allowed = bool(metrics["cross_allowed"])
+        if "inventory_urgency" not in locals():
+            self._inventory_urgency_score = _ZERO
+        return metrics
 
     def _evaluate_all_risk(
         self, spread_state: SpreadEdgeState, base_pct_gross: Decimal,
@@ -1276,6 +2095,18 @@ class EppV24Controller(MarketMakingControllerBase):
             order_book_stale=market.order_book_stale,
             pending_eod_close=self._pending_eod_close,
         )
+        if EppV24Controller._adverse_fill_soft_pause_active(self):
+            if "adverse_fill_soft_pause" not in risk_reasons:
+                risk_reasons.append("adverse_fill_soft_pause")
+        if EppV24Controller._edge_confidence_soft_pause_active(self):
+            if "edge_confidence_soft_pause" not in risk_reasons:
+                risk_reasons.append("edge_confidence_soft_pause")
+        if EppV24Controller._slippage_soft_pause_active(self):
+            if "slippage_soft_pause" not in risk_reasons:
+                risk_reasons.append("slippage_soft_pause")
+        if str(getattr(self, "_selective_quote_state", "inactive")) == "blocked":
+            if "selective_quote_soft_pause" not in risk_reasons:
+                risk_reasons.append("selective_quote_soft_pause")
         return risk_reasons, risk_hard_stop, daily_loss_pct, drawdown_pct
 
     def _resolve_guard_state(
@@ -1298,11 +2129,14 @@ class EppV24Controller(MarketMakingControllerBase):
                 risk_hard_stop=risk_hard_stop,
             )
         )
+        pause_reasons = {"adverse_fill_soft_pause", "edge_confidence_soft_pause", "slippage_soft_pause"}
+        if set(risk_reasons).intersection(pause_reasons) and state != GuardState.HARD_STOP:
+            state = GuardState.SOFT_PAUSE
         # Fail-closed on stale order book to avoid quoting off a frozen top-of-book.
         if market.order_book_stale and state != GuardState.HARD_STOP:
             stale_soft_pause_after_s = max(
-                float(getattr(self.config, "order_book_stale_after_s", 30.0)),
-                float(getattr(self.config, "order_book_stale_soft_pause_after_s", 75.0)),
+                float(self.config.order_book_stale_after_s),
+                float(self.config.order_book_stale_soft_pause_after_s),
             )
             if self._order_book_stale_age_s(now) >= stale_soft_pause_after_s:
                 state = GuardState.SOFT_PAUSE
@@ -1346,14 +2180,39 @@ class EppV24Controller(MarketMakingControllerBase):
         derisk_only = False
         derisk_runtime_recovered = False
         rr = set(risk_reasons)
-        if state == GuardState.SOFT_PAUSE and not risk_hard_stop and rr in (
-            {"base_pct_above_max"}, {"base_pct_below_min"}, {"eod_close_pending"},
-        ):
+        inventory_derisk_reasons = rr.intersection(_INVENTORY_DERISK_REASONS)
+        hard_stop_flatten_floor = EppV24Controller._position_rebalance_floor(self, mid)
+        hard_stop_inventory_flatten = (
+            state == GuardState.HARD_STOP
+            and abs(self._position_base) > hard_stop_flatten_floor
+        )
+        hard_stop_residual_below_floor = (
+            state == GuardState.HARD_STOP
+            and abs(self._position_base) > _BALANCE_EPSILON
+            and not hard_stop_inventory_flatten
+        )
+        if state == GuardState.SOFT_PAUSE and not risk_hard_stop and inventory_derisk_reasons:
             derisk_only = True
             risk_reasons_for_log.append("derisk_only")
+        if hard_stop_inventory_flatten:
+            risk_reasons_for_log.append("derisk_hard_stop_flatten")
+        elif hard_stop_residual_below_floor:
+            risk_reasons_for_log.append("derisk_hard_stop_residual_below_floor")
         derisk_force_taker = self._update_derisk_force_mode(now, derisk_only, rr)
+        if hard_stop_inventory_flatten:
+            # When hard-stop is triggered while inventory is still open, allow only
+            # force-taker rebalance flow so risk can be reduced instead of frozen.
+            derisk_force_taker = True
+            self._derisk_force_taker = True
         if derisk_force_taker:
             risk_reasons_for_log.append("derisk_force_taker")
+        if bool(getattr(self, "_derisk_force_taker_expectancy_guard_blocked", False)):
+            risk_reasons_for_log.append("derisk_force_taker_expectancy_blocked")
+        selective_state = str(getattr(self, "_selective_quote_state", "inactive"))
+        if selective_state == "reduced":
+            risk_reasons_for_log.append("selective_quote_reduced")
+        elif selective_state == "blocked" and "selective_quote_soft_pause" not in risk_reasons_for_log:
+            risk_reasons_for_log.append("selective_quote_soft_pause")
 
         base_bal, quote_bal = self._get_balances()
         snapshot = self._build_tick_snapshot(equity_quote)
@@ -1370,6 +2229,9 @@ class EppV24Controller(MarketMakingControllerBase):
         self.processed_data["target_net_base_pct"] = target_net_base_pct
         self.processed_data["net_edge_gate_pct"] = self._net_edge_gate
         self.processed_data["net_edge_ewma_pct"] = self._net_edge_ewma if self._net_edge_ewma is not None else spread_state.net_edge
+        self.processed_data["adverse_fill_soft_pause_active"] = snapshot["adverse_fill_soft_pause_active"]
+        self.processed_data["edge_confidence_soft_pause_active"] = snapshot["edge_confidence_soft_pause_active"]
+        self.processed_data["slippage_soft_pause_active"] = snapshot["slippage_soft_pause_active"]
         self.processed_data["adaptive_effective_min_edge_pct"] = snapshot["adaptive_effective_min_edge_pct"]
         self.processed_data["adaptive_fill_age_s"] = snapshot["adaptive_fill_age_s"]
         self.processed_data["adaptive_market_spread_bps_ewma"] = snapshot["adaptive_market_spread_bps_ewma"]
@@ -1390,6 +2252,32 @@ class EppV24Controller(MarketMakingControllerBase):
         self.processed_data["pnl_governor_size_boost_reason"] = snapshot["pnl_governor_size_boost_reason"]
         self.processed_data["pnl_governor_activation_reason_counts"] = snapshot["pnl_governor_activation_reason_counts"]
         self.processed_data["pnl_governor_size_boost_reason_counts"] = snapshot["pnl_governor_size_boost_reason_counts"]
+        self.processed_data["derisk_force_taker_min_base"] = snapshot["derisk_force_taker_min_base"]
+        self.processed_data["derisk_force_taker_expectancy_guard_blocked"] = snapshot[
+            "derisk_force_taker_expectancy_guard_blocked"
+        ]
+        self.processed_data["derisk_force_taker_expectancy_guard_reason"] = snapshot[
+            "derisk_force_taker_expectancy_guard_reason"
+        ]
+        self.processed_data["derisk_force_taker_expectancy_mean_quote"] = snapshot[
+            "derisk_force_taker_expectancy_mean_quote"
+        ]
+        self.processed_data["derisk_force_taker_expectancy_taker_fills"] = snapshot[
+            "derisk_force_taker_expectancy_taker_fills"
+        ]
+        self.processed_data["selective_quote_state"] = snapshot["selective_quote_state"]
+        self.processed_data["selective_quote_score"] = snapshot["selective_quote_score"]
+        self.processed_data["selective_quote_reason"] = snapshot["selective_quote_reason"]
+        self.processed_data["selective_quote_adverse_ratio"] = snapshot["selective_quote_adverse_ratio"]
+        self.processed_data["selective_quote_slippage_p95_bps"] = snapshot["selective_quote_slippage_p95_bps"]
+        self.processed_data["alpha_policy_state"] = snapshot["alpha_policy_state"]
+        self.processed_data["alpha_policy_reason"] = snapshot["alpha_policy_reason"]
+        self.processed_data["alpha_maker_score"] = snapshot["alpha_maker_score"]
+        self.processed_data["alpha_aggressive_score"] = snapshot["alpha_aggressive_score"]
+        self.processed_data["alpha_cross_allowed"] = snapshot["alpha_cross_allowed"]
+        self.processed_data["inventory_urgency_pct"] = snapshot["inventory_urgency_pct"]
+        self.processed_data["quote_side_mode"] = self._quote_side_mode
+        self.processed_data["quote_side_reason"] = self._quote_side_reason
 
         self._tick_duration_ms = (_time_mod.perf_counter() - _t0) * 1000.0
         self.processed_data["_tick_duration_ms"] = self._tick_duration_ms
@@ -1402,34 +2290,12 @@ class EppV24Controller(MarketMakingControllerBase):
             self._runtime_levels.total_amount_quote = Decimal("0")
         elif derisk_only:
             tight = self.config.derisk_spread_pct
-            if rr == {"base_pct_above_max"}:
-                if base_pct_net >= _ZERO:
-                    self._runtime_levels.buy_spreads = []
-                    self._runtime_levels.buy_amounts_pct = []
-                    active_side_count = max(1, len(self._runtime_levels.sell_spreads))
-                    if tight > _ZERO:
-                        self._runtime_levels.sell_spreads = [tight] * active_side_count
-                    if not self._runtime_levels.sell_amounts_pct:
-                        per_level = Decimal("100") / Decimal(active_side_count)
-                        self._runtime_levels.sell_amounts_pct = [per_level] * active_side_count
-                else:
-                    self._runtime_levels.sell_spreads = []
-                    self._runtime_levels.sell_amounts_pct = []
-                    active_side_count = max(1, len(self._runtime_levels.buy_spreads))
-                    if tight > _ZERO:
-                        self._runtime_levels.buy_spreads = [tight] * active_side_count
-                    if not self._runtime_levels.buy_amounts_pct:
-                        per_level = Decimal("100") / Decimal(active_side_count)
-                        self._runtime_levels.buy_amounts_pct = [per_level] * active_side_count
-                # Recover notional after a temporary non-derisk soft-pause path
-                # that zeroed runtime sizing (e.g. order_book_stale).
-                if self._runtime_levels.total_amount_quote <= _ZERO:
-                    self._runtime_levels.total_amount_quote = self.config.total_amount_quote
-                    derisk_runtime_recovered = True
-                if self.config.max_order_notional_quote > 0:
-                    max_total = self.config.max_order_notional_quote * Decimal(active_side_count)
-                    self._runtime_levels.total_amount_quote = min(self._runtime_levels.total_amount_quote, max_total)
-            elif rr == {"base_pct_below_min"}:
+            buy_only = False
+            if "base_pct_below_min" in rr:
+                buy_only = True
+            elif "base_pct_above_max" in rr or "eod_close_pending" in rr:
+                buy_only = base_pct_net < _ZERO
+            if buy_only:
                 self._runtime_levels.sell_spreads = []
                 self._runtime_levels.sell_amounts_pct = []
                 active_side_count = max(1, len(self._runtime_levels.buy_spreads))
@@ -1444,19 +2310,18 @@ class EppV24Controller(MarketMakingControllerBase):
                 if self.config.max_order_notional_quote > 0:
                     max_total = self.config.max_order_notional_quote * Decimal(active_side_count)
                     self._runtime_levels.total_amount_quote = min(self._runtime_levels.total_amount_quote, max_total)
-            elif rr == {"eod_close_pending"}:
-                if base_pct_net >= _ZERO:
-                    self._runtime_levels.buy_spreads = []
-                    self._runtime_levels.buy_amounts_pct = []
-                    active_side_count = max(1, len(self._runtime_levels.sell_spreads))
-                    if tight > _ZERO:
-                        self._runtime_levels.sell_spreads = [tight] * active_side_count
-                else:
-                    self._runtime_levels.sell_spreads = []
-                    self._runtime_levels.sell_amounts_pct = []
-                    active_side_count = max(1, len(self._runtime_levels.buy_spreads))
-                    if tight > _ZERO:
-                        self._runtime_levels.buy_spreads = [tight] * active_side_count
+            else:
+                self._runtime_levels.buy_spreads = []
+                self._runtime_levels.buy_amounts_pct = []
+                active_side_count = max(1, len(self._runtime_levels.sell_spreads))
+                if tight > _ZERO:
+                    self._runtime_levels.sell_spreads = [tight] * active_side_count
+                if not self._runtime_levels.sell_amounts_pct:
+                    per_level = Decimal("100") / Decimal(active_side_count)
+                    self._runtime_levels.sell_amounts_pct = [per_level] * active_side_count
+                if self._runtime_levels.total_amount_quote <= _ZERO:
+                    self._runtime_levels.total_amount_quote = self.config.total_amount_quote
+                    derisk_runtime_recovered = True
                 if self.config.max_order_notional_quote > 0:
                     max_total = self.config.max_order_notional_quote * Decimal(active_side_count)
                     self._runtime_levels.total_amount_quote = min(self._runtime_levels.total_amount_quote, max_total)
@@ -1486,7 +2351,8 @@ class EppV24Controller(MarketMakingControllerBase):
         snapshot["tick_duration_ms"] = self._tick_duration_ms
         snapshot["order_book_stale"] = self._is_order_book_stale(now)
         snapshot["cancel_per_min"] = self._cancel_per_min(now)
-        snapshot["orders_active"] = sum(1 for ex in self.executors_info if getattr(ex, "is_active", False))
+        runtime_orders_active = sum(1 for ex in self.executors_info if getattr(ex, "is_active", False))
+        snapshot["orders_active"] = max(runtime_orders_active, EppV24Controller._paper_open_order_count(self))
         self._tick_emitter.log_minute(now, event_ts, self.processed_data, state, risk_reasons_for_log, snapshot)
         self._auto_calibration_record_minute(
             now_ts=now,
@@ -1533,15 +2399,17 @@ class EppV24Controller(MarketMakingControllerBase):
             except Exception:
                 logger.debug("Derisk force-taker fallback to default open order type", exc_info=True)
         if self._derisk_force_taker and level_id == "position_rebalance":
-            self._trace_derisk(
-                self.market_data_provider.time(),
-                "rebalance_executor_config",
-                level_id=level_id,
-                side=getattr(side, "name", str(side)),
-                amount=q_amount,
-                entry_price=entry_price,
-                open_order_type=getattr(triple_barrier_cfg, "open_order_type", None),
-            )
+            trace_derisk = getattr(self, "_trace_derisk", None)
+            if callable(trace_derisk):
+                trace_derisk(
+                    self.market_data_provider.time(),
+                    "rebalance_executor_config",
+                    level_id=level_id,
+                    side=getattr(side, "name", str(side)),
+                    amount=q_amount,
+                    entry_price=entry_price,
+                    open_order_type=getattr(triple_barrier_cfg, "open_order_type", None),
+                )
         return PositionExecutorConfig(
             timestamp=self.market_data_provider.time(),
             level_id=level_id,
@@ -1554,12 +2422,106 @@ class EppV24Controller(MarketMakingControllerBase):
             side=side,
         )
 
+    def _derisk_force_min_base_amount(self) -> Decimal:
+        """Resolve minimum absolute inventory required to allow force-taker mode."""
+        min_force_base = _BALANCE_EPSILON
+        min_base_mult = max(_ZERO, to_decimal(getattr(self.config, "derisk_force_taker_min_base_mult", Decimal("2.0"))))
+        if min_base_mult <= _ZERO:
+            return min_force_base
+
+        reference_price = _ZERO
+        processed_data = getattr(self, "processed_data", {})
+        if isinstance(processed_data, dict):
+            reference_price = to_decimal(processed_data.get("reference_price", _ZERO))
+        if reference_price <= _ZERO:
+            reference_price = max(_ZERO, to_decimal(getattr(self, "_avg_entry_price", _ZERO)))
+        if reference_price <= _ZERO:
+            return min_force_base
+
+        min_base_amount_fn = getattr(self, "_min_base_amount", None)
+        if not callable(min_base_amount_fn):
+            return min_force_base
+        try:
+            min_exchange_base = max(_ZERO, to_decimal(min_base_amount_fn(reference_price)))
+        except Exception:
+            logger.debug("derisk force min-base resolution failed", exc_info=True)
+            return min_force_base
+        return max(min_force_base, min_exchange_base * min_base_mult)
+
+    def _derisk_force_expectancy_allows(self, abs_position_base: Decimal, min_force_base: Decimal) -> bool:
+        """Return True when force-taker derisk is allowed by recent taker expectancy."""
+        self._derisk_force_taker_expectancy_guard_blocked = False
+        self._derisk_force_taker_expectancy_guard_reason = "disabled"
+        self._derisk_force_taker_expectancy_mean_quote = _ZERO
+        self._derisk_force_taker_expectancy_taker_fills = 0
+
+        if not bool(getattr(self.config, "derisk_force_taker_expectancy_guard_enabled", False)):
+            return True
+
+        fill_history = getattr(self, "_auto_calibration_fill_history", None)
+        if fill_history is None:
+            self._derisk_force_taker_expectancy_guard_reason = "no_fill_history"
+            return True
+
+        window_fills = max(
+            1,
+            int(getattr(self.config, "derisk_force_taker_expectancy_window_fills", 300)),
+        )
+        min_taker_fills = max(
+            1,
+            int(getattr(self.config, "derisk_force_taker_expectancy_min_taker_fills", 40)),
+        )
+
+        window = list(fill_history)[-window_fills:]
+        taker_rows = [
+            row
+            for row in window
+            if isinstance(row, dict) and not bool(row.get("is_maker", False))
+        ]
+        taker_nets = [to_decimal(row.get("net_pnl_quote", _ZERO)) for row in taker_rows]
+        taker_fills = len(taker_nets)
+        self._derisk_force_taker_expectancy_taker_fills = taker_fills
+
+        if taker_fills < min_taker_fills:
+            self._derisk_force_taker_expectancy_guard_reason = "insufficient_data"
+            return True
+
+        taker_mean_quote = sum(taker_nets, _ZERO) / Decimal(taker_fills)
+        self._derisk_force_taker_expectancy_mean_quote = taker_mean_quote
+
+        min_expectancy_quote = to_decimal(
+            getattr(self.config, "derisk_force_taker_expectancy_min_quote", Decimal("-0.02"))
+        )
+        if taker_mean_quote >= min_expectancy_quote:
+            self._derisk_force_taker_expectancy_guard_reason = "pass"
+            return True
+
+        override_mult = max(
+            _ZERO,
+            to_decimal(getattr(self.config, "derisk_force_taker_expectancy_override_base_mult", Decimal("10"))),
+        )
+        if override_mult > _ZERO and min_force_base > _BALANCE_EPSILON:
+            override_abs_base = max(min_force_base, min_force_base * override_mult)
+            if abs_position_base >= override_abs_base:
+                self._derisk_force_taker_expectancy_guard_reason = "override_large_inventory"
+                return True
+
+        self._derisk_force_taker_expectancy_guard_blocked = True
+        self._derisk_force_taker_expectancy_guard_reason = "negative_taker_expectancy"
+        return False
+
     def _update_derisk_force_mode(self, now_ts: float, derisk_only: bool, rr: set[str]) -> bool:
-        tracked_rr = rr in ({"base_pct_above_max"}, {"base_pct_below_min"}, {"eod_close_pending"})
+        self._derisk_force_taker_expectancy_guard_blocked = False
+        self._derisk_force_taker_expectancy_guard_reason = "inactive"
+        self._derisk_force_taker_expectancy_mean_quote = _ZERO
+        self._derisk_force_taker_expectancy_taker_fills = 0
+
+        tracked_rr = bool(rr.intersection(_INVENTORY_DERISK_REASONS))
         if not derisk_only or not tracked_rr:
             self._derisk_cycle_started_ts = 0.0
             self._derisk_cycle_start_abs_base = _ZERO
             self._derisk_force_taker = False
+            self._derisk_force_taker_expectancy_guard_reason = "inactive"
             return False
 
         abs_position_base = abs(self._position_base)
@@ -1567,10 +2529,18 @@ class EppV24Controller(MarketMakingControllerBase):
             self._derisk_cycle_started_ts = 0.0
             self._derisk_cycle_start_abs_base = _ZERO
             self._derisk_force_taker = False
+            self._derisk_force_taker_expectancy_guard_reason = "flat_position"
+            return False
+        min_force_base = EppV24Controller._derisk_force_min_base_amount(self)
+        if abs_position_base <= min_force_base:
+            self._derisk_cycle_started_ts = 0.0
+            self._derisk_cycle_start_abs_base = _ZERO
+            self._derisk_force_taker = False
+            self._derisk_force_taker_expectancy_guard_reason = "below_force_min_base"
             return False
 
         progress_reset_ratio = _clip(
-            to_decimal(getattr(self.config, "derisk_progress_reset_ratio", Decimal("0.02"))),
+            to_decimal(self.config.derisk_progress_reset_ratio),
             _ZERO,
             _ONE,
         )
@@ -1588,12 +2558,30 @@ class EppV24Controller(MarketMakingControllerBase):
                 self._derisk_cycle_start_abs_base = abs_position_base
                 self._derisk_force_taker = False
 
-        force_after_s = float(max(0.0, getattr(self.config, "derisk_force_taker_after_s", 180.0)))
+        force_after_s = float(max(0.0, self.config.derisk_force_taker_after_s))
         if force_after_s <= 0:
             self._derisk_force_taker = False
+            self._derisk_force_taker_expectancy_guard_reason = "force_disabled"
             return False
 
         should_force = (now_ts - self._derisk_cycle_started_ts) >= force_after_s
+        if should_force:
+            if not EppV24Controller._derisk_force_expectancy_allows(self, abs_position_base, min_force_base):
+                should_force = False
+                trace_derisk = getattr(self, "_trace_derisk", None)
+                if callable(trace_derisk):
+                    trace_derisk(
+                        now_ts,
+                        "force_mode_blocked_expectancy",
+                        force=True,
+                        abs_position_base=abs_position_base,
+                        taker_expectancy_mean_quote=self._derisk_force_taker_expectancy_mean_quote,
+                        taker_fills=self._derisk_force_taker_expectancy_taker_fills,
+                        guard_reason=self._derisk_force_taker_expectancy_guard_reason,
+                    )
+        else:
+            self._derisk_force_taker_expectancy_guard_reason = "timer_not_elapsed"
+
         if should_force and not self._derisk_force_taker:
             logger.warning(
                 "Derisk force mode enabled after %.0fs without enough progress "
@@ -1603,15 +2591,17 @@ class EppV24Controller(MarketMakingControllerBase):
                 self._derisk_cycle_start_abs_base,
                 float(progress_reset_ratio * _100),
             )
-            self._trace_derisk(
-                now_ts,
-                "force_mode_enabled",
-                force=True,
-                abs_position_base=abs_position_base,
-                cycle_start_abs_base=self._derisk_cycle_start_abs_base,
-                progress_reset_ratio=progress_reset_ratio,
-                force_after_s=force_after_s,
-            )
+            trace_derisk = getattr(self, "_trace_derisk", None)
+            if callable(trace_derisk):
+                trace_derisk(
+                    now_ts,
+                    "force_mode_enabled",
+                    force=True,
+                    abs_position_base=abs_position_base,
+                    cycle_start_abs_base=self._derisk_cycle_start_abs_base,
+                    progress_reset_ratio=progress_reset_ratio,
+                    force_after_s=force_after_s,
+                )
             self._enqueue_force_derisk_executor_cancels()
             self._recently_issued_levels = {}
         self._derisk_force_taker = should_force
@@ -1724,6 +2714,7 @@ class EppV24Controller(MarketMakingControllerBase):
         realized_pnl_quote: Decimal,
         slippage_bps: Decimal,
         is_maker: bool,
+        fill_edge_bps: Decimal = _ZERO,
     ) -> None:
         net_pnl_quote = realized_pnl_quote - fee_quote
         self._auto_calibration_fill_history.append(
@@ -1734,6 +2725,7 @@ class EppV24Controller(MarketMakingControllerBase):
                 "realized_pnl_quote": to_decimal(realized_pnl_quote),
                 "net_pnl_quote": to_decimal(net_pnl_quote),
                 "slippage_bps": to_decimal(slippage_bps),
+                "fill_edge_bps": to_decimal(fill_edge_bps),
                 "is_maker": bool(is_maker),
             }
         )
@@ -1986,39 +2978,160 @@ class EppV24Controller(MarketMakingControllerBase):
             logger.debug("Telemetry Redis init failed", exc_info=True)
         return self._telemetry_redis
 
-    def did_fill_order(self, event: OrderFilledEvent):
+    @staticmethod
+    def _is_excluded_fill_for_risk_accounting(order_id: object) -> bool:
+        """Return True when a fill should be ignored for strategy accounting.
+
+        Probe orders are synthetic verification artifacts and can be emitted in the
+        same stream as strategy fills. They must not mutate runtime strategy state
+        (turnover, fill-risk, position, realized PnL, adaptive fill-age), otherwise
+        they can trigger false derisk/rebalance cascades.
+        """
+        oid = str(order_id or "").strip().lower()
+        return oid.startswith("probe-ord-")
+
+    @staticmethod
+    def _normalize_fill_key_ts(value: object) -> str:
+        """Normalize fill timestamp into a stable event-key component."""
+        if value is None:
+            return ""
         try:
-            ts = getattr(event, "timestamp", None)
-            if ts is not None:
-                self._last_fill_ts = float(ts)
-            else:
-                self._last_fill_ts = (
-                    float(self.market_data_provider.time())
-                    if hasattr(self, "market_data_provider")
-                    else _time_mod.time()
-                )
+            return f"{float(value):.6f}"
         except Exception:
-            self._last_fill_ts = (
-                float(self.market_data_provider.time())
-                if hasattr(self, "market_data_provider")
-                else _time_mod.time()
-            )
+            pass
+        raw = str(value or "").strip()
+        if not raw:
+            return ""
+        try:
+            return f"{datetime.fromisoformat(raw.replace('Z', '+00:00')).timestamp():.6f}"
+        except Exception:
+            return raw
+
+    @staticmethod
+    def _normalize_fill_key_decimal(value: object) -> str:
+        """Normalize numeric fill fields so row/event keys match reliably."""
+        try:
+            dec = to_decimal(value).normalize()
+            return format(dec, "f")
+        except Exception:
+            return str(value or "").strip()
+
+    @staticmethod
+    def _fill_event_dedupe_key(event: object) -> str:
+        """Build replay-safe dedupe key for a fill event."""
+        order_id = str(getattr(event, "order_id", "") or "").strip()
+        for attr in ("exchange_trade_id", "trade_id", "fill_id", "trade_fill_id"):
+            trade_id = str(getattr(event, attr, "") or "").strip()
+            if trade_id:
+                return f"trade:{trade_id}"
+        ts_key = EppV24Controller._normalize_fill_key_ts(getattr(event, "timestamp", None))
+        side = str(getattr(getattr(event, "trade_type", None), "name", "") or "").strip().lower()
+        price = EppV24Controller._normalize_fill_key_decimal(getattr(event, "price", ""))
+        amount = EppV24Controller._normalize_fill_key_decimal(getattr(event, "amount", ""))
+        if not (order_id or ts_key):
+            return ""
+        return f"legacy:{order_id}|{ts_key}|{side}|{price}|{amount}"
+
+    @staticmethod
+    def _fill_row_dedupe_key(row: Dict[str, object]) -> str:
+        """Build dedupe key from a fills.csv row for warm-restart hydration."""
+        for key in ("exchange_trade_id", "trade_id", "fill_id", "trade_fill_id"):
+            trade_id = str(row.get(key, "") or "").strip()
+            if trade_id:
+                return f"trade:{trade_id}"
+        order_id = str(row.get("order_id", "") or "").strip()
+        ts_key = EppV24Controller._normalize_fill_key_ts(row.get("ts"))
+        side = str(row.get("side", "") or "").strip().lower()
+        price = EppV24Controller._normalize_fill_key_decimal(row.get("price", ""))
+        amount = EppV24Controller._normalize_fill_key_decimal(row.get("amount_base", ""))
+        if not (order_id or ts_key):
+            return ""
+        return f"legacy:{order_id}|{ts_key}|{side}|{price}|{amount}"
+
+    @staticmethod
+    def _record_fill_event_key(self: Any, event_key: str) -> bool:
+        """Register fill key; return False when event was already seen."""
+        key = str(event_key or "").strip()
+        if not key:
+            return True
+        seen = getattr(self, "_seen_fill_event_keys", None)
+        if not isinstance(seen, set):
+            seen = set()
+            setattr(self, "_seen_fill_event_keys", seen)
+        fifo = getattr(self, "_seen_fill_event_keys_fifo", None)
+        if not isinstance(fifo, deque):
+            fifo = deque()
+            setattr(self, "_seen_fill_event_keys_fifo", fifo)
+        cap = int(getattr(self, "_seen_fill_event_keys_cap", 120_000) or 120_000)
+        cap = max(1_000, cap)
+        if key in seen:
+            return False
+        seen.add(key)
+        fifo.append(key)
+        while len(fifo) > cap:
+            evicted = fifo.popleft()
+            seen.discard(evicted)
+        return True
+
+    @staticmethod
+    def _record_seen_fill_order_id(self: Any, order_id: object) -> None:
+        """Track order IDs for diagnostics and restart cache hydration."""
+        oid = str(order_id or "").strip()
+        if not oid:
+            return
+        seen = getattr(self, "_seen_fill_order_ids", None)
+        if not isinstance(seen, set):
+            seen = set()
+            setattr(self, "_seen_fill_order_ids", seen)
+        fifo = getattr(self, "_seen_fill_order_ids_fifo", None)
+        if not isinstance(fifo, deque):
+            fifo = deque()
+            setattr(self, "_seen_fill_order_ids_fifo", fifo)
+        cap = int(getattr(self, "_seen_fill_order_ids_cap", 50_000) or 50_000)
+        cap = max(1_000, cap)
+        if oid in seen:
+            return
+        seen.add(oid)
+        fifo.append(oid)
+        while len(fifo) > cap:
+            evicted = fifo.popleft()
+            seen.discard(evicted)
+
+    def did_fill_order(self, event: OrderFilledEvent):
         notional = to_decimal(event.amount) * to_decimal(event.price)
-        self._traded_notional_today += notional
-        self._fills_count_today += 1
+        order_id = str(getattr(event, "order_id", "") or "")
+        fill_event_key = EppV24Controller._fill_event_dedupe_key(event)
+        if not EppV24Controller._record_fill_event_key(self, fill_event_key):
+            logger.debug("Skipping duplicate fill event order_id=%s key=%s", order_id, fill_event_key)
+            return
+        EppV24Controller._record_seen_fill_order_id(self, order_id)
+        excluded_from_risk_accounting = EppV24Controller._is_excluded_fill_for_risk_accounting(order_id)
+        if not excluded_from_risk_accounting:
+            try:
+                ts = getattr(event, "timestamp", None)
+                if ts is not None:
+                    self._last_fill_ts = float(ts)
+                else:
+                    self._last_fill_ts = float(self.market_data_provider.time())
+            except Exception:
+                self._last_fill_ts = float(self.market_data_provider.time())
+        if not excluded_from_risk_accounting:
+            self._traded_notional_today += notional
+            self._fills_count_today += 1
         fee_quote = Decimal("0")
         quote_asset = self.config.trading_pair.split("-")[1]
         try:
             fee_quote = to_decimal(event.trade_fee.fee_amount_in_token(quote_asset, event.price, event.amount))
         except Exception:
             fee_quote = notional * self._taker_fee_pct
-            logger.warning("Fee extraction failed for order %s, using estimate %.6f", event.order_id, fee_quote)
-        self._fees_paid_today_quote += fee_quote
+            logger.warning("Fee extraction failed for order %s, using estimate %.6f", order_id, fee_quote)
+        if not excluded_from_risk_accounting:
+            self._fees_paid_today_quote += fee_quote
 
         # Paper-trade skepticism: warn if effective fee rate deviates wildly from the
         # configured fee schedule (usually indicates wrong venue key / profile lookup).
         if (
-            self.config.is_paper
+            _config_is_paper(self.config)
             and not self._fee_rate_mismatch_warned_today
             and self._fills_count_today >= 10
             and self._traded_notional_today > _ZERO
@@ -2058,7 +3171,7 @@ class EppV24Controller(MarketMakingControllerBase):
             if trade_fee_is_maker is not None:
                 is_maker = bool(trade_fee_is_maker)
         except Exception:
-            logger.debug("is_maker extraction failed for order %s", event.order_id, exc_info=True)
+            logger.debug("is_maker extraction failed for order %s", order_id, exc_info=True)
         if is_maker is None:
             is_maker = False
             if event.trade_type.name.lower() == "buy" and fill_price < mid_ref:
@@ -2066,42 +3179,101 @@ class EppV24Controller(MarketMakingControllerBase):
             elif event.trade_type.name.lower() == "sell" and fill_price > mid_ref:
                 is_maker = True
 
-        fill_amount = to_decimal(event.amount)
         realized_pnl = _ZERO
-        if event.trade_type.name.lower() == "buy":
-            if self._position_base < _ZERO and self._avg_entry_price > _ZERO:
-                close_amount = min(fill_amount, abs(self._position_base))
-                fee_portion = fee_quote * close_amount / fill_amount if fill_amount > _ZERO else fee_quote
-                realized_pnl = (self._avg_entry_price - fill_price) * close_amount - fee_portion
-            new_pos = self._position_base + fill_amount
-            if new_pos > _ZERO and fill_amount > _ZERO:
-                # opening_amount is only the portion of the fill that opens a new long leg.
-                # On a position flip (short → long) this is new_pos, not fill_amount.
-                existing_long = max(_ZERO, self._position_base)
-                opening_amount = new_pos - existing_long  # = fill_amount for pure adds; = new_pos for flips
-                old_cost = self._avg_entry_price * existing_long
-                new_cost = fill_price * opening_amount
-                self._avg_entry_price = (old_cost + new_cost) / new_pos if new_pos > _ZERO else fill_price
-            self._position_base = new_pos
-        else:
-            if self._position_base > _ZERO and self._avg_entry_price > _ZERO:
-                close_amount = min(fill_amount, self._position_base)
-                fee_portion = fee_quote * close_amount / fill_amount if fill_amount > _ZERO else fee_quote
-                realized_pnl = (fill_price - self._avg_entry_price) * close_amount - fee_portion
-            new_pos = self._position_base - fill_amount
-            if new_pos < _ZERO and fill_amount > _ZERO:
-                # opening_amount is only the portion of the fill that opens a new short leg.
-                # On a position flip (long → short) this is abs(new_pos), not fill_amount.
-                existing_short = max(_ZERO, -self._position_base)
-                opening_amount = abs(new_pos) - existing_short  # = fill_amount for pure adds; = abs(new_pos) for flips
-                old_cost = self._avg_entry_price * existing_short
-                new_cost = fill_price * opening_amount
-                self._avg_entry_price = (old_cost + new_cost) / abs(new_pos) if abs(new_pos) > _ZERO else fill_price
-            self._position_base = new_pos
-        self._realized_pnl_today += realized_pnl
+        if not excluded_from_risk_accounting:
+            fill_amount = to_decimal(event.amount)
+            fill_position_action = str(getattr(event, "position_action", "auto") or "auto").strip().lower()
+            position_mode = str(getattr(self.config, "position_mode", "ONEWAY") or "ONEWAY").upper()
+            if "HEDGE" not in position_mode:
+                # In one-way mode, opposite fills must net position; explicit
+                # leg hints are hedge-mode semantics.
+                fill_position_action = "auto"
+            if fill_position_action in {"open_long", "close_long", "open_short", "close_short"}:
+                if fill_position_action == "open_long":
+                    new_qty = self._position_long_base + fill_amount
+                    if new_qty > _ZERO:
+                        old_cost = self._avg_entry_price_long * self._position_long_base
+                        new_cost = fill_price * fill_amount
+                        self._avg_entry_price_long = (old_cost + new_cost) / new_qty
+                    self._position_long_base = new_qty
+                elif fill_position_action == "close_long":
+                    close_amount = min(fill_amount, self._position_long_base)
+                    fee_portion = fee_quote * close_amount / fill_amount if fill_amount > _ZERO else fee_quote
+                    if close_amount > _ZERO and self._avg_entry_price_long > _ZERO:
+                        realized_pnl = (fill_price - self._avg_entry_price_long) * close_amount - fee_portion
+                    self._position_long_base = max(_ZERO, self._position_long_base - fill_amount)
+                    if self._position_long_base <= _BALANCE_EPSILON:
+                        self._avg_entry_price_long = _ZERO
+                elif fill_position_action == "open_short":
+                    new_qty = self._position_short_base + fill_amount
+                    if new_qty > _ZERO:
+                        old_cost = self._avg_entry_price_short * self._position_short_base
+                        new_cost = fill_price * fill_amount
+                        self._avg_entry_price_short = (old_cost + new_cost) / new_qty
+                    self._position_short_base = new_qty
+                elif fill_position_action == "close_short":
+                    close_amount = min(fill_amount, self._position_short_base)
+                    fee_portion = fee_quote * close_amount / fill_amount if fill_amount > _ZERO else fee_quote
+                    if close_amount > _ZERO and self._avg_entry_price_short > _ZERO:
+                        realized_pnl = (self._avg_entry_price_short - fill_price) * close_amount - fee_portion
+                    self._position_short_base = max(_ZERO, self._position_short_base - fill_amount)
+                    if self._position_short_base <= _BALANCE_EPSILON:
+                        self._avg_entry_price_short = _ZERO
+            else:
+                if event.trade_type.name.lower() == "buy":
+                    if self._position_base < _ZERO and self._avg_entry_price > _ZERO:
+                        close_amount = min(fill_amount, abs(self._position_base))
+                        fee_portion = fee_quote * close_amount / fill_amount if fill_amount > _ZERO else fee_quote
+                        realized_pnl = (self._avg_entry_price - fill_price) * close_amount - fee_portion
+                    new_pos = self._position_base + fill_amount
+                    if new_pos > _ZERO and fill_amount > _ZERO:
+                        existing_long = max(_ZERO, self._position_base)
+                        opening_amount = new_pos - existing_long
+                        old_cost = self._avg_entry_price * existing_long
+                        new_cost = fill_price * opening_amount
+                        self._avg_entry_price = (old_cost + new_cost) / new_pos if new_pos > _ZERO else fill_price
+                    self._position_base = new_pos
+                else:
+                    if self._position_base > _ZERO and self._avg_entry_price > _ZERO:
+                        close_amount = min(fill_amount, self._position_base)
+                        fee_portion = fee_quote * close_amount / fill_amount if fill_amount > _ZERO else fee_quote
+                        realized_pnl = (fill_price - self._avg_entry_price) * close_amount - fee_portion
+                    new_pos = self._position_base - fill_amount
+                    if new_pos < _ZERO and fill_amount > _ZERO:
+                        existing_short = max(_ZERO, -self._position_base)
+                        opening_amount = abs(new_pos) - existing_short
+                        old_cost = self._avg_entry_price * existing_short
+                        new_cost = fill_price * opening_amount
+                        self._avg_entry_price = (old_cost + new_cost) / abs(new_pos) if abs(new_pos) > _ZERO else fill_price
+                    self._position_base = new_pos
+                if self._position_base > _ZERO:
+                    self._position_long_base = self._position_base
+                    self._avg_entry_price_long = self._avg_entry_price
+                    self._position_short_base = _ZERO
+                    self._avg_entry_price_short = _ZERO
+                elif self._position_base < _ZERO:
+                    self._position_short_base = abs(self._position_base)
+                    self._avg_entry_price_short = self._avg_entry_price
+                    self._position_long_base = _ZERO
+                    self._avg_entry_price_long = _ZERO
+                else:
+                    self._position_long_base = _ZERO
+                    self._position_short_base = _ZERO
+                    self._avg_entry_price_long = _ZERO
+                    self._avg_entry_price_short = _ZERO
+                    self._avg_entry_price = _ZERO
+            self._position_base = self._position_long_base - self._position_short_base
+            self._position_gross_base = self._position_long_base + self._position_short_base
+            if self._position_base > _ZERO:
+                self._avg_entry_price = self._avg_entry_price_long
+            elif self._position_base < _ZERO:
+                self._avg_entry_price = self._avg_entry_price_short
+            elif self._position_gross_base <= _BALANCE_EPSILON:
+                self._avg_entry_price = _ZERO
+            self._realized_pnl_today += realized_pnl
 
         # Fill-edge EWMA for auto-widen (P1-2) and Kelly variance tracking (ROAD-4).
-        if mid_ref > _ZERO:
+        if mid_ref > _ZERO and not excluded_from_risk_accounting:
             side_sign = Decimal("-1") if event.trade_type.name.lower() == "buy" else _ONE
             fill_edge_bps = (fill_price - mid_ref) * side_sign / mid_ref * _10K
             _alpha = Decimal("0.05")
@@ -2127,7 +3299,7 @@ class EppV24Controller(MarketMakingControllerBase):
             price_deviation_pct = abs(fill_price - mid_ref) / mid_ref
             if price_deviation_pct > Decimal("0.01"):
                 logger.warning("Fill price deviation %.4f%% for order %s (fill=%.2f mid=%.2f)",
-                               float(price_deviation_pct * _100), event.order_id, float(fill_price), float(mid_ref))
+                               float(price_deviation_pct * _100), order_id, float(fill_price), float(mid_ref))
 
         slippage_bps = _ZERO
         if mid_ref > _ZERO:
@@ -2135,14 +3307,17 @@ class EppV24Controller(MarketMakingControllerBase):
                 slippage_bps = (fill_price - mid_ref) / mid_ref * _10K
             else:
                 slippage_bps = (mid_ref - fill_price) / mid_ref * _10K
-        self._auto_calibration_record_fill(
-            now_ts=float(event.timestamp),
-            notional_quote=notional,
-            fee_quote=fee_quote,
-            realized_pnl_quote=realized_pnl,
-            slippage_bps=slippage_bps,
-            is_maker=bool(is_maker),
-        )
+        auto_calibration_record_fill = getattr(self, "_auto_calibration_record_fill", None)
+        if callable(auto_calibration_record_fill) and not excluded_from_risk_accounting:
+            auto_calibration_record_fill(
+                now_ts=float(event.timestamp),
+                notional_quote=notional,
+                fee_quote=fee_quote,
+                realized_pnl_quote=realized_pnl,
+                slippage_bps=slippage_bps,
+                fill_edge_bps=fill_edge_bps if mid_ref > _ZERO else _ZERO,
+                is_maker=bool(is_maker),
+            )
 
         event_ts = datetime.fromtimestamp(event.timestamp, tz=timezone.utc).isoformat()
         self._csv.log_fill(
@@ -2155,8 +3330,11 @@ class EppV24Controller(MarketMakingControllerBase):
                 "amount_base": str(event.amount),
                 "notional_quote": str(notional),
                 "fee_quote": str(fee_quote),
-                "order_id": event.order_id,
+                "order_id": order_id,
                 "state": self._ops_guard.state.value,
+                "regime": str(self.processed_data.get("regime", "")),
+                "alpha_policy_state": str(self.processed_data.get("alpha_policy_state", "maker_two_sided")),
+                "alpha_policy_reason": str(self.processed_data.get("alpha_policy_reason", "unknown")),
                 "mid_ref": str(mid_ref),
                 "expected_spread_pct": str(expected_spread),
                 "adverse_drift_30s": str(adverse_ref),
@@ -2170,7 +3348,7 @@ class EppV24Controller(MarketMakingControllerBase):
         # Publish fill to hb.bot_telemetry.v1 so live and paper fills are
         # ingested symmetrically by the event_store service.
         # Paper fills publish from hb_bridge; this covers the live path.
-        if not self.config.is_paper:
+        if not _config_is_paper(self.config):
             try:
                 import json as _json_tel
                 import uuid as _uuid_tel
@@ -2182,7 +3360,7 @@ class EppV24Controller(MarketMakingControllerBase):
                         "event_version": "v1",
                         "schema_version": "1.0",
                         "ts_utc": event_ts,
-                        "producer": f"hb.epp_v2_4.{self.config.instance_name}",
+                        "producer": f"{_telemetry_producer_prefix(self.config)}.{self.config.instance_name}",
                         "instance_name": self.config.instance_name,
                         "controller_id": str(getattr(self, "id", "") or ""),
                         "connector_name": self.config.connector_name,
@@ -2192,7 +3370,7 @@ class EppV24Controller(MarketMakingControllerBase):
                         "amount_base": float(event.amount),
                         "notional_quote": float(notional),
                         "fee_quote": float(fee_quote),
-                        "order_id": event.order_id,
+                        "order_id": order_id,
                         "accounting_source": "live_connector",
                         "is_maker": bool(is_maker),
                         "realized_pnl_quote": float(realized_pnl),
@@ -2200,9 +3378,10 @@ class EppV24Controller(MarketMakingControllerBase):
                     }
                     _r.xadd("hb.bot_telemetry.v1", {"payload": _json_tel.dumps(_p)}, maxlen=100_000, approximate=True)
             except Exception:
-                logger.debug("Fill telemetry publish failed for order %s", event.order_id, exc_info=True)
+                logger.debug("Fill telemetry publish failed for order %s", order_id, exc_info=True)
 
-        self._save_daily_state()
+        if not excluded_from_risk_accounting:
+            self._save_daily_state()
 
     def did_cancel_order(self, cancelled_event: OrderCancelledEvent):
         self._cancel_events_ts.append(float(self.market_data_provider.time()))
@@ -2225,6 +3404,17 @@ class EppV24Controller(MarketMakingControllerBase):
             f"turnover_today={self.processed_data.get('turnover_x', Decimal('0')):.3f}x",
             f"mkt_spread={self.processed_data.get('market_spread_bps', Decimal('0')):.2f}bps",
             f"drawdown={self.processed_data.get('drawdown_pct', Decimal('0')) * Decimal('100'):.2f}%",
+            (
+                f"selective_state={self.processed_data.get('selective_quote_state', 'inactive')} "
+                f"score={self.processed_data.get('selective_quote_score', Decimal('0')):.2f} "
+                f"reason={self.processed_data.get('selective_quote_reason', 'n/a')}"
+            ),
+            (
+                f"alpha_state={self.processed_data.get('alpha_policy_state', 'maker_two_sided')} "
+                f"maker={self.processed_data.get('alpha_maker_score', Decimal('0')):.2f} "
+                f"aggr={self.processed_data.get('alpha_aggressive_score', Decimal('0')):.2f} "
+                f"inv_urgency={self.processed_data.get('inventory_urgency_pct', Decimal('0')):.2f}"
+            ),
             f"paper fills={self.processed_data.get('paper_fill_count', 0)} rejects={self.processed_data.get('paper_reject_count', 0)} avg_qdelay_ms={self.processed_data.get('paper_avg_queue_delay_ms', Decimal('0')):.1f}",
             f"fees maker={self._maker_fee_pct * Decimal('100'):.4f}% taker={self._taker_fee_pct * Decimal('100'):.4f}% source={self._fee_source}",
             f"guard_reasons={','.join(self._ops_guard.reasons) if self._ops_guard.reasons else 'none'}",
@@ -2257,9 +3447,8 @@ class EppV24Controller(MarketMakingControllerBase):
         action = str(intent.get("action", "")).strip()
         metadata = intent.get("metadata", {})
         metadata = metadata if isinstance(metadata, dict) else {}
-        now_ts = (
-            float(self.market_data_provider.time()) if hasattr(self, "market_data_provider") else _time_mod.time()
-        )
+        provider = getattr(self, "market_data_provider", None)
+        now_ts = float(provider.time()) if provider is not None else float(_time_mod.time())
         self._last_external_intent_ts = now_ts
         self._last_external_model_version = str(metadata.get("model_version", ""))
         self._last_external_intent_reason = str(metadata.get("reason", ""))
@@ -2334,7 +3523,7 @@ class EppV24Controller(MarketMakingControllerBase):
             regime = str(intent.get("regime", metadata.get("regime", ""))).strip()
             if not regime or regime not in self._resolved_specs:
                 return False, f"unknown_regime:{regime}"
-            now = float(self.market_data_provider.time()) if hasattr(self, "market_data_provider") else _time_mod.time()
+            now = float(self.market_data_provider.time())
             self._external_regime_override = regime
             self._external_regime_override_expiry = now + self.config.ml_regime_override_ttl_s
             logger.debug("ML regime override set: %s (expires in %.0fs)", regime, self.config.ml_regime_override_ttl_s)
@@ -2415,7 +3604,7 @@ class EppV24Controller(MarketMakingControllerBase):
         all three consumers see a consistent view of current volatility.
         """
         if self.config.ml_regime_enabled and self._external_regime_override:
-            now = float(self.market_data_provider.time()) if hasattr(self, "market_data_provider") else _time_mod.time()
+            now = float(self.market_data_provider.time())
             if now < self._external_regime_override_expiry:
                 regime = self._external_regime_override
                 self._active_regime = regime
@@ -2434,6 +3623,7 @@ class EppV24Controller(MarketMakingControllerBase):
             band_pct = self._price_buffer.band_pct(self.config.atr_period) or _ZERO
             source_tag = "price_buffer"
         drift = self._price_buffer.adverse_drift_30s(float(self.market_data_provider.time()))
+        self._regime_ema_value = ema_val
 
         regime_name, regime_spec = self._regime_detector.detect(
             mid, ema_val, band_pct, drift, source_tag,
@@ -2454,8 +3644,14 @@ class EppV24Controller(MarketMakingControllerBase):
         """Return StopExecutorActions for active executors on a side the new regime disabled."""
         from hummingbot.strategy_v2.models.executor_actions import StopExecutorAction
 
-        cancel_buy = (new_one_sided == "sell_only" and old_one_sided != "sell_only")
-        cancel_sell = (new_one_sided == "buy_only" and old_one_sided != "buy_only")
+        cancel_buy = (
+            (new_one_sided == "sell_only" and old_one_sided != "sell_only")
+            or (new_one_sided == "off" and old_one_sided != "off")
+        )
+        cancel_sell = (
+            (new_one_sided == "buy_only" and old_one_sided != "buy_only")
+            or (new_one_sided == "off" and old_one_sided != "off")
+        )
         if not cancel_buy and not cancel_sell:
             return []
         actions: List[Any] = []
@@ -2471,6 +3667,80 @@ class EppV24Controller(MarketMakingControllerBase):
         if actions:
             logger.info("Regime transition %s→%s: canceling %d stale-side executors", old_one_sided, new_one_sided, len(actions))
         return actions
+
+    def _cancel_active_quote_executors(self) -> List[Any]:
+        """Return StopExecutorActions for all active quote executors.
+
+        Used by alpha no-trade fail-closed behavior so outstanding buy/sell quote
+        executors do not keep resting and filling after the policy disabled quoting.
+        """
+        try:
+            from hummingbot.strategy_v2.models.executor_actions import StopExecutorAction
+        except Exception:
+            logger.debug("Unable to import StopExecutorAction for alpha no-trade cancel", exc_info=True)
+            return []
+
+        requested_ids = getattr(self, "_alpha_no_trade_cancel_requested_ids", None)
+        if not isinstance(requested_ids, set):
+            requested_ids = set()
+            self._alpha_no_trade_cancel_requested_ids = requested_ids
+
+        existing_pending = {
+            str(getattr(a, "executor_id", ""))
+            for a in self._pending_stale_cancel_actions
+            if getattr(a, "executor_id", None) is not None
+        }
+
+        actions: List[Any] = []
+        for executor in self.executors_info:
+            if not bool(getattr(executor, "is_active", False)):
+                continue
+            custom = getattr(executor, "custom_info", None) or {}
+            level_id = str(custom.get("level_id", "") if isinstance(custom, dict) else "")
+            if not (level_id.startswith("buy") or level_id.startswith("sell")):
+                continue
+            ex_id = str(getattr(executor, "id", "") or "")
+            if not ex_id or ex_id in existing_pending or ex_id in requested_ids:
+                continue
+            actions.append(StopExecutorAction(controller_id=self.config.id, executor_id=ex_id))
+            requested_ids.add(ex_id)
+
+        if actions:
+            logger.info("Alpha no-trade: canceling %d active quote executors", len(actions))
+        return actions
+
+    def _cancel_alpha_no_trade_paper_orders(self) -> int:
+        """Cancel lingering PaperDesk orders while alpha policy is in no-trade.
+
+        Quote executors can be stopped quickly, but their underlying PaperDesk
+        orders may remain briefly during restart/recovery races. This fail-closed
+        path keeps alpha no-trade behavior strict in paper mode.
+        """
+        if not _config_is_paper(self.config):
+            return 0
+
+        provider = getattr(self, "market_data_provider", None)
+        time_fn = getattr(provider, "time", None) if provider is not None else None
+        now_ts = float(time_fn()) if callable(time_fn) else float(_time_mod.time())
+        cooldown_s = 5.0
+        last_ts = float(getattr(self, "_alpha_no_trade_last_paper_cancel_ts", 0.0) or 0.0)
+        if (now_ts - last_ts) < cooldown_s:
+            return 0
+        self._alpha_no_trade_last_paper_cancel_ts = now_ts
+
+        try:
+            canceled = EppV24Controller._cancel_stale_paper_orders(
+                self,
+                stale_age_s=0.25,
+                now_ts=now_ts,
+            )
+        except Exception:
+            logger.debug("Alpha no-trade paper-order cleanup skipped", exc_info=True)
+            return 0
+
+        if canceled > 0:
+            logger.info("Alpha no-trade: canceled %d lingering paper order(s)", canceled)
+        return canceled
 
     def _pick_spread_pct(self, regime_spec: RegimeSpec, turnover_x: Decimal) -> Decimal:
         if self.config.override_spread_pct is not None:
@@ -2521,7 +3791,7 @@ class EppV24Controller(MarketMakingControllerBase):
 
     def _paper_portfolio_snapshot(self, mid: Decimal) -> Optional[Dict[str, Decimal]]:
         """Return canonical PaperDesk accounting snapshot for current instrument."""
-        if not bool(getattr(self.config, "is_paper", False)):
+        if not _config_is_paper(self.config):
             return None
         connector = self._connector()
         desk = getattr(connector, "_paper_desk_v2", None)
@@ -2532,7 +3802,7 @@ class EppV24Controller(MarketMakingControllerBase):
             strategy = getattr(self, "strategy", None) or getattr(self, "_strategy", None)
             bridges = getattr(strategy, "_paper_desk_v2_bridges", {}) if strategy is not None else {}
             if isinstance(bridges, dict):
-                bridge = bridges.get(str(getattr(self.config, "connector_name", "")), {})
+                bridge = bridges.get(str(self.config.connector_name), {})
                 if isinstance(bridge, dict):
                     desk = bridge.get("desk", desk)
                     iid = bridge.get("instrument_id", iid)
@@ -2550,7 +3820,13 @@ class EppV24Controller(MarketMakingControllerBase):
                 return None
             snapshot: Dict[str, Decimal] = {
                 "position_base": to_decimal(getattr(pos, "quantity", _ZERO)),
+                "position_gross_base": to_decimal(getattr(pos, "gross_quantity", abs(getattr(pos, "quantity", _ZERO)))),
+                "position_long_base": to_decimal(getattr(pos, "long_quantity", max(_ZERO, getattr(pos, "quantity", _ZERO)))),
+                "position_short_base": to_decimal(getattr(pos, "short_quantity", max(_ZERO, -to_decimal(getattr(pos, "quantity", _ZERO))))),
+                "position_mode": str(getattr(pos, "position_mode", "ONEWAY") or "ONEWAY").upper(),
                 "avg_entry_price": to_decimal(getattr(pos, "avg_entry_price", _ZERO)),
+                "avg_entry_price_long": to_decimal(getattr(pos, "long_avg_entry_price", _ZERO)),
+                "avg_entry_price_short": to_decimal(getattr(pos, "short_avg_entry_price", _ZERO)),
                 "unrealized_pnl": to_decimal(getattr(pos, "unrealized_pnl", _ZERO)),
                 "realized_pnl": to_decimal(getattr(pos, "realized_pnl", _ZERO)),
                 "daily_open_equity": to_decimal(getattr(portfolio, "daily_open_equity", _ZERO) or _ZERO),
@@ -2569,22 +3845,265 @@ class EppV24Controller(MarketMakingControllerBase):
         except Exception:
             return None
 
+    def _paper_open_order_level_ids(self) -> List[str]:
+        """Return side level_ids that are still live in PaperDesk.
+
+        Paper executor runtime state can occasionally drop before the underlying
+        PaperDesk order disappears. In that case, treat the side as occupied so
+        the controller does not layer a duplicate maker on top of the lingering
+        paper order.
+        """
+        if not _config_is_paper(self.config):
+            return []
+        connector = self._connector()
+        desk = getattr(connector, "_paper_desk_v2", None)
+        iid = getattr(connector, "_paper_desk_v2_instrument_id", None)
+        if desk is None or iid is None:
+            strategy = getattr(self, "strategy", None) or getattr(self, "_strategy", None)
+            bridges = getattr(strategy, "_paper_desk_v2_bridges", {}) if strategy is not None else {}
+            if isinstance(bridges, dict):
+                bridge = bridges.get(str(self.config.connector_name), {})
+                if isinstance(bridge, dict):
+                    desk = bridge.get("desk", desk)
+                    iid = bridge.get("instrument_id", iid)
+        if desk is None or iid is None:
+            return []
+        try:
+            engine = getattr(desk, "_engines", {}).get(iid.key)
+            open_orders_fn = getattr(engine, "open_orders", None)
+            if not callable(open_orders_fn):
+                return []
+            connector_name = str(getattr(self.config, "connector_name", "") or "")
+            occupied: set[str] = set()
+            working_orders = list(open_orders_fn() or [])
+            for inflight in list(getattr(engine, "_inflight", []) or []):
+                if not isinstance(inflight, tuple) or len(inflight) < 3:
+                    continue
+                _due_ns, action, order = inflight
+                if str(action or "").lower() != "accept":
+                    continue
+                working_orders.append(order)
+            for order in working_orders:
+                source_bot = str(getattr(order, "source_bot", "") or "")
+                if connector_name and source_bot and source_bot != connector_name:
+                    continue
+                side = str(getattr(getattr(order, "side", None), "value", getattr(order, "side", "")) or "").lower()
+                if side == "buy":
+                    occupied.update(
+                        self.get_level_id_from_side(TradeType.BUY, level)
+                        for level in range(len(self._runtime_levels.buy_spreads))
+                    )
+                elif side == "sell":
+                    occupied.update(
+                        self.get_level_id_from_side(TradeType.SELL, level)
+                        for level in range(len(self._runtime_levels.sell_spreads))
+                    )
+            return sorted(occupied)
+        except Exception:
+            return []
+
+    def _paper_open_order_count(self) -> int:
+        """Return live PaperDesk order count for this controller."""
+        if not _config_is_paper(self.config):
+            return 0
+        connector = self._connector()
+        desk = getattr(connector, "_paper_desk_v2", None)
+        iid = getattr(connector, "_paper_desk_v2_instrument_id", None)
+        if desk is None or iid is None:
+            strategy = getattr(self, "strategy", None) or getattr(self, "_strategy", None)
+            bridges = getattr(strategy, "_paper_desk_v2_bridges", {}) if strategy is not None else {}
+            if isinstance(bridges, dict):
+                bridge = bridges.get(str(self.config.connector_name), {})
+                if isinstance(bridge, dict):
+                    desk = bridge.get("desk", desk)
+                    iid = bridge.get("instrument_id", iid)
+        if desk is None or iid is None:
+            return 0
+        try:
+            engine = getattr(desk, "_engines", {}).get(iid.key)
+            open_orders_fn = getattr(engine, "open_orders", None)
+            if not callable(open_orders_fn):
+                return 0
+            connector_name = str(getattr(self.config, "connector_name", "") or "")
+            count = 0
+            working_orders = list(open_orders_fn() or [])
+            for inflight in list(getattr(engine, "_inflight", []) or []):
+                if not isinstance(inflight, tuple) or len(inflight) < 3:
+                    continue
+                _due_ns, action, order = inflight
+                if str(action or "").lower() != "accept":
+                    continue
+                working_orders.append(order)
+            for order in working_orders:
+                source_bot = str(getattr(order, "source_bot", "") or "")
+                if connector_name and source_bot and source_bot != connector_name:
+                    continue
+                count += 1
+            return count
+        except Exception:
+            return 0
+
+    def _cancel_orphan_paper_orders_on_startup(self) -> int:
+        """Cancel restored PaperDesk orders when no executor owns them after restart.
+
+        In paper mode, the desk can restore resting orders across process restarts,
+        but controller executors are not reconstructed from that persisted state.
+        Those orphaned makers then block duplicate level creation while never
+        participating in normal refresh/reprice logic. Clean them up once at
+        startup so fresh runtime executors can re-quote near market.
+        """
+        if not _config_is_paper(self.config):
+            return 0
+        if not bool(getattr(self.config, "paper_state_reconcile_enabled", False)):
+            return 0
+
+        connector = self._connector()
+        desk = getattr(connector, "_paper_desk_v2", None)
+        iid = getattr(connector, "_paper_desk_v2_instrument_id", None)
+        if desk is None or iid is None:
+            strategy = getattr(self, "strategy", None) or getattr(self, "_strategy", None)
+            bridges = getattr(strategy, "_paper_desk_v2_bridges", {}) if strategy is not None else {}
+            if isinstance(bridges, dict):
+                bridge = bridges.get(str(self.config.connector_name), {})
+                if isinstance(bridge, dict):
+                    desk = bridge.get("desk", desk)
+                    iid = bridge.get("instrument_id", iid)
+        if desk is None or iid is None:
+            return 0
+
+        try:
+            active_executors = self.filter_executors(
+                executors=self.executors_info,
+                filter_func=lambda x: getattr(x, "is_active", False),
+            )
+        except Exception:
+            active_executors = [x for x in list(getattr(self, "executors_info", []) or []) if getattr(x, "is_active", False)]
+        if active_executors:
+            return 0
+
+        try:
+            engine = getattr(desk, "_engines", {}).get(iid.key)
+            open_orders_fn = getattr(engine, "open_orders", None)
+            if not callable(open_orders_fn):
+                return 0
+            connector_name = str(getattr(self.config, "connector_name", "") or "")
+            cancel_ids: List[str] = []
+            for order in list(open_orders_fn() or []):
+                source_bot = str(getattr(order, "source_bot", "") or "")
+                if connector_name and source_bot and source_bot != connector_name:
+                    continue
+                order_id = str(getattr(order, "order_id", "") or "")
+                if order_id:
+                    cancel_ids.append(order_id)
+            canceled = 0
+            cancel_order_fn = getattr(desk, "cancel_order", None)
+            if not callable(cancel_order_fn):
+                return 0
+            for order_id in cancel_ids:
+                event = cancel_order_fn(iid, order_id)
+                if event is not None:
+                    canceled += 1
+            if canceled > 0:
+                self._recently_issued_levels = {}
+            return canceled
+        except Exception:
+            logger.debug("Startup orphan paper-order cleanup failed for %s", self.config.trading_pair, exc_info=True)
+            return 0
+
+    def _cancel_stale_paper_orders(self, stale_age_s: float, now_ts: Optional[float] = None) -> int:
+        """Cancel PaperDesk makers that outlive the refresh window in paper mode.
+
+        Paper executor stop actions can occasionally race with PaperDesk state,
+        leaving the underlying order live after its executor is already being
+        refreshed. When that happens, the lingering paper order keeps the side
+        marked as occupied and blocks a fresh near-market re-quote. Explicitly
+        cancel stale paper orders so refresh-driven repricing works reliably.
+        """
+        if not _config_is_paper(self.config):
+            return 0
+        if not bool(getattr(self.config, "paper_state_reconcile_enabled", False)):
+            return 0
+        stale_age_s = max(0.0, float(stale_age_s or 0.0))
+        if stale_age_s <= 0.0:
+            return 0
+
+        connector = self._connector()
+        desk = getattr(connector, "_paper_desk_v2", None)
+        iid = getattr(connector, "_paper_desk_v2_instrument_id", None)
+        if desk is None or iid is None:
+            strategy = getattr(self, "strategy", None) or getattr(self, "_strategy", None)
+            bridges = getattr(strategy, "_paper_desk_v2_bridges", {}) if strategy is not None else {}
+            if isinstance(bridges, dict):
+                bridge = bridges.get(str(self.config.connector_name), {})
+                if isinstance(bridge, dict):
+                    desk = bridge.get("desk", desk)
+                    iid = bridge.get("instrument_id", iid)
+        if desk is None or iid is None:
+            return 0
+
+        try:
+            engine = getattr(desk, "_engines", {}).get(iid.key)
+            open_orders_fn = getattr(engine, "open_orders", None)
+            if not callable(open_orders_fn):
+                return 0
+            cancel_order_fn = getattr(desk, "cancel_order", None)
+            if not callable(cancel_order_fn):
+                return 0
+
+            now_epoch = float(now_ts if now_ts is not None else self.market_data_provider.time())
+            connector_name = str(getattr(self.config, "connector_name", "") or "")
+            cancel_ids: List[str] = []
+            for order in list(open_orders_fn() or []):
+                source_bot = str(getattr(order, "source_bot", "") or "")
+                if connector_name and source_bot and source_bot != connector_name:
+                    continue
+                order_id = str(getattr(order, "order_id", "") or "")
+                if not order_id:
+                    continue
+                created_at_ns = int(
+                    getattr(order, "created_at_ns", 0)
+                    or getattr(order, "updated_at_ns", 0)
+                    or 0
+                )
+                if created_at_ns <= 0:
+                    continue
+                order_age_s = now_epoch - (created_at_ns / 1e9)
+                if order_age_s >= stale_age_s:
+                    cancel_ids.append(order_id)
+
+            canceled = 0
+            for order_id in cancel_ids:
+                event = cancel_order_fn(iid, order_id)
+                if event is not None:
+                    canceled += 1
+            if canceled > 0:
+                self._recently_issued_levels = {}
+            return canceled
+        except Exception:
+            logger.debug("Runtime stale paper-order cleanup failed for %s", self.config.trading_pair, exc_info=True)
+            return 0
+
     def _sync_from_paper_desk_v2(self, *, mid: Decimal, equity_quote: Optional[Decimal] = None) -> None:
         """In Paper Engine v2 mode, treat PaperDesk as the canonical accounting source.
 
         This prevents `minute.csv` (Grafana source) from drifting away from PaperDesk's
         position/avg entry/unrealized when fills are routed through the bridge.
         """
-        if not self.config.is_paper:
+        if not _config_is_paper(self.config):
             return
         snap = self._paper_portfolio_snapshot(mid)
         if not isinstance(snap, dict):
             return
         try:
             self._position_base = to_decimal(snap.get("position_base", _ZERO))
+            self._position_gross_base = to_decimal(snap.get("position_gross_base", abs(self._position_base)))
+            self._position_long_base = to_decimal(snap.get("position_long_base", max(_ZERO, self._position_base)))
+            self._position_short_base = to_decimal(snap.get("position_short_base", max(_ZERO, -self._position_base)))
             entry_px = to_decimal(snap.get("avg_entry_price", _ZERO))
             if entry_px > _ZERO:
                 self._avg_entry_price = entry_px
+            self._avg_entry_price_long = to_decimal(snap.get("avg_entry_price_long", self._avg_entry_price if self._position_long_base > _ZERO else _ZERO))
+            self._avg_entry_price_short = to_decimal(snap.get("avg_entry_price_short", self._avg_entry_price if self._position_short_base > _ZERO else _ZERO))
 
             open_eq_d = to_decimal(snap.get("daily_open_equity", _ZERO))
             if open_eq_d <= _ZERO and self._daily_equity_open is not None and self._daily_equity_open > _ZERO:
@@ -2599,13 +4118,10 @@ class EppV24Controller(MarketMakingControllerBase):
                 if self._daily_equity_peak is None or eq_used > self._daily_equity_peak:
                     self._daily_equity_peak = eq_used
 
-            now_ts = (
-                float(self.market_data_provider.time())
-                if hasattr(self, "market_data_provider")
-                else _time_mod.time()
-            )
-            startup_reset_enabled = bool(getattr(self.config, "paper_daily_baseline_auto_reset_on_startup", True))
-            startup_window_s = float(getattr(self.config, "paper_daily_baseline_reset_startup_window_s", 300))
+            provider = getattr(self, "market_data_provider", None)
+            now_ts = float(provider.time()) if provider is not None else float(_time_mod.time())
+            startup_reset_enabled = bool(getattr(self.config, "paper_daily_baseline_auto_reset_on_startup", False))
+            startup_window_s = float(getattr(self.config, "paper_daily_baseline_reset_startup_window_s", 300.0))
             loss_reset_threshold = max(
                 _ZERO,
                 to_decimal(getattr(self.config, "paper_daily_baseline_reset_loss_pct_threshold", Decimal("0.25"))),
@@ -2646,16 +4162,10 @@ class EppV24Controller(MarketMakingControllerBase):
                 prev_realized = self._realized_pnl_today
                 self._realized_pnl_today = reconciled_realized
 
-                if bool(getattr(self.config, "paper_state_reconcile_enabled", True)):
+                if bool(getattr(self.config, "paper_state_reconcile_enabled", False)):
                     reconcile_threshold = max(
                         _ZERO,
-                        to_decimal(
-                            getattr(
-                                self.config,
-                                "paper_state_reconcile_realized_pnl_diff_quote",
-                                Decimal("5"),
-                            )
-                        ),
+                        to_decimal(getattr(self.config, "paper_state_reconcile_realized_pnl_diff_quote", _ZERO)),
                     )
                     if abs(prev_realized - reconciled_realized) > reconcile_threshold:
                         if (
@@ -2682,11 +4192,13 @@ class EppV24Controller(MarketMakingControllerBase):
         if self._derisk_force_taker:
             # When force mode is active, route through market rebalance only.
             return []
+        if str(getattr(self, "_selective_quote_state", "inactive")) == "blocked":
+            return []
         cooldown = max(1, int(self._runtime_levels.cooldown_time))
-        refresh_s = max(1, int(self._runtime_levels.executor_refresh_time))
+        reissue_cooldown_s = cooldown
         now = self.market_data_provider.time()
         self._recently_issued_levels = {
-            k: v for k, v in self._recently_issued_levels.items() if now - v < refresh_s
+            k: v for k, v in self._recently_issued_levels.items() if now - v < reissue_cooldown_s
         }
         active_count = 0
         working_levels = self.filter_executors(
@@ -2706,8 +4218,25 @@ class EppV24Controller(MarketMakingControllerBase):
             return []
         working_levels_ids = [executor.custom_info["level_id"] for executor in working_levels]
         working_levels_ids.extend(stopping_level_ids)
+        if _config_is_paper(self.config):
+            working_levels_ids.extend(EppV24Controller._paper_open_order_level_ids(self))
         candidates = self.get_not_active_levels_ids(working_levels_ids)
         result = [lid for lid in candidates if lid not in self._recently_issued_levels]
+        if str(getattr(self, "_selective_quote_state", "inactive")) == "reduced" and result:
+            max_levels_per_side = max(1, int(getattr(self.config, "selective_max_levels_per_side", 1)))
+            grouped: Dict[str, List[Tuple[int, str]]] = {}
+            for lid in result:
+                side = str(lid).split("_", 1)[0]
+                try:
+                    level_idx = int(str(lid).rsplit("_", 1)[1])
+                except Exception:
+                    level_idx = 0
+                grouped.setdefault(side, []).append((level_idx, lid))
+            allowed: set[str] = set()
+            for side_items in grouped.values():
+                side_items.sort(key=lambda item: item[0], reverse=True)
+                allowed.update(lid for _, lid in side_items[:max_levels_per_side])
+            result = [lid for lid in result if lid in allowed]
         for lid in result:
             self._recently_issued_levels[lid] = now
         return result
@@ -2716,21 +4245,68 @@ class EppV24Controller(MarketMakingControllerBase):
         refresh_s = max(1, int(self._runtime_levels.executor_refresh_time))
         ack_timeout_s = max(5, self.config.order_ack_timeout_s)
         now = self.market_data_provider.time()
+        reconnect_refresh_suppressed = self._in_reconnect_refresh_suppression_window(now)
+        stale_age_s = refresh_s
+        if _config_is_paper(self.config):
+            paper_min_lifetime_s = max(0, int(getattr(self.config, "paper_executor_min_lifetime_s", 0) or 0))
+            stale_age_s = max(stale_age_s, paper_min_lifetime_s)
 
-        stale_executors = self.filter_executors(
-            executors=self.executors_info,
-            filter_func=lambda x: not x.is_trading and x.is_active and now - x.timestamp > refresh_s,
-        )
-        stuck_executors = self.filter_executors(
-            executors=self.executors_info,
-            filter_func=lambda x: not x.is_trading and x.is_active and now - x.timestamp > ack_timeout_s and now - x.timestamp <= refresh_s,
-        )
-        if stuck_executors:
-            logger.warning("Order ack timeout: %d executor(s) stuck in placing state for >%ds",
-                           len(stuck_executors), ack_timeout_s)
-            self._consecutive_stuck_ticks += 1
-        else:
+        if reconnect_refresh_suppressed:
+            # During reconnect grace windows, preserve existing makers instead of
+            # cancel/recreate churn that prevents orders from ever resting on book.
+            stale_executors = []
+            stuck_executors = []
             self._consecutive_stuck_ticks = 0
+        else:
+            def _is_unacked_executor(executor: Any) -> bool:
+                # Passive makers are expected to be non-trading while they rest on book.
+                # Treat as "stuck" only when there is no order id yet (placing/unacked).
+                ex_order_id = str(getattr(executor, "order_id", "") or "")
+                if ex_order_id:
+                    return False
+                custom = getattr(executor, "custom_info", None) or {}
+                if isinstance(custom, dict):
+                    custom_order_id = str(custom.get("order_id", "") or "")
+                    if custom_order_id:
+                        return False
+                return True
+
+            stale_executors = self.filter_executors(
+                executors=self.executors_info,
+                filter_func=lambda x: not x.is_trading and x.is_active and now - x.timestamp > stale_age_s,
+            )
+            if _config_is_paper(self.config):
+                # Paper executors frequently report non-trading while resting makers are
+                # healthy. Avoid false "stuck placing" classification in simulation mode.
+                stuck_executors = []
+                self._consecutive_stuck_ticks = 0
+            else:
+                stuck_executors = self.filter_executors(
+                    executors=self.executors_info,
+                    filter_func=lambda x: (
+                        not x.is_trading
+                        and x.is_active
+                        and _is_unacked_executor(x)
+                        and now - x.timestamp > ack_timeout_s
+                        and now - x.timestamp <= refresh_s
+                    ),
+                )
+                if stuck_executors:
+                    logger.warning("Order ack timeout: %d executor(s) stuck in placing state for >%ds",
+                                   len(stuck_executors), ack_timeout_s)
+                    self._consecutive_stuck_ticks += 1
+                else:
+                    self._consecutive_stuck_ticks = 0
+
+        if not reconnect_refresh_suppressed and _config_is_paper(self.config):
+            canceled = EppV24Controller._cancel_stale_paper_orders(self, stale_age_s=stale_age_s, now_ts=now)
+            if canceled > 0:
+                logger.info(
+                    "Canceled %d stale PaperDesk order(s) older than %.1fs for %s during refresh reconciliation",
+                    canceled,
+                    stale_age_s,
+                    self.config.trading_pair,
+                )
 
         from hummingbot.strategy_v2.models.executor_actions import StopExecutorAction
 
@@ -2740,6 +4316,17 @@ class EppV24Controller(MarketMakingControllerBase):
             actions.extend(self._pending_stale_cancel_actions)
             self._pending_stale_cancel_actions = []
         return actions
+
+    def _in_reconnect_refresh_suppression_window(self, now_ts: float) -> bool:
+        """Return True when executor refresh cancels should be suppressed.
+
+        Reconnect churn can repeatedly tear down/recreate orders before they have a
+        chance to rest/fill. Suppressing refresh-driven cancels during this window
+        keeps inventory-neutral makers live until feeds stabilize.
+        """
+        reconnect_cooldown_until = float(getattr(self, "_reconnect_cooldown_until", 0.0) or 0.0)
+        reconnect_grace_until = float(getattr(self, "_book_reconnect_grace_until_ts", 0.0) or 0.0)
+        return float(now_ts) < max(reconnect_cooldown_until, reconnect_grace_until)
 
     def get_not_active_levels_ids(self, active_levels_ids: List[str]) -> List[str]:
         buy_ids_missing = [
@@ -2786,20 +4373,55 @@ class EppV24Controller(MarketMakingControllerBase):
         total_sell_amount_quote = sum(sell_amounts_quote)
         return total_sell_amount_quote / reference_price
 
+    def _perp_target_base_amount(self, reference_price: Decimal) -> Decimal:
+        """Signed base amount implied by the current perp net-exposure target."""
+        if reference_price <= 0:
+            return Decimal("0")
+        processed = getattr(self, "processed_data", {}) or {}
+        equity_quote = to_decimal(processed.get("equity_quote", _ZERO))
+        if equity_quote <= 0:
+            return Decimal("0")
+        target_net_base_pct = to_decimal(processed.get("target_net_base_pct", _ZERO))
+        return (equity_quote * target_net_base_pct) / reference_price
+
+    def _position_rebalance_floor(self, reference_price: Decimal) -> Decimal:
+        """Minimum base size required to issue a rebalance order."""
+        floor = _BALANCE_EPSILON
+        min_base_mult = max(
+            _ZERO,
+            to_decimal(getattr(self.config, "position_rebalance_min_base_mult", Decimal("1.0"))),
+        )
+        min_base_amount_fn = getattr(self, "_min_base_amount", None)
+        if callable(min_base_amount_fn):
+            try:
+                min_exchange_base = max(_ZERO, to_decimal(min_base_amount_fn(reference_price)))
+                floor = max(floor, min_exchange_base * min_base_mult)
+            except Exception:
+                logger.debug("position rebalance floor resolution failed", exc_info=True)
+        return floor
+
     def check_position_rebalance(self):
         is_perp_connector = "_perpetual" in self.config.connector_name
-        guard_reasons = set(getattr(self._ops_guard, "reasons", []) or [])
+        ops_guard = getattr(self, "_ops_guard", None)
+        guard_reasons = set(getattr(ops_guard, "reasons", []) or [])
+        inventory_derisk_active = bool(guard_reasons.intersection(_INVENTORY_DERISK_REASONS))
+        guard_state = getattr(ops_guard, "state", None)
         derisk_only_active = (
-            getattr(self._ops_guard, "state", None) == GuardState.SOFT_PAUSE
-            and guard_reasons in ({"base_pct_above_max"}, {"base_pct_below_min"}, {"eod_close_pending"})
+            guard_state == GuardState.SOFT_PAUSE
+            and inventory_derisk_active
+        )
+        hard_stop_flatten_active = (
+            guard_state == GuardState.HARD_STOP
+            and abs(self._position_base) > _BALANCE_EPSILON
         )
         if "reference_price" not in self.processed_data or (
-            self.config.skip_rebalance and not (self._derisk_force_taker or derisk_only_active)
+            self.config.skip_rebalance
+            and not (self._derisk_force_taker or derisk_only_active or hard_stop_flatten_active)
         ):
             return None
         # Perps normally skip rebalance orders, but when derisk_only is active we must
         # actively flatten inventory even before force-taker escalation kicks in.
-        if is_perp_connector and not (self._derisk_force_taker or derisk_only_active):
+        if is_perp_connector and not (self._derisk_force_taker or derisk_only_active or hard_stop_flatten_active):
             return None
         active_rebalance = self.filter_executors(
             executors=self.executors_info,
@@ -2807,49 +4429,66 @@ class EppV24Controller(MarketMakingControllerBase):
         )
         if len(active_rebalance) > 0:
             if derisk_only_active:
-                self._trace_derisk(
-                    self.market_data_provider.time(),
-                    "rebalance_skipped_active_executor",
-                    active_rebalance=len(active_rebalance),
-                )
+                trace_derisk = getattr(self, "_trace_derisk", None)
+                if callable(trace_derisk):
+                    trace_derisk(
+                        self.market_data_provider.time(),
+                        "rebalance_skipped_active_executor",
+                        active_rebalance=len(active_rebalance),
+                    )
             return None
-        required_base_amount = self._runtime_required_base_amount(to_decimal(self.processed_data["reference_price"]))
+        reference_price = to_decimal(self.processed_data["reference_price"])
+        if is_perp_connector:
+            required_base_amount = EppV24Controller._perp_target_base_amount(self, reference_price)
+        else:
+            required_base_amount = self._runtime_required_base_amount(reference_price)
         current_base_amount = self._position_base if is_perp_connector else self.get_current_base_position()
         base_amount_diff = required_base_amount - current_base_amount
         threshold_amount = required_base_amount * self.config.position_rebalance_threshold_pct
+        # Guard against zero-threshold churn when target inventory is near flat.
+        # Without this floor, tiny residual inventory can trigger repeated
+        # min-notional taker rebalances (buy/sell ping-pong).
+        min_rebalance_floor = EppV24Controller._position_rebalance_floor(self, reference_price)
+        threshold_amount = max(threshold_amount, min_rebalance_floor)
         if derisk_only_active:
-            self._trace_derisk(
-                self.market_data_provider.time(),
-                "rebalance_eval",
-                required_base_amount=required_base_amount,
-                current_base_amount=current_base_amount,
-                base_amount_diff=base_amount_diff,
-                threshold_amount=threshold_amount,
-                skip_rebalance=self.config.skip_rebalance,
-                force_taker=self._derisk_force_taker,
-            )
+            trace_derisk = getattr(self, "_trace_derisk", None)
+            if callable(trace_derisk):
+                trace_derisk(
+                    self.market_data_provider.time(),
+                    "rebalance_eval",
+                    required_base_amount=required_base_amount,
+                    current_base_amount=current_base_amount,
+                    base_amount_diff=base_amount_diff,
+                    threshold_amount=threshold_amount,
+                    skip_rebalance=self.config.skip_rebalance,
+                    force_taker=self._derisk_force_taker,
+                )
         if abs(base_amount_diff) > threshold_amount:
             if derisk_only_active:
-                self._trace_derisk(
+                trace_derisk = getattr(self, "_trace_derisk", None)
+                if callable(trace_derisk):
+                    trace_derisk(
+                        self.market_data_provider.time(),
+                        "rebalance_proposed",
+                        required_base_amount=required_base_amount,
+                        current_base_amount=current_base_amount,
+                        base_amount_diff=base_amount_diff,
+                        threshold_amount=threshold_amount,
+                    )
+            if base_amount_diff > 0:
+                return self.create_position_rebalance_order(TradeType.BUY, abs(base_amount_diff))
+            return self.create_position_rebalance_order(TradeType.SELL, abs(base_amount_diff))
+        if derisk_only_active:
+            trace_derisk = getattr(self, "_trace_derisk", None)
+            if callable(trace_derisk):
+                trace_derisk(
                     self.market_data_provider.time(),
-                    "rebalance_proposed",
+                    "rebalance_skipped_threshold",
                     required_base_amount=required_base_amount,
                     current_base_amount=current_base_amount,
                     base_amount_diff=base_amount_diff,
                     threshold_amount=threshold_amount,
                 )
-            if base_amount_diff > 0:
-                return self.create_position_rebalance_order(TradeType.BUY, abs(base_amount_diff))
-            return self.create_position_rebalance_order(TradeType.SELL, abs(base_amount_diff))
-        if derisk_only_active:
-            self._trace_derisk(
-                self.market_data_provider.time(),
-                "rebalance_skipped_threshold",
-                required_base_amount=required_base_amount,
-                current_base_amount=current_base_amount,
-                base_amount_diff=base_amount_diff,
-                threshold_amount=threshold_amount,
-            )
         return None
 
     def _quantize_price(self, price: Decimal, side: TradeType) -> Decimal:
@@ -2870,19 +4509,26 @@ class EppV24Controller(MarketMakingControllerBase):
 
     def _quantize_amount(self, amount: Decimal) -> Decimal:
         rule = self._trading_rule()
-        if rule is None or amount <= 0:
+        if amount <= 0:
             return amount
         min_amount = Decimal("0")
         step = Decimal("0")
-        for attr in ("min_order_size", "min_base_amount", "min_amount"):
-            value = getattr(rule, attr, None)
-            if value is not None:
-                min_amount = max(min_amount, to_decimal(value))
-        for attr in ("min_base_amount_increment", "min_order_size_increment", "amount_step"):
-            value = getattr(rule, attr, None)
-            if value is not None:
-                step = to_decimal(value)
-                break
+        if rule is not None:
+            for attr in ("min_order_size", "min_base_amount", "min_amount"):
+                value = getattr(rule, attr, None)
+                if value is not None:
+                    min_amount = max(min_amount, to_decimal(value))
+            for attr in ("min_base_amount_increment", "min_order_size_increment", "amount_step"):
+                value = getattr(rule, attr, None)
+                if value is not None:
+                    step = to_decimal(value)
+                    break
+        paper_min_amount, paper_step = EppV24Controller._paper_engine_order_size_constraints(self)
+        min_amount = max(min_amount, paper_min_amount)
+        if paper_step > 0:
+            step = max(step, paper_step)
+        if min_amount <= 0 and step <= 0:
+            return amount
         q_amount = max(amount, min_amount)
         if step > 0:
             units = (q_amount / step).to_integral_value(rounding=ROUND_DOWN)
@@ -2891,19 +4537,26 @@ class EppV24Controller(MarketMakingControllerBase):
 
     def _quantize_amount_up(self, amount: Decimal) -> Decimal:
         rule = self._trading_rule()
-        if rule is None or amount <= 0:
+        if amount <= 0:
             return amount
         min_amount = Decimal("0")
         step = Decimal("0")
-        for attr in ("min_order_size", "min_base_amount", "min_amount"):
-            value = getattr(rule, attr, None)
-            if value is not None:
-                min_amount = max(min_amount, to_decimal(value))
-        for attr in ("min_base_amount_increment", "min_order_size_increment", "amount_step"):
-            value = getattr(rule, attr, None)
-            if value is not None:
-                step = to_decimal(value)
-                break
+        if rule is not None:
+            for attr in ("min_order_size", "min_base_amount", "min_amount"):
+                value = getattr(rule, attr, None)
+                if value is not None:
+                    min_amount = max(min_amount, to_decimal(value))
+            for attr in ("min_base_amount_increment", "min_order_size_increment", "amount_step"):
+                value = getattr(rule, attr, None)
+                if value is not None:
+                    step = to_decimal(value)
+                    break
+        paper_min_amount, paper_step = EppV24Controller._paper_engine_order_size_constraints(self)
+        min_amount = max(min_amount, paper_min_amount)
+        if paper_step > 0:
+            step = max(step, paper_step)
+        if min_amount <= 0 and step <= 0:
+            return amount
         q_amount = max(amount, min_amount)
         if step > 0:
             units = (q_amount / step).to_integral_value(rounding=ROUND_UP)
@@ -3011,15 +4664,15 @@ class EppV24Controller(MarketMakingControllerBase):
 
     def _check_portfolio_risk_guard(self, now_ts: float) -> None:
         """Fail-closed when portfolio_risk_service broadcasts global kill_switch."""
-        if not bool(getattr(self.config, "portfolio_risk_guard_enabled", True)):
+        if not self.config.portfolio_risk_guard_enabled:
             return
-        if now_ts - self._last_portfolio_risk_check_ts < float(getattr(self.config, "portfolio_risk_guard_check_s", 2)):
+        if now_ts - self._last_portfolio_risk_check_ts < float(self.config.portfolio_risk_guard_check_s):
             return
         self._last_portfolio_risk_check_ts = now_ts
         if self._portfolio_risk_hard_stop_latched:
             return
-        stream_name = str(getattr(self.config, "portfolio_risk_stream_name", PORTFOLIO_RISK_STREAM) or PORTFOLIO_RISK_STREAM)
-        max_age_s = int(getattr(self.config, "portfolio_risk_guard_max_age_s", 15))
+        stream_name = str(self.config.portfolio_risk_stream_name or PORTFOLIO_RISK_STREAM)
+        max_age_s = int(self.config.portfolio_risk_guard_max_age_s)
         r = self._get_telemetry_redis()
         if r is None:
             return
@@ -3139,22 +4792,34 @@ class EppV24Controller(MarketMakingControllerBase):
         """
         if self._startup_position_sync_done:
             return
-        if not self.config.startup_position_sync:
+        if not bool(getattr(self.config, "startup_position_sync", True)):
             self._startup_position_sync_done = True
             logger.info("Startup position sync disabled by config")
             return
-        is_paper_mode = bool(getattr(self.config, "is_paper", False))
-        if not is_paper_mode:
-            bot_mode = str(getattr(self.config, "bot_mode", "") or "").strip().lower()
-            is_paper_mode = bot_mode == "paper"
-        if is_paper_mode:
+        if _config_is_paper(self.config):
             self._startup_position_sync_done = True
             logger.info("Startup position sync auto-skipped in paper mode")
+            if not self._startup_orphan_check_done:
+                self._startup_orphan_check_done = True
+                canceled = EppV24Controller._cancel_orphan_paper_orders_on_startup(self)
+                if canceled > 0:
+                    logger.warning(
+                        "Startup orphan paper-order cleanup canceled %d restored order(s) for %s; "
+                        "fresh runtime executors will re-quote on the next tick.",
+                        canceled,
+                        self.config.trading_pair,
+                    )
+                else:
+                    logger.info(
+                        "Startup orphan paper-order cleanup found no restored orders for %s",
+                        self.config.trading_pair,
+                    )
             return
-        now_ts = float(self.market_data_provider.time()) if hasattr(self, "market_data_provider") else _time_mod.time()
+        provider = getattr(self, "market_data_provider", None)
+        now_ts = float(provider.time()) if provider is not None else float(_time_mod.time())
         if self._startup_sync_first_ts <= 0:
             self._startup_sync_first_ts = now_ts
-        if now_ts - self._startup_sync_first_ts >= float(self.config.startup_sync_timeout_s):
+        if now_ts - self._startup_sync_first_ts >= float(getattr(self.config, "startup_sync_timeout_s", 180.0)):
             self._startup_position_sync_done = True
             self._ops_guard.force_hard_stop("startup_sync_timeout")
             logger.error(
@@ -3272,12 +4937,27 @@ class EppV24Controller(MarketMakingControllerBase):
         finally:
             if self._startup_position_sync_done and not self._startup_orphan_check_done:
                 self._startup_orphan_check_done = True
-                logger.warning(
-                    "Orphan order check: manual verification recommended on exchange UI "
-                    "for %s — framework does not expose open orders at controller level. "
-                    "If stale limit/stop orders exist from a previous session, cancel them manually.",
-                    self.config.trading_pair,
-                )
+                if _config_is_paper(self.config):
+                    canceled = EppV24Controller._cancel_orphan_paper_orders_on_startup(self)
+                    if canceled > 0:
+                        logger.warning(
+                            "Startup orphan paper-order cleanup canceled %d restored order(s) for %s; "
+                            "fresh runtime executors will re-quote on the next tick.",
+                            canceled,
+                            self.config.trading_pair,
+                        )
+                    else:
+                        logger.info(
+                            "Startup orphan paper-order cleanup found no restored orders for %s",
+                            self.config.trading_pair,
+                        )
+                else:
+                    logger.warning(
+                        "Orphan order check: manual verification recommended on exchange UI "
+                        "for %s — framework does not expose open orders at controller level. "
+                        "If stale limit/stop orders exist from a previous session, cancel them manually.",
+                        self.config.trading_pair,
+                    )
 
     def _get_mid_price(self) -> Decimal:
         return self._runtime_adapter.get_mid_price()
@@ -3290,23 +4970,42 @@ class EppV24Controller(MarketMakingControllerBase):
         paper_snap = self._paper_portfolio_snapshot(mid)
         if self._is_perp:
             pos_base = self._position_base if abs(self._position_base) > _BALANCE_EPSILON else base_bal
-            use_paper_equity = bool(
-                getattr(self.config, "is_paper", False)
-                and getattr(self.config, "paper_use_portfolio_equity_for_risk", True)
+            pos_gross_base = (
+                to_decimal(getattr(self, "_position_gross_base", _ZERO))
+                if abs(to_decimal(getattr(self, "_position_gross_base", _ZERO))) > _BALANCE_EPSILON
+                else abs(pos_base)
             )
+            use_paper_equity = _config_is_paper(self.config) and bool(
+                getattr(self.config, "paper_use_portfolio_equity_for_risk", False)
+            )
+            position_mode = str(getattr(self.config, "position_mode", "ONEWAY") or "ONEWAY").upper()
             if use_paper_equity and isinstance(paper_snap, dict):
                 paper_pos = to_decimal(paper_snap.get("position_base", pos_base))
+                paper_pos_gross = to_decimal(paper_snap.get("position_gross_base", abs(paper_pos)))
+                position_mode = str(paper_snap.get("position_mode", position_mode) or position_mode).upper()
                 paper_eq = to_decimal(paper_snap.get("equity_quote", _ZERO))
                 if abs(paper_pos) > _BALANCE_EPSILON:
                     pos_base = paper_pos
+                if paper_pos_gross > _BALANCE_EPSILON:
+                    pos_gross_base = paper_pos_gross
+                if position_mode != "HEDGE":
+                    pos_gross_base = abs(pos_base)
                 equity = paper_eq if paper_eq > _ZERO else (quote_bal if quote_bal > _ZERO else abs(pos_base) * mid)
+                gross_value = paper_pos_gross * mid
             else:
+                if position_mode != "HEDGE":
+                    pos_gross_base = abs(pos_base)
                 equity = quote_bal if quote_bal > _ZERO else abs(pos_base) * mid
-            gross_value = abs(pos_base) * mid
+                gross_value = pos_gross_base * mid
+            if position_mode != "HEDGE":
+                gross_value = abs(pos_base) * mid
             net_value = pos_base * mid
             base_pct_gross = gross_value / equity if equity > _ZERO else _ZERO
             base_pct_net = net_value / equity if equity > _ZERO else _ZERO
-            self._refresh_margin_ratio(mid, pos_base, quote_bal)
+            try:
+                self._refresh_margin_ratio(mid, pos_base, quote_bal, gross_base=pos_gross_base)
+            except TypeError:
+                self._refresh_margin_ratio(mid, pos_base, quote_bal)
         else:
             equity = quote_bal + base_bal * mid
             base_pct_gross = (base_bal * mid) / equity if equity > _ZERO else _ZERO
@@ -3315,7 +5014,13 @@ class EppV24Controller(MarketMakingControllerBase):
             return _ZERO, _ZERO, _ZERO
         return equity, base_pct_gross, base_pct_net
 
-    def _refresh_margin_ratio(self, mid: Decimal, base_bal: Decimal, quote_bal: Decimal) -> None:
+    def _refresh_margin_ratio(
+        self,
+        mid: Decimal,
+        base_bal: Decimal,
+        quote_bal: Decimal,
+        gross_base: Optional[Decimal] = None,
+    ) -> None:
         """Update margin ratio for perp connectors."""
         if not self._is_perp:
             return
@@ -3332,7 +5037,7 @@ class EppV24Controller(MarketMakingControllerBase):
                     return
         except Exception:
             logger.debug("Margin info read failed for %s", self.config.trading_pair, exc_info=True)
-        position_notional = abs(base_bal) * mid
+        position_notional = max(abs(base_bal), to_decimal(gross_base or _ZERO)) * mid
         if position_notional > _ZERO and quote_bal > _ZERO:
             # margin_ratio = available_margin / required_margin.
             # required_margin = position_notional / leverage (initial margin).
@@ -3392,11 +5097,60 @@ class EppV24Controller(MarketMakingControllerBase):
                 return to_decimal(value)
         return Decimal("0")
 
+    def _paper_engine_order_size_constraints(self) -> Tuple[Decimal, Decimal]:
+        """Return PaperDesk (min_base, base_step) constraints when available."""
+        if not _config_is_paper(self.config):
+            return _ZERO, _ZERO
+        try:
+            connector = self._connector()
+        except Exception:
+            return _ZERO, _ZERO
+        desk = getattr(connector, "_paper_desk_v2", None)
+        instrument_id = getattr(connector, "_paper_desk_v2_instrument_id", None)
+        if desk is None or instrument_id is None:
+            strategy = getattr(self, "strategy", None) or getattr(self, "_strategy", None)
+            bridges = getattr(strategy, "_paper_desk_v2_bridges", {}) if strategy is not None else {}
+            if isinstance(bridges, dict):
+                bridge = bridges.get(str(self.config.connector_name), {})
+                if isinstance(bridge, dict):
+                    desk = bridge.get("desk", desk)
+                    instrument_id = bridge.get("instrument_id", instrument_id)
+        if desk is None or instrument_id is None:
+            return _ZERO, _ZERO
+        try:
+            key = str(getattr(instrument_id, "key", "") or instrument_id)
+            spec = None
+            specs = getattr(desk, "_specs", None)
+            if isinstance(specs, dict):
+                spec = specs.get(key)
+            if spec is None:
+                engines = getattr(desk, "_engines", None)
+                if isinstance(engines, dict):
+                    engine = engines.get(key)
+                    spec = getattr(engine, "_spec", None) if engine is not None else None
+            if spec is None:
+                return _ZERO, _ZERO
+            min_qty = max(_ZERO, to_decimal(getattr(spec, "min_quantity", _ZERO)))
+            size_step = max(_ZERO, to_decimal(getattr(spec, "size_increment", _ZERO)))
+            return max(min_qty, size_step), size_step
+        except Exception:
+            logger.debug("Paper size constraints lookup failed", exc_info=True)
+            return _ZERO, _ZERO
+
     def _min_base_amount(self, ref_price: Decimal) -> Decimal:
-        quote_min = self._min_notional_quote()
-        if quote_min <= 0 or ref_price <= 0:
-            return Decimal("0")
-        return quote_min / ref_price
+        min_base = _ZERO
+        quote_min = EppV24Controller._min_notional_quote(self)
+        if quote_min > 0 and ref_price > 0:
+            min_base = max(min_base, quote_min / ref_price)
+        rule = self._trading_rule()
+        if rule is not None:
+            for attr in ("min_order_size", "min_base_amount", "min_amount"):
+                value = getattr(rule, attr, None)
+                if value is not None:
+                    min_base = max(min_base, to_decimal(value))
+        paper_min_base, _ = EppV24Controller._paper_engine_order_size_constraints(self)
+        min_base = max(min_base, paper_min_base)
+        return min_base
 
     def _project_total_amount_quote(
         self,
@@ -3414,8 +5168,10 @@ class EppV24Controller(MarketMakingControllerBase):
         if self.config.max_total_notional_quote > 0:
             projected = min(projected, self.config.max_total_notional_quote)
         min_base = self._min_base_amount(mid)
-        if min_base > 0 and mid > 0 and projected > 0 and (projected / mid) < min_base:
-            projected = min_base * mid
+        if min_base > 0 and mid > 0 and projected > 0:
+            min_total_quote = min_base * mid * Decimal(max(1, total_levels))
+            if projected < min_total_quote:
+                projected = min_total_quote
         return projected
 
     def _risk_loss_metrics(self, equity_quote: Decimal) -> Tuple[Decimal, Decimal]:
@@ -3469,7 +5225,7 @@ class EppV24Controller(MarketMakingControllerBase):
         drift_alpha = _clip(to_decimal(self.config.adverse_drift_ewma_alpha), Decimal("0.05"), Decimal("0.95"))
         smooth_drift = self._price_buffer.adverse_drift_smooth(now_ts, drift_alpha)
         adaptive_min_edge_pct, adaptive_market_floor_pct, adaptive_vol_ratio = self._compute_adaptive_spread_knobs(
-            now_ts, equity_quote
+            now_ts, equity_quote, regime_name
         )
 
         state, floor = self._spread_engine.compute_spread_and_edge(
@@ -3495,6 +5251,7 @@ class EppV24Controller(MarketMakingControllerBase):
             adaptive_vol_ratio=adaptive_vol_ratio,
         )
         self._spread_floor_pct = floor
+        self._last_spread_state = state
         return state
 
     def _update_adaptive_history(
@@ -3521,9 +5278,12 @@ class EppV24Controller(MarketMakingControllerBase):
                 self._market_spread_bps_ewma = alpha_spread * spread_bps + (_ONE - alpha_spread) * self._market_spread_bps_ewma
 
     def _compute_adaptive_spread_knobs(
-        self, now_ts: float, equity_quote: Decimal
+        self, now_ts: float, equity_quote: Decimal, regime_name: str = "neutral_low_vol"
     ) -> Tuple[Optional[Decimal], Optional[Decimal], Optional[Decimal]]:
         """Compute adaptive edge floor and spread knobs with strict safety bounds."""
+        selective_metrics = EppV24Controller._compute_selective_quote_quality(self, regime_name)
+        selective_state = str(selective_metrics["state"])
+        selective_score = to_decimal(selective_metrics["score"])
         if not self.config.adaptive_params_enabled:
             base_min_edge_pct = Decimal(self.config.min_net_edge_bps) / _10K
             self._adaptive_effective_min_edge_pct = base_min_edge_pct
@@ -3573,10 +5333,33 @@ class EppV24Controller(MarketMakingControllerBase):
             vol_ratio = _clip(self._band_pct_ewma / self.config.high_vol_band_pct, _ZERO, _ONE)
         vol_edge_bonus_bps = vol_ratio * to_decimal(self.config.adaptive_vol_edge_bonus_cap_bps)
         edge_relax_bps = stale_ratio * to_decimal(self.config.adaptive_edge_relax_max_bps)
+        if EppV24Controller._fill_edge_below_cost_floor(self):
+            # Do not lower the entry standard just because fills are stale when
+            # recent realized edge already says the strategy is trading below cost.
+            edge_relax_bps = _ZERO
+        elif selective_state == "blocked":
+            edge_relax_bps = _ZERO
         edge_tighten_bps = fast_ratio * to_decimal(self.config.adaptive_edge_tighten_max_bps)
+        selective_edge_tighten_bps = _ZERO
+        if selective_state != "inactive":
+            selective_edge_tighten_bps = selective_score * to_decimal(
+                getattr(self.config, "selective_quality_edge_tighten_max_bps", Decimal("0"))
+            )
+            if regime_name == "neutral_low_vol":
+                selective_edge_tighten_bps += max(
+                    _ZERO,
+                    to_decimal(getattr(self.config, "selective_neutral_extra_edge_bps", Decimal("0"))),
+                )
 
         base_min_edge_bps = Decimal(self.config.min_net_edge_bps)
-        effective_min_edge_bps = base_min_edge_bps + market_edge_bonus_bps + vol_edge_bonus_bps + edge_tighten_bps - edge_relax_bps
+        effective_min_edge_bps = (
+            base_min_edge_bps
+            + market_edge_bonus_bps
+            + vol_edge_bonus_bps
+            + edge_tighten_bps
+            + selective_edge_tighten_bps
+            - edge_relax_bps
+        )
 
         # Daily PnL governor: when behind target by more than a buffer, relax min-edge
         # threshold to increase fill probability while preserving bounded risk controls.
@@ -3631,13 +5414,24 @@ class EppV24Controller(MarketMakingControllerBase):
                 to_decimal(self.config.pnl_governor_activation_buffer_pct), _ZERO, Decimal("0.50")
             )
             if deficit_quote > activation_buffer_quote:
-                governor_active = True
-                governor_activation_reason = "active"
-                governor_deficit_ratio = _clip(deficit_quote / governor_target_quote, _ZERO, _ONE)
-                governor_edge_relax_bps = governor_deficit_ratio * max(
-                    _ZERO, to_decimal(self.config.pnl_governor_max_edge_bps_cut)
-                )
-                effective_min_edge_bps -= governor_edge_relax_bps
+                if EppV24Controller._fill_edge_below_cost_floor(self):
+                    governor_activation_reason = "fill_edge_below_cost_floor"
+                elif selective_state != "inactive":
+                    governor_activation_reason = "selective_quote_filter"
+                elif stale_ratio > _ZERO:
+                    # Stale-fill relaxation already lowers the entry threshold to
+                    # recover cadence. Avoid stacking a second discount from the
+                    # daily governor, which can collapse the effective min-edge
+                    # all the way to the hard floor.
+                    governor_activation_reason = "stale_fill_relaxation_active"
+                else:
+                    governor_active = True
+                    governor_activation_reason = "active"
+                    governor_deficit_ratio = _clip(deficit_quote / governor_target_quote, _ZERO, _ONE)
+                    governor_edge_relax_bps = governor_deficit_ratio * max(
+                        _ZERO, to_decimal(self.config.pnl_governor_max_edge_bps_cut)
+                    )
+                    effective_min_edge_bps -= governor_edge_relax_bps
             else:
                 governor_activation_reason = "within_activation_buffer"
         elif self.config.pnl_governor_enabled:
@@ -3686,7 +5480,7 @@ class EppV24Controller(MarketMakingControllerBase):
         if not self._last_connector_ready and connector_ready_now:
             self._ws_reconnect_count += 1
             self._reconnect_cooldown_until = now_ts + self.config.reconnect_cooldown_s
-            reconnect_grace_s = max(0.0, float(getattr(self.config, "order_book_reconnect_grace_s", 45.0)))
+            reconnect_grace_s = max(0.0, float(self.config.order_book_reconnect_grace_s))
             self._book_reconnect_grace_until_ts = now_ts + reconnect_grace_s
             # Reset stale clock at reconnect boundary; keep fail-closed logic for true long stale windows.
             if self._book_stale_since_ts > 0.0:
@@ -3749,8 +5543,8 @@ class EppV24Controller(MarketMakingControllerBase):
         if float(now_ts) < float(getattr(self, "_book_reconnect_grace_until_ts", 0.0) or 0.0):
             return False
         stale_after_s = (
-            max(5.0, float(getattr(self.config, "order_book_stale_after_s", 30.0)))
-            + max(0.0, float(getattr(self.config, "max_clock_skew_s", 5.0)))
+            max(5.0, float(self.config.order_book_stale_after_s))
+            + max(0.0, float(self.config.max_clock_skew_s))
         )
         return self._order_book_stale_age_s(now_ts) > stale_after_s
 
@@ -3773,6 +5567,19 @@ class EppV24Controller(MarketMakingControllerBase):
                 and self._fill_edge_ewma is not None
             ) else _ONE,
             "spread_floor_pct": self._spread_floor_pct,
+            "base_spread_pct": getattr(getattr(self, "_last_spread_state", None), "quote_geometry", None).base_spread_pct
+            if getattr(getattr(self, "_last_spread_state", None), "quote_geometry", None) is not None
+            else _ZERO,
+            "reservation_price_adjustment_pct": getattr(getattr(self, "_last_spread_state", None), "quote_geometry", None).reservation_price_adjustment_pct
+            if getattr(getattr(self, "_last_spread_state", None), "quote_geometry", None) is not None
+            else _ZERO,
+            "inventory_skew_pct": getattr(getattr(self, "_last_spread_state", None), "quote_geometry", None).inventory_skew
+            if getattr(getattr(self, "_last_spread_state", None), "quote_geometry", None) is not None
+            else _ZERO,
+            "alpha_skew_pct": getattr(getattr(self, "_last_spread_state", None), "quote_geometry", None).alpha_skew
+            if getattr(getattr(self, "_last_spread_state", None), "quote_geometry", None) is not None
+            else _ZERO,
+            "inventory_urgency_pct": self._inventory_urgency_score,
             "adaptive_effective_min_edge_pct": self._adaptive_effective_min_edge_pct,
             "adaptive_fill_age_s": self._adaptive_fill_age_s,
             "adaptive_market_spread_bps_ewma": self._market_spread_bps_ewma,
@@ -3806,6 +5613,19 @@ class EppV24Controller(MarketMakingControllerBase):
             "spread_competitiveness_cap_side_pct": self._spread_competitiveness_cap_side_pct,
             "soft_pause_edge": self._soft_pause_edge,
             "edge_gate_blocked": self._edge_gate_blocked,
+            "selective_quote_state": self._selective_quote_state,
+            "selective_quote_score": self._selective_quote_score,
+            "selective_quote_reason": self._selective_quote_reason,
+            "selective_quote_adverse_ratio": self._selective_quote_adverse_ratio,
+            "selective_quote_slippage_p95_bps": self._selective_quote_slippage_p95_bps,
+            "alpha_policy_state": self._alpha_policy_state,
+            "alpha_policy_reason": self._alpha_policy_reason,
+            "alpha_maker_score": self._alpha_maker_score,
+            "alpha_aggressive_score": self._alpha_aggressive_score,
+            "alpha_cross_allowed": self._alpha_cross_allowed,
+            "adverse_fill_soft_pause_active": EppV24Controller._adverse_fill_soft_pause_active(self),
+            "edge_confidence_soft_pause_active": EppV24Controller._edge_confidence_soft_pause_active(self),
+            "slippage_soft_pause_active": EppV24Controller._slippage_soft_pause_active(self),
             "fills_count_today": self._fills_count_today,
             "fees_paid_today_quote": self._fees_paid_today_quote,
             "paper_fill_count": self._paper_fill_count,
@@ -3831,7 +5651,25 @@ class EppV24Controller(MarketMakingControllerBase):
             "is_perp": self._is_perp,
             "realized_pnl_today": self._realized_pnl_today,
             "avg_entry_price": self._avg_entry_price,
+            "avg_entry_price_long": self._avg_entry_price_long,
+            "avg_entry_price_short": self._avg_entry_price_short,
             "position_base": self._position_base,
+            "position_gross_base": self._position_gross_base,
+            "position_long_base": self._position_long_base,
+            "position_short_base": self._position_short_base,
+            "derisk_force_taker_min_base": EppV24Controller._derisk_force_min_base_amount(self),
+            "derisk_force_taker_expectancy_guard_blocked": bool(
+                getattr(self, "_derisk_force_taker_expectancy_guard_blocked", False)
+            ),
+            "derisk_force_taker_expectancy_guard_reason": str(
+                getattr(self, "_derisk_force_taker_expectancy_guard_reason", "")
+            ),
+            "derisk_force_taker_expectancy_mean_quote": to_decimal(
+                getattr(self, "_derisk_force_taker_expectancy_mean_quote", _ZERO)
+            ),
+            "derisk_force_taker_expectancy_taker_fills": int(
+                getattr(self, "_derisk_force_taker_expectancy_taker_fills", 0)
+            ),
             "position_drift_pct": self._position_drift_pct,
             "fill_edge_ewma": self._fill_edge_ewma,
             "adverse_fill_active": self._adverse_fill_count >= self.config.adverse_fill_count_threshold and self._fill_edge_ewma is not None,
@@ -3857,45 +5695,14 @@ class EppV24Controller(MarketMakingControllerBase):
             # config fields needed by log_minute
             "variant": self.config.variant,
             "bot_mode": self.config.bot_mode,
-            "is_paper": self.config.is_paper,
+            "is_paper": _config_is_paper(self.config),
             "connector_name": self.config.connector_name,
             "trading_pair": self.config.trading_pair,
         }
 
     def _get_top_of_book(self) -> Tuple[Decimal, Decimal, Decimal, Decimal, Decimal]:
-        connector = self._connector()
-        if connector is None:
-            return Decimal("0"), Decimal("0"), Decimal("0"), Decimal("0"), Decimal("0")
-        try:
-            book = connector.get_order_book(self.config.trading_pair)
-        except Exception:
-            logger.warning("Order book read failed for %s", self.config.trading_pair, exc_info=True)
-            return Decimal("0"), Decimal("0"), Decimal("0"), Decimal("0"), Decimal("0")
-        bid_p = Decimal("0")
-        ask_p = Decimal("0")
-        bid_sz = Decimal("0")
-        ask_sz = Decimal("0")
-        try:
-            best_bid = next(iter(book.bid_entries()), None)
-            if best_bid is None:
-                raise IndexError
-            bid_p = to_decimal(getattr(best_bid, "price", 0))
-            bid_sz = to_decimal(getattr(best_bid, "amount", 0))
-        except (IndexError, AttributeError):
-            pass
-        try:
-            best_ask = next(iter(book.ask_entries()), None)
-            if best_ask is None:
-                raise IndexError
-            ask_p = to_decimal(getattr(best_ask, "price", 0))
-            ask_sz = to_decimal(getattr(best_ask, "amount", 0))
-        except (IndexError, AttributeError):
-            pass
-        spread_pct = Decimal("0")
-        mid = (bid_p + ask_p) / Decimal("2") if bid_p > 0 and ask_p > 0 else Decimal("0")
-        if mid > 0 and ask_p >= bid_p:
-            spread_pct = (ask_p - bid_p) / mid
-        return bid_p, ask_p, spread_pct, bid_sz, ask_sz
+        top = self._runtime_adapter.get_top_of_book()
+        return top.best_bid, top.best_ask, top.spread_pct, top.best_bid_size, top.best_ask_size
 
     def _compute_ob_imbalance(self, depth: int = 5) -> Decimal:
         """Compute order book imbalance from top-N levels: (bid_depth - ask_depth) / (bid_depth + ask_depth).
@@ -3903,22 +5710,7 @@ class EppV24Controller(MarketMakingControllerBase):
         Returns value in [-1, +1]. Positive = more bids (buy pressure). Guarded by try/except.
         """
         try:
-            connector = self._connector()
-            if connector is None:
-                return _ZERO
-            book = connector.get_order_book(self.config.trading_pair)
-            bid_depth = sum(
-                to_decimal(getattr(e, "amount", 0))
-                for e in list(book.bid_entries())[:depth]
-            )
-            ask_depth = sum(
-                to_decimal(getattr(e, "amount", 0))
-                for e in list(book.ask_entries())[:depth]
-            )
-            total = bid_depth + ask_depth
-            if total <= _ZERO:
-                return _ZERO
-            return _clip((bid_depth - ask_depth) / total, Decimal("-1"), _ONE)
+            return _clip(self._runtime_adapter.get_depth_imbalance(depth=depth), Decimal("-1"), _ONE)
         except Exception:
             return _ZERO
 
@@ -3996,10 +5788,109 @@ class EppV24Controller(MarketMakingControllerBase):
         connector_tag = str(self.config.connector_name).replace("_paper_trade", "").replace(" ", "_")
         mode_tag = self.config.bot_mode
         return str(
-            Path(self.config.log_dir) / "epp_v24"
+            Path(self.config.log_dir) / _artifact_namespace(self.config)
             / f"{self.config.instance_name}_{self.config.variant}"
             / f"daily_state_{connector_tag}_{mode_tag}.json"
         )
+
+    def _fills_csv_path(self) -> Path:
+        """Return canonical fills.csv path for this instance."""
+        csv_logger_dir = getattr(self._csv, "log_dir", None)
+        if csv_logger_dir is not None:
+            try:
+                return Path(str(csv_logger_dir)).expanduser().resolve() / "fills.csv"
+            except Exception:
+                pass
+        return (
+            Path(self.config.log_dir).expanduser().resolve()
+            / _artifact_namespace(self.config)
+            / f"{self.config.instance_name}_{self.config.variant}"
+            / "fills.csv"
+        )
+
+    def _hydrate_seen_fill_order_ids_from_csv(self) -> None:
+        """Warm restart-time fill cache from fills.csv.
+
+        This cache is used for replay-safety diagnostics and live fill-event dedupe.
+        It is intentionally best-effort and never blocks startup.
+        """
+        fills_path = self._fills_csv_path()
+        if not fills_path.exists():
+            return
+        try:
+            order_id_cap = int(getattr(self, "_seen_fill_order_ids_cap", 50_000) or 50_000)
+            order_id_cap = max(1_000, order_id_cap)
+            event_key_cap = int(getattr(self, "_seen_fill_event_keys_cap", 120_000) or 120_000)
+            event_key_cap = max(1_000, event_key_cap)
+            seen_order_ids = getattr(self, "_seen_fill_order_ids", None)
+            if not isinstance(seen_order_ids, set):
+                seen_order_ids = set()
+                setattr(self, "_seen_fill_order_ids", seen_order_ids)
+            seen_order_ids_fifo = getattr(self, "_seen_fill_order_ids_fifo", None)
+            if not isinstance(seen_order_ids_fifo, (deque, list)):
+                seen_order_ids_fifo = deque()
+                setattr(self, "_seen_fill_order_ids_fifo", seen_order_ids_fifo)
+            seen_event_keys = getattr(self, "_seen_fill_event_keys", None)
+            if not isinstance(seen_event_keys, set):
+                seen_event_keys = set()
+                setattr(self, "_seen_fill_event_keys", seen_event_keys)
+            seen_event_keys_fifo = getattr(self, "_seen_fill_event_keys_fifo", None)
+            if not isinstance(seen_event_keys_fifo, (deque, list)):
+                seen_event_keys_fifo = deque()
+                setattr(self, "_seen_fill_event_keys_fifo", seen_event_keys_fifo)
+            order_ids: List[str] = []
+            fill_event_keys: List[str] = []
+            latest_fill_ts = 0.0
+            with fills_path.open("r", newline="", encoding="utf-8") as fp:
+                reader = csv.DictReader(fp)
+                for row in reader:
+                    oid = str(row.get("order_id", "") or "").strip()
+                    if oid:
+                        order_ids.append(oid)
+                    fill_event_key = EppV24Controller._fill_row_dedupe_key(row)
+                    if fill_event_key:
+                        fill_event_keys.append(fill_event_key)
+                    ts_raw = str(row.get("ts", "") or "").strip()
+                    if ts_raw:
+                        try:
+                            parsed_ts = datetime.fromisoformat(ts_raw.replace("Z", "+00:00")).timestamp()
+                            latest_fill_ts = max(latest_fill_ts, float(parsed_ts))
+                        except Exception:
+                            pass
+
+            if len(order_ids) > order_id_cap:
+                order_ids = order_ids[-order_id_cap:]
+            if len(fill_event_keys) > event_key_cap:
+                fill_event_keys = fill_event_keys[-event_key_cap:]
+
+            seen_order_ids.clear()
+            seen_order_ids_fifo.clear()
+            for oid in order_ids:
+                if oid in seen_order_ids:
+                    continue
+                seen_order_ids.add(oid)
+                seen_order_ids_fifo.append(oid)
+            seen_event_keys.clear()
+            seen_event_keys_fifo.clear()
+            for event_key in fill_event_keys:
+                if event_key in seen_event_keys:
+                    continue
+                seen_event_keys.add(event_key)
+                seen_event_keys_fifo.append(event_key)
+
+            if latest_fill_ts > 0:
+                self._last_fill_ts = max(float(getattr(self, "_last_fill_ts", 0.0) or 0.0), latest_fill_ts)
+
+            if seen_order_ids or seen_event_keys:
+                logger.info(
+                    "Hydrated fill cache: %d unique order_ids, %d unique event_keys from %s (last_fill_ts=%s)",
+                    len(seen_order_ids),
+                    len(seen_event_keys),
+                    fills_path,
+                    latest_fill_ts if latest_fill_ts > 0 else "n/a",
+                )
+        except Exception:
+            logger.warning("Failed to hydrate fill cache from %s", fills_path, exc_info=True)
 
     def _load_daily_state(self) -> None:
         """Restore daily state from Redis or disk.
@@ -4017,6 +5908,18 @@ class EppV24Controller(MarketMakingControllerBase):
             today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
             saved_position = to_decimal(data.get("position_base", "0"))
             saved_avg_entry = to_decimal(data.get("avg_entry_price", "0"))
+            saved_position_gross = to_decimal(data.get("position_gross_base", abs(saved_position)))
+            saved_position_long = to_decimal(data.get("position_long_base", max(_ZERO, saved_position)))
+            saved_position_short = to_decimal(data.get("position_short_base", max(_ZERO, -saved_position)))
+            saved_avg_entry_long = to_decimal(
+                data.get("avg_entry_price_long", saved_avg_entry if saved_position_long > _ZERO else _ZERO)
+            )
+            saved_avg_entry_short = to_decimal(
+                data.get("avg_entry_price_short", saved_avg_entry if saved_position_short > _ZERO else _ZERO)
+            )
+            saved_last_fill_ts = float(data.get("last_fill_ts", 0.0) or 0.0)
+            if saved_last_fill_ts > 0:
+                self._last_fill_ts = saved_last_fill_ts
             if data.get("day_key") == today:
                 self._daily_key = data.get("day_key")
                 self._daily_equity_open = to_decimal(data["equity_open"]) if data.get("equity_open") else None
@@ -4027,21 +5930,31 @@ class EppV24Controller(MarketMakingControllerBase):
                 self._funding_cost_today_quote = to_decimal(data.get("funding_cost", "0"))
                 self._realized_pnl_today = to_decimal(data.get("realized_pnl", "0"))
                 self._position_base = saved_position
+                self._position_gross_base = saved_position_gross
+                self._position_long_base = saved_position_long
+                self._position_short_base = saved_position_short
                 self._avg_entry_price = saved_avg_entry
+                self._avg_entry_price_long = saved_avg_entry_long
+                self._avg_entry_price_short = saved_avg_entry_short
                 logger.info("Restored daily state for %s (fills=%d, traded=%.2f)", today, self._fills_count_today, self._traded_notional_today)
             else:
                 self._position_base = saved_position
+                self._position_gross_base = saved_position_gross
+                self._position_long_base = saved_position_long
+                self._position_short_base = saved_position_short
                 self._avg_entry_price = saved_avg_entry
+                self._avg_entry_price_long = saved_avg_entry_long
+                self._avg_entry_price_short = saved_avg_entry_short
                 logger.info(
-                    "Cross-day restart: carried forward position_base=%.8f avg_entry=%.2f from %s",
-                    saved_position, saved_avg_entry, data.get("day_key", "?"),
+                    "Cross-day restart: carried forward net=%.8f gross=%.8f avg_entry=%.2f from %s",
+                    saved_position, saved_position_gross, saved_avg_entry, data.get("day_key", "?"),
                 )
         except Exception:
             logger.warning("Failed to load daily state", exc_info=True)
 
     def _save_daily_state(self, force: bool = False) -> None:
         """Persist daily state to Redis and disk for restart recovery."""
-        now_ts = float(self.market_data_provider.time()) if hasattr(self, "market_data_provider") else _time_mod.time()
+        now_ts = float(self.market_data_provider.time())
         data = {
             "day_key": self._daily_key,
             "equity_open": str(self._daily_equity_open) if self._daily_equity_open else None,
@@ -4051,8 +5964,14 @@ class EppV24Controller(MarketMakingControllerBase):
             "fees_paid": str(self._fees_paid_today_quote),
             "funding_cost": str(self._funding_cost_today_quote),
             "realized_pnl": str(self._realized_pnl_today),
-            "position_base": str(self._position_base),
-            "avg_entry_price": str(self._avg_entry_price),
+            "last_fill_ts": float(getattr(self, "_last_fill_ts", 0.0) or 0.0),
+            "position_base": str(getattr(self, "_position_base", _ZERO)),
+            "position_gross_base": str(getattr(self, "_position_gross_base", abs(getattr(self, "_position_base", _ZERO)))),
+            "position_long_base": str(getattr(self, "_position_long_base", max(_ZERO, getattr(self, "_position_base", _ZERO)))),
+            "position_short_base": str(getattr(self, "_position_short_base", max(_ZERO, -getattr(self, "_position_base", _ZERO)))),
+            "avg_entry_price": str(getattr(self, "_avg_entry_price", _ZERO)),
+            "avg_entry_price_long": str(getattr(self, "_avg_entry_price_long", getattr(self, "_avg_entry_price", _ZERO))),
+            "avg_entry_price_short": str(getattr(self, "_avg_entry_price_short", getattr(self, "_avg_entry_price", _ZERO))),
         }
         self._state_store.save(data, now_ts, force=force)
 

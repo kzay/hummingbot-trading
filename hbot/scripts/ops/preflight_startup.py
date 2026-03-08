@@ -74,7 +74,7 @@ def _password_env_keys_for_container(container: str) -> list[str]:
     return ["BOT1_PASSWORD"]
 
 
-def _check_bot_container_password(container: str = "hbot-bot1") -> tuple[bool, str]:
+def _check_bot_container_password(container: str = "bot1") -> tuple[bool, str]:
     """Check startup password path in running bot container.
 
     Accepted patterns:
@@ -260,7 +260,7 @@ def main() -> int:
     )
     parser.add_argument(
         "--bot-containers",
-        default=os.getenv("PREFLIGHT_BOT_CONTAINERS", "hbot-bot1,hbot-bot3,hbot-bot4"),
+        default=os.getenv("PREFLIGHT_BOT_CONTAINERS", "bot1,bot3,bot4"),
         help="Comma-separated container names to validate startup password path.",
     )
     parser.add_argument("--skip-container", action="store_true", help="Skip container check (e.g. before first up)")

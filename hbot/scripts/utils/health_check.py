@@ -38,7 +38,7 @@ async def check_system_time_drift(max_drift_seconds: float = 2.0) -> bool:
     for url, name in endpoints:
         try:
             req = urllib.request.Request(url, method="GET")
-            req.add_header("User-Agent", "hbot-health-check/1.0")
+            req.add_header("User-Agent", "kzay-capital-health-check/1.0")
             with urllib.request.urlopen(req, timeout=5) as resp:
                 body = _json.loads(resp.read())
                 if name == "bitget":
@@ -102,13 +102,13 @@ def check_memory(min_free_mb: float = 256.0) -> bool:
 
 
 def main() -> int:
-    parser = argparse.ArgumentParser(description="Hummingbot Health Check")
+    parser = argparse.ArgumentParser(description="Kzay Capital Health Check")
     parser.add_argument("--exchange", default="bitget", help="Exchange name")
     parser.add_argument("--pair", default="BTC-USDT", help="Trading pair")
     args = parser.parse_args()
 
     logger.info("=" * 50)
-    logger.info("Hummingbot Health Check")
+    logger.info("Kzay Capital Health Check")
     logger.info("=" * 50)
 
     checks_passed = 0

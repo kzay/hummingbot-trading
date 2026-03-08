@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -93,7 +94,10 @@ def run(root: Path) -> dict:
                 latest_other = fp
                 break
         other_rows = _count_non_empty_lines(latest_other) if latest_other != jsonl_path else 0
-        if latest_other != jsonl_path and today_rows < 1000 and other_rows > today_rows:
+        allow_sparse_fallback = str(
+            os.getenv("EVENT_STORE_INTEGRITY_ALLOW_SPARSE_FALLBACK", "true")
+        ).strip().lower() in {"1", "true", "yes", "on"}
+        if allow_sparse_fallback and latest_other != jsonl_path and today_rows < 1000 and other_rows > today_rows:
             print(
                 f"[integrity-local] today JSONL sparse ({today_rows}); using richer snapshot "
                 f"{latest_other.name} ({other_rows})"

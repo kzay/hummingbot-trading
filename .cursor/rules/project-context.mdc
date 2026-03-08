@@ -1,9 +1,9 @@
 ---
-description: Project orientation and backlog pointer for the hbot EPP trading system
+description: Project orientation and backlog pointer for the hbot shared-runtime trading system
 alwaysApply: true
 ---
 
-# Project: hbot — EPP v2.4 Algorithmic Trading Desk
+# Project: hbot — Shared Runtime v2.4 Trading Desk
 
 ## What this is
 Hummingbot-based market-making bot for BTC-USDT perpetual futures on Bitget.
@@ -13,7 +13,7 @@ Live deployment requires passing all promotion gates and the go-live hardening c
 ## Workspace layout
 ```
 hbot/
-  controllers/        # Trading logic (epp_v2_4.py is the main controller)
+  controllers/        # Trading logic (legacy epp_v2_4.py + strategy lanes)
   controllers/paper_engine_v2/  # Paper simulation (desk.py, hb_bridge.py, portfolio.py)
   services/           # Supporting microservices (kill_switch, reconciliation, signal, etc.)
   scripts/            # Ops, analysis, and release scripts

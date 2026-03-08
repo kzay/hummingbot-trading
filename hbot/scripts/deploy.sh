@@ -11,7 +11,7 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PROJECT_DIR="$(dirname "$SCRIPT_DIR")"
 
 echo "============================================"
-echo " Hummingbot Infrastructure - VPS Setup"
+echo " Kzay Capital Trading Infrastructure - VPS Setup"
 echo "============================================"
 
 # ---- 1. System Update ----
@@ -118,6 +118,6 @@ echo "  ssh -L 3000:127.0.0.1:3000 user@your-vps-ip"
 echo "  Then open http://localhost:3000"
 echo ""
 echo " To attach to bot1:"
-echo "  docker attach hbot-bot1"
+echo "  docker attach bot1"
 echo "  (Ctrl+P, Ctrl+Q to detach)"
 echo "============================================"

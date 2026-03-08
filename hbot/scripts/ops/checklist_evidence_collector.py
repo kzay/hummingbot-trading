@@ -83,9 +83,14 @@ def collect(checklist_path: Path) -> Dict[str, object]:
         st = str(section.get("status", "unknown"))
         status_counts[st] = int(status_counts.get(st, 0)) + 1
 
-    overall = "pass" if status_counts["fail"] == 0 and status_counts["unknown"] == 0 else "fail"
-    if overall == "fail" and status_counts["in_progress"] > 0 and status_counts["fail"] == 0:
+    if len(sections) > 0 and status_counts["pass"] == len(sections):
+        overall = "pass"
+    elif status_counts["fail"] > 0 or status_counts["unknown"] > 0:
+        overall = "fail"
+    elif status_counts["in_progress"] > 0:
         overall = "in_progress"
+    else:
+        overall = "unknown"
 
     return {
         "ts_utc": _utc_now(),

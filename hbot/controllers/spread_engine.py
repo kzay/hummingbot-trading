@@ -9,7 +9,13 @@ from __future__ import annotations
 from decimal import Decimal
 from typing import List, Optional, Tuple
 
-from controllers.core import RegimeSpec, RuntimeLevelState, SpreadEdgeState, clip
+from controllers.runtime.market_making_types import (
+    QuoteGeometry,
+    RegimeSpec,
+    RuntimeLevelState,
+    SpreadEdgeState,
+    clip,
+)
 
 _ZERO = Decimal("0")
 _ONE = Decimal("1")
@@ -172,14 +178,19 @@ class SpreadEngine:
         skew_cap = max(_MIN_SKEW_CAP, self._inventory_skew_cap_pct)
         inventory_skew = clip(inv_error * skew_factor * skew_scale, -skew_cap, skew_cap)
 
-        ob_skew = _ZERO
+        alpha_skew = _ZERO
         if ob_imbalance_skew_weight > _ZERO:
-            ob_skew = clip(
+            alpha_skew = clip(
                 ob_imbalance * ob_imbalance_skew_weight * skew_cap,
                 -skew_cap * Decimal("0.5"),
                 skew_cap * Decimal("0.5"),
             )
-        skew = clip(inventory_skew + ob_skew, -skew_cap, skew_cap)
+        reservation_price_adjustment_pct = clip(inventory_skew + alpha_skew, -skew_cap, skew_cap)
+        inventory_urgency = clip(
+            abs(inv_error) / max(skew_cap, Decimal("0.0001")),
+            _ZERO,
+            _ONE,
+        )
 
         drift_excess_bps = max(_ZERO, (raw_drift - smooth_drift) * _10K)
         drift_spike_bps = max(_ONE, Decimal(self._drift_spike_threshold_bps))
@@ -195,7 +206,10 @@ class SpreadEngine:
             if min_edge_threshold_override_pct is not None
             else Decimal(self._min_net_edge_bps) / _10K
         )
-        edge_resume_threshold = Decimal(self._edge_resume_bps) / _10K
+        base_min_edge_threshold = Decimal(self._min_net_edge_bps) / _10K
+        base_resume_threshold = Decimal(self._edge_resume_bps) / _10K
+        edge_resume_gap = max(_ZERO, base_resume_threshold - base_min_edge_threshold)
+        edge_resume_threshold = min_edge_threshold + edge_resume_gap
         fill_factor = clip(regime_spec.fill_factor, _FILL_FACTOR_LO, _ONE)
 
         funding_cost_bps = _ZERO
@@ -220,10 +234,10 @@ class SpreadEngine:
             spread_floor_pct = max(spread_floor_pct, market_spread_floor_pct)
 
         if override_spread_pct is not None:
-            spread_pct = max(_ZERO, override_spread_pct)
+            base_spread_pct = max(_ZERO, override_spread_pct)
         else:
-            spread_pct = self.pick_spread_pct(regime_spec, turnover_x)
-        spread_pct = max(spread_pct, spread_floor_pct)
+            base_spread_pct = self.pick_spread_pct(regime_spec, turnover_x)
+        spread_pct = max(base_spread_pct, spread_floor_pct)
         spread_pct = spread_pct * drift_spread_mult
         if adaptive_vol_ratio is not None and adaptive_vol_ratio > _ZERO:
             vol_widen = _ONE + clip(adaptive_vol_ratio, _ZERO, _ONE) * self._adaptive_vol_spread_widen_max
@@ -244,11 +258,19 @@ class SpreadEngine:
             - turnover_penalty
             - funding_cost_pct
         )
+        quote_geometry = QuoteGeometry(
+            base_spread_pct=base_spread_pct,
+            spread_floor_pct=spread_floor_pct,
+            reservation_price_adjustment_pct=reservation_price_adjustment_pct,
+            inventory_urgency=inventory_urgency,
+            inventory_skew=inventory_skew,
+            alpha_skew=alpha_skew,
+        )
         state = SpreadEdgeState(
             band_pct=band_pct,
             spread_pct=spread_pct,
             net_edge=net_edge,
-            skew=skew,
+            skew=reservation_price_adjustment_pct,
             adverse_drift=raw_drift,
             smooth_drift=smooth_drift,
             drift_spread_mult=drift_spread_mult,
@@ -256,6 +278,7 @@ class SpreadEngine:
             min_edge_threshold=min_edge_threshold,
             edge_resume_threshold=edge_resume_threshold,
             fill_factor=fill_factor,
+            quote_geometry=quote_geometry,
         )
         return state, spread_floor_pct
 
@@ -314,10 +337,10 @@ class SpreadEngine:
         side_levels = max(1, len(buy_spreads) + len(sell_spreads))
         total_amount_quote = per_order_quote * Decimal(side_levels)
 
-        if min_base_amount > 0 and total_amount_quote > 0:
-            base_for_total = total_amount_quote / mid
-            if base_for_total < min_base_amount:
-                total_amount_quote = min_base_amount * mid
+        if min_base_amount > 0 and total_amount_quote > 0 and mid > 0:
+            min_total_quote = min_base_amount * mid * Decimal(side_levels)
+            if total_amount_quote < min_total_quote:
+                total_amount_quote = min_total_quote
 
         runtime_levels.executor_refresh_time = max(30, int(runtime_levels.executor_refresh_time))
         runtime_levels.cooldown_time = max(5, cooldown_time)

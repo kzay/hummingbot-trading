@@ -7,7 +7,7 @@ Copy and paste the block below to an LLM to regenerate or update
 
 ```
 You are a Grafana dashboard JSON expert. Update the existing Grafana dashboard
-JSON (uid "hbot-ftui", title "FTUI Bot Monitor") to replicate the layout and
+JSON (uid "kzay-capital-ftui", title "Kzay Capital FTUI Bot Monitor") to replicate the layout and
 data shown in a FreqText/FTUI terminal trading dashboard screenshot.
 
 ## Existing dashboard to update
@@ -314,7 +314,7 @@ Panel 241 — Cumulative Profit
 
 Emit the complete valid Grafana dashboard JSON object (the content of
 ftui_bot_monitor.json) with ALL of the following preserved:
-  - uid: "hbot-ftui"
+  - uid: "kzay-capital-ftui"
   - title: "FTUI Bot Monitor"
   - All existing panels (IDs 1-71) with y values shifted by +43
     (to place them after the 5 new FreqText sections which occupy y=0..42)

@@ -10,6 +10,7 @@ always safe.
 from __future__ import annotations
 
 import logging
+import os
 import time
 from dataclasses import dataclass
 from decimal import Decimal
@@ -31,6 +32,7 @@ from controllers.paper_engine_v2.types import (
     OrderStatus,
     PaperOrder,
     PaperOrderType,
+    PositionAction,
     OrderBookSnapshot,
     order_status_transition,
     _EPS,
@@ -39,6 +41,7 @@ from controllers.paper_engine_v2.types import (
 )
 
 logger = logging.getLogger(__name__)
+_TRUE_VALUES = {"1", "true", "yes", "on"}
 
 
 # ---------------------------------------------------------------------------
@@ -100,6 +103,16 @@ class OrderMatchingEngine:
         # contingent children parked until parent fill condition is met
         self._parked_contingent: Dict[str, PaperOrder] = {}
         self._contingent_children: Dict[str, List[str]] = {}
+        self._match_trace_enabled = str(os.getenv("HB_PAPER_FILL_TRACE_ENABLED", "")).strip().lower() in _TRUE_VALUES
+        self._match_trace_max_lines = max(1, int(os.getenv("HB_PAPER_MATCH_TRACE_MAX_LINES", "300")))
+        self._match_trace_emitted = 0
+        if self._match_trace_enabled:
+            logger.warning(
+                "PAPER_MATCH_TRACE init enabled=true max_lines=%s fill_model=%s fill_model_trace_enabled=%s",
+                self._match_trace_max_lines,
+                type(self._fill_model).__name__,
+                str(getattr(self._fill_model, "_trace_enabled", "")),
+            )
 
     # -- Public API --------------------------------------------------------
 
@@ -291,6 +304,7 @@ class OrderMatchingEngine:
                 side=order.side.value, order_type=order.order_type.value,
                 price=order.price, quantity=order.quantity,
                 source_bot=order.source_bot,
+                position_action=order.position_action.value,
             )
 
         # 3. LIMIT_MAKER cross check
@@ -351,6 +365,7 @@ class OrderMatchingEngine:
             side=order.side.value, order_type=order.order_type.value,
             price=order.price, quantity=order.quantity,
             source_bot=order.source_bot,
+            position_action=order.position_action.value,
         )
 
     def _cancel_order_impl(self, order_id: str, now_ns: int) -> Optional[EngineEvent]:
@@ -436,6 +451,7 @@ class OrderMatchingEngine:
                         order_type=order.order_type.value,
                         price=order.price, quantity=order.quantity,
                         source_bot=order.source_bot,
+                        position_action=order.position_action.value,
                     ))
                 elif action == "cancel":
                     self._pending_cancel_ids.discard(order.order_id)
@@ -479,8 +495,31 @@ class OrderMatchingEngine:
             if last_fill_ns > 0 and (now_ns - last_fill_ns) < min_gap_ns:
                 continue
 
+            top = self._book.best_ask if order.side == OrderSide.BUY else self._book.best_bid
+            touchable = False
+            if top is not None:
+                if order.side == OrderSide.BUY:
+                    touchable = order.price >= top.price
+                else:
+                    touchable = order.price <= top.price
+
             decision = self._fill_model.evaluate(order, self._book, now_ns)
             if decision.fill_quantity <= _ZERO:
+                if self._match_trace_enabled and touchable and self._match_trace_emitted < self._match_trace_max_lines:
+                    logger.warning(
+                        "PAPER_MATCH_TRACE stage=no_fill_touchable instrument=%s order_id=%s side=%s order_type=%s "
+                        "price=%s remaining=%s top_price=%s top_size=%s fill_model=%s",
+                        self._iid.key,
+                        order.order_id,
+                        order.side.value,
+                        order.order_type.value,
+                        str(order.price),
+                        str(order.remaining_quantity),
+                        str(getattr(top, "price", "")),
+                        str(getattr(top, "size", "")),
+                        type(self._fill_model).__name__,
+                    )
+                    self._match_trace_emitted += 1
                 if order.order_type == PaperOrderType.MARKET:
                     best_bid = getattr(getattr(self._book, "best_bid", None), "price", "")
                     best_ask = getattr(getattr(self._book, "best_ask", None), "price", "")
@@ -495,20 +534,42 @@ class OrderMatchingEngine:
                 continue
 
             fill_qty = decision.fill_quantity
-            # Apply price protection uniformly so pathological fill-model outputs
-            # cannot execute at unrealistic prices in paper simulation.
-            if self._violates_price_protection(order.side, decision.fill_price):
-                if order.order_type == PaperOrderType.MARKET:
+            # Keep price protection for passive/quoted orders, but do not block
+            # market orders. Taker flows (e.g., position_rebalance flattening)
+            # must remain executable under normal slippage.
+            # For maker fills, this check can incorrectly block valid executions
+            # when the quote became stale but was already touchable intratick.
+            if (
+                order.order_type != PaperOrderType.MARKET
+                and not decision.is_maker
+                and self._violates_price_protection(order.side, decision.fill_price)
+            ):
+                if self._match_trace_enabled and self._match_trace_emitted < self._match_trace_max_lines:
                     logger.warning(
-                        "MATCH_ENGINE_PROBE stage=tick_price_protection_block instrument=%s order_id=%s fill_price=%s",
+                        "PAPER_MATCH_TRACE stage=blocked_price_protection instrument=%s order_id=%s side=%s "
+                        "order_type=%s fill_price=%s top_bid=%s top_ask=%s fill_model=%s",
                         self._iid.key,
                         order.order_id,
+                        order.side.value,
+                        order.order_type.value,
                         str(decision.fill_price),
+                        str(getattr(getattr(self._book, "best_bid", None), "price", "")),
+                        str(getattr(getattr(self._book, "best_ask", None), "price", "")),
+                        type(self._fill_model).__name__,
                     )
+                    self._match_trace_emitted += 1
                 continue
 
-            # Liquidity consumption tracking (Nautilus option)
-            if self._config.liquidity_consumption and order.order_type != PaperOrderType.MARKET:
+            # Liquidity consumption tracking (Nautilus option).
+            # Apply only to taker-style fills: maker fills can legitimately execute
+            # at a resting limit price not currently present in visible contra levels.
+            # Capping those maker fills against exact-price visible depth can
+            # incorrectly zero-out fills for touched orders.
+            if (
+                self._config.liquidity_consumption
+                and order.order_type != PaperOrderType.MARKET
+                and not decision.is_maker
+            ):
                 level = decision.fill_price
                 consumed_so_far = self._consumed.get(level, _ZERO)
                 book_size = self._book_size_at(level, order.side)
@@ -538,6 +599,8 @@ class OrderMatchingEngine:
                 now_ns=now_ns,
                 spec=self._spec,
                 leverage=self._leverage,
+                position_action=order.position_action,
+                position_mode=order.position_mode,
             )
 
             order.filled_quantity += fill_qty
@@ -564,6 +627,9 @@ class OrderMatchingEngine:
                     created_at_ns=order.created_at_ns,
                     updated_at_ns=order.updated_at_ns,
                     source_bot=order.source_bot,
+                    reduce_only=order.reduce_only,
+                    position_action=order.position_action,
+                    position_mode=order.position_mode,
                 )
                 new_asset, new_amt = self._compute_reserve(tmp)
                 if new_asset == order._reserved_asset:
@@ -587,6 +653,7 @@ class OrderMatchingEngine:
                 fee=fee, is_maker=decision.is_maker,
                 remaining_quantity=order.remaining_quantity,
                 source_bot=order.source_bot,
+                position_action=order.position_action.value,
             ))
             if order.order_type == PaperOrderType.MARKET:
                 logger.warning(
@@ -669,6 +736,24 @@ class OrderMatchingEngine:
     def _reduce_only_violation(self, order: PaperOrder) -> str:
         pos = self._portfolio.get_position(self._iid)
         qty = pos.quantity if pos is not None else _ZERO
+        action = getattr(order, "position_action", PositionAction.AUTO)
+        if not isinstance(action, PositionAction):
+            try:
+                action = PositionAction(str(action or "auto").lower())
+            except Exception:
+                action = PositionAction.AUTO
+        if action == PositionAction.CLOSE_SHORT:
+            if pos.short_quantity <= _ZERO:
+                return "reduce_only_no_short_position"
+            if order.quantity > pos.short_quantity + _EPS:
+                return "reduce_only_exceeds_position"
+            return ""
+        if action == PositionAction.CLOSE_LONG:
+            if pos.long_quantity <= _ZERO:
+                return "reduce_only_no_long_position"
+            if order.quantity > pos.long_quantity + _EPS:
+                return "reduce_only_exceeds_position"
+            return ""
         if order.side == OrderSide.BUY:
             if qty >= _ZERO:
                 return "reduce_only_no_short_position"

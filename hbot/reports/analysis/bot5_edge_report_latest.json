@@ -1,0 +1,25 @@
+{
+  "status": "ok",
+  "fill_count": 1542,
+  "total_notional_quote": 21364.3,
+  "gross_spread_capture_quote": -28.059777,
+  "total_fees_quote": 0.250582,
+  "total_adverse_drift_cost_quote": 10.249002,
+  "net_edge_total_quote": -38.559361,
+  "avg_edge_per_fill_quote": -0.025006,
+  "avg_edge_bps": -18.05,
+  "avg_fee_bps": 0.12,
+  "avg_capture_bps": -13.13,
+  "profitable_days": 1,
+  "losing_days": 3,
+  "daily_pnl": {
+    "2026-03-03": -39.255219,
+    "2026-03-04": 1.631891,
+    "2026-03-06": -0.010489,
+    "2026-03-07": -0.925544
+  },
+  "verdict": "NEGATIVE_EDGE",
+  "ts_utc": "2026-03-07T15:28:13.961877+00:00",
+  "bot": "bot5",
+  "variant": "a"
+}

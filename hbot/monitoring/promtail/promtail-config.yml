@@ -1,4 +1,4 @@
-﻿server:
+server:
   http_listen_port: 9080
   grpc_listen_port: 0
 
@@ -29,6 +29,30 @@ scrape_configs:
           job: bot_logs
           bot: bot3
           __path__: /workspace/hbot/data/bot3/logs/*.log
+      - targets:
+          - localhost
+        labels:
+          job: bot_logs
+          bot: bot4
+          __path__: /workspace/hbot/data/bot4/logs/*.log
+      - targets:
+          - localhost
+        labels:
+          job: bot_logs
+          bot: bot5
+          __path__: /workspace/hbot/data/bot5/logs/*.log
+      - targets:
+          - localhost
+        labels:
+          job: bot_logs
+          bot: bot6
+          __path__: /workspace/hbot/data/bot6/logs/*.log
+      - targets:
+          - localhost
+        labels:
+          job: bot_logs
+          bot: bot7
+          __path__: /workspace/hbot/data/bot7/logs/*.log
 
   - job_name: epp_csv_artifacts
     static_configs:
@@ -44,3 +68,33 @@ scrape_configs:
           job: epp_csv
           bot: bot2
           __path__: /workspace/hbot/data/bot2/logs/epp_v24/*/*.csv
+      - targets:
+          - localhost
+        labels:
+          job: epp_csv
+          bot: bot3
+          __path__: /workspace/hbot/data/bot3/logs/epp_v24/*/*.csv
+      - targets:
+          - localhost
+        labels:
+          job: epp_csv
+          bot: bot4
+          __path__: /workspace/hbot/data/bot4/logs/epp_v24/*/*.csv
+      - targets:
+          - localhost
+        labels:
+          job: epp_csv
+          bot: bot5
+          __path__: /workspace/hbot/data/bot5/logs/epp_v24/*/*.csv
+      - targets:
+          - localhost
+        labels:
+          job: epp_csv
+          bot: bot6
+          __path__: /workspace/hbot/data/bot6/logs/epp_v24/*/*.csv
+      - targets:
+          - localhost
+        labels:
+          job: epp_csv
+          bot: bot7
+          __path__: /workspace/hbot/data/bot7/logs/epp_v24/*/*.csv

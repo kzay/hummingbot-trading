@@ -1,0 +1,199 @@
+{
+  "ts_utc": "2026-03-07T15:28:14.017355+00:00",
+  "status": "warning",
+  "bot_log_root": "F:\\Environement\\git-repo\\hummingbot_custo\\hbot\\data\\bot5\\logs\\epp_v24\\bot5_a",
+  "lookback_days": 7,
+  "data_source_mode": "csv",
+  "summary": {
+    "days_included": 4,
+    "total_net_pnl_quote": 3.194533554896069,
+    "mean_fee_bps": 1.0021536174643102,
+    "mean_maker_ratio": 0.9639278557114228,
+    "maker_ratio_mean_daily": 0.9639278557114228,
+    "maker_ratio_weighted": 0.8599221789883269,
+    "max_slippage_p95_bps": 160.99821977001466,
+    "max_drawdown_pct": 0.0038426098623071656,
+    "soft_pause_ratio": 0.45136186770428016,
+    "soft_pause_state_ratio": 0.45136186770428016,
+    "soft_pause_edge_ratio": 0.0,
+    "soft_pause_state_rows": 116,
+    "soft_pause_edge_rows": 0,
+    "selective_quote_block_rows": 0,
+    "selective_quote_block_ratio": 0.0,
+    "selective_quote_reduce_rows": 0,
+    "selective_quote_reduce_ratio": 0.0,
+    "alpha_no_trade_rows": 0,
+    "alpha_no_trade_ratio": 0.0,
+    "alpha_aggressive_rows": 0,
+    "alpha_aggressive_ratio": 0.0,
+    "order_book_stale_rows": 0,
+    "cancel_before_fill_rows": 0,
+    "cancel_before_fill_rate": 0.0,
+    "expectancy_sample_count": 1542,
+    "expectancy_per_fill_quote": 0.0020716819422153506,
+    "expectancy_ci95_low_quote": 0.0012246109250127408,
+    "expectancy_ci95_high_quote": 0.00291875295941796,
+    "rolling_expectancy_window_fills": 300,
+    "rolling_expectancy_sample_count": 300,
+    "rolling_expectancy_per_fill_quote": 0.0028422098387015007,
+    "rolling_expectancy_ci95_low_quote": -0.00045106525365816224,
+    "rolling_expectancy_ci95_high_quote": 0.006135484931061164,
+    "rolling_expectancy_gate_min_fills": 300,
+    "rolling_expectancy_gate_fail": false,
+    "maker_expectancy_sample_count": 1326,
+    "maker_expectancy_per_fill_quote": 0.003585664710326711,
+    "maker_expectancy_ci95_low_quote": 0.0027952005125183466,
+    "maker_expectancy_ci95_high_quote": 0.004376128908135076,
+    "maker_rolling_expectancy_sample_count": 300,
+    "maker_rolling_expectancy_per_fill_quote": 0.005393521079164646,
+    "maker_rolling_expectancy_ci95_low_quote": 0.0024867497289565747,
+    "maker_rolling_expectancy_ci95_high_quote": 0.008300292429372719,
+    "taker_expectancy_sample_count": 216,
+    "taker_expectancy_per_fill_quote": -0.007222490050912734,
+    "taker_expectancy_ci95_low_quote": -0.010581092982683081,
+    "taker_expectancy_ci95_high_quote": -0.003863887119142386,
+    "taker_rolling_expectancy_sample_count": 216,
+    "taker_rolling_expectancy_per_fill_quote": -0.007222490050912734,
+    "taker_rolling_expectancy_ci95_low_quote": -0.010581092982683081,
+    "taker_rolling_expectancy_ci95_high_quote": -0.003863887119142386,
+    "alpha_policy_expectancy": {
+      "unknown": {
+        "fills": 1542.0,
+        "expectancy_per_fill_quote": 0.0020716819422153506,
+        "ci95_low_quote": 0.0012246109250127408,
+        "ci95_high_quote": 0.00291875295941796
+      }
+    },
+    "regime_expectancy": {
+      "unknown": {
+        "fills": 1542.0,
+        "expectancy_per_fill_quote": 0.0020716819422153506,
+        "ci95_low_quote": 0.0012246109250127408,
+        "ci95_high_quote": 0.00291875295941796
+      }
+    }
+  },
+  "checks": [
+    {
+      "name": "net_pnl_non_negative",
+      "pass": true,
+      "value": 3.194533554896069,
+      "threshold": 0.0
+    },
+    {
+      "name": "mean_fee_bps_within_0_to_12",
+      "pass": true,
+      "value": 1.0021536174643102,
+      "threshold": [
+        0.0,
+        12.0
+      ]
+    },
+    {
+      "name": "maker_ratio_at_least_45pct",
+      "pass": true,
+      "value": 0.8599221789883269,
+      "threshold": 0.45,
+      "note": "weighted_by_fills"
+    },
+    {
+      "name": "slippage_p95_below_25bps",
+      "pass": false,
+      "value": 160.99821977001466,
+      "threshold": 25.0
+    },
+    {
+      "name": "drawdown_below_2pct",
+      "pass": true,
+      "value": 0.0038426098623071656,
+      "threshold": 0.02
+    },
+    {
+      "name": "soft_pause_state_ratio_below_30pct",
+      "pass": false,
+      "value": 0.45136186770428016,
+      "threshold": 0.3
+    },
+    {
+      "name": "reconciliation_not_critical",
+      "pass": false,
+      "value": 2.0,
+      "threshold": 0.0
+    },
+    {
+      "name": "portfolio_risk_not_critical",
+      "pass": true,
+      "value": 0.0,
+      "threshold": 0.0
+    },
+    {
+      "name": "rolling_expectancy_ci95_upper_non_negative",
+      "pass": true,
+      "value": 0.006135484931061164,
+      "threshold": 0.0,
+      "note": "window_fills=300; sample=300; gate_min_fills=300"
+    }
+  ],
+  "daily_breakdown": [
+    {
+      "day": "2026-03-03",
+      "fills": 1497,
+      "realized_pnl_quote": 2.5641998496255383,
+      "fees_quote": 0.01732774305991823,
+      "net_pnl_quote": 2.54687210656562,
+      "fee_bps": 0.008614469857241383,
+      "maker_ratio": 0.8557114228456913,
+      "slippage_median_bps": 34.00838461264268,
+      "slippage_p95_bps": 160.99821977001466
+    },
+    {
+      "day": "2026-03-04",
+      "fills": 12,
+      "realized_pnl_quote": 0.815365824741867,
+      "fees_quote": 0.0,
+      "net_pnl_quote": 0.815365824741867,
+      "fee_bps": 0.0,
+      "maker_ratio": 1.0,
+      "slippage_median_bps": -196.25235613704487,
+      "slippage_p95_bps": -196.25235613704487
+    },
+    {
+      "day": "2026-03-06",
+      "fills": 2,
+      "realized_pnl_quote": 0.2170360870410593,
+      "fees_quote": 0.01687079303226371,
+      "net_pnl_quote": 0.2001652940087956,
+      "fee_bps": 2.0,
+      "maker_ratio": 1.0,
+      "slippage_median_bps": -5.758279259757815,
+      "slippage_p95_bps": -5.758279259757815
+    },
+    {
+      "day": "2026-03-07",
+      "fills": 31,
+      "realized_pnl_quote": -0.15148642470092055,
+      "fees_quote": 0.2163832457192933,
+      "net_pnl_quote": -0.36786967042021385,
+      "fee_bps": 2.0,
+      "maker_ratio": 1.0,
+      "slippage_median_bps": 2.0739817885336187,
+      "slippage_p95_bps": 8.994275770211466
+    }
+  ],
+  "external": {
+    "reconciliation": {
+      "status": "critical",
+      "critical_count": 2,
+      "warning_count": 0
+    },
+    "portfolio_risk": {
+      "status": "ok",
+      "critical_count": 0,
+      "warning_count": 0
+    },
+    "strict_cycle": {
+      "status": "FAIL",
+      "rc": 2
+    }
+  }
+}

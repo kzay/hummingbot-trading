@@ -1,6 +1,6 @@
-# Hummingbot Trading Infrastructure
+# Kzay Capital Trading Infrastructure
 
-Production-ready, Docker-based Hummingbot infrastructure for Bitget Spot trading with full monitoring stack.
+Production-ready, Docker-based trading infrastructure for Kzay Capital, built on Hummingbot for Bitget Spot trading with full monitoring stack.
 
 ---
 
@@ -201,7 +201,7 @@ docker compose --env-file ../env/.env logs -f bot1
 
 ```bash
 # Attach to bot1 interactive terminal
-docker attach hbot-bot1
+docker attach kzay-capital-bot1
 
 # Inside hummingbot:
 #   1. Set password when prompted
@@ -250,16 +250,17 @@ It will prompt for:
 - Secret Key
 - Passphrase
 
-These are stored **encrypted** in `data/bot1/conf/connectors/bitget.yml` using your bot password.
+These are stored **encrypted** in the shared connector directory at `data/shared/conf/connectors/bitget.yml` using your bot password.
+All bots that need to read the shared connector set must use the same `CONFIG_PASSWORD` value.
 
 ### 5.3 Secure Credential Injection
 
 **Method 1: Interactive (recommended)**
 ```bash
-docker attach hbot-bot1
+docker attach kzay-capital-bot1
 >>> connect bitget
 # Enter credentials when prompted
-# They are encrypted with CONFIG_PASSWORD
+# They are encrypted with CONFIG_PASSWORD and become available to every bot via the shared connectors mount
 ```
 
 **Method 2: Environment variable pre-seeding**
@@ -492,7 +493,7 @@ bash scripts/backup.sh bot1
 crontab -e
 
 # Add this line:
-0 4 * * * /home/user/hbot/hbot/scripts/backup.sh >> /var/log/hbot-backup.log 2>&1
+0 4 * * * /home/user/hbot/hbot/scripts/backup.sh >> /var/log/kzay-capital-backup.log 2>&1
 ```
 
 ### 10.3 What Gets Backed Up
@@ -528,7 +529,7 @@ For critical deployments, sync backups offsite:
 rsync -avz backups/ backup-user@offsite-server:/backups/hbot/
 
 # Or upload to S3-compatible storage
-aws s3 sync backups/ s3://your-bucket/hbot-backups/ --exclude "*.tmp"
+aws s3 sync backups/ s3://your-bucket/kzay-capital-backups/ --exclude "*.tmp"
 ```
 
 ---
@@ -573,7 +574,7 @@ Configured in docker-compose.yml:
 
 | Secret | Storage | Protection |
 |--------|---------|-----------|
-| Bitget API keys | `data/botX/conf/connectors/` | Encrypted by Hummingbot with CONFIG_PASSWORD |
+| Exchange API keys | `data/shared/conf/connectors/` | Encrypted by Hummingbot with CONFIG_PASSWORD and mounted into every bot |
 | CONFIG_PASSWORD | `env/.env` | File permissions 600, gitignored |
 | Grafana password | `env/.env` | File permissions 600, gitignored |
 | SSH keys | `~/.ssh/` | Standard SSH key management |
@@ -626,7 +627,7 @@ bash scripts/status.sh
 [ ] Review trading P&L in Hummingbot (attach to bot, run `history`)
 [ ] Check disk usage trend in Grafana
 [ ] Verify backups are running (ls -lh backups/)
-[ ] Review bot logs for errors: docker logs --tail 100 hbot-bot1
+[ ] Review bot logs for errors: docker logs --tail 100 kzay-capital-bot1
 [ ] Check fail2ban status: sudo fail2ban-client status sshd
 [ ] Verify system time is accurate: timedatectl
 ```
@@ -663,10 +664,10 @@ Silent failures are the most dangerous in trading infrastructure. Watch for:
 Monitoring approach:
 ```bash
 # Check if bot1 log is growing (should show recent timestamp)
-docker logs --tail 5 hbot-bot1
+docker logs --tail 5 kzay-capital-bot1
 
 # Check network I/O (should not be zero for active bot)
-docker stats --no-stream hbot-bot1
+docker stats --no-stream kzay-capital-bot1
 
 # Check last database modification
 ls -la data/bot1/data/
@@ -697,7 +698,7 @@ docker compose --env-file ../env/.env logs bot1
 # If connection fails:
 # - Verify API key, secret, passphrase are correct
 # - Check IP whitelist on Bitget includes VPS IP
-# - Test DNS resolution: docker exec hbot-bot1 ping api.bitget.com
+# - Test DNS resolution: docker exec kzay-capital-bot1 ping api.bitget.com
 # - Check VPS outbound connectivity
 ```
 
@@ -706,7 +707,7 @@ docker compose --env-file ../env/.env logs bot1
 ```bash
 # Verify SSH tunnel is active
 # Check Grafana container
-docker logs hbot-grafana
+docker logs kzay-capital-grafana
 
 # Restart Grafana
 docker compose --env-file ../env/.env restart grafana
@@ -760,7 +761,7 @@ docker compose --env-file ../env/.env stop bot1
 
 # ---- Interaction ----
 # Attach to bot
-docker attach hbot-bot1
+docker attach kzay-capital-bot1
 # Detach: Ctrl+P, Ctrl+Q
 
 # View logs
@@ -854,14 +855,14 @@ docker compose --env-file ../env/.env --profile multi up -d bot1 bot2
 2. Start bot1 strategy:
 
 ```bash
-docker attach hbot-bot1
+docker attach kzay-capital-bot1
 start --script v2_with_controllers.py --conf v2_epp_v2_4_bot_a.yml
 ```
 
 3. Start bot2 monitor (no trades):
 
 ```bash
-docker attach hbot-bot2
+docker attach kzay-capital-bot2
 start --script v2_with_controllers.py --conf v2_epp_v2_4_bot_d.yml
 ```
 
@@ -1091,7 +1092,7 @@ repeat despite the source file being updated.
 
 **Fix:** Clear the cache and recreate the container:
 ```bash
-docker exec hbot-bot1 rm -rf /home/hummingbot/controllers/__pycache__ \
+docker exec kzay-capital-bot1 rm -rf /home/hummingbot/controllers/__pycache__ \
     /home/hummingbot/controllers/market_making/__pycache__
 docker compose --env-file ../env/.env -f docker-compose.yml up -d --force-recreate bot1
 ```
@@ -1131,8 +1132,8 @@ docker compose --env-file ../env/.env up -d prometheus grafana node-exporter cad
 2. Grafana datasources:
    - `Prometheus` and `Loki` should both be healthy
 3. Dashboard data:
-   - `Hummingbot Trading Desk Overview`
-   - `Hummingbot Bot Deep Dive`
+   - `Kzay Capital Trading Desk`
+   - `Kzay Capital Bot Deep Dive`
 
 ### 15.3 Key Trading KPIs
 

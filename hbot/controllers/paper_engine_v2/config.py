@@ -14,6 +14,7 @@ from typing import Any, Dict
 @dataclass(frozen=True)
 class PaperEngineConfig:
     paper_equity_quote: Decimal = Decimal("500")
+    paper_reset_state_on_startup: bool = False
     paper_seed: int = 7
     paper_realism_profile: str = "custom"
     paper_fill_model: str = "queue_position"
@@ -25,6 +26,8 @@ class PaperEngineConfig:
     paper_queue_participation: Decimal = Decimal("0.35")
     paper_slippage_bps: Decimal = Decimal("1.0")
     paper_adverse_selection_bps: Decimal = Decimal("1.5")
+    paper_prob_fill_on_limit: float = 0.4
+    paper_prob_slippage: float = 0.0
     paper_partial_fill_min_ratio: Decimal = Decimal("0.15")
     paper_partial_fill_max_ratio: Decimal = Decimal("0.85")
     paper_depth_levels: int = 3
@@ -39,6 +42,7 @@ class PaperEngineConfig:
     instance_name: str = "bot1"
     variant: str = "a"
     log_dir: str = "/tmp"
+    artifact_namespace: str = "epp_v24"
 
     @staticmethod
     def _presets() -> Dict[str, Dict[str, Any]]:
@@ -52,6 +56,8 @@ class PaperEngineConfig:
                 "paper_queue_participation": Decimal("0.25"),
                 "paper_slippage_bps": Decimal("1.6"),
                 "paper_adverse_selection_bps": Decimal("2.2"),
+                "paper_prob_fill_on_limit": 0.30,
+                "paper_prob_slippage": 0.05,
                 "paper_partial_fill_min_ratio": Decimal("0.10"),
                 "paper_partial_fill_max_ratio": Decimal("0.55"),
                 "paper_depth_levels": 7,
@@ -72,6 +78,8 @@ class PaperEngineConfig:
                 "paper_queue_participation": Decimal("0.35"),
                 "paper_slippage_bps": Decimal("1.0"),
                 "paper_adverse_selection_bps": Decimal("1.5"),
+                "paper_prob_fill_on_limit": 0.40,
+                "paper_prob_slippage": 0.02,
                 "paper_partial_fill_min_ratio": Decimal("0.15"),
                 "paper_partial_fill_max_ratio": Decimal("0.85"),
                 "paper_depth_levels": 5,
@@ -92,6 +100,8 @@ class PaperEngineConfig:
                 "paper_queue_participation": Decimal("0.60"),
                 "paper_slippage_bps": Decimal("0.4"),
                 "paper_adverse_selection_bps": Decimal("0.8"),
+                "paper_prob_fill_on_limit": 0.75,
+                "paper_prob_slippage": 0.0,
                 "paper_partial_fill_min_ratio": Decimal("0.35"),
                 "paper_partial_fill_max_ratio": Decimal("1.00"),
                 "paper_depth_levels": 3,
@@ -144,6 +154,12 @@ class PaperEngineConfig:
                     getattr(cfg, "log_dir", merged.get("log_dir", cls.log_dir))
                     or merged.get("log_dir", cls.log_dir)
                 )
+                controller_name = str(getattr(cfg, "controller_name", "") or "").strip().lower()
+                default_artifact_namespace = "epp_v24" if controller_name.startswith("epp_") else "runtime_v24"
+                merged["artifact_namespace"] = str(
+                    getattr(cfg, "artifact_namespace", merged.get("artifact_namespace", default_artifact_namespace))
+                    or merged.get("artifact_namespace", default_artifact_namespace)
+                ).strip() or default_artifact_namespace
                 return cls(**merged)
             # Pydantic model or namespace-like object
         raise ValueError("Missing nested paper_engine config")

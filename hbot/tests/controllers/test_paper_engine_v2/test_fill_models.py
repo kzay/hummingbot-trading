@@ -207,6 +207,16 @@ class TestTopOfBookFillModel:
         d = model.evaluate(order, empty, _now())
         assert d.fill_quantity == Decimal("0")
 
+    def test_sell_market_fills_at_best_bid(self):
+        model = TopOfBookFillModel()
+        order = make_order("sell", "market", "0", "1.0")
+        order.status = OrderStatus.OPEN
+        book = make_book("100.00", "100.05", bid_size="5.0")
+        decision = model.evaluate(order, book, _now())
+        assert decision.fill_quantity == Decimal("1.0")
+        assert decision.fill_price == Decimal("100.00")
+        assert decision.is_maker is False
+
 
 class TestNautilusStylePresets:
     def test_best_price_alias_behaves_like_top_of_book(self):

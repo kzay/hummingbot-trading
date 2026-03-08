@@ -47,6 +47,21 @@ def _write_json(path: Path, payload: Dict[str, object]) -> None:
     path.write_text(json.dumps(payload, indent=2), encoding="utf-8")
 
 
+def _stream_entries_added(client: redis.Redis, stream: str) -> int:
+    """Use the same monotonic source counter semantics as Day2 gate checks."""
+    try:
+        info = client.xinfo_stream(stream)
+    except Exception:
+        return int(client.xlen(stream))
+    if not isinstance(info, dict):
+        return int(client.xlen(stream))
+    raw = info.get("entries-added", info.get("length", 0))
+    try:
+        return int(raw or 0)
+    except Exception:
+        return int(client.xlen(stream))
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(
         description="Safely reset event-store baseline_counts.json to current source/stored counters."
@@ -85,13 +100,16 @@ def main() -> None:
         password=os.getenv("REDIS_PASSWORD", "") or None,
         decode_responses=True,
     )
-    source_by_stream = {stream: int(client.xlen(stream)) for stream in STREAMS}
+    source_by_stream = {stream: _stream_entries_added(client, stream) for stream in STREAMS}
+    source_length_by_stream = {stream: int(client.xlen(stream)) for stream in STREAMS}
 
     baseline_after = {
         "created_at_utc": _utc_now(),
         "reason": str(args.reason),
         "source_by_stream": source_by_stream,
+        "source_length_by_stream": source_length_by_stream,
         "stored_by_stream": stored_by_stream,
+        "source_counter_kind": "entries_added",
         "integrity_file": str(latest_integrity_path) if latest_integrity_path else "",
     }
 

@@ -59,6 +59,7 @@ from controllers.paper_engine_v2.types import (
     PaperOrder,
     PaperOrderType,
     PaperPosition,
+    PositionAction,
     PositionChanged,
 )
 
@@ -71,6 +72,7 @@ __all__ = [
     "PaperOrder",
     "PaperOrderType",
     "PaperPosition",
+    "PositionAction",
     "OrderSide",
     "OrderStatus",
     # Events

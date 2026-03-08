@@ -1,0 +1,19 @@
+{
+  "ts_utc": "2026-03-07T13:22:52.461596+00:00",
+  "status": "pass",
+  "metrics": {
+    "p0_11_hb_executor_lifecycle_tests_pass_rate_pct": 100.0,
+    "p0_11_hb_event_count_delta_pct": 0.0,
+    "p0_11_inflight_order_lookup_miss_rate_pct": 0.0,
+    "p0_11_runtime_adapter_exception_count_24h": 0.0
+  },
+  "diagnostics": {
+    "golden_path_status": "pass",
+    "required_scenario_id": "hb_executor_runtime_compatibility",
+    "required_scenario_present": true,
+    "required_scenario_status": "pass",
+    "required_metric_count": 4,
+    "missing_metric_keys": [],
+    "metric_thresholds_ok": true
+  }
+}

@@ -1,23 +1,27 @@
-# EPP v2.4 - Phase 0 - Bot D (NO TRADE / PARKING)
+# EPP v2.4 - Bot 2 reserved scale slot (parking / no-trade)
 id: epp_v2_4_bot_d
 controller_name: epp_v2_4
 controller_type: market_making
 
-# Paper: use bitget_paper_trade.  Live: change to bitget.
-connector_name: bitget_paper_trade
+connector_name: bitget_perpetual
+connector_type: perp
 trading_pair: BTC-USDT
 
 total_amount_quote: 0
 buy_spreads: ""
 sell_spreads: ""
+buy_amounts_pct: "100"
+sell_amounts_pct: "100"
 executor_refresh_time: 120
-cooldown_time: 5
+cooldown_time: 8
 leverage: 1
 position_mode: ONEWAY
-stop_loss: 0.005
-take_profit: 0.005
-time_limit: 900
+stop_loss: 0.0015
+take_profit: 0.004
+time_limit: 300
+take_profit_order_type: LIMIT
 skip_rebalance: true
+position_rebalance_min_base_mult: 5.0
 
 variant: d
 enabled: true
@@ -30,13 +34,63 @@ fee_profile: vip0
 require_fee_resolution: true
 spot_fee_pct: 0.0010
 slippage_est_pct: 0.0005
-min_net_edge_bps: 2
-internal_paper_enabled: true
+turnover_cap_x: 1.0
+turnover_penalty_step: 0.0015
+ema_period: 20
+trend_eps_pct: 0.0004
+startup_position_sync: true
+max_daily_turnover_x_hard: 2.0
+max_daily_loss_pct_hard: 0.010
+max_drawdown_pct_hard: 0.020
+
+# Keep the parked lane wired like Bot 1, but fail closed and never quote.
+min_net_edge_bps: 8.0
+edge_resume_bps: 8.5
+edge_state_hold_s: 120
+paper_edge_gate_bypass: false
+paper_use_portfolio_equity_for_risk: true
+paper_state_reconcile_enabled: true
+paper_daily_baseline_auto_reset_on_startup: true
+max_quote_to_market_spread_mult: 0.00
+min_side_spread_bps: 0.30
+reconnect_cooldown_s: 3.0
+max_clock_skew_s: 20.0
+order_book_stale_after_s: 60.0
+order_book_stale_soft_pause_after_s: 90.0
+order_book_reconnect_grace_s: 30.0
+max_active_executors: 1
+
+perp_target_net_base_pct: 0.0
+min_base_pct: 0.0
+max_base_pct: 0.10
+
+sample_interval_s: 10
+spread_floor_recalc_s: 30
+cancel_budget_per_min: 5
+
 paper_engine:
+  paper_equity_quote: 1000
+  paper_realism_profile: custom
   paper_seed: 7
+  paper_reset_state_on_startup: false
+  paper_fill_model: latency_aware
+  paper_latency_model: configured_latency_ms
   paper_latency_ms: 150
-  paper_queue_participation: 0.35
+  paper_insert_latency_ms: 20
+  paper_cancel_latency_ms: 80
+  paper_liquidity_consumption: true
+  paper_queue_participation: 0.60
   paper_slippage_bps: 1.0
   paper_adverse_selection_bps: 1.5
+  paper_prob_fill_on_limit: 0.95
+  paper_prob_slippage: 0.0
   paper_partial_fill_min_ratio: 0.15
   paper_partial_fill_max_ratio: 0.85
+  paper_depth_levels: 5
+  paper_depth_decay: 0.70
+  paper_queue_position_enabled: true
+  paper_queue_ahead_ratio: 0.02
+  paper_queue_trade_through_ratio: 0.35
+  paper_price_protection_points: 8
+  paper_margin_model_type: leveraged
+  paper_max_fills_per_order: 8

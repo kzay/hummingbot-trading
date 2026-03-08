@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import re
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Dict, List, Tuple
@@ -36,6 +37,41 @@ def _check(name: str, ok: bool, reason: str, evidence_paths: List[str]) -> Dict[
     }
 
 
+def _extract_compose_service_block(compose_text: str, service_name: str) -> str:
+    pattern = rf"(?ms)^\s{{2}}{re.escape(service_name)}:\n(.*?)(?=^\s{{2}}[a-zA-Z0-9_-]+:\n|\Z)"
+    match = re.search(pattern, compose_text or "")
+    if not match:
+        return ""
+    return f"  {service_name}:\n{match.group(1)}"
+
+
+def _controller_paths_with_legacy_internal_paper_enabled(root: Path) -> List[str]:
+    candidates: List[Path] = []
+    controllers_root = root / "data"
+    if controllers_root.exists():
+        candidates.extend(sorted(controllers_root.glob("*/conf/controllers/*.yml")))
+        candidates.extend(sorted(controllers_root.glob("*/conf/controllers/*.yaml")))
+    templates_root = root / "config" / "strategy_catalog" / "templates"
+    if templates_root.exists():
+        candidates.extend(sorted(templates_root.glob("*.yml")))
+        candidates.extend(sorted(templates_root.glob("*.yaml")))
+
+    flagged: List[str] = []
+    for path in candidates:
+        try:
+            lines = path.read_text(encoding="utf-8").splitlines()
+        except Exception:
+            continue
+        for raw in lines:
+            line = raw.strip()
+            if not line or line.startswith("#"):
+                continue
+            if re.match(r"^internal_paper_enabled\s*:", line):
+                flagged.append(str(path))
+                break
+    return sorted(flagged)
+
+
 def build_report(root: Path) -> Dict[str, object]:
     checks: List[Dict[str, object]] = []
 
@@ -51,8 +87,20 @@ def build_report(root: Path) -> Dict[str, object]:
 
     compose_path = root / "compose" / "docker-compose.yml"
     compose_text = compose_path.read_text(encoding="utf-8") if compose_path.exists() else ""
+    paper_exchange_block = _extract_compose_service_block(compose_text, "paper-exchange-service")
     compose_has_service = "paper-exchange-service:" in compose_text
-    compose_has_command = "services/paper_exchange_service/main.py" in compose_text
+    compose_has_command = "services/paper_exchange_service/main.py" in paper_exchange_block
+    compose_has_healthcheck = "healthcheck:" in paper_exchange_block
+    required_mode_toggles = [
+        "PAPER_EXCHANGE_MODE_BOT1",
+        "PAPER_EXCHANGE_MODE_BOT3",
+        "PAPER_EXCHANGE_MODE_BOT4",
+        "PAPER_EXCHANGE_MODE_BOT5",
+        "PAPER_EXCHANGE_MODE_BOT6",
+    ]
+    compose_mode_toggles_present = all(
+        f"PAPER_EXCHANGE_MODE: ${{{key}:-" in compose_text for key in required_mode_toggles
+    )
     checks.append(
         _check(
             "paper_exchange_compose_service_wired",
@@ -60,6 +108,26 @@ def build_report(root: Path) -> Dict[str, object]:
             "compose service block + command wiring present"
             if (compose_has_service and compose_has_command)
             else "compose paper-exchange service block/command wiring missing",
+            [str(compose_path)],
+        )
+    )
+    checks.append(
+        _check(
+            "paper_exchange_compose_healthcheck_present",
+            compose_has_healthcheck,
+            "compose paper-exchange service healthcheck present"
+            if compose_has_healthcheck
+            else "compose paper-exchange service healthcheck missing",
+            [str(compose_path)],
+        )
+    )
+    checks.append(
+        _check(
+            "paper_exchange_compose_mode_toggles_present",
+            compose_mode_toggles_present,
+            "compose per-bot PAPER_EXCHANGE_MODE toggles present"
+            if compose_mode_toggles_present
+            else "compose missing one or more per-bot PAPER_EXCHANGE_MODE toggles",
             [str(compose_path)],
         )
     )
@@ -104,6 +172,9 @@ def build_report(root: Path) -> Dict[str, object]:
         "PAPER_EXCHANGE_MODE_BOT1",
         "PAPER_EXCHANGE_MODE_BOT3",
         "PAPER_EXCHANGE_MODE_BOT4",
+        "PAPER_EXCHANGE_MODE_BOT5",
+        "PAPER_EXCHANGE_MODE_BOT6",
+        "PAPER_EXCHANGE_SERVICE_ONLY",
         "PAPER_EXCHANGE_SYNC_TIMEOUT_MS",
     ]
     missing_template_keys = [key for key in required_template_keys if key not in env_template_map]
@@ -115,6 +186,39 @@ def build_report(root: Path) -> Dict[str, object]:
             if len(missing_template_keys) == 0
             else f"missing env template keys: {','.join(missing_template_keys)}",
             [str(env_template_path)],
+        )
+    )
+    valid_rollout_modes = {"disabled", "shadow", "active", "auto"}
+    invalid_mode_keys = [
+        key
+        for key in required_mode_toggles
+        if str(env_template_map.get(key, "")).strip().lower() not in valid_rollout_modes
+    ]
+    checks.append(
+        _check(
+            "paper_exchange_mode_toggle_values_valid",
+            len(invalid_mode_keys) == 0,
+            "all PAPER_EXCHANGE_MODE_BOT* values are valid"
+            if len(invalid_mode_keys) == 0
+            else f"invalid rollout mode values for: {','.join(invalid_mode_keys)}",
+            [str(env_template_path)],
+        )
+    )
+
+    legacy_mode_paths = _controller_paths_with_legacy_internal_paper_enabled(root)
+    checks.append(
+        _check(
+            "paper_exchange_legacy_internal_paper_enabled_removed",
+            len(legacy_mode_paths) == 0,
+            "legacy internal_paper_enabled removed from controller/template YAMLs"
+            if len(legacy_mode_paths) == 0
+            else f"found legacy internal_paper_enabled in {len(legacy_mode_paths)} file(s)",
+            legacy_mode_paths
+            if legacy_mode_paths
+            else [
+                str(root / "data"),
+                str(root / "config" / "strategy_catalog" / "templates"),
+            ],
         )
     )
 

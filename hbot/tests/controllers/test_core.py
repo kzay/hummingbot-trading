@@ -3,6 +3,7 @@ from decimal import Decimal
 
 from controllers.core import (
     MarketConditions,
+    QuoteGeometry,
     RegimeSpec,
     RuntimeLevelState,
     SpreadEdgeState,
@@ -59,6 +60,14 @@ def test_spread_edge_state_fields():
         drift_spread_mult=Decimal("1"), turnover_x=Decimal("0"),
         min_edge_threshold=Decimal("0.0001"), edge_resume_threshold=Decimal("0.0004"),
         fill_factor=Decimal("0.4"),
+        quote_geometry=QuoteGeometry(
+            base_spread_pct=Decimal("0.003"),
+            spread_floor_pct=Decimal("0.002"),
+            reservation_price_adjustment_pct=Decimal("0"),
+            inventory_urgency=Decimal("0"),
+            inventory_skew=Decimal("0"),
+            alpha_skew=Decimal("0"),
+        ),
     )
     assert ses.fill_factor == Decimal("0.4")
 

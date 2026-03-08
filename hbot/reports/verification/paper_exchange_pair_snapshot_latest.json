@@ -1,0 +1,39 @@
+{
+  "ts_utc": "2026-03-08T01:30:45Z",
+  "pairs_total": 1,
+  "pairs": {
+    "::bitget_perpetual::BTC-USDT": {
+      "connector_name": "bitget_perpetual",
+      "trading_pair": "BTC-USDT",
+      "instance_name": "",
+      "timestamp_ms": 1772933445901,
+      "freshness_ts_ms": 1772933445901,
+      "mid_price": 67144.25,
+      "best_bid": 67144.2,
+      "best_ask": 67144.3,
+      "best_bid_size": 2.7955,
+      "best_ask_size": 1.4842,
+      "last_trade_price": 67144.2,
+      "mark_price": null,
+      "funding_rate": 7.2e-05,
+      "exchange_ts_ms": 1772933445791,
+      "ingest_ts_ms": 1772933445901,
+      "market_sequence": 1772933445791,
+      "event_id": "92f85b36-51dd-4b4c-819f-cc0ab22ae824",
+      "source_event_type": "market_quote",
+      "bid_levels": [
+        [
+          67144.2,
+          2.7955
+        ]
+      ],
+      "ask_levels": [
+        [
+          67144.3,
+          1.4842
+        ]
+      ],
+      "namespace_key": "::bitget_perpetual::BTC-USDT"
+    }
+  }
+}

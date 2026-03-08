@@ -1,5 +1,5 @@
 # ============================================
-# Hummingbot Infrastructure - .gitignore
+# Kzay Capital Trading Infrastructure - .gitignore
 # ============================================
 
 # ---- Secrets - NEVER commit ----
@@ -119,6 +119,21 @@ venv/
 
 # ---- Replay regression pinned inputs (generated, timestamped, large) ----
 reports/replay_regression/pinned_inputs/20*/
+
+# ---- Non-canonical report variants (loadtest, game-day, one-off) ----
+reports/clickhouse_ingest/
+reports/promotion_gates/game_day_*.json
+reports/strategy/*_ab_*.json
+reports/strategy/tca_latest.json
+reports/strategy/testnet_daily_scorecard_20*.json
+reports/verification/*_loadtest*.json
+reports/verification/*_load_*.json
+reports/verification/*_threshold*.json
+reports/verification/*_harness*.json
+
+# ---- Python coverage ----
+.coverage
+htmlcov/
 
 # ---- Debug / temp scripts ----
 scripts/check_telemetry_stream.py

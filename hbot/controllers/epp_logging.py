@@ -1,8 +1,11 @@
-"""Buffered CSV split logger for EPP v2.4.
+"""Buffered CSV split logger for strategy runtime controllers.
 
 Keeps file handles open and buffers rows, flushing periodically or when a
 buffer size threshold is reached.  Schema rotation (header mismatch) is
 checked only on first open, not on every write.
+
+Historical note: module filename is retained for backward compatibility.
+Prefer importing from ``controllers.strategy_runtime_logging``.
 """
 from __future__ import annotations
 
@@ -168,6 +171,9 @@ class CsvSplitLogger:
         "fee_quote",
         "order_id",
         "state",
+        "regime",
+        "alpha_policy_state",
+        "alpha_policy_reason",
         "mid_ref",
         "expected_spread_pct",
         "adverse_drift_30s",
@@ -181,11 +187,15 @@ class CsvSplitLogger:
         base_log_dir: str,
         instance_name: str,
         variant: str,
+        namespace: str = "epp_v24",
         flush_rows: int = 10,
         flush_interval_s: float = 5.0,
     ):
         root = Path(base_log_dir).expanduser().resolve()
-        self.log_dir = root / "epp_v24" / f"{instance_name}_{variant.lower()}"
+        namespace_tag = str(namespace or "epp_v24").strip().replace("\\", "_").replace("/", "_")
+        if not namespace_tag:
+            namespace_tag = "epp_v24"
+        self.log_dir = root / namespace_tag / f"{instance_name}_{variant.lower()}"
         self.log_dir.mkdir(parents=True, exist_ok=True)
         self._buffers: Dict[str, _CsvBuffer] = {}
         paths = {
@@ -242,6 +252,7 @@ class CsvSplitLogger:
             "target_net_base_pct",
             "spread_pct",
             "spread_floor_pct",
+            "base_spread_pct",
             "spread_competitiveness_cap_active",
             "spread_competitiveness_cap_side_pct",
             "net_edge_pct",
@@ -273,10 +284,26 @@ class CsvSplitLogger:
             "pnl_governor_activation_reason_counts",
             "pnl_governor_size_boost_reason_counts",
             "skew",
+            "reservation_price_adjustment_pct",
+            "inventory_urgency_pct",
+            "inventory_skew_pct",
+            "alpha_skew_pct",
             "adverse_drift_30s",
             "adverse_drift_smooth_30s",
             "drift_spread_mult",
             "soft_pause_edge",
+            "selective_quote_state",
+            "selective_quote_score",
+            "selective_quote_reason",
+            "selective_quote_adverse_ratio",
+            "selective_quote_slippage_p95_bps",
+            "alpha_policy_state",
+            "alpha_policy_reason",
+            "alpha_maker_score",
+            "alpha_aggressive_score",
+            "alpha_cross_allowed",
+            "quote_side_mode",
+            "quote_side_reason",
             "base_balance",
             "quote_balance",
             "market_spread_pct",
@@ -316,6 +343,23 @@ class CsvSplitLogger:
             "funding_cost_today_quote",
             "margin_ratio",
             "position_drift_pct",
+            "bot6_signal_side",
+            "bot6_signal_reason",
+            "bot6_signal_score_long",
+            "bot6_signal_score_short",
+            "bot6_signal_score_active",
+            "bot6_sma_fast",
+            "bot6_sma_slow",
+            "bot6_adx",
+            "bot6_funding_bias",
+            "bot6_futures_cvd",
+            "bot6_spot_cvd",
+            "bot6_cvd_divergence_ratio",
+            "bot6_stacked_buy_count",
+            "bot6_stacked_sell_count",
+            "bot6_delta_spike_ratio",
+            "bot6_hedge_state",
+            "bot6_partial_exit_ratio",
             "ws_reconnect_count",
             "order_book_stale",
             "derisk_runtime_recovered",

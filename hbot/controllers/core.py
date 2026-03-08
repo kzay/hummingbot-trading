@@ -1,8 +1,11 @@
-"""Shared primitives for the EPP controller family.
+"""Shared primitives for the market-making v2.4 controller family.
 
 Houses data classes and utility functions imported by multiple controller
-sub-modules.  Extracted from ``epp_v2_4.py`` to break circular imports
+sub-modules.  Extracted from the legacy main runtime module to break circular imports
 between regime_detector, spread_engine, risk_policy, and the main controller.
+
+Historical note: this module name is retained for compatibility. New imports
+should use ``controllers.runtime.market_making_types``.
 """
 from __future__ import annotations
 
@@ -47,6 +50,16 @@ class RuntimeLevelState:
 
 
 @dataclass(frozen=True)
+class QuoteGeometry:
+    base_spread_pct: Decimal
+    spread_floor_pct: Decimal
+    reservation_price_adjustment_pct: Decimal
+    inventory_urgency: Decimal
+    inventory_skew: Decimal
+    alpha_skew: Decimal
+
+
+@dataclass(frozen=True)
 class SpreadEdgeState:
     band_pct: Decimal
     spread_pct: Decimal
@@ -59,6 +72,7 @@ class SpreadEdgeState:
     min_edge_threshold: Decimal
     edge_resume_threshold: Decimal
     fill_factor: Decimal
+    quote_geometry: QuoteGeometry
 
 
 @dataclass(frozen=True)

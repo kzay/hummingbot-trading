@@ -1,0 +1,59 @@
+{
+  "ts_utc": "2026-03-04T16:37:16.158173+00:00",
+  "status": "pass",
+  "failed_checks": [],
+  "checks": {
+    "harness_pass": true,
+    "load_validation_pass": true,
+    "run_id_propagation": true,
+    "budget_checks_enforced": true,
+    "sustained_window_qualified": true,
+    "minimum_instance_coverage": true
+  },
+  "metrics": {
+    "p1_19_sustained_command_throughput_cmds_per_sec": 60.000316668337966,
+    "p1_19_command_latency_under_load_p95_ms": 28.0,
+    "p1_19_command_latency_under_load_p99_ms": 60.0,
+    "p1_19_stream_backlog_growth_rate_pct_per_10min": 0.0,
+    "p1_19_stress_window_oom_restart_count": 0.0,
+    "p1_19_command_instance_coverage_count": 3.0,
+    "p1_19_sustained_window_observed_sec": 7199.962,
+    "p1_19_sustained_window_required_sec": 7200.0,
+    "p1_19_sustained_window_qualification_rate_pct": 100.0,
+    "harness_published_commands": 432000.0,
+    "harness_result_match_rate_pct": 4.62962962962963
+  },
+  "diagnostics": {
+    "profile": {
+      "duration_sec": 7200.0,
+      "target_cmd_rate": 60.0,
+      "expected_commands": 432000,
+      "min_commands": 345600,
+      "command_maxlen": 648000,
+      "sample_count": 518400,
+      "lookback_sec": 7800,
+      "sustained_window_sec": 7200,
+      "min_window_sec": 120,
+      "min_instance_coverage": 3,
+      "min_publish_success_rate_pct": 99.0
+    },
+    "harness_rc": 2,
+    "harness_status": "fail",
+    "harness_failed_checks": [
+      "result_match_rate"
+    ],
+    "harness_publish_checks_pass": true,
+    "harness_only_result_match_failure": true,
+    "harness_min_commands_required": 345600.0,
+    "harness_min_publish_success_rate_pct_required": 99.0,
+    "harness_published_commands": 432000.0,
+    "harness_instance_coverage_count": 3.0,
+    "harness_publish_success_rate_pct": 100.0,
+    "harness_run_id": "20260304T143618102327Z",
+    "load_rc": 0,
+    "load_status": "pass",
+    "load_failed_checks": [],
+    "load_run_id": "20260304T143618102327Z",
+    "load_budget_failed_checks": []
+  }
+}

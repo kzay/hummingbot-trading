@@ -1,0 +1,27 @@
+{
+  "ts_utc": "2026-03-07T13:22:52.826658+00:00",
+  "status": "pass",
+  "metrics": {
+    "p1_21_successful_restore_drills_30d_count": 28.0,
+    "p1_21_restore_replay_data_integrity_mismatch_count": 0.0,
+    "p1_21_full_restore_to_healthy_heartbeat_minutes": 0.0054699349999999996,
+    "p1_21_backup_artifact_freshness_hours": 0.00015479604403177897
+  },
+  "diagnostics": {
+    "required_artifact_count": 4,
+    "required_artifacts": {
+      "paper_exchange_command_journal_latest": "F:\\Environement\\git-repo\\hummingbot_custo\\hbot\\reports\\verification\\paper_exchange_command_journal_latest.json",
+      "paper_exchange_state_snapshot_latest": "F:\\Environement\\git-repo\\hummingbot_custo\\hbot\\reports\\verification\\paper_exchange_state_snapshot_latest.json",
+      "paper_exchange_pair_snapshot_latest": "F:\\Environement\\git-repo\\hummingbot_custo\\hbot\\reports\\verification\\paper_exchange_pair_snapshot_latest.json",
+      "paper_exchange_market_fill_journal_latest": "F:\\Environement\\git-repo\\hummingbot_custo\\hbot\\reports\\verification\\paper_exchange_market_fill_journal_latest.json"
+    },
+    "missing_artifacts": [],
+    "copy_failures": [],
+    "hash_mismatches": [],
+    "backup_root": "F:\\Environement\\git-repo\\hummingbot_custo\\hbot\\reports\\verification\\paper_exchange_state_backups",
+    "backup_dir": "F:\\Environement\\git-repo\\hummingbot_custo\\hbot\\reports\\verification\\paper_exchange_state_backups\\20260307T132252Z",
+    "history_latest_path": "F:\\Environement\\git-repo\\hummingbot_custo\\hbot\\reports\\verification\\paper_exchange_state_dr_history_latest.json",
+    "restore_duration_minutes_observed": 0.0054699349999999996,
+    "restore_duration_minutes_metric": 0.0054699349999999996
+  }
+}

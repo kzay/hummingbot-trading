@@ -6,7 +6,7 @@ import json
 import os
 import subprocess
 import sys
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Dict, List, Tuple
 
@@ -157,35 +157,53 @@ def _metric_insufficient(metric_entry: Dict[str, object]) -> bool:
     return metric_entry.get("value") is None and metric_entry.get("delta") is None
 
 
-def _parity_core_insufficient_active_bots(parity: Dict[str, object]) -> Tuple[List[str], List[str]]:
-    """Return (insufficient_active_bots, active_bots).
-
-    Active bot scope is inferred from parity summary activity counters that are
-    directly tied to intent/fill/reject behavior.
-    """
+def _parity_active_scope(parity: Dict[str, object]) -> List[str]:
+    active_bots_raw = parity.get("active_bots", [])
+    if isinstance(active_bots_raw, list):
+        active_bots = sorted(str(bot).strip() for bot in active_bots_raw if str(bot).strip())
+        if active_bots:
+            return active_bots
     bots = parity.get("bots", [])
     if not isinstance(bots, list):
-        return [], []
-    active_bots: List[str] = []
-    insufficient_bots: List[str] = []
-    core_metrics = ("fill_ratio_delta", "slippage_delta_bps", "reject_rate_delta")
+        return []
+    inferred: List[str] = []
     for idx, bot_entry in enumerate(bots):
         if not isinstance(bot_entry, dict):
             continue
         bot_name = str(bot_entry.get("bot", "")).strip() or f"bot_{idx}"
         summary = bot_entry.get("summary", {})
         summary = summary if isinstance(summary, dict) else {}
-        active = False
+        if bool(summary.get("active_window")):
+            inferred.append(bot_name)
+            continue
         for key in ("intents_total", "actionable_intents", "fills_total", "order_failed_total", "risk_denied_total"):
             try:
                 if float(summary.get(key, 0) or 0) > 0:
-                    active = True
+                    inferred.append(bot_name)
                     break
             except Exception:
                 continue
-        if not active:
+    return sorted(set(inferred))
+
+
+def _parity_core_insufficient_active_bots(parity: Dict[str, object]) -> Tuple[List[str], List[str]]:
+    """Return (insufficient_active_bots, active_bots).
+
+    Active bot scope prefers the explicit parity report scope and falls back to
+    per-bot active_window / activity counters only when needed.
+    """
+    bots = parity.get("bots", [])
+    if not isinstance(bots, list):
+        return [], []
+    active_bot_scope = set(_parity_active_scope(parity))
+    insufficient_bots: List[str] = []
+    core_metrics = ("fill_ratio_delta", "slippage_delta_bps", "reject_rate_delta")
+    for idx, bot_entry in enumerate(bots):
+        if not isinstance(bot_entry, dict):
             continue
-        active_bots.append(bot_name)
+        bot_name = str(bot_entry.get("bot", "")).strip() or f"bot_{idx}"
+        if bot_name not in active_bot_scope:
+            continue
         metrics = bot_entry.get("metrics", [])
         metric_map: Dict[str, Dict[str, object]] = {}
         if isinstance(metrics, list):
@@ -195,7 +213,68 @@ def _parity_core_insufficient_active_bots(parity: Dict[str, object]) -> Tuple[Li
         core_insufficient = [_metric_insufficient(metric_map.get(metric_name, {})) for metric_name in core_metrics]
         if core_insufficient and all(core_insufficient):
             insufficient_bots.append(bot_name)
-    return insufficient_bots, active_bots
+    return sorted(set(insufficient_bots)), sorted(active_bot_scope)
+
+
+def _parity_drift_audit_status(drift_audit: Dict[str, object], *, max_report_age_min: float) -> Dict[str, object]:
+    active_bots_raw = drift_audit.get("active_bots", [])
+    active_bots = sorted(str(bot).strip() for bot in active_bots_raw if str(bot).strip()) if isinstance(active_bots_raw, list) else []
+    bots_raw = drift_audit.get("bots", [])
+    failing_active_bots: List[str] = []
+    insuff_active_bots: List[str] = []
+    if isinstance(bots_raw, list):
+        active_scope = set(active_bots)
+        for row in bots_raw:
+            if not isinstance(row, dict):
+                continue
+            bot = str(row.get("bot", "")).strip()
+            if not bot or (active_scope and bot not in active_scope):
+                continue
+            if not bool(row.get("pass", False)):
+                failing_active_bots.append(bot)
+            buckets = row.get("buckets", [])
+            if isinstance(buckets, list):
+                if any(
+                    str(bucket).strip() in {
+                        "fill_path_insufficient_evidence",
+                        "market_data_or_fill_alignment_insufficient",
+                        "active_bot_scope_mismatch",
+                    }
+                    for bucket in buckets
+                ):
+                    insuff_active_bots.append(bot)
+    drift_fresh = _minutes_since(str(drift_audit.get("ts_utc", ""))) <= max_report_age_min
+    return {
+        "active_bots": active_bots,
+        "failing_active_bots": sorted(set(failing_active_bots)),
+        "insufficient_active_bots": sorted(set(insuff_active_bots)),
+        "fresh": bool(drift_fresh),
+    }
+
+
+def _reconciliation_active_bot_coverage(reconciliation: Dict[str, object]) -> Dict[str, object]:
+    active_bots_raw = reconciliation.get("active_bots", [])
+    active_bots = sorted(str(bot).strip() for bot in active_bots_raw if str(bot).strip()) if isinstance(active_bots_raw, list) else []
+    uncovered_raw = reconciliation.get("active_bots_unchecked", [])
+    uncovered_bots = (
+        sorted(str(bot).strip() for bot in uncovered_raw if str(bot).strip())
+        if isinstance(uncovered_raw, list)
+        else []
+    )
+    covered_raw = reconciliation.get("covered_active_bots", [])
+    covered_bots = (
+        sorted(str(bot).strip() for bot in covered_raw if str(bot).strip())
+        if isinstance(covered_raw, list)
+        else sorted(bot for bot in active_bots if bot not in uncovered_bots)
+    )
+    return {
+        "active_bots": active_bots,
+        "covered_active_bots": covered_bots,
+        "uncovered_active_bots": uncovered_bots,
+        "active_bot_count": len(active_bots),
+        "covered_active_bot_count": len(covered_bots),
+        "coverage_ok": len(uncovered_bots) == 0,
+    }
 
 
 def _portfolio_diversification_gate(report: Dict[str, object]) -> Tuple[bool, str]:
@@ -208,6 +287,97 @@ def _portfolio_diversification_gate(report: Dict[str, object]) -> Tuple[bool, st
     if status == "fail":
         return False, "portfolio diversification check fail (btc/eth correlation above threshold)"
     return False, "portfolio diversification report missing or invalid"
+
+
+def _performance_dossier_expectancy_diag(report: Dict[str, object]) -> Dict[str, object]:
+    """Normalize rolling expectancy gate diagnostics from performance dossier payload."""
+    status = str(report.get("status", "")).strip().lower()
+    summary_raw = report.get("summary", {})
+    summary = summary_raw if isinstance(summary_raw, dict) else {}
+    summary_present = bool(summary)
+
+    try:
+        rolling_sample_count = max(0, int(float(summary.get("rolling_expectancy_sample_count", 0) or 0)))
+    except Exception:
+        rolling_sample_count = 0
+    try:
+        rolling_gate_min_fills = max(1, int(float(summary.get("rolling_expectancy_gate_min_fills", 1) or 1)))
+    except Exception:
+        rolling_gate_min_fills = 1
+    try:
+        rolling_window_fills = max(1, int(float(summary.get("rolling_expectancy_window_fills", 1) or 1)))
+    except Exception:
+        rolling_window_fills = 1
+    try:
+        rolling_ci95_high_quote = float(summary.get("rolling_expectancy_ci95_high_quote", 0.0) or 0.0)
+    except Exception:
+        rolling_ci95_high_quote = 0.0
+
+    rolling_gate_fail = _safe_bool(summary.get("rolling_expectancy_gate_fail"), default=False)
+    rolling_gate_armed = rolling_sample_count >= rolling_gate_min_fills
+
+    if not summary_present:
+        return {
+            "status": status,
+            "summary_present": False,
+            "rolling_gate_fail": False,
+            "rolling_gate_armed": False,
+            "rolling_sample_count": rolling_sample_count,
+            "rolling_gate_min_fills": rolling_gate_min_fills,
+            "rolling_window_fills": rolling_window_fills,
+            "rolling_ci95_high_quote": rolling_ci95_high_quote,
+            "gate_pass": False,
+            "reason": "performance dossier summary missing",
+        }
+    if rolling_gate_fail:
+        return {
+            "status": status,
+            "summary_present": True,
+            "rolling_gate_fail": True,
+            "rolling_gate_armed": rolling_gate_armed,
+            "rolling_sample_count": rolling_sample_count,
+            "rolling_gate_min_fills": rolling_gate_min_fills,
+            "rolling_window_fills": rolling_window_fills,
+            "rolling_ci95_high_quote": rolling_ci95_high_quote,
+            "gate_pass": False,
+            "reason": (
+                "rolling expectancy CI upper bound below zero "
+                f"(ci95_high={rolling_ci95_high_quote:.6f}, sample={rolling_sample_count}, "
+                f"min_fills={rolling_gate_min_fills})"
+            ),
+        }
+    if not rolling_gate_armed:
+        return {
+            "status": status,
+            "summary_present": True,
+            "rolling_gate_fail": False,
+            "rolling_gate_armed": False,
+            "rolling_sample_count": rolling_sample_count,
+            "rolling_gate_min_fills": rolling_gate_min_fills,
+            "rolling_window_fills": rolling_window_fills,
+            "rolling_ci95_high_quote": rolling_ci95_high_quote,
+            "gate_pass": True,
+            "reason": (
+                "rolling expectancy gate not armed yet "
+                f"(sample={rolling_sample_count} < min_fills={rolling_gate_min_fills})"
+            ),
+        }
+    return {
+        "status": status,
+        "summary_present": True,
+        "rolling_gate_fail": False,
+        "rolling_gate_armed": True,
+        "rolling_sample_count": rolling_sample_count,
+        "rolling_gate_min_fills": rolling_gate_min_fills,
+        "rolling_window_fills": rolling_window_fills,
+        "rolling_ci95_high_quote": rolling_ci95_high_quote,
+        "gate_pass": True,
+        "reason": (
+            "rolling expectancy gate pass "
+            f"(ci95_high={rolling_ci95_high_quote:.6f}, sample={rolling_sample_count}, "
+            f"min_fills={rolling_gate_min_fills})"
+        ),
+    }
 
 
 def _day2_freshness(day2: Dict[str, object], day2_path: Path, max_report_age_min: float) -> Tuple[bool, float]:
@@ -291,7 +461,11 @@ def _file_ref(path: Path) -> Dict[str, object]:
     return ref
 
 
-def _paper_exchange_threshold_inputs_readiness(report: Dict[str, object]) -> Dict[str, object]:
+def _paper_exchange_threshold_inputs_readiness(
+    report: Dict[str, object],
+    *,
+    enforce_live_path: bool = False,
+) -> Dict[str, object]:
     diagnostics_raw = report.get("diagnostics", {})
     diagnostics = diagnostics_raw if isinstance(diagnostics_raw, dict) else {}
 
@@ -328,7 +502,18 @@ def _paper_exchange_threshold_inputs_readiness(report: Dict[str, object]) -> Dic
     status = str(report.get("status", "")).strip().lower()
     status_ok = status == "ok"
     source_artifacts_ready = len(stale_sources) == 0 and len(missing_sources) == 0
-    ready = status_ok and unresolved_metric_count <= 0 and source_artifacts_ready
+    manual_metric_count_raw = diagnostics.get("manual_metric_count", 0)
+    try:
+        manual_metric_count = max(0, int(float(manual_metric_count_raw)))
+    except Exception:
+        manual_metric_count = 0
+    manual_metrics_blocking_count_raw = diagnostics.get("manual_metrics_blocking_count", manual_metric_count)
+    try:
+        manual_metrics_blocking_count = max(0, int(float(manual_metrics_blocking_count_raw)))
+    except Exception:
+        manual_metrics_blocking_count = manual_metric_count
+    manual_metrics_blocking = bool(manual_metrics_blocking_count > 0)
+    ready = status_ok and unresolved_metric_count <= 0 and source_artifacts_ready and not manual_metrics_blocking
 
     return {
         "status": status,
@@ -342,6 +527,10 @@ def _paper_exchange_threshold_inputs_readiness(report: Dict[str, object]) -> Dic
         "missing_source_count": len(missing_sources),
         "missing_sources": sorted(set(missing_sources)),
         "source_artifacts_ready": bool(source_artifacts_ready),
+        "manual_metric_count": int(manual_metric_count),
+        "manual_metrics_blocking_count": int(manual_metrics_blocking_count),
+        "manual_metrics_blocking": bool(manual_metrics_blocking),
+        "manual_metrics_live_path_enforced": bool(enforce_live_path),
     }
 
 
@@ -355,6 +544,7 @@ def _trading_validation_ladder_status(
     road1_path = strategy_root / "multi_day_summary_latest.json"
     road5_readiness_path = ops_root / "testnet_readiness_latest.json"
     road5_scorecard_latest_path = strategy_root / "testnet_daily_scorecard_latest.json"
+    road5_summary_path = strategy_root / "testnet_multi_day_summary_latest.json"
 
     if not bool(enforce_live_path):
         return {
@@ -368,14 +558,20 @@ def _trading_validation_ladder_status(
             "road1_gate_pass": False,
             "road5_coverage_days": 0,
             "road5_coverage_min_days": 28,
+            "road5_trading_days": 0,
             "road5_readiness_pass": False,
             "road5_scorecard_pass": False,
+            "road5_gate_pass": False,
+            "road5_criteria_ready": False,
+            "road5_missing_criteria_keys": [],
+            "road5_failed_criteria_keys": [],
             "enforced": False,
             "evidence_paths": [
                 str(checklist_path),
                 str(road1_path),
                 str(road5_readiness_path),
                 str(road5_scorecard_latest_path),
+                str(road5_summary_path),
             ],
         }
 
@@ -397,24 +593,62 @@ def _trading_validation_ladder_status(
     road1_days = int(road1.get("n_days", 0) or 0)
     road1_gate = road1.get("road1_gate", {})
     road1_gate = road1_gate if isinstance(road1_gate, dict) else {}
+    road1_criteria_raw = road1_gate.get("criteria", {})
+    road1_criteria = road1_criteria_raw if isinstance(road1_criteria_raw, dict) else {}
+    road1_required_criteria = [
+        "min_days_gte_20",
+        "consecutive_days_complete",
+        "mean_daily_net_pnl_bps_positive",
+        "sharpe_gte_1_5",
+        "max_drawdown_lt_2pct",
+        "no_hard_stop_days",
+        "spread_capture_dominant_source",
+    ]
+    road1_missing_criteria_keys = [key for key in road1_required_criteria if key not in road1_criteria]
+    road1_failed_criteria_keys = [
+        key
+        for key in road1_required_criteria
+        if key in road1_criteria and not bool(road1_criteria.get(key))
+    ]
+    road1_criteria_ready = len(road1_missing_criteria_keys) == 0
+    road1_criteria_ok = road1_criteria_ready and len(road1_failed_criteria_keys) == 0
     road1_gate_pass = bool(road1_gate.get("pass", False))
-    road1_complete = road1_days >= 20 and road1_gate_pass
+    road1_complete = road1_days >= 20 and road1_gate_pass and road1_criteria_ok
 
     road5_readiness = _read_json(road5_readiness_path, {})
     road5_readiness_pass = str(road5_readiness.get("status", "")).strip().lower() == "pass"
     road5_scorecard_latest = _read_json(road5_scorecard_latest_path, {})
     road5_scorecard_pass = str(road5_scorecard_latest.get("status", "")).strip().lower() == "pass"
-
-    road5_daily_files = sorted(strategy_root.glob("testnet_daily_scorecard_*.json"))
-    road5_coverage_days = 0
-    for score_file in road5_daily_files:
-        stem = score_file.stem
-        if stem.startswith("testnet_daily_scorecard_"):
-            suffix = stem.replace("testnet_daily_scorecard_", "", 1)
-            if len(suffix) == 8 and suffix.isdigit():
-                road5_coverage_days += 1
-    road5_coverage_ok = road5_coverage_days >= 28
-    road5_complete = road5_readiness_pass and road5_scorecard_pass and road5_coverage_ok
+    road5_summary = _read_json(road5_summary_path, {})
+    road5_gate = road5_summary.get("road5_gate", {})
+    road5_gate = road5_gate if isinstance(road5_gate, dict) else {}
+    road5_criteria_raw = road5_gate.get("criteria", {})
+    road5_criteria = road5_criteria_raw if isinstance(road5_criteria_raw, dict) else {}
+    road5_required_criteria = [
+        "calendar_coverage_days_gte_28",
+        "trading_days_gte_20",
+        "no_hard_stop_incidents",
+        "slippage_delta_lt_2bps",
+        "rejection_rate_lt_0_5pct",
+        "testnet_sharpe_gte_0_8x_paper",
+    ]
+    road5_missing_criteria_keys = [key for key in road5_required_criteria if key not in road5_criteria]
+    road5_failed_criteria_keys = [
+        key
+        for key in road5_required_criteria
+        if key in road5_criteria and not bool(road5_criteria.get(key))
+    ]
+    road5_criteria_ready = len(road5_missing_criteria_keys) == 0
+    road5_criteria_ok = road5_criteria_ready and len(road5_failed_criteria_keys) == 0
+    road5_coverage_days = int(road5_summary.get("coverage_days", 0) or 0)
+    road5_trading_days = int(road5_summary.get("trading_days_count", 0) or 0)
+    road5_gate_pass = bool(road5_gate.get("pass", False))
+    road5_complete = (
+        road5_readiness_pass
+        and road5_scorecard_pass
+        and road5_gate_pass
+        and road5_criteria_ok
+    )
 
     blocking_reasons: List[str] = []
     if not go_live_complete:
@@ -425,12 +659,17 @@ def _trading_validation_ladder_status(
     if not road1_complete:
         blocking_reasons.append(
             "road1_not_ready"
-            f"(n_days={road1_days}, min_days=20, gate_pass={road1_gate_pass})"
+            f"(n_days={road1_days}, min_days=20, gate_pass={road1_gate_pass}, "
+            f"criteria_ready={road1_criteria_ready}, missing_criteria={road1_missing_criteria_keys}, "
+            f"failed_criteria={road1_failed_criteria_keys})"
         )
     if not road5_complete:
         blocking_reasons.append(
             "road5_not_ready"
-            f"(readiness_pass={road5_readiness_pass}, scorecard_pass={road5_scorecard_pass}, coverage_days={road5_coverage_days}, min_days=28)"
+            f"(readiness_pass={road5_readiness_pass}, scorecard_pass={road5_scorecard_pass}, "
+            f"coverage_days={road5_coverage_days}, trading_days={road5_trading_days}, "
+            f"gate_pass={road5_gate_pass}, criteria_ready={road5_criteria_ready}, "
+            f"missing_criteria={road5_missing_criteria_keys}, failed_criteria={road5_failed_criteria_keys})"
         )
 
     pass_status = len(blocking_reasons) == 0
@@ -451,16 +690,25 @@ def _trading_validation_ladder_status(
         "road5_complete": bool(road5_complete),
         "road1_days": int(road1_days),
         "road1_gate_pass": bool(road1_gate_pass),
+        "road1_criteria_ready": bool(road1_criteria_ready),
+        "road1_missing_criteria_keys": road1_missing_criteria_keys,
+        "road1_failed_criteria_keys": road1_failed_criteria_keys,
         "road5_coverage_days": int(road5_coverage_days),
         "road5_coverage_min_days": 28,
+        "road5_trading_days": int(road5_trading_days),
         "road5_readiness_pass": bool(road5_readiness_pass),
         "road5_scorecard_pass": bool(road5_scorecard_pass),
+        "road5_gate_pass": bool(road5_gate_pass),
+        "road5_criteria_ready": bool(road5_criteria_ready),
+        "road5_missing_criteria_keys": road5_missing_criteria_keys,
+        "road5_failed_criteria_keys": road5_failed_criteria_keys,
         "enforced": True,
         "evidence_paths": [
             str(checklist_path),
             str(road1_path),
             str(road5_readiness_path),
             str(road5_scorecard_latest_path),
+            str(road5_summary_path),
         ],
     }
 
@@ -567,9 +815,9 @@ def _run_event_store_once(root: Path) -> Tuple[int, str]:
         # so strict-cycle day2 catch-up reflects real service behavior.
         host_disabled = "Redis stream client is disabled" in msg
         if rc != 0 and host_disabled and not Path("/.dockerenv").exists():
-            container = os.getenv("EVENT_STORE_CONTAINER_NAME", "hbot-event-store-service").strip()
+            container = os.getenv("EVENT_STORE_CONTAINER_NAME", "event-store-service").strip()
             if not container:
-                container = "hbot-event-store-service"
+                container = "event-store-service"
             docker_cmd = [
                 "docker",
                 "exec",
@@ -802,8 +1050,10 @@ def _run_ml_governance_check(root: Path) -> Tuple[int, str]:
         return 2, str(e)
 
 
-def _run_alerting_health_check(root: Path) -> Tuple[int, str]:
+def _run_alerting_health_check(root: Path, strict: bool = False) -> Tuple[int, str]:
     cmd = [sys.executable, str(root / "scripts" / "release" / "check_alerting_health.py")]
+    if strict:
+        cmd.append("--strict")
     try:
         proc = subprocess.run(cmd, cwd=str(root), capture_output=True, text=True, check=False)
         msg = (proc.stdout or "") + ("\n" + proc.stderr if proc.stderr else "")
@@ -1383,6 +1633,55 @@ def _run_testnet_daily_scorecard(root: Path, day_utc: str) -> Tuple[int, str]:
         return 2, str(e)
 
 
+def _run_testnet_multi_day_summary(root: Path, end_day_utc: str, window_days: int = 28) -> Tuple[int, str]:
+    end_day = datetime.fromisoformat(str(end_day_utc)).date()
+    start_day = end_day - timedelta(days=max(1, int(window_days)) - 1)
+    cmd = [
+        sys.executable,
+        str(root / "scripts" / "analysis" / "testnet_multi_day_summary.py"),
+        "--start",
+        start_day.isoformat(),
+        "--end",
+        end_day.isoformat(),
+    ]
+    try:
+        proc = subprocess.run(cmd, cwd=str(root), capture_output=True, text=True, check=False)
+        msg = (proc.stdout or "") + ("\n" + proc.stderr if proc.stderr else "")
+        return int(proc.returncode), msg.strip()
+    except Exception as e:
+        return 2, str(e)
+
+
+def _run_performance_dossier(
+    root: Path,
+    *,
+    bot_log_root: str,
+    lookback_days: int,
+) -> Tuple[int, str]:
+    cmd = [
+        sys.executable,
+        str(root / "scripts" / "analysis" / "performance_dossier.py"),
+        "--lookback-days",
+        str(max(1, int(lookback_days))),
+        "--save",
+    ]
+    if str(bot_log_root or "").strip():
+        cmd.extend(["--bot-log-root", str(bot_log_root).strip()])
+    try:
+        proc = subprocess.run(
+            cmd,
+            cwd=str(root),
+            capture_output=True,
+            text=True,
+            check=False,
+            env=_build_subprocess_env(root),
+        )
+        msg = (proc.stdout or "") + ("\n" + proc.stderr if proc.stderr else "")
+        return int(proc.returncode), msg.strip()
+    except Exception as e:
+        return 2, str(e)
+
+
 def _run_portfolio_diversification_check(root: Path) -> Tuple[int, str]:
     cmd = [
         sys.executable,
@@ -1396,14 +1695,25 @@ def _run_portfolio_diversification_check(root: Path) -> Tuple[int, str]:
         return 2, str(e)
 
 
+def _run_road9_allocation_rebalance(root: Path) -> Tuple[int, str]:
+    cmd = [
+        sys.executable,
+        str(root / "scripts" / "analysis" / "rebalance_multi_bot_policy.py"),
+        "--update-max-alloc",
+    ]
+    try:
+        proc = subprocess.run(cmd, cwd=str(root), capture_output=True, text=True, check=False)
+        msg = (proc.stdout or "") + ("\n" + proc.stderr if proc.stderr else "")
+        return int(proc.returncode), msg.strip()
+    except Exception as e:
+        return 2, str(e)
+
+
 def _run_dashboard_readiness_check(
     root: Path,
     *,
     max_data_age_s: int,
-    tradenote_report_max_age_s: int,
-    tradenote_fill_max_age_s: int,
     required_grafana_bot_variants: str = "",
-    required_tradenote_bot_variants: str = "",
 ) -> Tuple[int, str]:
     cmd = [
         sys.executable,
@@ -1411,15 +1721,53 @@ def _run_dashboard_readiness_check(
         "--strict",
         "--max-data-age-s",
         str(max(30, int(max_data_age_s))),
-        "--tradenote-report-max-age-s",
-        str(max(30, int(tradenote_report_max_age_s))),
-        "--tradenote-fill-max-age-s",
-        str(max(30, int(tradenote_fill_max_age_s))),
     ]
     if str(required_grafana_bot_variants or "").strip():
         cmd.extend(["--required-grafana-bot-variants", str(required_grafana_bot_variants).strip()])
-    if str(required_tradenote_bot_variants or "").strip():
-        cmd.extend(["--required-tradenote-bot-variants", str(required_tradenote_bot_variants).strip()])
+    try:
+        proc = subprocess.run(
+            cmd,
+            cwd=str(root),
+            capture_output=True,
+            text=True,
+            check=False,
+            env=_build_subprocess_env(root),
+        )
+        msg = (proc.stdout or "") + ("\n" + proc.stderr if proc.stderr else "")
+        return int(proc.returncode), msg.strip()
+    except Exception as e:
+        return 2, str(e)
+
+
+def _run_realtime_l2_data_quality_check(
+    root: Path,
+    *,
+    max_age_sec: int,
+    max_sequence_gap: int,
+    min_sampled_events: int,
+    max_raw_to_sampled_ratio: float,
+    max_depth_stream_share: float,
+    max_depth_event_bytes: int,
+    lookback_depth_events: int,
+) -> Tuple[int, str]:
+    cmd = [
+        sys.executable,
+        str(root / "scripts" / "release" / "check_realtime_l2_data_quality.py"),
+        "--max-age-sec",
+        str(max(30, int(max_age_sec))),
+        "--max-sequence-gap",
+        str(max(0, int(max_sequence_gap))),
+        "--min-sampled-events",
+        str(max(0, int(min_sampled_events))),
+        "--max-raw-to-sampled-ratio",
+        str(max(1.0, float(max_raw_to_sampled_ratio))),
+        "--max-depth-stream-share",
+        str(max(0.0, min(1.0, float(max_depth_stream_share)))),
+        "--max-depth-event-bytes",
+        str(max(200, int(max_depth_event_bytes))),
+        "--lookback-depth-events",
+        str(max(100, int(lookback_depth_events))),
+    ]
     try:
         proc = subprocess.run(
             cmd,
@@ -1571,6 +1919,30 @@ def main() -> int:
         help="Run ROAD-5 daily scorecard for UTC today.",
     )
     parser.add_argument(
+        "--check-performance-dossier",
+        action="store_true",
+        default=str(os.getenv("PROMOTION_CHECK_PERFORMANCE_DOSSIER", "true")).strip().lower()
+        in {"1", "true", "yes", "on"},
+        help="Run strategy performance dossier refresh and enforce rolling expectancy CI gate.",
+    )
+    parser.add_argument(
+        "--no-check-performance-dossier",
+        action="store_false",
+        dest="check_performance_dossier",
+        help="Skip strategy performance dossier gate.",
+    )
+    parser.add_argument(
+        "--performance-dossier-bot-log-root",
+        default=os.getenv("PERF_DOSSIER_BOT_LOG_ROOT", "data/bot1/logs/epp_v24/bot1_a"),
+        help="Bot log root path used by performance dossier runner.",
+    )
+    parser.add_argument(
+        "--performance-dossier-lookback-days",
+        type=int,
+        default=int(os.getenv("PERF_DOSSIER_LOOKBACK_DAYS", "7")),
+        help="Lookback window in days for performance dossier refresh.",
+    )
+    parser.add_argument(
         "--check-portfolio-diversification",
         action="store_true",
         help="Run ROAD-9 BTC/ETH diversification evidence check (warning gate).",
@@ -1629,7 +2001,7 @@ def main() -> int:
         action="store_true",
         default=str(os.getenv("PROMOTION_CHECK_DASHBOARD_READINESS", "false")).strip().lower()
         in {"1", "true", "yes", "on"},
-        help="Run TradeNote + Grafana data readiness gate.",
+        help="Run Grafana dashboard data readiness gate.",
     )
     parser.add_argument(
         "--dashboard-max-data-age-s",
@@ -1643,21 +2015,59 @@ def main() -> int:
         help="Required bot:variant list for Grafana readiness check.",
     )
     parser.add_argument(
-        "--dashboard-required-tradenote-bot-variants",
-        default=os.getenv("TRADENOTE_SYNC_BOT_VARIANTS", ""),
-        help="Required bot:variant list for TradeNote readiness check (empty means all discovered).",
+        "--check-realtime-l2-data-quality",
+        action="store_true",
+        default=str(os.getenv("PROMOTION_CHECK_REALTIME_L2_DATA_QUALITY", "true")).strip().lower()
+        in {"1", "true", "yes", "on"},
+        help="Run realtime/L2 data quality evidence gate (freshness, sequence integrity, sampling, parity, storage).",
     )
     parser.add_argument(
-        "--dashboard-tradenote-report-max-age-s",
-        type=int,
-        default=int(os.getenv("TRADENOTE_SYNC_HEALTH_MAX_SEC", "5400")),
-        help="Max age for TradeNote sync report in readiness gate.",
+        "--no-check-realtime-l2-data-quality",
+        action="store_false",
+        dest="check_realtime_l2_data_quality",
+        help="Skip realtime/L2 data quality evidence gate.",
     )
     parser.add_argument(
-        "--dashboard-tradenote-fill-max-age-s",
+        "--realtime-l2-max-age-sec",
         type=int,
-        default=int(os.getenv("TRADENOTE_FILL_MAX_AGE_S", str(7 * 24 * 3600))),
-        help="Max acceptable fill age for TradeNote readiness sources.",
+        default=int(os.getenv("REALTIME_L2_MAX_AGE_SEC", "180")),
+        help="Max allowed age for realtime/L2 evidence artifacts in seconds.",
+    )
+    parser.add_argument(
+        "--realtime-l2-max-sequence-gap",
+        type=int,
+        default=int(os.getenv("REALTIME_L2_MAX_SEQUENCE_GAP", "50")),
+        help="Max tolerated market_sequence gap before sequence-integrity failure.",
+    )
+    parser.add_argument(
+        "--realtime-l2-min-sampled-events",
+        type=int,
+        default=int(os.getenv("REALTIME_L2_MIN_SAMPLED_EVENTS", "1")),
+        help="Minimum sampled depth events required when raw depth events exist.",
+    )
+    parser.add_argument(
+        "--realtime-l2-max-raw-to-sampled-ratio",
+        type=float,
+        default=float(os.getenv("REALTIME_L2_MAX_RAW_TO_SAMPLED_RATIO", "100")),
+        help="Maximum allowed raw_depth/sampled_depth ratio for sampling coverage.",
+    )
+    parser.add_argument(
+        "--realtime-l2-max-depth-stream-share",
+        type=float,
+        default=float(os.getenv("REALTIME_L2_MAX_DEPTH_STREAM_SHARE", "0.95")),
+        help="Maximum allowed share of total event_store volume consumed by depth stream.",
+    )
+    parser.add_argument(
+        "--realtime-l2-max-depth-event-bytes",
+        type=int,
+        default=int(os.getenv("REALTIME_L2_MAX_DEPTH_EVENT_BYTES", "4000")),
+        help="Maximum payload size budget for observed L2 events.",
+    )
+    parser.add_argument(
+        "--realtime-l2-lookback-events",
+        type=int,
+        default=int(os.getenv("REALTIME_L2_LOOKBACK_EVENTS", "5000")),
+        help="Depth events scanned from event_store JSONL for sequence/storage diagnostics.",
     )
     parser.add_argument(
         "--check-paper-exchange-thresholds",
@@ -2122,8 +2532,15 @@ def main() -> int:
     testnet_readiness_msg = ""
     testnet_scorecard_rc = 0
     testnet_scorecard_msg = ""
+    testnet_multi_day_summary_rc = 0
+    testnet_multi_day_summary_msg = ""
+    performance_dossier_rc = 0
+    performance_dossier_msg = ""
+    performance_dossier_diag: Dict[str, object] = _performance_dossier_expectancy_diag({})
     diversification_rc = 0
     diversification_msg = ""
+    road9_rebalance_rc = 0
+    road9_rebalance_msg = ""
     paper_exchange_load_harness_rc = 0
     paper_exchange_load_harness_msg = ""
     paper_exchange_load_harness_auto_run = False
@@ -2163,6 +2580,8 @@ def main() -> int:
     recon_refresh_msg = ""
     dashboard_readiness_rc = 0
     dashboard_readiness_msg = ""
+    realtime_l2_data_quality_rc = 0
+    realtime_l2_data_quality_msg = ""
     ops_db_writer_refresh_rc = 0
     ops_db_writer_refresh_msg = ""
 
@@ -2200,16 +2619,24 @@ def main() -> int:
         recon_refresh_rc, recon_refresh_msg = _refresh_reconciliation_exchange_once(root)
 
     if args.check_alerting_health:
-        alerting_health_rc, alerting_health_msg = _run_alerting_health_check(root)
+        alerting_health_rc, alerting_health_msg = _run_alerting_health_check(root, strict=bool(args.ci))
 
     if args.check_dashboard_readiness:
         dashboard_readiness_rc, dashboard_readiness_msg = _run_dashboard_readiness_check(
             root,
             max_data_age_s=int(max(60, int(args.dashboard_max_data_age_s))),
-            tradenote_report_max_age_s=int(args.dashboard_tradenote_report_max_age_s),
-            tradenote_fill_max_age_s=int(args.dashboard_tradenote_fill_max_age_s),
             required_grafana_bot_variants=str(args.dashboard_required_grafana_bot_variants),
-            required_tradenote_bot_variants=str(args.dashboard_required_tradenote_bot_variants),
+        )
+    if args.check_realtime_l2_data_quality:
+        realtime_l2_data_quality_rc, realtime_l2_data_quality_msg = _run_realtime_l2_data_quality_check(
+            root,
+            max_age_sec=int(args.realtime_l2_max_age_sec),
+            max_sequence_gap=int(args.realtime_l2_max_sequence_gap),
+            min_sampled_events=int(args.realtime_l2_min_sampled_events),
+            max_raw_to_sampled_ratio=float(args.realtime_l2_max_raw_to_sampled_ratio),
+            max_depth_stream_share=float(args.realtime_l2_max_depth_stream_share),
+            max_depth_event_bytes=int(args.realtime_l2_max_depth_event_bytes),
+            lookback_depth_events=int(args.realtime_l2_lookback_events),
         )
     if args.check_canonical_plane_gates:
         canonical_gate_rc, canonical_gate_msg = _run_canonical_plane_gate(
@@ -2238,6 +2665,7 @@ def main() -> int:
         root / "scripts" / "release" / "check_accounting_integrity_v2.py",
         root / "scripts" / "release" / "check_market_data_freshness.py",
         root / "scripts" / "release" / "check_alerting_health.py",
+        root / "scripts" / "release" / "check_realtime_l2_data_quality.py",
         root / "scripts" / "release" / "check_canonical_plane_gate.py",
         root / "scripts" / "release" / "run_paper_exchange_load_harness.py",
         root / "scripts" / "release" / "check_paper_exchange_load.py",
@@ -2252,6 +2680,7 @@ def main() -> int:
         root / "scripts" / "ops" / "verify_dashboard.py",
         root / "scripts" / "release" / "testnet_readiness_gate.py",
         root / "scripts" / "analysis" / "testnet_daily_scorecard.py",
+        root / "scripts" / "analysis" / "performance_dossier.py",
         root / "scripts" / "analysis" / "portfolio_diversification_check.py",
         root / "scripts" / "utils" / "refresh_event_store_integrity_local.py",
         root / "config" / "coordination_policy_v1.json",
@@ -2404,7 +2833,70 @@ def main() -> int:
             )
         )
 
-    # 1i) ROAD-9 diversification evidence (BTC vs ETH correlation + inverse-variance weights)
+        # Aggregate rolling ROAD-5 window for deterministic ladder evidence.
+        testnet_multi_day_summary_rc, testnet_multi_day_summary_msg = _run_testnet_multi_day_summary(
+            root,
+            end_day_utc=day_utc,
+            window_days=28,
+        )
+        testnet_multi_day_path = root / "reports" / "strategy" / "testnet_multi_day_summary_latest.json"
+        testnet_multi_day = _read_json(testnet_multi_day_path, {})
+        road5_gate_raw = testnet_multi_day.get("road5_gate", {})
+        road5_gate = road5_gate_raw if isinstance(road5_gate_raw, dict) else {}
+        road5_gate_pass = bool(road5_gate.get("pass", False))
+        road5_coverage_days = int(testnet_multi_day.get("coverage_days", 0) or 0)
+        road5_trading_days = int(testnet_multi_day.get("trading_days_count", 0) or 0)
+        testnet_multi_day_ok = testnet_multi_day_summary_rc == 0 and road5_gate_pass
+        checks.append(
+            _check(
+                testnet_multi_day_ok,
+                "testnet_multi_day_summary",
+                "warning",
+                (
+                    "testnet multi-day summary PASS "
+                    f"(coverage_days={road5_coverage_days}, trading_days={road5_trading_days})"
+                )
+                if testnet_multi_day_ok
+                else (
+                    "testnet multi-day summary not pass "
+                    f"(coverage_days={road5_coverage_days}, trading_days={road5_trading_days}, "
+                    f"rc={testnet_multi_day_summary_rc})"
+                ),
+                [str(testnet_multi_day_path)],
+            )
+        )
+
+    # 1i) Strategy profitability confidence gate (rolling expectancy CI)
+    if args.check_performance_dossier:
+        performance_dossier_rc, performance_dossier_msg = _run_performance_dossier(
+            root,
+            bot_log_root=str(args.performance_dossier_bot_log_root),
+            lookback_days=int(args.performance_dossier_lookback_days),
+        )
+        performance_dossier_path = reports / "analysis" / "performance_dossier_latest.json"
+        performance_dossier_report = _read_json(performance_dossier_path, {})
+        performance_dossier_diag = _performance_dossier_expectancy_diag(performance_dossier_report)
+        performance_dossier_ok = (
+            performance_dossier_rc == 0
+            and bool(performance_dossier_diag.get("summary_present", False))
+            and bool(performance_dossier_diag.get("gate_pass", False))
+        )
+        checks.append(
+            _check(
+                performance_dossier_ok,
+                "performance_dossier_expectancy_ci",
+                "critical",
+                str(performance_dossier_diag.get("reason", "performance dossier diagnostics unavailable")),
+                [
+                    str(performance_dossier_path),
+                    str(root / "scripts" / "analysis" / "performance_dossier.py"),
+                ],
+            )
+        )
+        if not performance_dossier_ok:
+            critical_failures.append("performance_dossier_expectancy_ci")
+
+    # 1j) ROAD-9 diversification evidence (BTC vs ETH correlation + inverse-variance weights)
     if args.check_portfolio_diversification:
         diversification_rc, diversification_msg = _run_portfolio_diversification_check(root)
         diversification_path = reports / "policy" / "portfolio_diversification_latest.json"
@@ -2422,8 +2914,26 @@ def main() -> int:
                 [str(diversification_path)],
             )
         )
+        road9_rebalance_rc, road9_rebalance_msg = _run_road9_allocation_rebalance(root)
+        road9_rebalance_path = reports / "policy" / "road9_allocation_latest.json"
+        road9_rebalance_report = _read_json(road9_rebalance_path, {})
+        road9_plan_raw = road9_rebalance_report.get("plan", {})
+        road9_plan = road9_plan_raw if isinstance(road9_plan_raw, dict) else {}
+        road9_plan_ready = bool(road9_plan.get("plan_ready", False))
+        road9_ok = road9_rebalance_rc == 0 and road9_plan_ready
+        checks.append(
+            _check(
+                road9_ok,
+                "road9_allocation_rebalance",
+                "warning",
+                "ROAD-9 allocation rebalance plan ready"
+                if road9_ok
+                else "ROAD-9 allocation rebalance plan missing/not-ready",
+                [str(road9_rebalance_path), str(root / "config" / "multi_bot_policy_v1.json")],
+            )
+        )
 
-    # 1j) INFRA-5 data-plane consistency gate
+    # 1k) INFRA-5 data-plane consistency gate
     if args.check_data_plane_consistency:
         dp_rc, dp_msg = _run_data_plane_consistency_check(root)
         dp_path = reports / "data_plane_consistency" / "latest.json"
@@ -2441,7 +2951,7 @@ def main() -> int:
             )
         )
 
-    # 1k) Unified dashboard data readiness gate (TradeNote + Grafana)
+    # 1l) Grafana dashboard data readiness gate
     if args.check_dashboard_readiness:
         dashboard_path = reports / "ops" / "dashboard_data_ready_latest.json"
         dashboard_report = _read_json(dashboard_path, {})
@@ -2455,7 +2965,7 @@ def main() -> int:
                 dashboard_ok,
                 "dashboard_data_ready",
                 "critical" if dashboard_gate_enforced else "warning",
-                "TradeNote + Grafana data readiness PASS"
+                "Grafana dashboard data readiness PASS"
                 if dashboard_ok
                 else (
                     f"dashboard readiness failed (rc={dashboard_readiness_rc})"
@@ -2468,7 +2978,30 @@ def main() -> int:
         if dashboard_gate_enforced and not dashboard_ok:
             critical_failures.append("dashboard_data_ready")
 
-    # 1l) Functional paper-exchange golden-path certification gate
+    # 1m) Realtime + L2 quality gate
+    if args.check_realtime_l2_data_quality:
+        realtime_l2_path = reports / "verification" / "realtime_l2_data_quality_latest.json"
+        realtime_l2_report = _read_json(realtime_l2_path, {})
+        realtime_l2_status = str(realtime_l2_report.get("status", "fail")).strip().lower()
+        realtime_l2_ok = realtime_l2_data_quality_rc == 0 and realtime_l2_status == "pass"
+        checks.append(
+            _check(
+                realtime_l2_ok,
+                "realtime_l2_data_quality",
+                "critical",
+                "realtime/L2 data quality PASS (freshness + sequence + sampling + parity + storage budget)"
+                if realtime_l2_ok
+                else (
+                    "realtime/L2 data quality failed "
+                    f"(status={realtime_l2_status or 'unknown'}, rc={realtime_l2_data_quality_rc})"
+                ),
+                [str(realtime_l2_path), str(root / "scripts" / "release" / "check_realtime_l2_data_quality.py")],
+            )
+        )
+        if not realtime_l2_ok:
+            critical_failures.append("realtime_l2_data_quality")
+
+    # 1n) Functional paper-exchange golden-path certification gate
     if args.check_paper_exchange_golden_path:
         paper_exchange_golden_path_rc, paper_exchange_golden_path_msg = _run_paper_exchange_golden_path_check(
             root, strict=bool(args.ci)
@@ -2499,7 +3032,7 @@ def main() -> int:
         if not pe_golden_path_ok:
             critical_failures.append("paper_exchange_functional_golden_path")
 
-    # 1m) Quantitative paper-exchange threshold gate
+    # 1o) Quantitative paper-exchange threshold gate
     if args.check_paper_exchange_thresholds:
         auto_run_load_harness_in_ci = bool(args.ci and not args.run_paper_exchange_load_harness)
         paper_exchange_load_harness_auto_run = bool(auto_run_load_harness_in_ci)
@@ -2766,13 +3299,16 @@ def main() -> int:
             )
         paper_exchange_threshold_inputs_report = _read_json(paper_exchange_threshold_inputs_path, {})
         paper_exchange_threshold_inputs_diag = _paper_exchange_threshold_inputs_readiness(
-            paper_exchange_threshold_inputs_report
+            paper_exchange_threshold_inputs_report,
+            enforce_live_path=bool(enforce_live_promotion_gates),
         )
         paper_exchange_threshold_inputs_ready = bool(paper_exchange_threshold_inputs_diag.get("ready", False))
         inputs_status = str(paper_exchange_threshold_inputs_diag.get("status", ""))
         inputs_unresolved = int(paper_exchange_threshold_inputs_diag.get("unresolved_metric_count", 0) or 0)
         inputs_stale = int(paper_exchange_threshold_inputs_diag.get("stale_source_count", 0) or 0)
         inputs_missing = int(paper_exchange_threshold_inputs_diag.get("missing_source_count", 0) or 0)
+        inputs_manual = int(paper_exchange_threshold_inputs_diag.get("manual_metric_count", 0) or 0)
+        inputs_manual_blocking = int(paper_exchange_threshold_inputs_diag.get("manual_metrics_blocking_count", 0) or 0)
         checks.append(
             _check(
                 paper_exchange_threshold_inputs_ready,
@@ -2780,12 +3316,16 @@ def main() -> int:
                 "critical",
                 (
                     "paper-exchange threshold inputs ready "
-                    f"(status={inputs_status}, unresolved={inputs_unresolved}, stale_sources={inputs_stale}, missing_sources={inputs_missing})"
+                    f"(status={inputs_status}, unresolved={inputs_unresolved}, stale_sources={inputs_stale}, "
+                    f"missing_sources={inputs_missing}, manual_metrics={inputs_manual}, "
+                    f"blocking_manual_metrics={inputs_manual_blocking})"
                 )
                 if paper_exchange_threshold_inputs_ready
                 else (
                     "paper-exchange threshold inputs not ready "
-                    f"(status={inputs_status}, unresolved={inputs_unresolved}, stale_sources={inputs_stale}, missing_sources={inputs_missing})"
+                    f"(status={inputs_status}, unresolved={inputs_unresolved}, stale_sources={inputs_stale}, "
+                    f"missing_sources={inputs_missing}, manual_metrics={inputs_manual}, "
+                    f"blocking_manual_metrics={inputs_manual_blocking})"
                 ),
                 [str(paper_exchange_threshold_inputs_path)],
             )
@@ -3011,43 +3551,64 @@ def main() -> int:
     # 12) Reconciliation status
     recon_path = reports / "reconciliation" / "latest.json"
     recon = _read_json(recon_path, {})
+    recon_coverage = _reconciliation_active_bot_coverage(recon)
     recon_ok = str(recon.get("status", "critical")) in {"ok", "warning"} and int(recon.get("critical_count", 1)) == 0
     recon_fresh = _minutes_since(str(recon.get("ts_utc", ""))) <= max_report_age_min
+    recon_coverage_ok = bool(recon_coverage.get("coverage_ok", True))
+    recon_gate_ok = recon_ok and recon_fresh and recon_coverage_ok
     checks.append(
         _check(
-            recon_ok and recon_fresh,
+            recon_gate_ok,
             "reconciliation_status",
             "critical",
-            "reconciliation healthy and fresh"
-            if (recon_ok and recon_fresh)
-            else "reconciliation critical or stale",
+            "reconciliation healthy, fresh, and covers active bots"
+            if recon_gate_ok
+            else (
+                "reconciliation active-bot coverage gap: "
+                + ",".join(recon_coverage.get("uncovered_active_bots", []))
+                if (recon_ok and recon_fresh and not recon_coverage_ok)
+                else "reconciliation critical or stale"
+            ),
             [str(recon_path)],
         )
     )
 
     # 13) Parity thresholds
     parity_path = reports / "parity" / "latest.json"
+    drift_audit_path = reports / "parity" / "drift_audit_latest.json"
     parity = _read_json(parity_path, {})
+    drift_audit = _read_json(drift_audit_path, {})
     parity_ok = str(parity.get("status", "fail")) == "pass"
     parity_fresh = _minutes_since(str(parity.get("ts_utc", ""))) <= max_report_age_min
     parity_insufficient_bots, parity_active_bots = _parity_core_insufficient_active_bots(parity)
     parity_informative_ok = (not args.require_parity_informative_core) or (len(parity_insufficient_bots) == 0)
-    if parity_ok and parity_fresh and parity_informative_ok:
-        parity_reason = "parity pass, fresh, and informative"
+    drift_diag = _parity_drift_audit_status(drift_audit, max_report_age_min=max_report_age_min)
+    drift_gate_ok = drift_diag["fresh"] and not drift_diag["failing_active_bots"] and not drift_diag["insufficient_active_bots"]
+    if parity_ok and parity_fresh and parity_informative_ok and drift_gate_ok:
+        parity_reason = "parity pass, drift audit clean, fresh, and informative"
     elif parity_ok and parity_fresh and not parity_informative_ok:
         parity_reason = (
             "parity core metrics insufficient_data for active bots: "
             + ",".join(parity_insufficient_bots)
         )
+    elif parity_ok and parity_fresh and not drift_diag["fresh"]:
+        parity_reason = "parity drift audit stale"
+    elif parity_ok and parity_fresh and drift_diag["failing_active_bots"]:
+        parity_reason = "parity drift audit failing for active bots: " + ",".join(drift_diag["failing_active_bots"])
+    elif parity_ok and parity_fresh and drift_diag["insufficient_active_bots"]:
+        parity_reason = (
+            "parity drift audit insufficient evidence for active bots: "
+            + ",".join(drift_diag["insufficient_active_bots"])
+        )
     else:
         parity_reason = "parity fail or stale"
     checks.append(
         _check(
-            parity_ok and parity_fresh and parity_informative_ok,
+            parity_ok and parity_fresh and parity_informative_ok and drift_gate_ok,
             "parity_thresholds",
             "critical",
             parity_reason,
-            [str(parity_path)],
+            [str(parity_path), str(drift_audit_path)],
         )
     )
 
@@ -3094,15 +3655,27 @@ def main() -> int:
     # 16) Alerting health
     alert_path = reports / "reconciliation" / "last_webhook_sent.json"
     alert = _read_json(alert_path, {})
-    alert_ok = alert_path.exists() and _minutes_since(str(alert.get("ts_utc", ""))) <= 24 * 60
+    alert_status = str(alert.get("status", "")).strip().lower()
+    alert_mode = str(alert.get("mode", "")).strip().lower()
+    alert_fresh = alert_path.exists() and _minutes_since(str(alert.get("ts_utc", ""))) <= 24 * 60
+    runner_ok = (not bool(args.check_alerting_health)) or int(alerting_health_rc) == 0
+    allowed_statuses = {"ok"} if bool(args.ci) else {"ok", "local_dev_degraded"}
+    status_ok = alert_status in allowed_statuses
+    alert_ok = alert_fresh and runner_ok and status_ok
     checks.append(
         _check(
             alert_ok,
             "alerting_health",
             "critical",
-            "alert webhook evidence is present/recent"
-            if alert_ok
-            else "alert webhook evidence missing or stale",
+            (
+                f"alert webhook evidence healthy (status={alert_status or 'unknown'}, mode={alert_mode or 'unknown'})"
+                if alert_ok
+                else (
+                    f"alert webhook unhealthy/stale (status={alert_status or 'unknown'}, "
+                    f"mode={alert_mode or 'unknown'}, rc={alerting_health_rc})"
+                )
+            )
+            ,
             [str(alert_path)],
         )
     )
@@ -3409,6 +3982,9 @@ def main() -> int:
             "require_parity_informative_core": bool(args.require_parity_informative_core),
             "parity_active_bots": parity_active_bots,
             "parity_insufficient_active_bots": parity_insufficient_bots,
+            "parity_drift_active_bots": drift_diag["active_bots"],
+            "parity_drift_failing_active_bots": drift_diag["failing_active_bots"],
+            "parity_drift_insufficient_active_bots": drift_diag["insufficient_active_bots"],
             "day2_lag_ok": bool(day2_lag_ok),
             "day2_lag_diagnostics": day2_lag_diag,
             "day2_catchup_attempted": bool(args.attempt_day2_catchup),
@@ -3432,9 +4008,16 @@ def main() -> int:
             "dashboard_readiness_rc": int(dashboard_readiness_rc),
             "dashboard_max_data_age_s": int(args.dashboard_max_data_age_s),
             "dashboard_required_grafana_bot_variants": str(args.dashboard_required_grafana_bot_variants),
-            "dashboard_required_tradenote_bot_variants": str(args.dashboard_required_tradenote_bot_variants),
-            "dashboard_tradenote_report_max_age_s": int(args.dashboard_tradenote_report_max_age_s),
-            "dashboard_tradenote_fill_max_age_s": int(args.dashboard_tradenote_fill_max_age_s),
+            "check_realtime_l2_data_quality": bool(args.check_realtime_l2_data_quality),
+            "realtime_l2_data_quality_output": realtime_l2_data_quality_msg[:2000],
+            "realtime_l2_data_quality_rc": int(realtime_l2_data_quality_rc),
+            "realtime_l2_max_age_sec": int(args.realtime_l2_max_age_sec),
+            "realtime_l2_max_sequence_gap": int(args.realtime_l2_max_sequence_gap),
+            "realtime_l2_min_sampled_events": int(args.realtime_l2_min_sampled_events),
+            "realtime_l2_max_raw_to_sampled_ratio": float(args.realtime_l2_max_raw_to_sampled_ratio),
+            "realtime_l2_max_depth_stream_share": float(args.realtime_l2_max_depth_stream_share),
+            "realtime_l2_max_depth_event_bytes": int(args.realtime_l2_max_depth_event_bytes),
+            "realtime_l2_lookback_events": int(args.realtime_l2_lookback_events),
             "check_canonical_plane_gates": bool(args.check_canonical_plane_gates),
             "canonical_gate_output": canonical_gate_msg[:2000],
             "canonical_gate_rc": int(canonical_gate_rc),
@@ -3457,8 +4040,18 @@ def main() -> int:
             "testnet_readiness_rc": testnet_readiness_rc,
             "testnet_scorecard_output": testnet_scorecard_msg[:2000],
             "testnet_scorecard_rc": testnet_scorecard_rc,
+            "testnet_multi_day_summary_output": testnet_multi_day_summary_msg[:2000],
+            "testnet_multi_day_summary_rc": testnet_multi_day_summary_rc,
+            "check_performance_dossier": bool(args.check_performance_dossier),
+            "performance_dossier_bot_log_root": str(args.performance_dossier_bot_log_root),
+            "performance_dossier_lookback_days": int(args.performance_dossier_lookback_days),
+            "performance_dossier_output": performance_dossier_msg[:2000],
+            "performance_dossier_rc": int(performance_dossier_rc),
+            "performance_dossier_diag": performance_dossier_diag,
             "portfolio_diversification_output": diversification_msg[:2000],
             "portfolio_diversification_rc": diversification_rc,
+            "road9_allocation_rebalance_output": road9_rebalance_msg[:2000],
+            "road9_allocation_rebalance_rc": road9_rebalance_rc,
             "check_paper_exchange_golden_path": bool(args.check_paper_exchange_golden_path),
             "paper_exchange_golden_path_output": paper_exchange_golden_path_msg[:2000],
             "paper_exchange_golden_path_rc": int(paper_exchange_golden_path_rc),

@@ -210,6 +210,41 @@ def test_startup_sync_auto_skipped_in_paper_mode(tmp_path: Path):
     assert dummy._position_base == Decimal("0"), "paper-mode auto-skip must not mutate position"
 
 
+def test_startup_sync_paper_mode_cancels_restored_orphan_orders(tmp_path: Path):
+    """Paper-mode startup should clear restored desk orders that have no live executors."""
+    dummy = _make_sync_dummy(tmp_path, local_pos=Decimal("0"), exchange_pos=Decimal("0"))
+    canceled: list[str] = []
+    order_a = SimpleNamespace(order_id="paper_v2_135", source_bot="bitget_perpetual")
+    order_b = SimpleNamespace(order_id="paper_v2_136", source_bot="bitget_perpetual")
+    engine = SimpleNamespace(open_orders=lambda: [order_a, order_b])
+    desk = SimpleNamespace(
+        _engines={"bitget:BTC-USDT:perp": engine},
+        cancel_order=lambda iid, order_id: canceled.append(f"{iid.key}:{order_id}") or object(),
+    )
+    connector = SimpleNamespace(
+        _paper_desk_v2=desk,
+        _paper_desk_v2_instrument_id=SimpleNamespace(key="bitget:BTC-USDT:perp"),
+    )
+    dummy.config.startup_position_sync = True
+    dummy.config.bot_mode = "paper"
+    dummy.config.paper_state_reconcile_enabled = True
+    dummy.config.connector_name = "bitget_perpetual"
+    dummy.executors_info = []
+    dummy.filter_executors = lambda executors, filter_func: [e for e in executors if filter_func(e)]
+    dummy._recently_issued_levels = {"buy_0": 100.0}
+    dummy._connector = lambda: connector
+
+    EppV24Controller._run_startup_position_sync(dummy)
+
+    assert dummy._startup_position_sync_done is True
+    assert dummy._startup_orphan_check_done is True
+    assert canceled == [
+        "bitget:BTC-USDT:perp:paper_v2_135",
+        "bitget:BTC-USDT:perp:paper_v2_136",
+    ]
+    assert dummy._recently_issued_levels == {}
+
+
 def test_startup_sync_both_zero(tmp_path: Path):
     """When both local and exchange are zero, no-op."""
     dummy = _make_sync_dummy(tmp_path, local_pos=Decimal("0"), exchange_pos=Decimal("0"))

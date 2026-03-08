@@ -10,20 +10,24 @@ connector_type: perp
 trading_pair: BTC-USDT
 
 # ── Order sizing ───────────────────────────────────────────────────
-total_amount_quote: 20
-buy_spreads: "0.00020,0.00045"
-sell_spreads: "0.00020,0.00045"
+# Keep per-side intended size near 1 lot on BTC-USDT perp so controller intent
+# matches exchange minimum size (avoid silent 10x upsizing from 0.0001 -> 0.001).
+total_amount_quote: 140
+buy_spreads: "0.00025,0.00060"
+sell_spreads: "0.00025,0.00060"
 buy_amounts_pct: "50,50"
 sell_amounts_pct: "50,50"
-executor_refresh_time: 150
-cooldown_time: 5
+executor_refresh_time: 120
+cooldown_time: 8
 leverage: 1
 position_mode: ONEWAY
-stop_loss: 0.002
-take_profit: 0.004
-time_limit: 300
+stop_loss: 0.0015
+# Profit-taking should happen on realistic intraday swings, not only on wide moves.
+take_profit: 0.0006
+time_limit: 240
 take_profit_order_type: LIMIT
-skip_rebalance: true
+skip_rebalance: false
+position_rebalance_min_base_mult: 1
 
 # ── Identity ───────────────────────────────────────────────────────
 variant: a
@@ -38,22 +42,26 @@ fee_profile: vip0
 require_fee_resolution: true
 spot_fee_pct: 0.0010
 slippage_est_pct: 0.0005
-turnover_cap_x: 3.0
-turnover_penalty_step: 0.0005
+turnover_cap_x: 6.0
+turnover_penalty_step: 0.0015
+ema_period: 20
+trend_eps_pct: 0.0004
 
 # ── Hard risk caps (low-equity ramp) ────────────────────────────────
-# For a 200 USDT start, keep turnover moderate to compound faster while
-# controlling fee drag and churn in unstable sessions.
-max_daily_turnover_x_hard: 10.0
+# Keep a firm cap for soak/live-readiness so churn cannot silently explode.
+max_daily_turnover_x_hard: 14.0
 startup_position_sync: true
 
 # ── Edge gate ──────────────────────────────────────────────────────
-# Lower minimum edge to restore fill frequency while keeping positive expectancy.
-min_net_edge_bps: 1
-edge_resume_bps: 1
-edge_state_hold_s: 120
+# Still require positive edge, but ease the neutral paper floor so quotes can rest close
+# enough to get hit before the selective filters take over.
+min_net_edge_bps: 5.5
+edge_resume_bps: 6.0
+edge_state_hold_s: 45
 edge_gate_ewma_period: 8
-adaptive_edge_relax_max_bps: 12
+adaptive_edge_relax_max_bps: 2
+adaptive_edge_tighten_max_bps: 1.5
+adaptive_min_edge_bps_floor: 2.5
 auto_calibration_enabled: true
 auto_calibration_shadow_mode: false
 auto_calibration_update_interval_s: 900
@@ -66,45 +74,94 @@ auto_calibration_rollback_negative_windows: 3
 auto_calibration_freeze_drawdown_pct: 0.035
 auto_calibration_freeze_daily_loss_pct: 0.020
 auto_calibration_freeze_order_book_stale_ratio_gt: 0.20
-pnl_governor_enabled: true
+pnl_governor_enabled: false
 # Target trajectory now uses pct of opening equity; quote target remains
 # as legacy fallback when pct is zero.
-daily_pnl_target_pct: 0.6
+daily_pnl_target_pct: 0.3
 daily_pnl_target_quote: 0
 pnl_governor_activation_buffer_pct: 0.05
-pnl_governor_max_edge_bps_cut: 5
-pnl_governor_max_size_boost_pct: 0.20
+pnl_governor_max_edge_bps_cut: 3
+pnl_governor_max_size_boost_pct: 0.00
 pnl_governor_size_activation_deficit_pct: 0.12
-pnl_governor_turnover_soft_cap_x: 6.0
+pnl_governor_turnover_soft_cap_x: 2.5
 pnl_governor_drawdown_soft_cap_pct: 0.015
+adverse_fill_soft_pause_enabled: true
+adverse_fill_soft_pause_min_fills: 30
+adverse_fill_soft_pause_cost_floor_mult: 1.0
+edge_confidence_soft_pause_enabled: true
+edge_confidence_soft_pause_min_fills: 40
+edge_confidence_soft_pause_z_score: 1.96
+edge_confidence_soft_pause_cost_floor_mult: 1.0
+slippage_soft_pause_enabled: true
+slippage_soft_pause_window_fills: 300
+slippage_soft_pause_min_fills: 20
+slippage_soft_pause_p95_bps: 12
+# Selective MM redesign: quote much less aggressively when realized edge quality degrades.
+selective_quoting_enabled: true
+selective_quality_min_fills: 12
+selective_quality_reduce_threshold: 0.30
+selective_quality_block_threshold: 0.55
+selective_quality_edge_tighten_max_bps: 3.5
+selective_neutral_extra_edge_bps: 2.0
+selective_side_bias_pct: 0.00025
+selective_max_levels_per_side: 1
+# Hybrid MM redesign: forward-looking policy decides when to stand down, bias,
+# or quote near touch for inventory relief.
+alpha_policy_enabled: true
+alpha_policy_no_trade_threshold: 0.30
+alpha_policy_aggressive_threshold: 0.92
+alpha_policy_inventory_relief_threshold: 0.70
+alpha_policy_cross_spread_mult: 1.40
 # Keep quotes competitive to live top-of-book while preserving floor safety.
-max_quote_to_market_spread_mult: 1.50
-min_side_spread_bps: 0.20
-reconnect_cooldown_s: 1.0
+max_quote_to_market_spread_mult: 0.00
+min_side_spread_bps: 0.30
+reconnect_cooldown_s: 8.0
 max_clock_skew_s: 20.0
+order_book_stale_after_s: 60.0
+order_book_stale_soft_pause_after_s: 90.0
+order_book_reconnect_grace_s: 30.0
 
 # ── Execution safety ────────────────────────────────────────────────
 # Cap concurrent executors to avoid runaway churn / memory growth.
-max_active_executors: 12
+max_active_executors: 8
 
 # ── Derisk spread ───────────────────────────────────────────────────
 # During derisk-only mode, place close-out orders this close to mid
 # so they fill quickly without chasing a large adverse move.
-derisk_spread_pct: 0.0001
+derisk_spread_pct: 0.0002
+# Accelerate derisk escalation per backlog P1-STRAT-20260305-2.
+derisk_force_taker_after_s: 300
+# Reset derisk force timer on smaller progress increments.
+derisk_progress_reset_ratio: 0.005
+# Require material imbalance before forcing taker-style derisk.
+derisk_force_taker_min_base_mult: 8.0
+# Block force-taker escalation when recent taker fills are deeply unprofitable.
+derisk_force_taker_expectancy_guard_enabled: true
+derisk_force_taker_expectancy_window_fills: 300
+derisk_force_taker_expectancy_min_taker_fills: 60
+derisk_force_taker_expectancy_min_quote: 0.02
+# Still allow force-taker for very large inventory imbalances.
+derisk_force_taker_expectancy_override_base_mult: 30.0
 
 # ── Perp inventory ────────────────────────────────────────────────
 # Delta-neutral: target net exposure = 0 for balanced MM
 perp_target_net_base_pct: 0.0
 min_base_pct: 0.0
-# Lower derisk trigger from 0.90 → 0.55 so position is capped earlier
+# Lower derisk trigger from 0.60 -> 0.45 so position is capped earlier
 # and the derisk cycle completes before large adverse moves.
-max_base_pct: 0.55
+max_base_pct: 0.10
 
 # ── Drift protection ──────────────────────────────────────────────
 adverse_drift_ewma_alpha: 0.25
 drift_spike_threshold_bps: 8
 drift_spike_mult_max: 1.35
-spread_step_multiplier: 0.25
+# In neutral_low_vol, suppress counter-trend quotes once price leans 2 bps away
+# from EMA, instead of waiting for a full regime flip.
+neutral_trend_guard_pct: 0.0002
+spread_step_multiplier: 0.23
+trend_skew_factor: 0.40
+neutral_skew_factor: 0.20
+inventory_skew_cap_pct: 0.0010
 
 # ── Sampling ───────────────────────────────────────────────────────
 sample_interval_s: 10
@@ -114,31 +171,36 @@ cancel_budget_per_min: 35
 # ── Paper simulation params (only active when BOT_MODE=paper) ─────
 # IMPORTANT: disable the paper edge-gate bypass so min_net_edge_bps is enforced.
 paper_edge_gate_bypass: false
-# Keep paper behavior close to live risk path (no paper-only auto-healing).
-paper_use_portfolio_equity_for_risk: false
-paper_state_reconcile_enabled: false
-paper_daily_baseline_auto_reset_on_startup: false
+# Use PaperDesk mark-to-market equity in risk/PnL calculations so validation
+# behavior matches live accounting semantics more closely.
+paper_use_portfolio_equity_for_risk: true
+paper_state_reconcile_enabled: true
+paper_daily_baseline_auto_reset_on_startup: true
 paper_engine:
-  paper_equity_quote: 200
+  paper_equity_quote: 1000
+  paper_reset_state_on_startup: false
   # Quick realism switch (custom|conservative|balanced|aggressive).
   # "custom" uses the explicit paper_* knobs below.
-  paper_realism_profile: balanced
+  paper_realism_profile: custom
   paper_seed: 7
+  # Use a more realistic fill model for parity with live execution behavior.
   paper_fill_model: latency_aware
   paper_latency_model: configured_latency_ms
   paper_latency_ms: 150
   paper_insert_latency_ms: 20
   paper_cancel_latency_ms: 80
   paper_liquidity_consumption: true
-  paper_queue_participation: 0.35
+  paper_queue_participation: 0.60
   paper_slippage_bps: 1.0
   paper_adverse_selection_bps: 1.5
+  paper_prob_fill_on_limit: 0.95
+  paper_prob_slippage: 0.0
   paper_partial_fill_min_ratio: 0.15
   paper_partial_fill_max_ratio: 0.85
   paper_depth_levels: 5
   paper_depth_decay: 0.70
   paper_queue_position_enabled: true
-  paper_queue_ahead_ratio: 0.45
+  paper_queue_ahead_ratio: 0.02
   paper_queue_trade_through_ratio: 0.35
   paper_price_protection_points: 8
   paper_margin_model_type: leveraged
@@ -153,29 +215,44 @@ regime_specs_override:
     one_sided: "off"
     spread_min: "0.00025"
     spread_max: "0.00075"
+    levels_min: 1
+    levels_max: 1
+    refresh_s: 120
     target_base_pct: "0.0"
     fill_factor: "0.45"
   down:
     one_sided: "off"
     spread_min: "0.00025"
     spread_max: "0.00075"
+    levels_min: 1
+    levels_max: 1
+    refresh_s: 120
     target_base_pct: "0.0"
     fill_factor: "0.45"
   neutral_low_vol:
-    spread_min: "0.00015"
-    spread_max: "0.00045"
+    spread_min: "0.00045"
+    spread_max: "0.00110"
+    levels_min: 1
+    levels_max: 1
+    refresh_s: 120
     target_base_pct: "0.0"
-    fill_factor: "0.50"
+    fill_factor: "0.42"
   neutral_high_vol:
     one_sided: "off"
     spread_min: "0.00025"
     spread_max: "0.00085"
+    levels_min: 1
+    levels_max: 1
+    refresh_s: 120
     target_base_pct: "0.0"
     fill_factor: "0.42"
   high_vol_shock:
     one_sided: "off"
     spread_min: "0.00040"
     spread_max: "0.00150"
+    levels_min: 1
+    levels_max: 1
+    refresh_s: 90
     target_base_pct: "0.0"
     fill_factor: "0.38"
 
@@ -183,7 +260,7 @@ regime_specs_override:
 # Set ob_imbalance_skew_weight: 0 to disable. Positive weight adds OB
 # imbalance as a skew contribution (bid pressure → widen ask spread).
 ob_imbalance_depth: 5
-ob_imbalance_skew_weight: 0.3
+ob_imbalance_skew_weight: 0.0
 
 # ── Kelly sizing (ROAD-4) ─────────────────────────────────────────
 # Disabled by default. Enable after 20+ days of paper data confirm edge.

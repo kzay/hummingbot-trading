@@ -80,14 +80,22 @@ def main() -> None:
             elapsed_hours = 0.0
 
     missing_corr = int(integrity.get("missing_correlation_count", 0))
-    delta_since = latest_compare.get("delta_produced_minus_ingested_since_baseline", {})
+    delta_since = latest_compare.get("lag_produced_minus_ingested_since_baseline")
+    if not isinstance(delta_since, dict) or not delta_since:
+        delta_since = latest_compare.get("delta_produced_minus_ingested_since_baseline", {})
     if not isinstance(delta_since, dict):
         delta_since = {}
     lag_by_stream_abs: Dict[str, int] = {}
+    lag_by_stream_signed: Dict[str, int] = {}
     for stream, value in delta_since.items():
         try:
-            lag_by_stream_abs[str(stream)] = abs(int(value))
+            signed = int(value)
+            lag_by_stream_signed[str(stream)] = signed
+            # Treat only positive produced-minus-ingested deltas as lag.
+            # Negative deltas indicate ingest is already ahead/caught up.
+            lag_by_stream_abs[str(stream)] = max(0, signed)
         except Exception:
+            lag_by_stream_signed[str(stream)] = 0
             lag_by_stream_abs[str(stream)] = 0
     max_delta_observed = max(list(lag_by_stream_abs.values()) or [0])
     worst_stream = ""
@@ -122,6 +130,7 @@ def main() -> None:
             "max_allowed_delta": max_allowed_delta,
             "worst_stream": worst_stream,
             "lag_by_stream_abs": lag_by_stream_abs,
+            "lag_by_stream_signed": lag_by_stream_signed,
             "offending_streams": offending_streams,
         },
         "checks": checks,

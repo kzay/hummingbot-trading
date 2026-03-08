@@ -1,0 +1,121 @@
+{
+  "schema_version": 1,
+  "project": "paper_engine_v2",
+  "upstream_project": "nautilus_trader",
+  "upstream_repo_url": "https://github.com/nautechsystems/nautilus_trader",
+  "default_license": "LGPL-3.0-or-later",
+  "attribution_docs": [
+    "docs/validation/nautilus_license_boundary.md",
+    "third_party/nautilus_trader.LICENSE.txt"
+  ],
+  "entries": [
+    {
+      "module_path": "controllers/paper_engine_v2/accounting.py",
+      "decision": "reimplement",
+      "upstream_component": "model/position.pyx accounting semantics",
+      "rationale": "Need deterministic pure-Python accounting without framework runtime coupling.",
+      "boundary": "Local accounting core only; consumed by local portfolio APIs; no upstream imports.",
+      "license": "LGPL-3.0-or-later",
+      "attribution_file": "third_party/nautilus_trader.LICENSE.txt",
+      "test_refs": [
+        "tests/controllers/test_paper_engine_v2/test_accounting.py"
+      ]
+    },
+    {
+      "module_path": "controllers/paper_engine_v2/types.py",
+      "decision": "adapt",
+      "upstream_component": "instrument + order/position domain contracts",
+      "rationale": "Keep local type contracts aligned with proven semantics while preserving HB-native wiring.",
+      "boundary": "Only contract-level adaptation; local dataclasses and enums remain repo-owned.",
+      "license": "LGPL-3.0-or-later",
+      "attribution_file": "third_party/nautilus_trader.LICENSE.txt",
+      "test_refs": [
+        "tests/controllers/test_paper_engine_v2/test_order_state_machine.py"
+      ]
+    },
+    {
+      "module_path": "controllers/paper_engine_v2/fee_models.py",
+      "decision": "adapt",
+      "upstream_component": "maker/taker and fixed commission model concepts",
+      "rationale": "Reuse proven fee-model semantics, but keep connector/profile integration local.",
+      "boundary": "Local fee model protocol + factory; no upstream class dependency at runtime.",
+      "license": "LGPL-3.0-or-later",
+      "attribution_file": "third_party/nautilus_trader.LICENSE.txt",
+      "test_refs": [
+        "tests/controllers/test_paper_engine_v2/test_fee_models.py"
+      ]
+    },
+    {
+      "module_path": "controllers/paper_engine_v2/fill_models.py",
+      "decision": "adapt",
+      "upstream_component": "FillModelConfig conventions and depth/queue behavior families",
+      "rationale": "Borrow model taxonomy for determinism while retaining local fill implementation controls.",
+      "boundary": "All fill logic implemented locally behind local FillModel protocol.",
+      "license": "LGPL-3.0-or-later",
+      "attribution_file": "third_party/nautilus_trader.LICENSE.txt",
+      "test_refs": [
+        "tests/controllers/test_paper_engine_v2/test_fill_models.py"
+      ]
+    },
+    {
+      "module_path": "controllers/paper_engine_v2/latency_model.py",
+      "decision": "adapt",
+      "upstream_component": "LatencyModelConfig naming + latency decomposition",
+      "rationale": "Preserve familiar config semantics while keeping local runtime and serialization boundaries.",
+      "boundary": "Local LatencyModel dataclass only; no dependency on external runtime objects.",
+      "license": "LGPL-3.0-or-later",
+      "attribution_file": "third_party/nautilus_trader.LICENSE.txt",
+      "test_refs": [
+        "tests/controllers/test_paper_engine_v2/test_desk.py"
+      ]
+    },
+    {
+      "module_path": "controllers/paper_engine_v2/funding_simulator.py",
+      "decision": "adapt",
+      "upstream_component": "simulation-module funding cadence pattern",
+      "rationale": "Funding cadence behavior is reused conceptually, with local accounting/event contracts.",
+      "boundary": "Local simulator and portfolio calls only; no upstream module import.",
+      "license": "LGPL-3.0-or-later",
+      "attribution_file": "third_party/nautilus_trader.LICENSE.txt",
+      "test_refs": [
+        "tests/controllers/test_paper_engine_v2/test_funding_simulator.py"
+      ]
+    },
+    {
+      "module_path": "controllers/paper_engine_v2/risk_engine.py",
+      "decision": "adapt",
+      "upstream_component": "risk engine architecture and margin ladder concepts",
+      "rationale": "Reuse proven liquidation-level design while keeping desk-specific constraints configurable.",
+      "boundary": "Local risk hooks and decisions; no upstream risk-engine classes imported.",
+      "license": "LGPL-3.0-or-later",
+      "attribution_file": "third_party/nautilus_trader.LICENSE.txt",
+      "test_refs": [
+        "tests/controllers/test_paper_engine_v2/test_risk_engine.py"
+      ]
+    },
+    {
+      "module_path": "controllers/paper_engine_v2/portfolio.py",
+      "decision": "adapt",
+      "upstream_component": "portfolio/ledger accounting separation conventions",
+      "rationale": "Keep separation of price PnL, fees, and margin semantics while retaining desk invariants.",
+      "boundary": "Delegates to local accounting core and local ledger/risk engines only.",
+      "license": "LGPL-3.0-or-later",
+      "attribution_file": "third_party/nautilus_trader.LICENSE.txt",
+      "test_refs": [
+        "tests/controllers/test_paper_engine_v2/test_portfolio.py"
+      ]
+    },
+    {
+      "module_path": "controllers/paper_engine_v2/matching_engine.py",
+      "decision": "adapt",
+      "upstream_component": "matching-loop options (liquidity consumption, maker/taker semantics)",
+      "rationale": "Retain exchange-realistic matching controls while preserving local execution contracts.",
+      "boundary": "Local engine orchestration around local fill/fee/portfolio interfaces.",
+      "license": "LGPL-3.0-or-later",
+      "attribution_file": "third_party/nautilus_trader.LICENSE.txt",
+      "test_refs": [
+        "tests/controllers/test_paper_engine_v2/test_matching_engine.py"
+      ]
+    }
+  ]
+}

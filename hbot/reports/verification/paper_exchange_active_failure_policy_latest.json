@@ -1,0 +1,18 @@
+{
+  "ts_utc": "2026-03-07T13:22:52.459517+00:00",
+  "status": "pass",
+  "metrics": {
+    "p1_16_service_down_detection_delay_seconds": 0.0,
+    "p1_16_safety_state_transition_delay_seconds": 0.0,
+    "p1_16_silent_live_fallback_count": 0.0,
+    "p1_16_mean_recovery_time_minutes": 0.0
+  },
+  "diagnostics": {
+    "golden_path_status": "pass",
+    "required_scenario_id": "active_mode_failure_policy",
+    "required_scenario_present": true,
+    "required_scenario_status": "pass",
+    "required_metric_count": 4,
+    "missing_metric_keys": []
+  }
+}

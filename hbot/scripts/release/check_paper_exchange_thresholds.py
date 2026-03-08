@@ -123,6 +123,7 @@ THRESHOLD_CLAUSES: List[ThresholdClause] = [
     ThresholdClause("P1-PAPER-SVC-20260301-19", "p1_19_command_latency_under_load_p99_ms", "le", 1000.0),
     ThresholdClause("P1-PAPER-SVC-20260301-19", "p1_19_stream_backlog_growth_rate_pct_per_10min", "le", 1.0),
     ThresholdClause("P1-PAPER-SVC-20260301-19", "p1_19_stress_window_oom_restart_count", "eq", 0.0),
+    ThresholdClause("P1-PAPER-SVC-20260301-19", "p1_19_sustained_window_qualification_rate_pct", "ge", 100.0),
     # [P1-PAPER-SVC-20260301-20]
     ThresholdClause("P1-PAPER-SVC-20260301-20", "p1_20_unauthorized_producer_acceptance_rate_pct", "le", 0.0),
     ThresholdClause("P1-PAPER-SVC-20260301-20", "p1_20_privileged_command_attribution_complete_rate_pct", "ge", 100.0),
@@ -134,6 +135,39 @@ THRESHOLD_CLAUSES: List[ThresholdClause] = [
     ThresholdClause("P1-PAPER-SVC-20260301-21", "p1_21_full_restore_to_healthy_heartbeat_minutes", "le", 15.0),
     ThresholdClause("P1-PAPER-SVC-20260301-21", "p1_21_backup_artifact_freshness_hours", "le", 24.0),
 ]
+
+
+def _source_artifacts_for_metric(metric_name: str) -> List[str]:
+    metric = str(metric_name or "").strip()
+    if metric.startswith("p0_11_"):
+        return ["paper_exchange_hb_compatibility_latest", "paper_exchange_golden_path_latest"]
+    if metric.startswith("p1_6_"):
+        return ["paper_exchange_command_journal_latest", "parity_latest"]
+    if metric.startswith("p1_7_"):
+        return ["parity_latest", "replay_regression_multi_window_latest", "paper_exchange_command_journal_latest"]
+    if metric.startswith("p1_8_"):
+        return ["reliability_slo_latest"]
+    if metric.startswith("p1_9_"):
+        return ["paper_exchange_canary_latest", "data_plane_rollback_drill_latest"]
+    if metric.startswith("p2_10_"):
+        return ["paper_exchange_nautilus_reuse_latest"]
+    if metric.startswith("p1_15_"):
+        return ["paper_exchange_namespace_isolation_latest"]
+    if metric.startswith("p1_16_"):
+        return ["paper_exchange_active_failure_policy_latest", "paper_exchange_golden_path_latest"]
+    if metric.startswith("p1_17_"):
+        return ["promotion_gates_latest", "strict_cycle_latest", "parity_latest", "reliability_slo_latest"]
+    if metric.startswith("p1_19_"):
+        return ["paper_exchange_load_latest"]
+    if metric.startswith("p1_20_"):
+        return ["paper_exchange_command_journal_latest"]
+    if metric.startswith("p1_21_"):
+        return ["paper_exchange_state_dr_latest"]
+    if metric.startswith("p0_18_"):
+        return ["strict_cycle_latest"]
+    if metric in {"p0_1_contract_tests_pass_rate_pct", "p1_17_gate_path_tests_pass_rate_pct"}:
+        return ["tests_latest"]
+    return ["manual_metrics"]
 
 
 def _utc_now() -> str:
@@ -213,6 +247,10 @@ def evaluate_thresholds(metrics: Dict[str, object]) -> Dict[str, object]:
     per_item: Dict[str, Dict[str, object]] = {}
     failed_items: List[str] = []
     passed_clauses = 0
+    missing_metric_clauses: List[str] = []
+    non_numeric_metric_clauses: List[str] = []
+    threshold_breach_clauses: List[str] = []
+    failed_clause_sources: Dict[str, List[str]] = {}
 
     for clause in THRESHOLD_CLAUSES:
         item_bucket = per_item.setdefault(
@@ -220,24 +258,30 @@ def evaluate_thresholds(metrics: Dict[str, object]) -> Dict[str, object]:
             {"item_id": clause.item_id, "status": "pass", "failed_clauses": [], "clause_count": 0},
         )
         item_bucket["clause_count"] = int(item_bucket["clause_count"]) + 1
+        source_artifacts = _source_artifacts_for_metric(clause.metric)
 
         observed_raw = working_metrics.get(clause.metric)
         observed_num = _to_float(observed_raw)
         if observed_raw is None:
             passed = False
             reason = "missing_metric"
+            missing_metric_clauses.append(clause.metric)
         elif observed_num is None:
             passed = False
             reason = "non_numeric_metric"
+            non_numeric_metric_clauses.append(clause.metric)
         else:
             passed = _compare(observed_num, clause.op, clause.target)
             reason = "pass" if passed else "threshold_breach"
+            if not passed:
+                threshold_breach_clauses.append(clause.metric)
 
         if passed:
             passed_clauses += 1
         else:
             item_bucket["status"] = "fail"
             item_bucket["failed_clauses"].append(clause.metric)
+            failed_clause_sources[str(clause.metric)] = list(source_artifacts)
 
         clause_results.append(
             {
@@ -248,6 +292,7 @@ def evaluate_thresholds(metrics: Dict[str, object]) -> Dict[str, object]:
                 "observed": observed_raw,
                 "pass": passed,
                 "reason": reason,
+                "source_artifacts": source_artifacts,
             }
         )
 
@@ -265,6 +310,16 @@ def evaluate_thresholds(metrics: Dict[str, object]) -> Dict[str, object]:
             "passed_clauses": passed_clauses,
             "failed_clauses": clause_count - passed_clauses,
             "coverage_pct": coverage_pct,
+            "missing_metric_clause_count": len(missing_metric_clauses),
+            "missing_metric_clauses": sorted(set(missing_metric_clauses)),
+            "non_numeric_metric_clause_count": len(non_numeric_metric_clauses),
+            "non_numeric_metric_clauses": sorted(set(non_numeric_metric_clauses)),
+            "threshold_breach_clause_count": len(threshold_breach_clauses),
+            "threshold_breach_clauses": sorted(set(threshold_breach_clauses)),
+            "failed_clause_sources": {
+                key: failed_clause_sources[key]
+                for key in sorted(failed_clause_sources.keys())
+            },
         },
     }
 
@@ -300,10 +355,36 @@ def build_report(
     eval_result = evaluate_thresholds(metrics)
     failed_items = eval_result.get("failed_items", [])
     failed_items = failed_items if isinstance(failed_items, list) else []
+    eval_summary = eval_result.get("summary", {})
+    eval_summary = eval_summary if isinstance(eval_summary, dict) else {}
+    missing_metric_clauses = eval_summary.get("missing_metric_clauses", [])
+    missing_metric_clauses = missing_metric_clauses if isinstance(missing_metric_clauses, list) else []
+
+    input_diagnostics = payload.get("diagnostics", {})
+    input_diagnostics = input_diagnostics if isinstance(input_diagnostics, dict) else {}
+    diagnostics_available = len(input_diagnostics) > 0
+    unresolved_metric_count = _to_float(input_diagnostics.get("unresolved_metric_count"))
+    if unresolved_metric_count is None:
+        unresolved_metric_count = float(len(missing_metric_clauses))
+    stale_sources = input_diagnostics.get("stale_sources", [])
+    stale_sources = stale_sources if isinstance(stale_sources, list) else []
+    missing_sources = input_diagnostics.get("missing_sources", [])
+    missing_sources = missing_sources if isinstance(missing_sources, list) else []
+    manual_metrics_blocking_count = _to_float(input_diagnostics.get("manual_metrics_blocking_count"))
+    if manual_metrics_blocking_count is None:
+        manual_metrics_blocking_count = 0.0
+    manual_metrics_blocking = float(manual_metrics_blocking_count) > 0.0
+    source_inputs_ready = True
+    if diagnostics_available:
+        source_inputs_ready = len(stale_sources) == 0 and len(missing_sources) == 0
 
     checks = {
         "input_artifact_present": bool(input_present),
         "input_artifact_fresh": bool(input_fresh) if require_input_fresh else True,
+        "input_metrics_resolved": float(unresolved_metric_count) <= 0.0,
+        "no_missing_metric_clauses": len(missing_metric_clauses) == 0,
+        "input_source_artifacts_ready": bool(source_inputs_ready),
+        "blocking_metrics_computed": not manual_metrics_blocking,
         "threshold_matrix_complete": bool(eval_result.get("summary", {}).get("coverage_pct", 0.0) >= 100.0),
         "all_item_thresholds_passed": len(failed_items) == 0,
     }
@@ -323,6 +404,14 @@ def build_report(
             "age_min": float(payload_age_min),
             "max_input_age_min": float(max_input_age_min),
             "require_input_fresh": bool(require_input_fresh),
+            "diagnostics_available": bool(diagnostics_available),
+            "unresolved_metric_count": float(unresolved_metric_count),
+            "stale_source_count": len(stale_sources),
+            "stale_sources": stale_sources,
+            "missing_source_count": len(missing_sources),
+            "missing_sources": missing_sources,
+            "manual_metrics_blocking_count": float(manual_metrics_blocking_count),
+            "manual_metrics_blocking": bool(manual_metrics_blocking),
         },
         "evaluation": eval_result,
     }

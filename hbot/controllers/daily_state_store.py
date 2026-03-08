@@ -79,6 +79,11 @@ class DailyStateStore:
             logger.info("DailyStateStore: restored from file (%s)", self._file_path)
         return data
 
+    def clear(self) -> None:
+        """Best-effort delete of both persisted backends."""
+        self._clear_redis()
+        self._clear_file()
+
     def _save_file(self, json_str: str) -> None:
         try:
             self._file_path.parent.mkdir(parents=True, exist_ok=True)
@@ -123,3 +128,18 @@ class DailyStateStore:
         except Exception:
             logger.warning("DailyStateStore: file load failed (%s)", self._file_path, exc_info=True)
             return None
+
+    def _clear_redis(self) -> None:
+        if self._redis is None:
+            return
+        try:
+            self._redis.delete(self._redis_key)
+        except Exception:
+            logger.warning("DailyStateStore: Redis clear failed", exc_info=True)
+
+    def _clear_file(self) -> None:
+        try:
+            if self._file_path.exists():
+                self._file_path.unlink()
+        except Exception:
+            logger.warning("DailyStateStore: file clear failed (%s)", self._file_path, exc_info=True)

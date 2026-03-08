@@ -1,0 +1,128 @@
+{
+  "ts_utc": "2026-03-07T13:26:57.707595+00:00",
+  "status": "pass",
+  "suite": "paper_exchange_functional_golden_path_v1",
+  "strict": true,
+  "summary": {
+    "scenario_count": 6,
+    "passed_count": 6,
+    "failed_count": 0
+  },
+  "failed_remediation_categories": [],
+  "remediation_map": {},
+  "scenarios": [
+    {
+      "id": "submit_cancel_partial_fill_fill_reject_expire",
+      "description": "Validate canonical order lifecycle edges: submit, cancel, partial fill, full fill, reject, expire.",
+      "status": "pass",
+      "rc": 0,
+      "duration_sec": 1.0649,
+      "node_ids": [
+        "tests/services/test_order_fsm.py::test_can_transition_state_allows_expected_lifecycle_edges",
+        "tests/services/test_order_fsm.py::test_can_transition_state_rejects_invalid_edges",
+        "tests/services/test_order_fsm.py::test_resolve_crossing_limit_order_outcome_gtc_partial_rests",
+        "tests/services/test_order_fsm.py::test_resolve_crossing_limit_order_outcome_full_fill",
+        "tests/services/test_order_fsm.py::test_resolve_crossing_limit_order_outcome_ioc_partial_expires_remainder",
+        "tests/services/test_order_fsm.py::test_resolve_crossing_limit_order_outcome_fok_partial_expires_without_fill"
+      ],
+      "remediation_category": "order_lifecycle_fsm",
+      "remediation_hint": "Review transition rules in services/paper_exchange_service/order_fsm.py.",
+      "derived_metrics": {},
+      "output_tail": "......                                                                   [100%]"
+    },
+    {
+      "id": "sync_handshake_before_quote",
+      "description": "Ensure active mode rejects quote/cancel path until sync_state handshake is confirmed.",
+      "status": "pass",
+      "rc": 0,
+      "duration_sec": 2.2054,
+      "node_ids": [
+        "tests/controllers/test_hb_bridge_signal_routing.py::TestPaperExchangeActiveAdapter::test_active_buy_rejects_while_sync_pending",
+        "tests/controllers/test_hb_bridge_signal_routing.py::TestPaperExchangeActiveAdapter::test_active_cancel_rejects_while_sync_pending",
+        "tests/controllers/test_hb_bridge_signal_routing.py::TestPaperExchangeActiveAdapter::test_sync_state_processed_marks_handshake_confirmed"
+      ],
+      "remediation_category": "sync_handshake_contract",
+      "remediation_hint": "Review active sync gate and sync_state routing in controllers/paper_engine_v2/hb_bridge.py.",
+      "derived_metrics": {},
+      "output_tail": "...                                                                      [100%]"
+    },
+    {
+      "id": "hard_stop_to_kill_switch_transition",
+      "description": "Verify HARD_STOP transition emits kill-switch once and avoids duplicate side effects.",
+      "status": "pass",
+      "rc": 0,
+      "duration_sec": 1.348,
+      "node_ids": [
+        "tests/controllers/test_hb_bridge_signal_routing.py::TestHardStopTransition::test_first_hard_stop_publishes_kill_switch",
+        "tests/controllers/test_hb_bridge_signal_routing.py::TestHardStopTransition::test_second_hard_stop_tick_does_not_republish",
+        "tests/controllers/test_hb_bridge_signal_routing.py::TestHardStopTransition::test_transition_from_running_to_hard_stop"
+      ],
+      "remediation_category": "hard_stop_kill_switch_transition",
+      "remediation_hint": "Review hard-stop transition handling in controllers/paper_engine_v2/signal_consumer.py.",
+      "derived_metrics": {},
+      "output_tail": "...                                                                      [100%]"
+    },
+    {
+      "id": "restart_recovery_without_duplicate_side_effects",
+      "description": "Validate restart recovery idempotency: stream cursor bootstrap/resume and monotonic order IDs.",
+      "status": "pass",
+      "rc": 0,
+      "duration_sec": 2.5214,
+      "node_ids": [
+        "tests/controllers/test_hb_bridge_signal_routing.py::TestPaperExchangeActiveAdapter::test_consume_bootstraps_cursor_from_latest_stream_entry_when_missing",
+        "tests/controllers/test_hb_bridge_signal_routing.py::TestPaperExchangeActiveAdapter::test_consume_uses_persisted_cursor_and_advances_storage",
+        "tests/controllers/test_paper_engine_v2/test_desk.py::TestStatePersistence::test_order_counter_persists_across_restart"
+      ],
+      "remediation_category": "restart_recovery_idempotency",
+      "remediation_hint": "Review cursor persistence in controllers/paper_engine_v2/hb_bridge.py and desk snapshot restore.",
+      "derived_metrics": {},
+      "output_tail": "...                                                                      [100%]"
+    },
+    {
+      "id": "hb_executor_runtime_compatibility",
+      "description": "Verify HB compatibility adapter semantics for executor lifecycle mapping, runtime in-flight order fallback, and no adapter-exception regressions.",
+      "status": "pass",
+      "rc": 0,
+      "duration_sec": 1.5999,
+      "node_ids": [
+        "tests/controllers/test_hb_bridge_signal_routing.py::TestPaperExchangeActiveAdapter::test_consume_event_rejected_submit_maps_to_hb_reject",
+        "tests/controllers/test_hb_bridge_signal_routing.py::TestPaperExchangeActiveAdapter::test_consume_event_processed_cancel_maps_to_hb_cancel",
+        "tests/controllers/test_hb_bridge_signal_routing.py::TestPaperExchangeActiveAdapter::test_submit_processed_filled_maps_to_hb_fill",
+        "tests/controllers/test_hb_bridge_signal_routing.py::TestPaperExchangeActiveAdapter::test_submit_processed_expired_maps_to_hb_reject",
+        "tests/controllers/test_hb_bridge_signal_routing.py::TestExecutorInflightCompatibility::test_executor_inflight_fallback_uses_runtime_store",
+        "tests/controllers/test_hb_bridge_signal_routing.py::TestExecutorInflightCompatibility::test_executor_inflight_fallback_returns_none_when_missing"
+      ],
+      "remediation_category": "hb_executor_runtime_compatibility",
+      "remediation_hint": "Review compatibility adapter flow in controllers/paper_engine_v2/hb_bridge.py for OrderFilled/OrderCanceled/OrderRejected translation and in-flight fallback patching.",
+      "derived_metrics": {
+        "p0_11_hb_executor_lifecycle_tests_pass_rate_pct": 100.0,
+        "p0_11_hb_event_count_delta_pct": 0.0,
+        "p0_11_inflight_order_lookup_miss_rate_pct": 0.0,
+        "p0_11_runtime_adapter_exception_count_24h": 0.0
+      },
+      "output_tail": "......                                                                   [100%]"
+    },
+    {
+      "id": "active_mode_failure_policy",
+      "description": "Validate active-mode failure matrix: service-down/stale-feed soft-pause, recovery-loop hard-stop escalation, and resume-on-recovery.",
+      "status": "pass",
+      "rc": 0,
+      "duration_sec": 1.7124,
+      "node_ids": [
+        "tests/controllers/test_hb_bridge_signal_routing.py::TestPaperExchangeActiveAdapter::test_active_buy_publish_failure_applies_soft_pause_intent",
+        "tests/controllers/test_hb_bridge_signal_routing.py::TestPaperExchangeActiveAdapter::test_consume_rejected_stale_market_applies_soft_pause_policy",
+        "tests/controllers/test_hb_bridge_signal_routing.py::TestPaperExchangeActiveAdapter::test_repeated_active_failures_escalate_to_hard_stop",
+        "tests/controllers/test_hb_bridge_signal_routing.py::TestPaperExchangeActiveAdapter::test_processed_event_resumes_after_soft_pause_failure"
+      ],
+      "remediation_category": "active_mode_failure_policy",
+      "remediation_hint": "Review active-mode failure policy in controllers/paper_engine_v2/hb_bridge.py and associated runbook matrix.",
+      "derived_metrics": {
+        "p1_16_service_down_detection_delay_seconds": 0.0,
+        "p1_16_safety_state_transition_delay_seconds": 0.0,
+        "p1_16_silent_live_fallback_count": 0.0,
+        "p1_16_mean_recovery_time_minutes": 0.0
+      },
+      "output_tail": "....                                                                     [100%]"
+    }
+  ]
+}

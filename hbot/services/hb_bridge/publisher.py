@@ -2,11 +2,21 @@ from __future__ import annotations
 
 from typing import Optional
 
-from services.contracts.event_schemas import AuditEvent, BotFillEvent, MarketSnapshotEvent
+from services.contracts.event_schemas import (
+    AuditEvent,
+    BotFillEvent,
+    MarketDepthSnapshotEvent,
+    MarketQuoteEvent,
+    MarketSnapshotEvent,
+    MarketTradeEvent,
+)
 from services.contracts.stream_names import (
     AUDIT_STREAM,
     BOT_TELEMETRY_STREAM,
+    MARKET_DEPTH_STREAM,
     MARKET_DATA_STREAM,
+    MARKET_QUOTE_STREAM,
+    MARKET_TRADE_STREAM,
     STREAM_RETENTION_MAXLEN,
 )
 from services.hb_bridge.redis_client import RedisStreamClient
@@ -27,6 +37,30 @@ class HBEventPublisher:
             MARKET_DATA_STREAM,
             event.model_dump(),
             maxlen=STREAM_RETENTION_MAXLEN.get(MARKET_DATA_STREAM),
+        )
+
+    def publish_market_depth(self, event: MarketDepthSnapshotEvent) -> Optional[str]:
+        event.producer = self._producer
+        return self._redis.xadd(
+            MARKET_DEPTH_STREAM,
+            event.model_dump(),
+            maxlen=STREAM_RETENTION_MAXLEN.get(MARKET_DEPTH_STREAM),
+        )
+
+    def publish_market_quote(self, event: MarketQuoteEvent) -> Optional[str]:
+        event.producer = self._producer
+        return self._redis.xadd(
+            MARKET_QUOTE_STREAM,
+            event.model_dump(),
+            maxlen=STREAM_RETENTION_MAXLEN.get(MARKET_QUOTE_STREAM),
+        )
+
+    def publish_market_trade(self, event: MarketTradeEvent) -> Optional[str]:
+        event.producer = self._producer
+        return self._redis.xadd(
+            MARKET_TRADE_STREAM,
+            event.model_dump(),
+            maxlen=STREAM_RETENTION_MAXLEN.get(MARKET_TRADE_STREAM),
         )
 
     def publish_audit(self, event: AuditEvent) -> Optional[str]:

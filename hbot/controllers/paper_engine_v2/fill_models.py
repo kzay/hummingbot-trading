@@ -12,6 +12,8 @@ Design follows NautilusTrader FillModelConfig conventions:
 """
 from __future__ import annotations
 
+import logging
+import os
 import random
 from dataclasses import dataclass
 from decimal import Decimal
@@ -28,6 +30,15 @@ from controllers.paper_engine_v2.types import (
 )
 
 _10K = Decimal("10000")
+_TRUE_VALUES = {"1", "true", "yes", "on"}
+logger = logging.getLogger(__name__)
+
+
+def _env_bool(name: str, default: bool = False) -> bool:
+    raw = os.getenv(name)
+    if raw is None:
+        return default
+    return raw.strip().lower() in _TRUE_VALUES
 
 
 # ---------------------------------------------------------------------------
@@ -88,6 +99,39 @@ class QueuePositionFillModel:
         self._cfg = config or QueuePositionConfig()
         self._rng = random.Random(self._cfg.seed)
         self._queue_ahead_by_order: dict[str, Decimal] = {}
+        self._trace_enabled = _env_bool("HB_PAPER_FILL_TRACE_ENABLED", default=False)
+        self._trace_sample_every = max(1, int(os.getenv("HB_PAPER_FILL_TRACE_SAMPLE_EVERY", "1")))
+        self._trace_max_lines = max(1, int(os.getenv("HB_PAPER_FILL_TRACE_MAX_LINES", "200")))
+        self._trace_seen = 0
+        self._trace_emitted = 0
+        if self._trace_enabled:
+            logger.warning(
+                "PAPER_FILL_TRACE init enabled=true sample_every=%s max_lines=%s seed=%s",
+                self._trace_sample_every,
+                self._trace_max_lines,
+                self._cfg.seed,
+            )
+
+    def _trace(self, stage: str, order: PaperOrder, **fields: object) -> None:
+        if not self._trace_enabled:
+            return
+        self._trace_seen += 1
+        if self._trace_emitted >= self._trace_max_lines:
+            return
+        if (self._trace_seen % self._trace_sample_every) != 0:
+            return
+        base_fields = {
+            "order_id": order.order_id,
+            "side": str(order.side),
+            "otype": str(order.order_type),
+            "price": str(order.price),
+            "remaining": str(order.remaining_quantity),
+        }
+        parts: list[str] = []
+        for key, value in {**base_fields, **fields}.items():
+            parts.append(f"{key}={value}")
+        logger.warning("PAPER_FILL_TRACE stage=%s %s", stage, " ".join(parts))
+        self._trace_emitted += 1
 
     def evaluate(self, order: PaperOrder, book: OrderBookSnapshot, now_ns: int) -> FillDecision:
         remaining = order.remaining_quantity
@@ -117,6 +161,7 @@ class QueuePositionFillModel:
                 is_touchable = True
 
         if top_level is None:
+            self._trace("no_fill_no_top", order, best_bid=str(best_bid), best_ask=str(best_ask))
             return _NO_FILL
 
         cfg = self._cfg
@@ -134,10 +179,28 @@ class QueuePositionFillModel:
             return _NO_FILL
 
         # Market touched the order price — apply queue position probability
-        if self._rng.random() > cfg.prob_fill_on_limit:
+        fill_draw = self._rng.random()
+        if fill_draw > cfg.prob_fill_on_limit:
+            self._trace(
+                "no_fill_prob_miss",
+                order,
+                draw=f"{fill_draw:.6f}",
+                prob=f"{cfg.prob_fill_on_limit:.6f}",
+                top_price=str(top_level.price),
+                top_size=str(top_level.size),
+            )
             return _NO_FILL  # queue position miss
 
         contra_levels = self._reachable_levels(order, book)
+        self._trace(
+            "touch_eligible",
+            order,
+            draw=f"{fill_draw:.6f}",
+            prob=f"{cfg.prob_fill_on_limit:.6f}",
+            top_price=str(top_level.price),
+            top_size=str(top_level.size),
+            reachable_levels=len(contra_levels),
+        )
         return self._passive_maker_fill(order, top_level, contra_levels, remaining, latency_ms)
 
     def _contra_levels(self, order: PaperOrder, book: OrderBookSnapshot) -> list[BookLevel]:
@@ -177,6 +240,14 @@ class QueuePositionFillModel:
             queue_ahead = max(_ZERO, queue_ahead - depth_now * max(_ZERO, cfg.queue_trade_through_ratio))
             self._queue_ahead_by_order[order.order_id] = queue_ahead
             if queue_ahead > _ZERO:
+                self._trace(
+                    "no_fill_queue_ahead",
+                    order,
+                    depth_now=str(depth_now),
+                    queue_ahead=str(queue_ahead),
+                    ahead_ratio=str(cfg.queue_ahead_ratio),
+                    trade_through_ratio=str(cfg.queue_trade_through_ratio),
+                )
                 return _NO_FILL
         jitter = 1.0 + self._rng.uniform(-cfg.queue_jitter_pct, cfg.queue_jitter_pct)
         qf = Decimal(str(float(cfg.queue_participation) * jitter))
@@ -189,7 +260,24 @@ class QueuePositionFillModel:
         qty = min(remaining, depth_fill, remaining * pr)
         qty = max(qty, _ZERO)
         if qty <= _ZERO:
+            self._trace(
+                "no_fill_zero_qty",
+                order,
+                qf=str(qf),
+                pr=str(pr),
+                reachable_depth=str(reachable_depth),
+                depth_fill=str(depth_fill),
+            )
             return _NO_FILL
+        self._trace(
+            "maker_fill",
+            order,
+            qty=str(qty),
+            qf=str(qf),
+            pr=str(pr),
+            reachable_depth=str(reachable_depth),
+            delay_ms=delay_ms,
+        )
         return FillDecision(
             fill_quantity=qty,
             fill_price=order.price,
@@ -490,6 +578,8 @@ def make_fill_model(
     queue_position_enabled: bool = False,
     queue_ahead_ratio: Decimal = Decimal("0.50"),
     queue_trade_through_ratio: Decimal = Decimal("0.35"),
+    prob_fill_on_limit: float = 0.4,
+    prob_slippage: float = 0.0,
 ) -> FillModel:
     """Create a fill model by name string."""
     cfg = QueuePositionConfig(
@@ -504,6 +594,8 @@ def make_fill_model(
         queue_position_enabled=bool(queue_position_enabled),
         queue_ahead_ratio=max(_ZERO, queue_ahead_ratio),
         queue_trade_through_ratio=max(_ZERO, queue_trade_through_ratio),
+        prob_fill_on_limit=max(0.0, min(1.0, float(prob_fill_on_limit))),
+        prob_slippage=max(0.0, min(1.0, float(prob_slippage))),
     )
     if name == "best_price":
         return BestPriceFillModel()

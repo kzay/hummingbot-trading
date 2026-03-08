@@ -55,27 +55,31 @@ class FundingSimulator:
 
             self._last_funding_ns[key] = now_ns
             pos = portfolio.get_position(spec.instrument_id)
-            if pos.abs_quantity <= _ZERO:
+            if pos.abs_quantity <= _ZERO and pos.gross_quantity <= _ZERO:
                 continue
+            funding_legs = []
+            if pos.long_quantity > _ZERO:
+                funding_legs.append(("long", pos.long_quantity * pos.long_avg_entry_price, Decimal("1")))
+            if pos.short_quantity > _ZERO:
+                funding_legs.append(("short", pos.short_quantity * pos.short_avg_entry_price, Decimal("-1")))
+            if not funding_legs and pos.abs_quantity > _ZERO:
+                direction = Decimal("1") if pos.quantity > _ZERO else Decimal("-1")
+                funding_legs.append((None, pos.abs_quantity * pos.avg_entry_price, direction))
 
-            notional = pos.abs_quantity * pos.avg_entry_price
-            # Exchange convention: positive funding => longs pay shorts.
-            # Signed charge: +debit, -credit.
-            direction = Decimal("1") if pos.quantity > _ZERO else Decimal("-1")
-            charge = funding_rate * notional * direction
-
-            try:
-                event = portfolio.apply_funding(spec.instrument_id, charge, now_ns)
-                # Enrich with actual funding rate
-                import dataclasses
-                event = dataclasses.replace(event, funding_rate=funding_rate)
-                events.append(event)
-                logger.debug(
-                    "Funding applied: %s rate=%s charge=%s notional=%s",
-                    key, funding_rate, charge, notional,
-                )
-            except Exception as exc:
-                logger.error("Funding apply failed for %s: %s", key, exc, exc_info=True)
+            for leg_side, notional, direction in funding_legs:
+                charge = funding_rate * notional * direction
+                try:
+                    event = portfolio.apply_funding(spec.instrument_id, charge, now_ns, leg_side=leg_side)
+                    # Enrich with actual funding rate
+                    import dataclasses
+                    event = dataclasses.replace(event, funding_rate=funding_rate)
+                    events.append(event)
+                    logger.debug(
+                        "Funding applied: %s leg=%s rate=%s charge=%s notional=%s",
+                        key, leg_side or "net", funding_rate, charge, notional,
+                    )
+                except Exception as exc:
+                    logger.error("Funding apply failed for %s leg=%s: %s", key, leg_side or "net", exc, exc_info=True)
 
         return events
 

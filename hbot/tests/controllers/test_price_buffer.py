@@ -140,6 +140,41 @@ class TestAtrAndBandPct:
         assert bp > _D("0")
 
 
+class TestAdditionalIndicators:
+    def test_bollinger_bands_center_on_constant_price(self):
+        buf = MidPriceBuffer()
+        _fill_buffer(buf, [100.0] * 40)
+        bands = buf.bollinger_bands(20)
+        assert bands is not None
+        lower, basis, upper = bands
+        assert lower == _D("100")
+        assert basis == _D("100")
+        assert upper == _D("100")
+
+    def test_rsi_above_50_on_rising_series(self):
+        buf = MidPriceBuffer()
+        _fill_buffer(buf, [100 + i for i in range(25)])
+        rsi = buf.rsi(14)
+        assert rsi is not None
+        assert rsi > _D("50")
+
+    def test_rsi_below_50_on_falling_series(self):
+        buf = MidPriceBuffer()
+        _fill_buffer(buf, [125 - i for i in range(25)])
+        rsi = buf.rsi(14)
+        assert rsi is not None
+        assert rsi < _D("50")
+
+    def test_adx_positive_when_series_has_directional_moves(self):
+        buf = MidPriceBuffer()
+        prices = [100, 101, 103, 104, 106, 107, 109, 110, 112, 113, 115, 116, 118, 119, 121,
+                  122, 124, 125, 127, 128, 130, 131, 133, 134, 136, 137, 139, 140, 142, 143]
+        _fill_buffer(buf, prices)
+        adx = buf.adx(14)
+        assert adx is not None
+        assert adx > _D("0")
+
+
 class TestAdverseDrift:
     def test_drift_zero_with_empty_buffer(self):
         buf = MidPriceBuffer()

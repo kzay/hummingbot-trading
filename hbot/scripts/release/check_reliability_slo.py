@@ -14,6 +14,8 @@ try:
 except Exception:  # pragma: no cover
     redis = None
 
+from services.contracts.stream_names import PAPER_EXCHANGE_HEARTBEAT_STREAM
+
 DEFAULT_NON_CRITICAL_DEAD_LETTER_REASONS = [
     "local_authority_reject",
     "expired_intent",
@@ -86,6 +88,13 @@ def _decode_stream_payload(data: Dict[str, object]) -> Dict[str, object]:
         except Exception:
             return {}
     return {}
+
+
+def _stream_id_ms(stream_id: object) -> int:
+    text = str(stream_id or "")
+    if "-" not in text:
+        return 0
+    return _safe_int(text.split("-", 1)[0], 0)
 
 
 def _parse_xinfo_groups(raw: object) -> Dict[str, Dict[str, int]]:
@@ -173,6 +182,15 @@ def build_report(
     snapshot_max_age_s: int = 180,
     dead_letter_scan_count: int = 5000,
     non_critical_dead_letter_reasons: Optional[List[str]] = None,
+    check_paper_exchange: bool = False,
+    paper_exchange_heartbeat_stream: str = PAPER_EXCHANGE_HEARTBEAT_STREAM,
+    paper_exchange_heartbeat_max_age_s: int = 30,
+    max_paper_exchange_reject_rate_pct: float = 25.0,
+    max_paper_exchange_stale_pairs: int = 0,
+    paper_exchange_load_report_max_age_s: int = 1800,
+    max_paper_exchange_backlog_growth_pct_per_10min: float = 5.0,
+    max_paper_exchange_latency_p95_ms: float = 500.0,
+    max_paper_exchange_latency_p99_ms: float = 1000.0,
 ) -> Dict[str, object]:
     now_ts = float(now_ts if now_ts is not None else datetime.now(timezone.utc).timestamp())
     now_ms = int(now_ts * 1000)
@@ -280,6 +298,117 @@ def build_report(
         "non_critical_reasons": list(non_critical_dead_letter_reasons),
     }
 
+    # 4) Optional paper-exchange reliability checks
+    if bool(check_paper_exchange):
+        paper_exchange_heartbeat = {
+            "stream": str(paper_exchange_heartbeat_stream),
+            "present": False,
+            "ts_ms": 0,
+            "age_s": 1e9,
+            "processed_commands": 0,
+            "rejected_commands": 0,
+            "reject_rate_pct": 100.0,
+            "stale_pairs": 0,
+            "error": "",
+        }
+        if redis_client is not None:
+            try:
+                rows = redis_client.xrevrange(
+                    str(paper_exchange_heartbeat_stream),
+                    "+",
+                    "-",
+                    count=1,
+                )
+                if isinstance(rows, list) and len(rows) > 0:
+                    stream_id, data = rows[0]
+                    payload = _decode_stream_payload(data if isinstance(data, dict) else {})
+                    ts_ms = _safe_int(payload.get("timestamp_ms"), 0) or _stream_id_ms(stream_id)
+                    metadata = payload.get("metadata", {})
+                    metadata = metadata if isinstance(metadata, dict) else {}
+                    processed_commands = _safe_int(metadata.get("processed_commands"), 0)
+                    rejected_commands = _safe_int(metadata.get("rejected_commands"), 0)
+                    stale_pairs = _safe_int(metadata.get("stale_pairs"), 0)
+                    reject_rate_pct = (
+                        100.0 * float(rejected_commands) / float(processed_commands)
+                        if processed_commands > 0
+                        else 0.0
+                    )
+                    paper_exchange_heartbeat = {
+                        "stream": str(paper_exchange_heartbeat_stream),
+                        "present": ts_ms > 0,
+                        "ts_ms": int(ts_ms),
+                        "age_s": max(0.0, (now_ms - int(ts_ms)) / 1000.0) if ts_ms > 0 else 1e9,
+                        "processed_commands": int(processed_commands),
+                        "rejected_commands": int(rejected_commands),
+                        "reject_rate_pct": float(reject_rate_pct),
+                        "stale_pairs": int(stale_pairs),
+                        "error": "",
+                    }
+            except Exception as exc:
+                paper_exchange_heartbeat["error"] = f"{type(exc).__name__}: {exc}"
+        else:
+            paper_exchange_heartbeat["error"] = "redis_client_unavailable"
+
+        load_report_path = root / "reports" / "verification" / "paper_exchange_load_latest.json"
+        load_report = _read_json(load_report_path)
+        load_present = load_report_path.exists()
+        load_status = str(load_report.get("status", "")).strip().lower()
+        load_age_s = _age_seconds_from_ts_or_mtime(str(load_report.get("ts_utc", "")), load_report_path, now_ts)
+        load_metrics = load_report.get("metrics", {})
+        load_metrics = load_metrics if isinstance(load_metrics, dict) else {}
+        load_backlog_growth = _safe_float(
+            load_metrics.get("p1_19_stream_backlog_growth_rate_pct_per_10min"),
+            1_000_000.0,
+        )
+        load_latency_p95 = _safe_float(load_metrics.get("p1_19_command_latency_under_load_p95_ms"), 1_000_000.0)
+        load_latency_p99 = _safe_float(load_metrics.get("p1_19_command_latency_under_load_p99_ms"), 1_000_000.0)
+
+        checks["paper_exchange_heartbeat_present"] = bool(paper_exchange_heartbeat.get("present", False))
+        checks["paper_exchange_heartbeat_fresh"] = (
+            bool(paper_exchange_heartbeat.get("present", False))
+            and float(paper_exchange_heartbeat.get("age_s", 1e9)) <= float(paper_exchange_heartbeat_max_age_s)
+        )
+        checks["paper_exchange_reject_rate_within_slo"] = float(
+            paper_exchange_heartbeat.get("reject_rate_pct", 1e9)
+        ) <= float(max_paper_exchange_reject_rate_pct)
+        checks["paper_exchange_stale_pairs_within_slo"] = _safe_int(
+            paper_exchange_heartbeat.get("stale_pairs"),
+            10**9,
+        ) <= int(max_paper_exchange_stale_pairs)
+        checks["paper_exchange_load_report_present"] = bool(load_present)
+        checks["paper_exchange_load_report_fresh"] = bool(load_present) and float(load_age_s) <= float(
+            paper_exchange_load_report_max_age_s
+        )
+        checks["paper_exchange_load_report_pass"] = load_status == "pass"
+        checks["paper_exchange_backlog_growth_within_slo"] = float(load_backlog_growth) <= float(
+            max_paper_exchange_backlog_growth_pct_per_10min
+        )
+        checks["paper_exchange_latency_p95_within_slo"] = float(load_latency_p95) <= float(
+            max_paper_exchange_latency_p95_ms
+        )
+        checks["paper_exchange_latency_p99_within_slo"] = float(load_latency_p99) <= float(
+            max_paper_exchange_latency_p99_ms
+        )
+        details["paper_exchange_heartbeat"] = {
+            **paper_exchange_heartbeat,
+            "max_age_s": float(paper_exchange_heartbeat_max_age_s),
+            "max_reject_rate_pct": float(max_paper_exchange_reject_rate_pct),
+            "max_stale_pairs": int(max_paper_exchange_stale_pairs),
+        }
+        details["paper_exchange_load"] = {
+            "path": str(load_report_path),
+            "present": bool(load_present),
+            "status": load_status,
+            "age_s": float(load_age_s),
+            "max_age_s": float(paper_exchange_load_report_max_age_s),
+            "backlog_growth_pct_per_10min": float(load_backlog_growth),
+            "max_backlog_growth_pct_per_10min": float(max_paper_exchange_backlog_growth_pct_per_10min),
+            "latency_p95_ms": float(load_latency_p95),
+            "max_latency_p95_ms": float(max_paper_exchange_latency_p95_ms),
+            "latency_p99_ms": float(load_latency_p99),
+            "max_latency_p99_ms": float(max_paper_exchange_latency_p99_ms),
+        }
+
     failed_checks = sorted([name for name, ok in checks.items() if not ok])
     status = "pass" if len(failed_checks) == 0 else "fail"
     return {
@@ -308,6 +437,15 @@ def run_check(
     snapshot_max_age_s: int,
     dead_letter_scan_count: int,
     non_critical_dead_letter_reasons: List[str],
+    check_paper_exchange: bool,
+    paper_exchange_heartbeat_stream: str,
+    paper_exchange_heartbeat_max_age_s: int,
+    max_paper_exchange_reject_rate_pct: float,
+    max_paper_exchange_stale_pairs: int,
+    paper_exchange_load_report_max_age_s: int,
+    max_paper_exchange_backlog_growth_pct_per_10min: float,
+    max_paper_exchange_latency_p95_ms: float,
+    max_paper_exchange_latency_p99_ms: float,
 ) -> int:
     root = Path("/workspace/hbot") if Path("/.dockerenv").exists() else Path(__file__).resolve().parents[2]
 
@@ -344,6 +482,15 @@ def run_check(
         snapshot_max_age_s=snapshot_max_age_s,
         dead_letter_scan_count=dead_letter_scan_count,
         non_critical_dead_letter_reasons=non_critical_dead_letter_reasons,
+        check_paper_exchange=bool(check_paper_exchange),
+        paper_exchange_heartbeat_stream=str(paper_exchange_heartbeat_stream),
+        paper_exchange_heartbeat_max_age_s=int(paper_exchange_heartbeat_max_age_s),
+        max_paper_exchange_reject_rate_pct=float(max_paper_exchange_reject_rate_pct),
+        max_paper_exchange_stale_pairs=int(max_paper_exchange_stale_pairs),
+        paper_exchange_load_report_max_age_s=int(paper_exchange_load_report_max_age_s),
+        max_paper_exchange_backlog_growth_pct_per_10min=float(max_paper_exchange_backlog_growth_pct_per_10min),
+        max_paper_exchange_latency_p95_ms=float(max_paper_exchange_latency_p95_ms),
+        max_paper_exchange_latency_p99_ms=float(max_paper_exchange_latency_p99_ms),
     )
     if redis_error:
         report["redis_client_error"] = redis_error
@@ -395,6 +542,59 @@ def main() -> int:
             ",".join(DEFAULT_NON_CRITICAL_DEAD_LETTER_REASONS),
         ),
     )
+    parser.add_argument(
+        "--check-paper-exchange",
+        action="store_true",
+        default=str(os.getenv("SLO_CHECK_PAPER_EXCHANGE", "false")).strip().lower() in {"1", "true", "yes", "on"},
+        help="Enable additional paper-exchange heartbeat/load reliability checks.",
+    )
+    parser.add_argument(
+        "--paper-exchange-heartbeat-stream",
+        default=os.getenv("PAPER_EXCHANGE_HEARTBEAT_STREAM", PAPER_EXCHANGE_HEARTBEAT_STREAM),
+        help="Paper-exchange heartbeat stream name for reliability checks.",
+    )
+    parser.add_argument(
+        "--paper-exchange-heartbeat-max-age-s",
+        type=int,
+        default=int(os.getenv("SLO_PAPER_EXCHANGE_HEARTBEAT_MAX_AGE_S", "30")),
+        help="Maximum allowed age for latest paper-exchange heartbeat when checks are enabled.",
+    )
+    parser.add_argument(
+        "--max-paper-exchange-reject-rate-pct",
+        type=float,
+        default=float(os.getenv("SLO_MAX_PAPER_EXCHANGE_REJECT_RATE_PCT", "25")),
+        help="Maximum allowed paper-exchange reject-rate percentage when checks are enabled.",
+    )
+    parser.add_argument(
+        "--max-paper-exchange-stale-pairs",
+        type=int,
+        default=int(os.getenv("SLO_MAX_PAPER_EXCHANGE_STALE_PAIRS", "0")),
+        help="Maximum allowed stale pair count reported by paper-exchange heartbeat.",
+    )
+    parser.add_argument(
+        "--paper-exchange-load-report-max-age-s",
+        type=int,
+        default=int(os.getenv("SLO_PAPER_EXCHANGE_LOAD_REPORT_MAX_AGE_S", "1800")),
+        help="Maximum allowed age for paper-exchange load report when checks are enabled.",
+    )
+    parser.add_argument(
+        "--max-paper-exchange-backlog-growth-pct-per-10min",
+        type=float,
+        default=float(os.getenv("SLO_MAX_PAPER_EXCHANGE_BACKLOG_GROWTH_PCT_PER_10MIN", "5")),
+        help="Maximum allowed paper-exchange backlog growth (pct per 10 min) when checks are enabled.",
+    )
+    parser.add_argument(
+        "--max-paper-exchange-latency-p95-ms",
+        type=float,
+        default=float(os.getenv("SLO_MAX_PAPER_EXCHANGE_LATENCY_P95_MS", "500")),
+        help="Maximum allowed paper-exchange load p95 latency when checks are enabled.",
+    )
+    parser.add_argument(
+        "--max-paper-exchange-latency-p99-ms",
+        type=float,
+        default=float(os.getenv("SLO_MAX_PAPER_EXCHANGE_LATENCY_P99_MS", "1000")),
+        help="Maximum allowed paper-exchange load p99 latency when checks are enabled.",
+    )
     args = parser.parse_args()
 
     return run_check(
@@ -413,6 +613,15 @@ def main() -> int:
         snapshot_max_age_s=int(args.snapshot_max_age_s),
         dead_letter_scan_count=int(args.dead_letter_scan_count),
         non_critical_dead_letter_reasons=_csv_list(args.non_critical_dead_letter_reasons),
+        check_paper_exchange=bool(args.check_paper_exchange),
+        paper_exchange_heartbeat_stream=str(args.paper_exchange_heartbeat_stream),
+        paper_exchange_heartbeat_max_age_s=int(args.paper_exchange_heartbeat_max_age_s),
+        max_paper_exchange_reject_rate_pct=float(args.max_paper_exchange_reject_rate_pct),
+        max_paper_exchange_stale_pairs=int(args.max_paper_exchange_stale_pairs),
+        paper_exchange_load_report_max_age_s=int(args.paper_exchange_load_report_max_age_s),
+        max_paper_exchange_backlog_growth_pct_per_10min=float(args.max_paper_exchange_backlog_growth_pct_per_10min),
+        max_paper_exchange_latency_p95_ms=float(args.max_paper_exchange_latency_p95_ms),
+        max_paper_exchange_latency_p99_ms=float(args.max_paper_exchange_latency_p99_ms),
     )
 
 

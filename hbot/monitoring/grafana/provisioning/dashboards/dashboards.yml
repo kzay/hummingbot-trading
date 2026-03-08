@@ -7,7 +7,7 @@ apiVersion: 1
 providers:
   - name: "default"
     orgId: 1
-    folder: "Hummingbot"
+    folder: "Kzay Capital"
     type: file
     disableDeletion: false
     editable: true

@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import time
 import uuid
-from typing import Dict, Literal, Optional
+from typing import Dict, List, Literal, Optional
 
 from pydantic import BaseModel, Field
 
@@ -48,6 +48,81 @@ class MarketSnapshotEvent(EventEnvelope):
     exchange_ts_ms: Optional[int] = None
     ingest_ts_ms: Optional[int] = None
     market_sequence: Optional[int] = None
+    extra: Dict[str, str] = Field(default_factory=dict)
+
+
+class MarketQuoteEvent(EventEnvelope):
+    event_type: Literal["market_quote"] = "market_quote"
+    connector_name: str
+    trading_pair: str
+    best_bid: float
+    best_ask: float
+    best_bid_size: Optional[float] = None
+    best_ask_size: Optional[float] = None
+    mid_price: Optional[float] = None
+    last_trade_price: Optional[float] = None
+    mark_price: Optional[float] = None
+    funding_rate: Optional[float] = None
+    exchange_ts_ms: Optional[int] = None
+    ingest_ts_ms: Optional[int] = None
+    market_sequence: Optional[int] = None
+    venue_symbol: Optional[str] = None
+    extra: Dict[str, str] = Field(default_factory=dict)
+
+
+class MarketTradeEvent(EventEnvelope):
+    event_type: Literal["market_trade"] = "market_trade"
+    connector_name: str
+    trading_pair: str
+    trade_id: Optional[str] = None
+    side: Optional[Literal["buy", "sell"]] = None
+    price: float
+    size: float
+    exchange_ts_ms: Optional[int] = None
+    ingest_ts_ms: Optional[int] = None
+    market_sequence: Optional[int] = None
+    venue_symbol: Optional[str] = None
+    extra: Dict[str, str] = Field(default_factory=dict)
+
+
+class MarketDepthLevel(BaseModel):
+    price: float
+    size: float
+
+
+class MarketDepthSnapshotEvent(EventEnvelope):
+    event_type: Literal["market_depth_snapshot"] = "market_depth_snapshot"
+    instance_name: str
+    controller_id: str
+    connector_name: str
+    trading_pair: str
+    depth_levels: int = 20
+    bids: List[MarketDepthLevel] = Field(default_factory=list)
+    asks: List[MarketDepthLevel] = Field(default_factory=list)
+    best_bid: Optional[float] = None
+    best_ask: Optional[float] = None
+    last_trade_price: Optional[float] = None
+    mark_price: Optional[float] = None
+    funding_rate: Optional[float] = None
+    exchange_ts_ms: Optional[int] = None
+    ingest_ts_ms: Optional[int] = None
+    market_sequence: Optional[int] = None
+    extra: Dict[str, str] = Field(default_factory=dict)
+
+
+class MarketDepthDeltaEvent(EventEnvelope):
+    event_type: Literal["market_depth_delta"] = "market_depth_delta"
+    instance_name: str
+    controller_id: str
+    connector_name: str
+    trading_pair: str
+    depth_levels: int = 20
+    sequence_start: Optional[int] = None
+    sequence_end: Optional[int] = None
+    bids: List[MarketDepthLevel] = Field(default_factory=list)
+    asks: List[MarketDepthLevel] = Field(default_factory=list)
+    exchange_ts_ms: Optional[int] = None
+    ingest_ts_ms: Optional[int] = None
     extra: Dict[str, str] = Field(default_factory=dict)
 
 
@@ -174,6 +249,9 @@ class PaperExchangeCommandEvent(EventEnvelope):
     amount_base: Optional[float] = None
     price: Optional[float] = None
     expires_at_ms: Optional[int] = None
+    reduce_only: bool = False
+    position_action: Optional[str] = None
+    position_mode: Optional[str] = None
     metadata: Dict[str, str] = Field(default_factory=dict)
 
 
@@ -189,6 +267,8 @@ class PaperExchangeEvent(EventEnvelope):
     connector_name: str
     trading_pair: str
     order_id: Optional[str] = None
+    position_action: Optional[str] = None
+    position_mode: Optional[str] = None
     metadata: Dict[str, str] = Field(default_factory=dict)
 
 

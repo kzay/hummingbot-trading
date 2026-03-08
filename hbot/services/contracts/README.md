@@ -5,6 +5,7 @@ This folder defines the canonical event contracts for the external Signal/Risk a
 ## Streams
 
 - `hb.market_data.v1`
+- `hb.market_depth.v1`
 - `hb.signal.v1`
 - `hb.ml_signal.v1`
 - `hb.risk_decision.v1`

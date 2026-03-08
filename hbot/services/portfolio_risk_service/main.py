@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import argparse
-import csv
 import json
 import os
 import time
@@ -27,6 +26,7 @@ from services.common.utils import (
     today_utc as _today,
     utc_now as _utc_now,
 )
+from services.common.event_store_reader import load_bot_snapshot_windows
 
 
 def _read_json(path: Path, default: Dict[str, object]) -> Dict[str, object]:
@@ -43,20 +43,6 @@ def _append_jsonl(path: Path, payload: Dict[str, object]) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     with path.open("a", encoding="utf-8") as f:
         f.write(json.dumps(payload) + "\n")
-
-
-def _read_last_csv_row(path: Path) -> Optional[Dict[str, str]]:
-    if not path.exists():
-        return None
-    try:
-        with path.open("r", encoding="utf-8", newline="") as f:
-            reader = csv.DictReader(f)
-            last = None
-            for row in reader:
-                last = row
-            return last
-    except Exception:
-        return None
 
 
 def _load_limits(path: Path) -> Dict[str, object]:
@@ -158,7 +144,7 @@ def _build_portfolio_snapshot_payload(
 
 def run(once: bool = False, synthetic_breach: bool = False) -> None:
     root = Path("/workspace/hbot") if Path("/.dockerenv").exists() else Path(__file__).resolve().parents[2]
-    data_root = Path(os.getenv("HB_DATA_ROOT", str(root / "data")))
+    event_store_root = Path(os.getenv("PORTFOLIO_RISK_EVENT_STORE_ROOT", str(root / "reports" / "event_store")))
     reports_root = root / "reports" / "portfolio_risk"
     reports_root.mkdir(parents=True, exist_ok=True)
     interval_sec = int(os.getenv("PORTFOLIO_RISK_INTERVAL_SEC", "300"))
@@ -192,11 +178,9 @@ def run(once: bool = False, synthetic_breach: bool = False) -> None:
         bot_overrides = bot_overrides if isinstance(bot_overrides, dict) else {}
 
         bots: Dict[str, Dict[str, object]] = {}
-        for minute_file in data_root.glob("*/logs/epp_v24/*/minute.csv"):
-            bot = minute_file.parts[-5]
-            row = _read_last_csv_row(minute_file)
-            if not row:
-                continue
+        snapshot_windows = load_bot_snapshot_windows(event_store_root, max_snapshots_per_bot=1)
+        for bot, snapshots in snapshot_windows.items():
+            row = snapshots[0] if snapshots else {}
             equity_quote = _safe_float(row.get("equity_quote"), 0.0)
             if equity_quote <= 0:
                 continue
@@ -364,7 +348,11 @@ def run(once: bool = False, synthetic_breach: bool = False) -> None:
                 correlation_id=str(intent.get("event_id")),
             )
             if client.enabled:
-                client.xadd(stream=AUDIT_STREAM, payload=audit)
+                client.xadd(
+                    stream=AUDIT_STREAM,
+                    payload=audit,
+                    maxlen=STREAM_RETENTION_MAXLEN.get(AUDIT_STREAM),
+                )
 
         if client.enabled and publish_actions:
             for row in actions:
@@ -383,6 +371,7 @@ def run(once: bool = False, synthetic_breach: bool = False) -> None:
             "warning_count": warning_count,
             "portfolio_action": portfolio_action,
             "limits_path": str(limits_path),
+            "event_store_root": str(event_store_root),
             "publish_actions_enabled": bool(client.enabled and publish_actions),
             "synthetic_breach": synthetic_breach,
             "metrics": {

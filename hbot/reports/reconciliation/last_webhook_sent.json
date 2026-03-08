@@ -1,6 +1,10 @@
 {
-  "ts_utc": "2026-03-02T15:02:36.915450+00:00",
+  "ts_utc": "2026-03-07T13:24:33.508064+00:00",
   "mode": "live",
+  "telegram_configured": false,
+  "telegram_probe_ok": false,
+  "telegram_probe_reason": "not_configured",
+  "telegram_required_failure": false,
   "probes": [
     {
       "endpoint": "alert_webhook_sink",

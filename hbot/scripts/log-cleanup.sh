@@ -6,7 +6,7 @@
 # Default: keep last 7 days of logs
 #
 # Recommended cron (weekly):
-#   0 3 * * 0 /path/to/hbot/scripts/log-cleanup.sh >> /var/log/hbot-cleanup.log 2>&1
+#   0 3 * * 0 /path/to/hbot/scripts/log-cleanup.sh >> /var/log/kzay-capital-cleanup.log 2>&1
 # ============================================
 set -euo pipefail
 
@@ -37,7 +37,7 @@ done
 if [ "$(id -u)" -eq 0 ]; then
     echo ""
     echo "Truncating Docker container logs..."
-    for container in $(docker ps --filter "name=hbot-" -q 2>/dev/null); do
+    for container in $(docker ps --filter "label=com.docker.compose.project=kzay-capital" -q 2>/dev/null); do
         name=$(docker inspect --format='{{.Name}}' "$container" | sed 's/\///')
         log_file=$(docker inspect --format='{{.LogPath}}' "$container")
         if [ -f "$log_file" ]; then

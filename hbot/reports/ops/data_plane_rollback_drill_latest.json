@@ -1,0 +1,30 @@
+{
+  "ts_utc": "2026-03-03T00:22:37.271675+00:00",
+  "status": "pass",
+  "from_mode": "db_primary",
+  "to_mode": "csv_compat",
+  "apply": false,
+  "env_file": "hbot\\env\\.env.template",
+  "env_backup": "",
+  "duration_sec": 0.001507,
+  "duration_minutes": 2.5e-05,
+  "max_allowed_rto_sec": 300.0,
+  "rto_within_target": true,
+  "flags_expected": {
+    "OPS_DATA_PLANE_MODE": "csv_compat",
+    "OPS_DB_READ_PREFERRED": "false",
+    "PROMOTION_CHECK_CANONICAL_PLANE_GATES": "false",
+    "STRICT_REQUIRE_CANONICAL_PLANE_GATES": "false"
+  },
+  "flags_after": {
+    "OPS_DATA_PLANE_MODE": "csv_compat",
+    "OPS_DB_READ_PREFERRED": "false",
+    "PROMOTION_CHECK_CANONICAL_PLANE_GATES": "false",
+    "STRICT_REQUIRE_CANONICAL_PLANE_GATES": "false"
+  },
+  "flags_applied_ok": true,
+  "documented_commands": [
+    "python scripts/ops/data_plane_rollback_drill.py --env-file hbot/env/.env.template --apply --from-mode db_primary --to-mode csv_compat",
+    "python scripts/release/run_promotion_gates.py --max-report-age-min 20"
+  ]
+}

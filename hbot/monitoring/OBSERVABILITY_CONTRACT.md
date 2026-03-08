@@ -1,15 +1,15 @@
-## Trading Desk Observability Contract (HBot)
+## Kzay Capital Trading Desk Observability Contract
 
 This repo’s Grafana dashboards are **contract-driven**: every number must map to a concrete in-repo source (CSV/JSON/log) exported via **Prometheus** and/or **Loki**. If a requested KPI cannot be derived from existing artifacts, it must be explicitly marked “not available” until instrumented.
 
 ### Canonical entities (dashboard + metric model)
 
-- **bot_id**: Prometheus label `bot` (e.g. `bot1`)
+- **bot_id**: Prometheus label `bot` (e.g. `bot1`, `bot2`, `bot3`, `bot4`, `bot5`, `bot6`, `bot7`)
 - **exchange**: label `exchange` (e.g. `bitget_paper_trade`, `bitget_perpetual`)
 - **market / symbol**: label `pair` (e.g. `BTC-USDT`)
 - **strategy**: label `variant` (strategy role/variant; e.g. `a`, `paper_validation`)
 - **environment**: label `environment` (Prometheus `external_labels`; default in this repo: `production`)
-- **cluster**: label `cluster` (Prometheus `external_labels`; default in this repo: `hbot-prod`)
+- **cluster**: label `cluster` (Prometheus `external_labels`; default in this repo: `kzay-capital-prod`)
 - **venue_type**:
   - **execution mode**: label `mode` (`paper` / `live`)
   - **instrument type (spot vs perp)**: derived (until first-class) from `exchange` naming (e.g. `.*_perpetual.*` ⇒ futures/perps)
@@ -78,4 +78,26 @@ Dashboard-only variables (no Prometheus label):
 - `hbot/reports/**/latest.json` and related gate artifacts
 - `hbot/reports/exchange_snapshots/latest.json`
 - `data/<bot>/.../fills.csv` blotter stats (row count + last fill time)
+
+### Realtime UI + L2 contract (stream-first read path)
+
+New operator execution UI reads from:
+
+- `hb.market_data.v1` (L1 snapshots, backward compatible)
+- `hb.market_depth.v1` (L2 depth snapshots)
+- `hb.bot_telemetry.v1` (fills/telemetry feed)
+- `hb.paper_exchange.event.v1` (order/event lifecycle feed)
+
+Operational evidence artifacts:
+
+- `reports/verification/realtime_l2_data_quality_latest.json`
+- `reports/ops_db_writer/latest.json` (`counts.market_depth.*`)
+- `reports/event_store/integrity_*.json` (`events_by_stream`)
+
+Strict-cycle quality dimensions:
+
+- ingest freshness (event-store integrity + depth stream age)
+- sequence integrity (gaps / out-of-order / duplicates)
+- sampling coverage and raw-vs-sampled parity
+- storage budget controls (depth stream share + payload-size budget)
 

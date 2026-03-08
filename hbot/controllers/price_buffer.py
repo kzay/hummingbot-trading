@@ -10,6 +10,7 @@ from collections import deque
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from decimal import Decimal
+from math import sqrt
 from typing import Deque, Dict, List, Optional, Tuple
 
 _ZERO = Decimal("0")
@@ -157,6 +158,93 @@ class MidPriceBuffer:
         if price is None or atr_val is None or price <= 0:
             return None
         return atr_val / price
+
+    def sma(self, period: int) -> Optional[Decimal]:
+        """Return simple moving average of close prices."""
+        if period <= 0 or len(self._bars) < period:
+            return None
+        closes = [bar.close for bar in list(self._bars)[-period:]]
+        return sum(closes, _ZERO) / Decimal(period)
+
+    def stddev(self, period: int) -> Optional[Decimal]:
+        """Return population standard deviation of close prices."""
+        if period <= 0 or len(self._bars) < period:
+            return None
+        closes = [bar.close for bar in list(self._bars)[-period:]]
+        mean = sum(closes, _ZERO) / Decimal(period)
+        variance = sum(((close - mean) ** 2 for close in closes), _ZERO) / Decimal(period)
+        return Decimal(str(sqrt(float(variance)))) if variance > _ZERO else _ZERO
+
+    def bollinger_bands(self, period: int = 20, stddev_mult: Decimal = _TWO) -> Optional[Tuple[Decimal, Decimal, Decimal]]:
+        """Return (lower, basis, upper) Bollinger bands for close prices."""
+        basis = self.sma(period)
+        stdev = self.stddev(period)
+        if basis is None or stdev is None:
+            return None
+        width = stdev * stddev_mult
+        return basis - width, basis, basis + width
+
+    def rsi(self, period: int = 14) -> Optional[Decimal]:
+        """Return RSI on close prices using simple average gains/losses."""
+        if period <= 0 or len(self._bars) < period + 1:
+            return None
+        closes = [bar.close for bar in list(self._bars)[-(period + 1):]]
+        gains = _ZERO
+        losses = _ZERO
+        for prev_close, close in zip(closes, closes[1:]):
+            delta = close - prev_close
+            if delta > _ZERO:
+                gains += delta
+            elif delta < _ZERO:
+                losses += abs(delta)
+        avg_gain = gains / Decimal(period)
+        avg_loss = losses / Decimal(period)
+        if avg_loss <= _ZERO:
+            return Decimal("100")
+        rs = avg_gain / avg_loss
+        return Decimal("100") - (Decimal("100") / (_ONE + rs))
+
+    def adx(self, period: int = 14) -> Optional[Decimal]:
+        """Return ADX using Wilder-style directional movement smoothing."""
+        if period <= 0 or len(self._bars) < (period * 2):
+            return None
+        bars = list(self._bars)
+        trs: List[Decimal] = []
+        plus_dm: List[Decimal] = []
+        minus_dm: List[Decimal] = []
+        for prev_bar, bar in zip(bars[:-1], bars[1:]):
+            up_move = bar.high - prev_bar.high
+            down_move = prev_bar.low - bar.low
+            trs.append(
+                max(
+                    bar.high - bar.low,
+                    abs(bar.high - prev_bar.close),
+                    abs(bar.low - prev_bar.close),
+                )
+            )
+            plus_dm.append(up_move if up_move > down_move and up_move > _ZERO else _ZERO)
+            minus_dm.append(down_move if down_move > up_move and down_move > _ZERO else _ZERO)
+        if len(trs) < period * 2 - 1:
+            return None
+
+        atr = sum(trs[:period], _ZERO)
+        plus = sum(plus_dm[:period], _ZERO)
+        minus = sum(minus_dm[:period], _ZERO)
+        dxs: List[Decimal] = []
+        for idx in range(period, len(trs)):
+            atr = atr - (atr / Decimal(period)) + trs[idx]
+            plus = plus - (plus / Decimal(period)) + plus_dm[idx]
+            minus = minus - (minus / Decimal(period)) + minus_dm[idx]
+            if atr <= _ZERO:
+                dxs.append(_ZERO)
+                continue
+            plus_di = Decimal("100") * (plus / atr)
+            minus_di = Decimal("100") * (minus / atr)
+            denom = plus_di + minus_di
+            dxs.append((Decimal("100") * abs(plus_di - minus_di) / denom) if denom > _ZERO else _ZERO)
+        if len(dxs) < period:
+            return None
+        return sum(dxs[-period:], _ZERO) / Decimal(period)
 
     def adverse_drift_30s(self, now_ts: float) -> Decimal:
         """Raw 30-second adverse drift (absolute price change / older price).

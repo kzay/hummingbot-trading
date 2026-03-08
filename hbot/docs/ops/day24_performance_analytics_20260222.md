@@ -2,7 +2,7 @@
 
 ## Scope
 - Extend `bot-metrics-exporter` with desk-grade risk/performance metrics already present in `minute.csv`.
-- Upgrade `Hummingbot Trading Desk Overview` to include equity, drawdown, PnL distribution, and activity/risk posture.
+- Upgrade `Kzay Capital Trading Desk` to include equity, drawdown, PnL distribution, and activity/risk posture.
 
 ## Implemented
 - Exporter extension:

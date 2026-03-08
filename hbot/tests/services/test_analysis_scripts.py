@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import csv
+import json
 from datetime import datetime
 from pathlib import Path
 
@@ -8,6 +9,7 @@ from scripts.analysis import bot1_multi_day_summary as multi_day_summary
 from scripts.analysis import bot1_paper_day_summary as day_summary
 from scripts.analysis import pnl_governor_ab_short_run as ab_short_run
 from scripts.analysis import pnl_governor_ab_tuning as ab_tuning
+from scripts.analysis import testnet_multi_day_summary as testnet_multi_day_summary
 from scripts.analysis.bot1_tca_report import run_tca
 from scripts.analysis.portfolio_diversification_check import build_diversification_report
 from scripts.analysis.testnet_daily_scorecard import build_scorecard
@@ -20,6 +22,11 @@ def _write_csv(path: Path, headers: list[str], rows: list[dict[str, object]]) ->
         w.writeheader()
         for r in rows:
             w.writerow(r)
+
+
+def _write_json(path: Path, payload: dict[str, object]) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps(payload), encoding="utf-8")
 
 
 def test_scorecard_no_testnet_fills_only_when_testnet_is_empty(tmp_path: Path) -> None:
@@ -101,6 +108,95 @@ def test_scorecard_micro_benchmark_fails_when_deltas_exceed_thresholds(tmp_path:
     assert payload["status"] == "fail"
 
 
+def test_scorecard_fails_when_hard_stop_incident_detected(tmp_path: Path) -> None:
+    testnet_root = tmp_path / "testnet"
+    paper_root = tmp_path / "paper"
+    reports_root = tmp_path / "reports"
+    _write_csv(
+        testnet_root / "fills.csv",
+        ["ts", "pnl_vs_mid_pct", "realized_pnl_quote", "fee_quote"],
+        [{"ts": "2026-02-27T12:00:00+00:00", "pnl_vs_mid_pct": "0.0001", "realized_pnl_quote": "1.0", "fee_quote": "0.1"}],
+    )
+    _write_csv(
+        paper_root / "fills.csv",
+        ["ts", "pnl_vs_mid_pct", "realized_pnl_quote", "fee_quote"],
+        [{"ts": "2026-02-27T12:00:00+00:00", "pnl_vs_mid_pct": "0.0001", "realized_pnl_quote": "1.0", "fee_quote": "0.1"}],
+    )
+    _write_csv(
+        testnet_root / "minute.csv",
+        ["ts", "cancel_per_min", "fills_count_today", "position_drift_pct", "state"],
+        [{"ts": "2026-02-27T12:00:00+00:00", "cancel_per_min": "0", "fills_count_today": "1", "position_drift_pct": "0", "state": "hard_stop"}],
+    )
+    _write_csv(
+        paper_root / "minute.csv",
+        ["ts", "cancel_per_min", "fills_count_today", "position_drift_pct", "state"],
+        [{"ts": "2026-02-27T12:00:00+00:00", "cancel_per_min": "0", "fills_count_today": "1", "position_drift_pct": "0", "state": "running"}],
+    )
+
+    payload = build_scorecard("2026-02-27", testnet_root=testnet_root, paper_root=paper_root, reports_root=reports_root)
+    assert payload["status"] == "fail"
+    assert "hard_stop_incident_detected" in payload["failures"]
+    assert payload["metrics"]["hard_stop_incident_count"] == 1
+
+
+def test_testnet_multi_day_summary_passes_when_road5_criteria_are_met(tmp_path: Path) -> None:
+    reports_root = tmp_path / "reports"
+    strategy_root = reports_root / "strategy"
+
+    for day in range(1, 29):
+        _write_json(
+            strategy_root / f"testnet_daily_scorecard_202601{day:02d}.json",
+            {
+                "status": "pass",
+                "metrics": {
+                    "testnet_fill_count": 10,
+                    "paper_fill_count": 10,
+                    "rejection_count": 0,
+                    "avg_testnet_slippage_bps": 1.2,
+                    "avg_paper_slippage_bps": 0.5,
+                    "hard_stop_incident_count": 0,
+                    "testnet_net_pnl_quote": 1.0 + day / 100.0,
+                    "paper_net_pnl_quote": 1.1 + day / 100.0,
+                },
+            },
+        )
+
+    payload = testnet_multi_day_summary.build_summary(reports_root=reports_root)
+    assert payload["coverage_days"] == 28
+    assert payload["trading_days_count"] == 28
+    assert payload["road5_gate"]["pass"] is True
+    assert payload["road5_gate"]["failed_criteria"] == []
+
+
+def test_testnet_multi_day_summary_fails_when_hard_stop_and_rejection_rate_exceed_limits(tmp_path: Path) -> None:
+    reports_root = tmp_path / "reports"
+    strategy_root = reports_root / "strategy"
+
+    for day in range(1, 29):
+        _write_json(
+            strategy_root / f"testnet_daily_scorecard_202601{day:02d}.json",
+            {
+                "status": "pass",
+                "metrics": {
+                    "testnet_fill_count": 10,
+                    "paper_fill_count": 10,
+                    "rejection_count": 1,  # 10% reject rate over window -> fail
+                    "avg_testnet_slippage_bps": 1.0,
+                    "avg_paper_slippage_bps": 0.5,
+                    "hard_stop_incident_count": 1 if day == 5 else 0,
+                    "testnet_net_pnl_quote": 1.0 + day / 100.0,
+                    "paper_net_pnl_quote": 1.2 + day / 100.0,
+                },
+            },
+        )
+
+    payload = testnet_multi_day_summary.build_summary(reports_root=reports_root)
+    failed = payload["road5_gate"]["failed_criteria"]
+    assert payload["road5_gate"]["pass"] is False
+    assert "no_hard_stop_incidents" in failed
+    assert "rejection_rate_lt_0_5pct" in failed
+
+
 def test_tca_runs_with_parsed_timestamp_rows(tmp_path: Path) -> None:
     root = tmp_path / "bot1"
     fills_path = root / "fills.csv"
@@ -178,6 +274,7 @@ def test_multi_day_summary_marks_low_confidence_when_minute_missing(monkeypatch)
     out = multi_day_summary.compute_summary("2026-02-26", "2026-02-27", root="ignored", save=False)
 
     assert out["n_days"] == 2
+    assert out["data_source_mode_counts"]["csv"] == 2
     assert out["data_quality"]["low_confidence_days"] == 1
     assert any("low_confidence_days=1" in w for w in out["warnings"])
 
@@ -218,6 +315,119 @@ def test_multi_day_summary_aggregates_spread_cap_hit_ratio(monkeypatch) -> None:
     assert out["spread_competitiveness_cap_active_rows"] == 5
     assert out["spread_competitiveness_cap_observed_rows"] == 15
     assert abs(float(out["spread_competitiveness_cap_hit_ratio"]) - (5.0 / 15.0)) < 1e-9
+
+
+def test_multi_day_summary_includes_funding_component(monkeypatch) -> None:
+    def _fake_day(day: str, root: str):  # noqa: ARG001
+        if day == "2026-02-26":
+            return {
+                "fills_agg": {"fills": 2, "realized_pnl_sum_quote": "1.0", "fees_quote": "0.1"},
+                "minute_snapshot": {
+                    "rows": 4,
+                    "equity_quote": "1000",
+                    "turnover_today_x": "0.5",
+                    "drawdown_pct": "0.001",
+                    "daily_loss_pct": "0",
+                    "regime_counts": {"neutral_low_vol": 4},
+                    "funding_cost_today_quote": "0.05",
+                },
+            }
+        return {
+            "fills_agg": {"fills": 3, "realized_pnl_sum_quote": "0.8", "fees_quote": "0.1"},
+            "minute_snapshot": {
+                "rows": 5,
+                "equity_quote": "950",
+                "turnover_today_x": "0.7",
+                "drawdown_pct": "0.002",
+                "daily_loss_pct": "0",
+                "regime_counts": {"neutral_low_vol": 5},
+                "funding_cost_today_quote": "0.10",
+            },
+        }
+
+    monkeypatch.setattr(multi_day_summary, "_run_day_summary", _fake_day)
+    out = multi_day_summary.compute_summary("2026-02-26", "2026-02-27", root="ignored", save=False)
+
+    assert abs(float(out["total_net_pnl_usdt"]) - 1.6) < 1e-9
+    assert abs(float(out["total_funding_cost_usdt"]) - 0.15) < 1e-9
+    assert abs(float(out["total_net_pnl_including_funding_usdt"]) - 1.45) < 1e-9
+    assert abs(float(out["mean_daily_pnl_including_funding_usdt"]) - 0.725) < 1e-9
+    assert abs(float(out["daily_breakdown"][0]["net_pnl_including_funding_usdt"]) - 0.85) < 1e-9
+
+
+def test_multi_day_summary_road1_gate_passes_with_20_consecutive_days_and_spread_capture(monkeypatch) -> None:
+    def _fake_day(day: str, root: str):  # noqa: ARG001
+        return {
+            "fills_agg": {
+                "fills": 10,
+                "realized_pnl_sum_quote": "2.0",
+                "fees_quote": "0.5",
+                "notional_quote": "1000",
+                "avg_edge_vs_mid_pct": "0.002",
+                "pos_edge_frac": 0.8,
+            },
+            "minute_snapshot": {
+                "rows": 10,
+                "equity_quote": "1000",
+                "turnover_today_x": "1.0",
+                "drawdown_pct": "0.01",
+                "daily_loss_pct": "0.0",
+                "regime_counts": {"neutral_low_vol": 10},
+                "funding_cost_today_quote": "0.0",
+            },
+        }
+
+    monkeypatch.setattr(multi_day_summary, "_run_day_summary", _fake_day)
+    out = multi_day_summary.compute_summary("2026-01-01", "2026-01-20", root="ignored", save=False)
+
+    gate = out["road1_gate"]
+    assert out["n_days"] == 20
+    assert gate["pass"] is True
+    assert gate["failed_criteria"] == []
+    assert gate["criteria"]["min_days_gte_20"] is True
+    assert gate["criteria"]["consecutive_days_complete"] is True
+    assert gate["criteria"]["mean_daily_net_pnl_bps_positive"] is True
+    assert gate["criteria"]["spread_capture_dominant_source"] is True
+    assert out["pnl_decomposition"]["dominant_source"] == "spread_capture"
+
+
+def test_multi_day_summary_road1_gate_fails_on_missing_days_and_non_dominant_spread_capture(monkeypatch) -> None:
+    missing_day = "2026-01-10"
+
+    def _fake_day(day: str, root: str):  # noqa: ARG001
+        if day == missing_day:
+            return None
+        return {
+            "fills_agg": {
+                "fills": 5,
+                "realized_pnl_sum_quote": "1.0",
+                "fees_quote": "0.1",
+                "notional_quote": "100",
+                "avg_edge_vs_mid_pct": "0.0001",
+                "pos_edge_frac": 0.55,
+            },
+            "minute_snapshot": {
+                "rows": 8,
+                "equity_quote": "1000",
+                "turnover_today_x": "0.8",
+                "drawdown_pct": "0.005",
+                "daily_loss_pct": "0.0",
+                "regime_counts": {"neutral_low_vol": 8},
+                "funding_cost_today_quote": "0.0",
+            },
+        }
+
+    monkeypatch.setattr(multi_day_summary, "_run_day_summary", _fake_day)
+    out = multi_day_summary.compute_summary("2026-01-01", "2026-01-20", root="ignored", save=False)
+
+    gate = out["road1_gate"]
+    assert out["n_days"] == 19
+    assert out["missing_days_count"] == 1
+    assert gate["pass"] is False
+    assert gate["criteria"]["min_days_gte_20"] is False
+    assert gate["criteria"]["consecutive_days_complete"] is False
+    assert gate["criteria"]["spread_capture_dominant_source"] is False
+    assert "road1_window_shortfall_days=1" in out["warnings"]
 
 
 def test_ab_short_run_writes_2h_and_24h_reports(tmp_path: Path, monkeypatch) -> None:

@@ -8,19 +8,21 @@ Profile combinations for baseline and external orchestration operation.
 
 ## Profiles
 - Default (no explicit profile): `bot1` + monitoring stack.
-- `multi`: adds `bot2` (Phase-0 monitor/no-trade role).
-- `test`: includes `bot3` paper trade smoke-test instance.
-  Bot3 uses `bitget_paper_trade` connector (framework `PaperTradeExchange` wrapper)
-  to verify market data flow and simulated fills before promoting strategies to live.
+- `multi`: adds `bot2` as the hardened reserved/no-trade scale slot.
+- `test`: includes the validation lanes `bot3`, `bot4`, and `bot5`.
+  `bot3` and `bot5` run their production connector mappings in paper mode via
+  Paper Engine v2, while `bot4` remains the Binance testnet validation lane.
 - `external`: enables Redis + signal/risk/coordination services.
 
 ## Recommended Commands
 - Baseline:
   - `docker compose --env-file ../env/.env up -d`
-- Multi-bot:
+- Include reserved slot:
   - `docker compose --env-file ../env/.env --profile multi up -d`
-- External orchestration:
-  - `docker compose --env-file ../env/.env --profile multi --profile external up -d`
+- Bring up validation lanes:
+  - `docker compose --env-file ../env/.env --profile test up -d`
+- Full external orchestration with all bot lanes:
+  - `docker compose --env-file ../env/.env --profile multi --profile test --profile external up -d`
 
 ## Rollback
 - Disable external layer quickly:
@@ -32,5 +34,5 @@ Profile combinations for baseline and external orchestration operation.
 
 ## Owner
 - Engineering/Infrastructure
-- Last-updated: 2026-02-19
+- Last-updated: 2026-03-06
 

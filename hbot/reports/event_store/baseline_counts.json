@@ -1,21 +1,21 @@
 {
-  "created_at_utc": "2026-03-02T12:51:46.656941+00:00",
-  "reason": "strict_cycle_after_matching_fix_20260302",
+  "created_at_utc": "2026-03-07T17:10:27.223836+00:00",
   "source_by_stream": {
-    "hb.market_data.v1": 50001,
-    "hb.signal.v1": 23076,
+    "hb.market_data.v1": 0,
+    "hb.signal.v1": 0,
     "hb.ml_signal.v1": 0,
-    "hb.risk_decision.v1": 23056,
-    "hb.execution_intent.v1": 26483,
-    "hb.audit.v1": 4312
+    "hb.risk_decision.v1": 0,
+    "hb.execution_intent.v1": 2,
+    "hb.audit.v1": 0
   },
   "stored_by_stream": {
-    "hb.market_data.v1": 24694,
+    "hb.market_data.v1": 75648,
     "hb.signal.v1": 1,
     "hb.ml_signal.v1": 0,
     "hb.risk_decision.v1": 1,
-    "hb.execution_intent.v1": 415,
-    "hb.audit.v1": 419
+    "hb.execution_intent.v1": 625,
+    "hb.audit.v1": 640
   },
-  "integrity_file": "F:\\Environement\\git-repo\\hummingbot_custo\\hbot\\reports\\event_store\\integrity_20260302.json"
+  "source_counter_kind": "entries_added",
+  "reason": "counter_decrease_detected"
 }

@@ -1,5 +1,5 @@
 # ============================================
-# Hummingbot Trading Infrastructure
+# Kzay Capital Trading Infrastructure
 # docker-compose.yml - Production Configuration
 # ============================================
 # Usage:
@@ -7,16 +7,16 @@
 #   docker compose --env-file ../env/.env -f docker-compose.yml up -d
 # ============================================
 
-name: hbot
+name: kzay-capital
 
 # ---- Networks ----
 networks:
   trading:
     driver: bridge
-    name: hbot-trading
+    name: kzay-capital-trading
   monitoring:
     driver: bridge
-    name: hbot-monitoring
+    name: kzay-capital-monitoring
 
 # ---- Volumes ----
 volumes:
@@ -28,7 +28,7 @@ volumes:
     driver: local
   postgres-data:
     driver: local
-  tradenote-mongo-data:
+  redis-data:
     driver: local
 
 # ---- Logging anchor ----
@@ -40,13 +40,13 @@ x-logging: &default-logging
 
 # ---- External control-plane image (reproducible) ----
 x-control-plane-image: &control-plane-image
-  image: ${HBOT_CONTROL_PLANE_IMAGE:-hbot-control-plane:20260222}
+  image: ${KZAY_CAPITAL_CONTROL_PLANE_IMAGE:-kzay-capital-control-plane:20260222}
   build:
     context: ..
     dockerfile: compose/images/control_plane/Dockerfile
 
 # ---- Shared Hummingbot env ----
-x-hbot-env: &hbot-env
+x-kzay-env: &kzay-env
   TZ: ${TZ:-UTC}
   PYTHONPYCACHEPREFIX: /tmp/pycache
   EXT_SIGNAL_RISK_ENABLED: ${EXT_SIGNAL_RISK_ENABLED:-true}
@@ -57,9 +57,10 @@ x-hbot-env: &hbot-env
   REDIS_PASSWORD: ${REDIS_PASSWORD:-}
   REDIS_CONSUMER_GROUP: ${REDIS_CONSUMER_GROUP:-hb_group_v1}
   EVENT_POLL_MS: ${EVENT_POLL_MS:-1000}
+  HB_MARKET_DEPTH_LEVELS: ${HB_MARKET_DEPTH_LEVELS:-20}
 
 # ---- Hummingbot base anchor ----
-x-hbot-base: &hbot-base
+x-kzay-base: &kzay-base
   image: ${HUMMINGBOT_IMAGE:-hummingbot/hummingbot:version-2.12.0}
   restart: unless-stopped
   logging: *default-logging
@@ -67,7 +68,7 @@ x-hbot-base: &hbot-base
     - "autoheal=true"
   networks:
     - trading
-  environment: *hbot-env
+  environment: *kzay-env
   stdin_open: true
   tty: true
 
@@ -77,7 +78,7 @@ x-hbot-base: &hbot-base
 services:
   autoheal:
     image: willfarrell/autoheal:latest
-    container_name: hbot-autoheal
+    container_name: autoheal
     profiles:
       - external
       - monitoring
@@ -98,13 +99,14 @@ services:
   # BOT 1
   # ==========================================
   bot1:
-    <<: *hbot-base
-    container_name: hbot-bot1
+    <<: *kzay-base
+    container_name: bot1
     env_file:
       - ../env/.env
     volumes:
       # ---- Bot config, data, logs ----
       - ../data/bot1/conf:/home/hummingbot/conf
+      - ../data/shared/conf/connectors:/home/hummingbot/conf/connectors
       - ../data/bot1/logs:/home/hummingbot/logs
       - ../data/bot1/data:/home/hummingbot/data
       - ../data/bot1/scripts:/home/hummingbot/custom_scripts
@@ -117,24 +119,32 @@ services:
       - ../services:/home/hummingbot/services:ro
     command: /bin/bash -lc "export CONFIG_PASSWORD=\"$${CONFIG_PASSWORD:-$${BOT1_PASSWORD:-}}\"; if [ -z \"$${CONFIG_PASSWORD}\" ]; then echo '[fatal] BOT1_PASSWORD/CONFIG_PASSWORD missing; refusing interactive startup.' >&2; exit 64; fi; conda activate hummingbot && python ./bin/headless_start.py 2>> ./logs/errors.log"
     environment:
-      <<: *hbot-env
+      <<: *kzay-env
       EXT_SIGNAL_RISK_ENABLED: "true"
       REDIS_CONSUMER_GROUP: hb_group_bot1
       CONFIG_FILE_NAME: v2_with_controllers.py
       SCRIPT_CONFIG: v2_epp_v2_4_bot_a.yml
       BOT_MODE: ${BOT1_MODE:-paper}
       HEADLESS_MODE: "true"
+      HB_ORDER_EXEC_TRACE_ALL_LEVELS: "true"
+      PAPER_EXCHANGE_SERVICE_ONLY_BOT1: "false"
       PAPER_EXCHANGE_MODE: ${PAPER_EXCHANGE_MODE_BOT1:-disabled}
       PAPER_EXCHANGE_SYNC_TIMEOUT_MS: ${PAPER_EXCHANGE_SYNC_TIMEOUT_MS:-30000}
       BOT_POLICY_ROLE: live_microcap_primary
       BOT_POLICY_MODE: live
       BOT_POLICY_VERSION: multi_bot_policy_v1
+      HB_BITGET_WS_HEARTBEAT_S: "20"
+      HB_BITGET_WS_MESSAGE_TIMEOUT_S: "120"
+      HB_BITGET_WS_MAX_CONSEC_TIMEOUTS: "6"
+      HB_BITGET_WS_TIMEOUT_RETRY_SLEEP_S: "1.0"
     healthcheck:
-      # Restart if minute.csv hasn't been written for >5 min (WS event-loop hang detector).
+      # Restart only when both minute and heartbeat are stale.
+      # If heartbeat is still fresh, allow minute-csv lag grace to avoid false
+      # restarts during transient reconnect/recovery windows.
       test:
         [
           "CMD-SHELL",
-          "python -c \"import sys,time; from pathlib import Path; files=list(Path('/home/hummingbot/logs/epp_v24').rglob('minute.csv')); newest=max((f.stat().st_mtime for f in files), default=0); hb=Path('/home/hummingbot/logs/heartbeat/strategy_heartbeat.json'); hb_ok=hb.exists() and (time.time()-hb.stat().st_mtime)<300; minute_ok=bool(files) and (time.time()-newest)<300; sys.exit(0 if minute_ok and hb_ok else 1)\""
+          'python -c "import sys,time; from pathlib import Path; stale_s=300; minute_grace_s=900; now=time.time(); files=list(Path(''/home/hummingbot/logs/epp_v24'').rglob(''minute.csv'')); newest=max((f.stat().st_mtime for f in files), default=0.0); hb=Path(''/home/hummingbot/logs/heartbeat/strategy_heartbeat.json''); hb_age=(now-hb.stat().st_mtime) if hb.exists() else 9999.0; minute_age=(now-newest) if files else 9999.0; hb_ok=hb_age<stale_s; minute_ok=bool(files) and minute_age<stale_s; minute_heartbeat_grace=bool(files) and hb_ok and minute_age<(stale_s+minute_grace_s); sys.exit(0 if ((minute_ok and hb_ok) or minute_heartbeat_grace) else 1)"',
         ]
       interval: 60s
       timeout: 10s
@@ -153,29 +163,53 @@ services:
   # BOT 2 (scale replica)
   # ==========================================
   bot2:
-    <<: *hbot-base
-    container_name: hbot-bot2
+    <<: *kzay-base
+    container_name: bot2
     profiles:
       - multi
+    env_file:
+      - ../env/.env
     volumes:
       # ---- Bot config, data, logs ----
       - ../data/bot2/conf:/home/hummingbot/conf
+      - ../data/shared/conf/connectors:/home/hummingbot/conf/connectors
       - ../data/bot2/logs:/home/hummingbot/logs
       - ../data/bot2/data:/home/hummingbot/data
       - ../data/bot2/scripts:/home/hummingbot/custom_scripts
       - ../scripts/shared/v2_with_controllers.py:/home/hummingbot/custom_scripts/v2_with_controllers.py:ro
       - ../scripts/shared/v2_with_controllers.py:/home/hummingbot/scripts/v2_with_controllers.py:ro
+      - ../scripts/shared/headless_start.py:/home/hummingbot/bin/headless_start.py:ro
       - ../data/bot2/pmm_scripts:/home/hummingbot/pmm_scripts
       # ---- Shared controllers mount (Day 30) ----
       - ../controllers:/home/hummingbot/controllers:ro
       - ../config:/home/hummingbot/project_config:ro
       - ../services:/home/hummingbot/services:ro
+    command: /bin/bash -lc "export CONFIG_PASSWORD=\"$${CONFIG_PASSWORD:-$${BOT2_PASSWORD:-$${BOT1_PASSWORD:-}}}\"; if [ -z \"$${CONFIG_PASSWORD}\" ]; then echo '[fatal] BOT2_PASSWORD/BOT1_PASSWORD/CONFIG_PASSWORD missing; refusing interactive startup.' >&2; exit 64; fi; conda activate hummingbot && python ./bin/headless_start.py 2>> ./logs/errors.log"
     environment:
-      <<: *hbot-env
-      CONFIG_PASSWORD: ${BOT2_PASSWORD:-admin}
+      <<: *kzay-env
+      EXT_SIGNAL_RISK_ENABLED: "true"
+      REDIS_CONSUMER_GROUP: hb_group_bot2
+      CONFIG_FILE_NAME: v2_with_controllers.py
+      SCRIPT_CONFIG: v2_epp_v2_4_bot_d.yml
+      BOT_MODE: ${BOT2_MODE:-paper}
+      HEADLESS_MODE: "true"
+      HB_ORDER_EXEC_TRACE_ALL_LEVELS: "true"
+      PAPER_EXCHANGE_SERVICE_ONLY_BOT1: "false"
+      PAPER_EXCHANGE_MODE: ${PAPER_EXCHANGE_MODE_BOT2:-disabled}
+      PAPER_EXCHANGE_SYNC_TIMEOUT_MS: ${PAPER_EXCHANGE_SYNC_TIMEOUT_MS:-30000}
       BOT_POLICY_ROLE: reserved_scale_slot
       BOT_POLICY_MODE: disabled
       BOT_POLICY_VERSION: multi_bot_policy_v1
+    healthcheck:
+      test:
+        [
+          "CMD-SHELL",
+          'python -c "import sys,time; from pathlib import Path; hb=Path(''/home/hummingbot/logs/heartbeat/strategy_heartbeat.json''); stale_ok=(time.time()-hb.stat().st_mtime)<300 if hb.exists() else False; minute_ok=True; files=list(Path(''/home/hummingbot/logs/epp_v24'').rglob(''minute.csv'')); minute_ok=(time.time()-max((f.stat().st_mtime for f in files), default=time.time()))<300 if files else True; sys.exit(0 if stale_ok and minute_ok else 1)"',
+        ]
+      interval: 60s
+      timeout: 10s
+      retries: 3
+      start_period: 120s
     deploy:
       resources:
         limits:
@@ -189,14 +223,15 @@ services:
   # BOT 3 (paper trading smoke test)
   # ==========================================
   bot3:
-    <<: *hbot-base
-    container_name: hbot-bot3
+    <<: *kzay-base
+    container_name: bot3
     profiles:
       - test
     env_file:
       - ../env/.env
     volumes:
       - ../data/bot3/conf:/home/hummingbot/conf
+      - ../data/shared/conf/connectors:/home/hummingbot/conf/connectors
       - ../data/bot3/logs:/home/hummingbot/logs
       - ../data/bot3/data:/home/hummingbot/data
       - ../data/bot3/scripts:/home/hummingbot/custom_scripts
@@ -205,24 +240,37 @@ services:
       - ../scripts/shared/headless_start.py:/home/hummingbot/bin/headless_start.py:ro
       - ../data/bot3/pmm_scripts:/home/hummingbot/pmm_scripts
       # ---- Shared controllers mount (Day 30) ----
-      - ../controllers:/home/hummingbot/controllers
+      - ../controllers:/home/hummingbot/controllers:ro
       - ../config:/home/hummingbot/project_config:ro
       - ../services:/home/hummingbot/services:ro
       # Mount test script into the scripts dir so `start --script` finds it
       - ../data/bot3/scripts/paper_test.py:/home/hummingbot/scripts/paper_test.py:ro
     command: /bin/bash -lc "export CONFIG_PASSWORD=\"$${CONFIG_PASSWORD:-$${BOT3_PASSWORD:-$${BOT1_PASSWORD:-}}}\"; if [ -z \"$${CONFIG_PASSWORD}\" ]; then echo '[fatal] BOT3_PASSWORD/BOT1_PASSWORD/CONFIG_PASSWORD missing; refusing interactive startup.' >&2; exit 64; fi; conda activate hummingbot && python ./bin/headless_start.py 2>> ./logs/errors.log"
     environment:
-      <<: *hbot-env
+      <<: *kzay-env
+      EXT_SIGNAL_RISK_ENABLED: "true"
       REDIS_CONSUMER_GROUP: hb_group_bot3
       CONFIG_FILE_NAME: v2_with_controllers.py
       SCRIPT_CONFIG: v2_epp_v2_4_bot3_eth_paper_smoke.yml
       BOT_MODE: ${BOT3_MODE:-paper}
       HEADLESS_MODE: "true"
+      HB_ORDER_EXEC_TRACE_ALL_LEVELS: "true"
+      PAPER_EXCHANGE_SERVICE_ONLY_BOT1: "false"
       PAPER_EXCHANGE_MODE: ${PAPER_EXCHANGE_MODE_BOT3:-disabled}
       PAPER_EXCHANGE_SYNC_TIMEOUT_MS: ${PAPER_EXCHANGE_SYNC_TIMEOUT_MS:-30000}
       BOT_POLICY_ROLE: paper_validation
       BOT_POLICY_MODE: paper_only
       BOT_POLICY_VERSION: multi_bot_policy_v1
+    healthcheck:
+      test:
+        [
+          "CMD-SHELL",
+          'python -c "import sys,time; from pathlib import Path; files=list(Path(''/home/hummingbot/logs/epp_v24'').rglob(''minute.csv'')); newest=max((f.stat().st_mtime for f in files), default=0); hb=Path(''/home/hummingbot/logs/heartbeat/strategy_heartbeat.json''); hb_ok=hb.exists() and (time.time()-hb.stat().st_mtime)<300; minute_ok=bool(files) and (time.time()-newest)<300; sys.exit(0 if minute_ok and hb_ok else 1)"',
+        ]
+      interval: 60s
+      timeout: 10s
+      retries: 3
+      start_period: 120s
     deploy:
       resources:
         limits:
@@ -236,14 +284,15 @@ services:
   # BOT 4 (binance testnet v2 matrix)
   # ==========================================
   bot4:
-    <<: *hbot-base
-    container_name: hbot-bot4
+    <<: *kzay-base
+    container_name: bot4
     profiles:
       - test
     env_file:
       - ../env/.env
     volumes:
       - ../data/bot4/conf:/home/hummingbot/conf
+      - ../data/shared/conf/connectors:/home/hummingbot/conf/connectors
       - ../data/bot4/logs:/home/hummingbot/logs
       - ../data/bot4/data:/home/hummingbot/data
       - ../data/bot4/scripts:/home/hummingbot/custom_scripts
@@ -258,17 +307,208 @@ services:
       - ../services:/home/hummingbot/services:ro
     command: /bin/bash -lc "export CONFIG_PASSWORD=\"$${CONFIG_PASSWORD:-$${BOT4_PASSWORD:-$${BOT1_PASSWORD:-}}}\"; if [ -z \"$${CONFIG_PASSWORD}\" ]; then echo '[fatal] BOT4_PASSWORD/BOT1_PASSWORD/CONFIG_PASSWORD missing; refusing interactive startup.' >&2; exit 64; fi; conda activate hummingbot && python ./bin/headless_start.py 2>> ./logs/errors.log"
     environment:
-      <<: *hbot-env
+      <<: *kzay-env
+      EXT_SIGNAL_RISK_ENABLED: "true"
       REDIS_CONSUMER_GROUP: hb_group_bot4
       CONFIG_FILE_NAME: v2_with_controllers.py
       SCRIPT_CONFIG: v2_epp_v2_4_bot4_binance_smoke.yml
       BOT_MODE: ${BOT4_MODE:-live}
       HEADLESS_MODE: "true"
+      HB_ORDER_EXEC_TRACE_ALL_LEVELS: "true"
+      PAPER_EXCHANGE_SERVICE_ONLY_BOT1: "false"
       PAPER_EXCHANGE_MODE: ${PAPER_EXCHANGE_MODE_BOT4:-disabled}
       PAPER_EXCHANGE_SYNC_TIMEOUT_MS: ${PAPER_EXCHANGE_SYNC_TIMEOUT_MS:-30000}
       BOT_POLICY_ROLE: connector_validation
       BOT_POLICY_MODE: testnet_probe
       BOT_POLICY_VERSION: multi_bot_policy_v1
+    healthcheck:
+      test:
+        [
+          "CMD-SHELL",
+          'python -c "import sys,time; from pathlib import Path; files=list(Path(''/home/hummingbot/logs/epp_v24'').rglob(''minute.csv'')); newest=max((f.stat().st_mtime for f in files), default=0); hb=Path(''/home/hummingbot/logs/heartbeat/strategy_heartbeat.json''); hb_ok=hb.exists() and (time.time()-hb.stat().st_mtime)<300; minute_ok=bool(files) and (time.time()-newest)<300; sys.exit(0 if minute_ok and hb_ok else 1)"',
+        ]
+      interval: 60s
+      timeout: 10s
+      retries: 3
+      start_period: 120s
+    deploy:
+      resources:
+        limits:
+          memory: 512M
+          cpus: "0.5"
+        reservations:
+          memory: 128M
+          cpus: "0.25"
+
+  # ==========================================
+  # BOT 5 (IFT/JOTA paper engine lane)
+  # ==========================================
+  bot5:
+    <<: *kzay-base
+    container_name: bot5
+    profiles:
+      - test
+    env_file:
+      - ../env/.env
+    volumes:
+      - ../data/bot5/conf:/home/hummingbot/conf
+      - ../data/shared/conf/connectors:/home/hummingbot/conf/connectors
+      - ../data/bot5/conf/.password_verification:/home/hummingbot/conf/.password_verification:ro
+      - ../data/bot5/logs:/home/hummingbot/logs
+      - ../data/bot5/data:/home/hummingbot/data
+      - ../data/bot5/scripts:/home/hummingbot/custom_scripts
+      - ../scripts/shared/v2_with_controllers.py:/home/hummingbot/custom_scripts/v2_with_controllers.py:ro
+      - ../scripts/shared/v2_with_controllers.py:/home/hummingbot/scripts/v2_with_controllers.py:ro
+      - ../scripts/shared/headless_start.py:/home/hummingbot/bin/headless_start.py:ro
+      - ../data/bot5/pmm_scripts:/home/hummingbot/pmm_scripts
+      # ---- Shared controllers mount (Day 30) ----
+      - ../controllers:/home/hummingbot/controllers:ro
+      - ../config:/home/hummingbot/project_config:ro
+      - ../services:/home/hummingbot/services:ro
+    command: /bin/bash -lc "export CONFIG_PASSWORD=\"$${CONFIG_PASSWORD:-$${BOT5_PASSWORD:-$${BOT1_PASSWORD:-}}}\"; if [ -z \"$${CONFIG_PASSWORD}\" ]; then echo '[fatal] BOT5_PASSWORD/BOT1_PASSWORD/CONFIG_PASSWORD missing; refusing interactive startup.' >&2; exit 64; fi; conda activate hummingbot && python ./bin/headless_start.py 2>> ./logs/errors.log"
+    environment:
+      <<: *kzay-env
+      EXT_SIGNAL_RISK_ENABLED: "true"
+      REDIS_CONSUMER_GROUP: hb_group_bot5
+      CONFIG_FILE_NAME: v2_with_controllers.py
+      SCRIPT_CONFIG: v2_epp_v2_4_bot5_ift_jota_paper.yml
+      BOT_MODE: ${BOT5_MODE:-paper}
+      HEADLESS_MODE: "true"
+      HB_ORDER_EXEC_TRACE_ALL_LEVELS: "true"
+      PAPER_EXCHANGE_SERVICE_ONLY_BOT1: "false"
+      PAPER_EXCHANGE_MODE: ${PAPER_EXCHANGE_MODE_BOT5:-disabled}
+      PAPER_EXCHANGE_SYNC_TIMEOUT_MS: ${PAPER_EXCHANGE_SYNC_TIMEOUT_MS:-30000}
+      BOT_POLICY_ROLE: paper_validation
+      BOT_POLICY_MODE: paper_only
+      BOT_POLICY_VERSION: multi_bot_policy_v1
+    healthcheck:
+      test:
+        [
+          "CMD-SHELL",
+          'python -c "import sys,time; from pathlib import Path; files=list(Path(''/home/hummingbot/logs/epp_v24'').rglob(''minute.csv'')); newest=max((f.stat().st_mtime for f in files), default=0); hb=Path(''/home/hummingbot/logs/heartbeat/strategy_heartbeat.json''); hb_ok=hb.exists() and (time.time()-hb.stat().st_mtime)<300; minute_ok=bool(files) and (time.time()-newest)<300; sys.exit(0 if minute_ok and hb_ok else 1)"',
+        ]
+      interval: 60s
+      timeout: 10s
+      retries: 3
+      start_period: 120s
+    deploy:
+      resources:
+        limits:
+          memory: 512M
+          cpus: "0.5"
+        reservations:
+          memory: 128M
+          cpus: "0.25"
+
+  # ==========================================
+  # BOT 6 (Directional CVD paper engine lane)
+  # ==========================================
+  bot6:
+    <<: *kzay-base
+    container_name: bot6
+    profiles:
+      - test
+    env_file:
+      - ../env/.env
+    volumes:
+      - ../data/bot6/conf:/home/hummingbot/conf
+      - ../data/shared/conf/connectors:/home/hummingbot/conf/connectors
+      - ../data/bot6/conf/.password_verification:/home/hummingbot/conf/.password_verification:ro
+      - ../data/bot6/logs:/home/hummingbot/logs
+      - ../data/bot6/data:/home/hummingbot/data
+      - ../data/bot6/scripts:/home/hummingbot/custom_scripts
+      - ../scripts/shared/v2_with_controllers.py:/home/hummingbot/custom_scripts/v2_with_controllers.py:ro
+      - ../scripts/shared/v2_with_controllers.py:/home/hummingbot/scripts/v2_with_controllers.py:ro
+      - ../scripts/shared/headless_start.py:/home/hummingbot/bin/headless_start.py:ro
+      - ../data/bot6/pmm_scripts:/home/hummingbot/pmm_scripts
+      - ../controllers:/home/hummingbot/controllers:ro
+      - ../config:/home/hummingbot/project_config:ro
+      - ../services:/home/hummingbot/services:ro
+    command: /bin/bash -lc "export CONFIG_PASSWORD=\"$${CONFIG_PASSWORD:-$${BOT6_PASSWORD:-$${BOT1_PASSWORD:-}}}\"; if [ -z \"$${CONFIG_PASSWORD}\" ]; then echo '[fatal] BOT6_PASSWORD/BOT1_PASSWORD/CONFIG_PASSWORD missing; refusing interactive startup.' >&2; exit 64; fi; conda activate hummingbot && python ./bin/headless_start.py 2>> ./logs/errors.log"
+    environment:
+      <<: *kzay-env
+      EXT_SIGNAL_RISK_ENABLED: "true"
+      REDIS_CONSUMER_GROUP: hb_group_bot6
+      CONFIG_FILE_NAME: v2_with_controllers.py
+      SCRIPT_CONFIG: v2_epp_v2_4_bot6_bitget_cvd_paper.yml
+      BOT_MODE: ${BOT6_MODE:-paper}
+      HEADLESS_MODE: "true"
+      HB_ORDER_EXEC_TRACE_ALL_LEVELS: "true"
+      PAPER_EXCHANGE_SERVICE_ONLY_BOT1: "false"
+      PAPER_EXCHANGE_MODE: ${PAPER_EXCHANGE_MODE_BOT6:-disabled}
+      PAPER_EXCHANGE_SYNC_TIMEOUT_MS: ${PAPER_EXCHANGE_SYNC_TIMEOUT_MS:-30000}
+      BOT_POLICY_ROLE: paper_validation
+      BOT_POLICY_MODE: paper_only
+      BOT_POLICY_VERSION: multi_bot_policy_v1
+    healthcheck:
+      test:
+        [
+          "CMD-SHELL",
+          'python -c "import sys,time; from pathlib import Path; files=list(Path(''/home/hummingbot/logs/epp_v24'').rglob(''minute.csv'')); newest=max((f.stat().st_mtime for f in files), default=0); hb=Path(''/home/hummingbot/logs/heartbeat/strategy_heartbeat.json''); hb_ok=hb.exists() and (time.time()-hb.stat().st_mtime)<300; minute_ok=bool(files) and (time.time()-newest)<300; sys.exit(0 if minute_ok and hb_ok else 1)"',
+        ]
+      interval: 60s
+      timeout: 10s
+      retries: 3
+      start_period: 120s
+    deploy:
+      resources:
+        limits:
+          memory: 512M
+          cpus: "0.5"
+        reservations:
+          memory: 128M
+          cpus: "0.25"
+
+  # ==========================================
+  # BOT 7 (Adaptive Absorption Grid paper lane)
+  # ==========================================
+  bot7:
+    <<: *kzay-base
+    container_name: bot7
+    profiles:
+      - test
+    env_file:
+      - ../env/.env
+    volumes:
+      - ../data/bot7/conf:/home/hummingbot/conf
+      - ../data/shared/conf/connectors:/home/hummingbot/conf/connectors
+      - ../data/bot7/conf/.password_verification:/home/hummingbot/conf/.password_verification:ro
+      - ../data/bot7/logs:/home/hummingbot/logs
+      - ../data/bot7/data:/home/hummingbot/data
+      - ../data/bot7/scripts:/home/hummingbot/custom_scripts
+      - ../scripts/shared/v2_with_controllers.py:/home/hummingbot/custom_scripts/v2_with_controllers.py:ro
+      - ../scripts/shared/v2_with_controllers.py:/home/hummingbot/scripts/v2_with_controllers.py:ro
+      - ../scripts/shared/headless_start.py:/home/hummingbot/bin/headless_start.py:ro
+      - ../data/bot7/pmm_scripts:/home/hummingbot/pmm_scripts
+      - ../controllers:/home/hummingbot/controllers:ro
+      - ../config:/home/hummingbot/project_config:ro
+      - ../services:/home/hummingbot/services:ro
+    command: /bin/bash -lc "export CONFIG_PASSWORD=\"$${CONFIG_PASSWORD:-$${BOT7_PASSWORD:-$${BOT1_PASSWORD:-}}}\"; if [ -z \"$${CONFIG_PASSWORD}\" ]; then echo '[fatal] BOT7_PASSWORD/BOT1_PASSWORD/CONFIG_PASSWORD missing; refusing interactive startup.' >&2; exit 64; fi; conda activate hummingbot && python ./bin/headless_start.py 2>> ./logs/errors.log"
+    environment:
+      <<: *kzay-env
+      EXT_SIGNAL_RISK_ENABLED: "true"
+      REDIS_CONSUMER_GROUP: hb_group_bot7
+      CONFIG_FILE_NAME: v2_with_controllers.py
+      SCRIPT_CONFIG: v2_epp_v2_4_bot7_adaptive_grid_paper.yml
+      BOT_MODE: ${BOT7_MODE:-paper}
+      HEADLESS_MODE: "true"
+      HB_ORDER_EXEC_TRACE_ALL_LEVELS: "true"
+      PAPER_EXCHANGE_SERVICE_ONLY_BOT1: "false"
+      PAPER_EXCHANGE_MODE: ${PAPER_EXCHANGE_MODE_BOT7:-disabled}
+      PAPER_EXCHANGE_SYNC_TIMEOUT_MS: ${PAPER_EXCHANGE_SYNC_TIMEOUT_MS:-30000}
+      BOT_POLICY_ROLE: paper_validation
+      BOT_POLICY_MODE: paper_only
+      BOT_POLICY_VERSION: multi_bot_policy_v1
+    healthcheck:
+      test:
+        [
+          "CMD-SHELL",
+          'python -c "import sys,time; from pathlib import Path; files=list(Path(''/home/hummingbot/logs/epp_v24'').rglob(''minute.csv'')); newest=max((f.stat().st_mtime for f in files), default=0); hb=Path(''/home/hummingbot/logs/heartbeat/strategy_heartbeat.json''); hb_ok=hb.exists() and (time.time()-hb.stat().st_mtime)<300; minute_ok=bool(files) and (time.time()-newest)<300; sys.exit(0 if minute_ok and hb_ok else 1)"',
+        ]
+      interval: 60s
+      timeout: 10s
+      retries: 3
+      start_period: 120s
     deploy:
       resources:
         limits:
@@ -283,14 +523,29 @@ services:
   # ==========================================
   redis:
     image: redis:7.2-alpine
-    container_name: hbot-redis
+    container_name: redis
     profiles:
       - external
     restart: unless-stopped
     logging: *default-logging
-    command: ["redis-server", "--appendonly", "yes"]
+    command:
+      [
+        "redis-server",
+        "--appendonly",
+        "yes",
+        "--auto-aof-rewrite-percentage",
+        "50",
+        "--auto-aof-rewrite-min-size",
+        "64mb",
+        "--maxmemory",
+        "${REDIS_MAXMEMORY:-1536mb}",
+        "--maxmemory-policy",
+        "${REDIS_MAXMEMORY_POLICY:-noeviction}",
+      ]
     ports:
       - "${REDIS_BIND_IP:-127.0.0.1}:${REDIS_PORT:-6379}:6379"
+    volumes:
+      - redis-data:/data
     networks:
       - trading
     healthcheck:
@@ -298,10 +553,19 @@ services:
       interval: 10s
       timeout: 5s
       retries: 5
+    stop_grace_period: 30s
+    deploy:
+      resources:
+        limits:
+          memory: 2G
+          cpus: "0.5"
+        reservations:
+          memory: 256M
+          cpus: "0.1"
 
   paper-exchange-service:
     <<: *control-plane-image
-    container_name: hbot-paper-exchange-service
+    container_name: paper-exchange-service
     profiles:
       - paper-exchange
     restart: unless-stopped
@@ -320,14 +584,14 @@ services:
       - PAPER_EXCHANGE_CONSUMER_GROUP=${PAPER_EXCHANGE_CONSUMER_GROUP:-hb_group_paper_exchange}
       - PAPER_EXCHANGE_CONSUMER_NAME=${PAPER_EXCHANGE_CONSUMER_NAME:-paper_exchange_1}
       - PAPER_EXCHANGE_ALLOWED_CONNECTORS=${PAPER_EXCHANGE_ALLOWED_CONNECTORS:-bitget_perpetual}
-      - PAPER_EXCHANGE_ALLOWED_COMMAND_PRODUCERS=${PAPER_EXCHANGE_ALLOWED_COMMAND_PRODUCERS:-hb_bridge_active_adapter}
-      - PAPER_EXCHANGE_MARKET_STREAM=${PAPER_EXCHANGE_MARKET_STREAM:-hb.market_data.v1}
+      - PAPER_EXCHANGE_ALLOWED_COMMAND_PRODUCERS=${PAPER_EXCHANGE_ALLOWED_COMMAND_PRODUCERS:-hb_bridge_active_adapter,hb_bridge_shadow_adapter,hb.paper_engine_v2}
+      - PAPER_EXCHANGE_MARKET_STREAM=${PAPER_EXCHANGE_MARKET_STREAM:-hb.market_quote.v1}
       - PAPER_EXCHANGE_COMMAND_STREAM=${PAPER_EXCHANGE_COMMAND_STREAM:-hb.paper_exchange.command.v1}
       - PAPER_EXCHANGE_EVENT_STREAM=${PAPER_EXCHANGE_EVENT_STREAM:-hb.paper_exchange.event.v1}
       - PAPER_EXCHANGE_HEARTBEAT_STREAM=${PAPER_EXCHANGE_HEARTBEAT_STREAM:-hb.paper_exchange.heartbeat.v1}
       - PAPER_EXCHANGE_AUDIT_STREAM=${PAPER_EXCHANGE_AUDIT_STREAM:-hb.audit.v1}
       - PAPER_EXCHANGE_HEARTBEAT_INTERVAL_MS=${PAPER_EXCHANGE_HEARTBEAT_INTERVAL_MS:-5000}
-      - PAPER_EXCHANGE_MARKET_STALE_AFTER_MS=${PAPER_EXCHANGE_MARKET_STALE_AFTER_MS:-15000}
+      - PAPER_EXCHANGE_MARKET_STALE_AFTER_MS=${PAPER_EXCHANGE_MARKET_STALE_AFTER_MS:-60000}
       - PAPER_EXCHANGE_READ_COUNT=${PAPER_EXCHANGE_READ_COUNT:-200}
       - PAPER_EXCHANGE_READ_BLOCK_MS=${PAPER_EXCHANGE_READ_BLOCK_MS:-250}
       - PAPER_EXCHANGE_PENDING_RECLAIM_ENABLED=${PAPER_EXCHANGE_PENDING_RECLAIM_ENABLED:-true}
@@ -335,6 +599,7 @@ services:
       - PAPER_EXCHANGE_PERSIST_SYNC_STATE_RESULTS=${PAPER_EXCHANGE_PERSIST_SYNC_STATE_RESULTS:-false}
       - PAPER_EXCHANGE_COMMAND_JOURNAL_PATH=${PAPER_EXCHANGE_COMMAND_JOURNAL_PATH:-/workspace/hbot/reports/verification/paper_exchange_command_journal_latest.json}
       - PAPER_EXCHANGE_STATE_SNAPSHOT_PATH=${PAPER_EXCHANGE_STATE_SNAPSHOT_PATH:-/workspace/hbot/reports/verification/paper_exchange_state_snapshot_latest.json}
+      - PAPER_EXCHANGE_PAIR_SNAPSHOT_PATH=${PAPER_EXCHANGE_PAIR_SNAPSHOT_PATH:-/workspace/hbot/reports/verification/paper_exchange_pair_snapshot_latest.json}
       - PAPER_EXCHANGE_MARKET_FILL_JOURNAL_PATH=${PAPER_EXCHANGE_MARKET_FILL_JOURNAL_PATH:-/workspace/hbot/reports/verification/paper_exchange_market_fill_journal_latest.json}
     volumes:
       - ..:/workspace/hbot
@@ -357,7 +622,7 @@ services:
 
   mosquitto:
     image: eclipse-mosquitto:2.0
-    container_name: hbot-mosquitto
+    container_name: mosquitto
     profiles:
       - external
     restart: unless-stopped
@@ -380,7 +645,7 @@ services:
 
   signal-service:
     <<: *control-plane-image
-    container_name: hbot-signal-service
+    container_name: signal-service
     profiles:
       - external
     restart: unless-stopped
@@ -430,7 +695,7 @@ services:
 
   risk-service:
     <<: *control-plane-image
-    container_name: hbot-risk-service
+    container_name: risk-service
     profiles:
       - external
     restart: unless-stopped
@@ -473,7 +738,7 @@ services:
 
   coordination-service:
     <<: *control-plane-image
-    container_name: hbot-coordination-service
+    container_name: coordination-service
     profiles:
       - external
     restart: unless-stopped
@@ -518,7 +783,7 @@ services:
 
   event-store-service:
     <<: *control-plane-image
-    container_name: hbot-event-store-service
+    container_name: event-store-service
     profiles:
       - external
     restart: unless-stopped
@@ -540,9 +805,9 @@ services:
       - EVENT_STORE_DB_APPEND_RETRIES=${EVENT_STORE_DB_APPEND_RETRIES:-3}
       - OPS_DB_HOST=${OPS_DB_HOST:-postgres}
       - OPS_DB_PORT=${OPS_DB_PORT:-5432}
-      - OPS_DB_NAME=${OPS_DB_NAME:-hbot_ops}
-      - OPS_DB_USER=${OPS_DB_USER:-hbot}
-      - OPS_DB_PASSWORD=${OPS_DB_PASSWORD:-hbot_dev_password}
+      - OPS_DB_NAME=${OPS_DB_NAME:-kzay_capital_ops}
+      - OPS_DB_USER=${OPS_DB_USER:-kzay_capital}
+      - OPS_DB_PASSWORD=${OPS_DB_PASSWORD:-kzay_capital_dev_password}
       - HB_INSTANCE_NAME=bot1
       - EVENT_PRODUCER_NAME=event_store_service
     volumes:
@@ -567,7 +832,7 @@ services:
 
   event-store-monitor:
     <<: *control-plane-image
-    container_name: hbot-event-store-monitor
+    container_name: event-store-monitor
     profiles:
       - external
     restart: unless-stopped
@@ -601,9 +866,155 @@ services:
       retries: 3
       start_period: 30s
 
+  market-data-service:
+    <<: *control-plane-image
+    container_name: market-data-service
+    profiles:
+      - external
+    restart: unless-stopped
+    logging: *default-logging
+    command: >
+      /bin/sh -lc "python /workspace/hbot/services/market_data_service/main.py"
+    environment:
+      - EXT_SIGNAL_RISK_ENABLED=${EXT_SIGNAL_RISK_ENABLED:-true}
+      - REDIS_HOST=${REDIS_HOST:-redis}
+      - REDIS_PORT=${REDIS_PORT:-6379}
+      - REDIS_DB=${REDIS_DB:-0}
+      - REDIS_PASSWORD=${REDIS_PASSWORD:-}
+      - MARKET_DATA_SERVICE_ENABLED=${MARKET_DATA_SERVICE_ENABLED:-false}
+      - MARKET_DATA_SERVICE_SUBSCRIPTIONS=${MARKET_DATA_SERVICE_SUBSCRIPTIONS:-bitget_perpetual|BTC-USDT}
+      - MARKET_DATA_SERVICE_RECONNECT_SEC=${MARKET_DATA_SERVICE_RECONNECT_SEC:-5}
+      - MARKET_DATA_SERVICE_DEPTH_ENABLED=${MARKET_DATA_SERVICE_DEPTH_ENABLED:-true}
+      - MARKET_DATA_SERVICE_DEPTH_LEVELS=${MARKET_DATA_SERVICE_DEPTH_LEVELS:-20}
+      - MARKET_DATA_SERVICE_STATUS_MAX_SEC=${MARKET_DATA_SERVICE_STATUS_MAX_SEC:-30}
+      - HB_REPORTS_ROOT=/workspace/hbot/reports
+      - PYTHONPATH=/workspace/hbot
+      - PYTHONPYCACHEPREFIX=/tmp/pycache
+    volumes:
+      - ..:/workspace/hbot
+      - ../reports:/workspace/hbot/reports
+    depends_on:
+      redis:
+        condition: service_healthy
+    networks:
+      - trading
+    healthcheck:
+      test:
+        [
+          "CMD-SHELL",
+          'python -c "import json,os,time,sys; from pathlib import Path; p=Path(''/workspace/hbot/reports/market_data_service/latest.json''); d=json.loads(p.read_text()) if p.exists() else {}; age=max(10,int(os.getenv(''MARKET_DATA_SERVICE_STATUS_MAX_SEC'',''30''))); ok=p.exists() and d.get(''status'') in {''ok'',''degraded''} and (time.time()-p.stat().st_mtime)<=age; sys.exit(0 if ok else 1)"',
+        ]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 20s
+
+  realtime-ui-api:
+    <<: *control-plane-image
+    container_name: realtime-ui-api
+    profiles:
+      - external
+    restart: unless-stopped
+    logging: *default-logging
+    command: >
+      /bin/sh -lc "python /workspace/hbot/services/realtime_ui_api/main.py"
+    ports:
+      - "${REALTIME_UI_API_BIND_IP:-127.0.0.1}:${REALTIME_UI_API_PORT:-9910}:9910"
+    environment:
+      - EXT_SIGNAL_RISK_ENABLED=${EXT_SIGNAL_RISK_ENABLED:-true}
+      - REDIS_HOST=${REDIS_HOST:-redis}
+      - REDIS_PORT=${REDIS_PORT:-6379}
+      - REDIS_DB=${REDIS_DB:-0}
+      - REDIS_PASSWORD=${REDIS_PASSWORD:-}
+      - REALTIME_UI_API_MODE=${REALTIME_UI_API_MODE:-disabled}
+      - REALTIME_UI_API_BIND_HOST=0.0.0.0
+      - REALTIME_UI_API_PORT=${REALTIME_UI_API_PORT:-9910}
+      - REALTIME_UI_API_CORS_ALLOW_ORIGIN=${REALTIME_UI_API_CORS_ALLOW_ORIGIN:-*}
+      - REALTIME_UI_API_ALLOWED_ORIGINS=${REALTIME_UI_API_ALLOWED_ORIGINS:-}
+      - REALTIME_UI_API_AUTH_ENABLED=${REALTIME_UI_API_AUTH_ENABLED:-false}
+      - REALTIME_UI_API_AUTH_TOKEN=${REALTIME_UI_API_AUTH_TOKEN:-}
+      - REALTIME_UI_API_ALLOW_QUERY_TOKEN=${REALTIME_UI_API_ALLOW_QUERY_TOKEN:-false}
+      - REALTIME_UI_API_POLL_MS=${REALTIME_UI_API_POLL_MS:-200}
+      - REALTIME_UI_API_CONSUMER_GROUP=${REALTIME_UI_API_CONSUMER_GROUP:-hb_realtime_ui_api_v1}
+      - REALTIME_UI_API_CONSUMER_NAME=${REALTIME_UI_API_CONSUMER_NAME:-realtime-ui-api-1}
+      - REALTIME_UI_API_STREAM_STALE_MS=${REALTIME_UI_API_STREAM_STALE_MS:-15000}
+      - REALTIME_UI_API_FALLBACK_ENABLED=${REALTIME_UI_API_FALLBACK_ENABLED:-true}
+      - REALTIME_UI_API_DEGRADED_MODE_ENABLED=${REALTIME_UI_API_DEGRADED_MODE_ENABLED:-false}
+      - REALTIME_UI_API_MAX_FILLS_PER_KEY=${REALTIME_UI_API_MAX_FILLS_PER_KEY:-200}
+      - REALTIME_UI_API_MAX_EVENTS_PER_KEY=${REALTIME_UI_API_MAX_EVENTS_PER_KEY:-200}
+      - REALTIME_UI_API_MAX_HISTORY_POINTS=${REALTIME_UI_API_MAX_HISTORY_POINTS:-5000}
+      - REALTIME_UI_API_MAX_FALLBACK_FILLS=${REALTIME_UI_API_MAX_FALLBACK_FILLS:-120}
+      - REALTIME_UI_API_MAX_FALLBACK_ORDERS=${REALTIME_UI_API_MAX_FALLBACK_ORDERS:-40}
+      - REALTIME_UI_API_DB_ENABLED=${REALTIME_UI_API_DB_ENABLED:-true}
+      - REALTIME_UI_API_CSV_FAILOVER_ONLY=${REALTIME_UI_API_CSV_FAILOVER_ONLY:-true}
+      - REALTIME_UI_API_DB_LOOKBACK_HOURS=${REALTIME_UI_API_DB_LOOKBACK_HOURS:-168}
+      - REALTIME_UI_API_DB_MAX_POINTS_MULTIPLIER=${REALTIME_UI_API_DB_MAX_POINTS_MULTIPLIER:-20}
+      - REALTIME_UI_API_DB_STATEMENT_TIMEOUT_MS=${REALTIME_UI_API_DB_STATEMENT_TIMEOUT_MS:-1500}
+      - REALTIME_UI_API_DB_LOCK_TIMEOUT_MS=${REALTIME_UI_API_DB_LOCK_TIMEOUT_MS:-750}
+      - REALTIME_UI_API_SSE_ENABLED=${REALTIME_UI_API_SSE_ENABLED:-false}
+      - OPS_DB_HOST=${OPS_DB_HOST:-postgres}
+      - OPS_DB_PORT=${OPS_DB_PORT:-5432}
+      - OPS_DB_NAME=${OPS_DB_NAME:-kzay_capital_ops}
+      - OPS_DB_USER=${OPS_DB_USER:-kzay_capital}
+      - OPS_DB_PASSWORD=${OPS_DB_PASSWORD:-kzay_capital_dev_password}
+      - HB_REPORTS_ROOT=/workspace/hbot/reports
+      - HB_DATA_ROOT=/workspace/hbot/data
+      - PYTHONPATH=/workspace/hbot
+      - PYTHONPYCACHEPREFIX=/tmp/pycache
+    volumes:
+      - ..:/workspace/hbot
+      - ../reports:/workspace/hbot/reports
+    depends_on:
+      redis:
+        condition: service_healthy
+      desk-snapshot-service:
+        condition: service_started
+    networks:
+      - trading
+    healthcheck:
+      test:
+        [
+          "CMD-SHELL",
+          'python -c "import json,urllib.request; d=json.loads(urllib.request.urlopen(''http://localhost:9910/health'', timeout=3).read().decode(''utf-8'')); import sys; sys.exit(0 if d.get(''status'') in {''ok'',''disabled''} else 1)"',
+        ]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 20s
+
+  realtime-ui-web:
+    image: python:3.11-slim
+    container_name: realtime-ui-web
+    profiles:
+      - external
+    restart: unless-stopped
+    logging: *default-logging
+    working_dir: /workspace/hbot/apps/realtime_ui
+    command: >
+      /bin/sh -lc "python -m http.server ${REALTIME_UI_WEB_PORT:-8088}"
+    ports:
+      - "${REALTIME_UI_WEB_BIND_IP:-127.0.0.1}:${REALTIME_UI_WEB_PORT:-8088}:8088"
+    volumes:
+      - ..:/workspace/hbot:ro
+    depends_on:
+      realtime-ui-api:
+        condition: service_started
+    networks:
+      - trading
+    healthcheck:
+      test:
+        [
+          "CMD-SHELL",
+          'python -c "import urllib.request; urllib.request.urlopen(''http://localhost:8088'', timeout=3)"',
+        ]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 10s
+
   day2-gate-monitor:
     <<: *control-plane-image
-    container_name: hbot-day2-gate-monitor
+    container_name: day2-gate-monitor
     profiles:
       - external
     restart: unless-stopped
@@ -643,7 +1054,7 @@ services:
 
   reconciliation-service:
     <<: *control-plane-image
-    container_name: hbot-reconciliation-service
+    container_name: reconciliation-service
     profiles:
       - external
     restart: unless-stopped
@@ -680,10 +1091,18 @@ services:
       timeout: 10s
       retries: 3
       start_period: 30s
+    deploy:
+      resources:
+        limits:
+          memory: 256M
+          cpus: "0.5"
+        reservations:
+          memory: 64M
+          cpus: "0.1"
 
   exchange-snapshot-service:
     <<: *control-plane-image
-    container_name: hbot-exchange-snapshot-service
+    container_name: exchange-snapshot-service
     profiles:
       - external
     restart: unless-stopped
@@ -724,7 +1143,7 @@ services:
 
   shadow-parity-service:
     <<: *control-plane-image
-    container_name: hbot-shadow-parity-service
+    container_name: shadow-parity-service
     profiles:
       - external
     restart: unless-stopped
@@ -759,7 +1178,7 @@ services:
 
   portfolio-risk-service:
     <<: *control-plane-image
-    container_name: hbot-portfolio-risk-service
+    container_name: portfolio-risk-service
     profiles:
       - external
     restart: unless-stopped
@@ -799,10 +1218,18 @@ services:
       timeout: 10s
       retries: 3
       start_period: 30s
+    deploy:
+      resources:
+        limits:
+          memory: 256M
+          cpus: "0.5"
+        reservations:
+          memory: 64M
+          cpus: "0.1"
 
   portfolio-allocator-service:
     <<: *control-plane-image
-    container_name: hbot-portfolio-allocator-service
+    container_name: portfolio-allocator-service
     profiles:
       - external
     restart: unless-stopped
@@ -842,7 +1269,7 @@ services:
 
   soak-monitor:
     <<: *control-plane-image
-    container_name: hbot-soak-monitor
+    container_name: soak-monitor
     profiles:
       - external
     restart: unless-stopped
@@ -879,7 +1306,7 @@ services:
 
   daily-ops-reporter:
     <<: *control-plane-image
-    container_name: hbot-daily-ops-reporter
+    container_name: daily-ops-reporter
     profiles:
       - external
     restart: unless-stopped
@@ -911,7 +1338,7 @@ services:
 
   telegram-bot:
     <<: *control-plane-image
-    container_name: hbot-telegram-bot
+    container_name: telegram-bot
     profiles:
       - external
     restart: unless-stopped
@@ -936,7 +1363,7 @@ services:
 
   kill-switch:
     <<: *control-plane-image
-    container_name: hbot-kill-switch
+    container_name: kill-switch
     profiles:
       - external
     restart: unless-stopped
@@ -948,9 +1375,12 @@ services:
     environment:
       - KILL_SWITCH_DRY_RUN=${KILL_SWITCH_DRY_RUN:-true}
       - KILL_SWITCH_EXCHANGE=${KILL_SWITCH_EXCHANGE:-bitget}
-      - KILL_SWITCH_API_KEY=${KILL_SWITCH_API_KEY:-}
-      - KILL_SWITCH_SECRET=${KILL_SWITCH_SECRET:-}
-      - KILL_SWITCH_PASSPHRASE=${KILL_SWITCH_PASSPHRASE:-}
+      - KILL_SWITCH_API_KEY=${KILL_SWITCH_API_KEY:-${BOT1_BITGET_API_KEY:-}}
+      - KILL_SWITCH_SECRET=${KILL_SWITCH_SECRET:-${BOT1_BITGET_API_SECRET:-}}
+      - KILL_SWITCH_PASSPHRASE=${KILL_SWITCH_PASSPHRASE:-${BOT1_BITGET_PASSPHRASE:-}}
+      - KILL_SWITCH_STOP_BOT=${KILL_SWITCH_STOP_BOT:-true}
+      - KILL_SWITCH_BOT_CONTAINER=${KILL_SWITCH_BOT_CONTAINER:-bot1}
+      - KILL_SWITCH_FLATTEN_POSITION=${KILL_SWITCH_FLATTEN_POSITION:-false}
       - KILL_SWITCH_HTTP_PORT=9900
       - EXT_SIGNAL_RISK_ENABLED=true
       - REDIS_HOST=${REDIS_HOST:-redis}
@@ -979,7 +1409,7 @@ services:
 
   ops-db-writer:
     <<: *control-plane-image
-    container_name: hbot-ops-db-writer
+    container_name: ops-db-writer
     restart: unless-stopped
     logging: *default-logging
     command: >
@@ -989,11 +1419,12 @@ services:
       - HB_REPORTS_ROOT=/workspace/hbot/reports
       - OPS_DB_HOST=${OPS_DB_HOST:-postgres}
       - OPS_DB_PORT=${OPS_DB_PORT:-5432}
-      - OPS_DB_NAME=${OPS_DB_NAME:-hbot_ops}
-      - OPS_DB_USER=${OPS_DB_USER:-hbot}
-      - OPS_DB_PASSWORD=${OPS_DB_PASSWORD:-hbot_dev_password}
+      - OPS_DB_NAME=${OPS_DB_NAME:-kzay_capital_ops}
+      - OPS_DB_USER=${OPS_DB_USER:-kzay_capital}
+      - OPS_DB_PASSWORD=${OPS_DB_PASSWORD:-kzay_capital_dev_password}
       - OPS_DB_WRITER_INTERVAL_SEC=${OPS_DB_WRITER_INTERVAL_SEC:-300}
-      - OPS_DB_WRITER_HEALTH_MAX_SEC=${OPS_DB_WRITER_HEALTH_MAX_SEC:-900}
+      - OPS_DB_WRITER_HEALTH_MAX_SEC=${OPS_DB_WRITER_HEALTH_MAX_SEC:-21600}
+      - OPS_DB_APPLY_SCHEMA_EACH_RUN=${OPS_DB_APPLY_SCHEMA_EACH_RUN:-false}
     volumes:
       - ..:/workspace/hbot
     depends_on:
@@ -1020,7 +1451,7 @@ services:
   # ---- Bot KPI Exporter ----
   bot-metrics-exporter:
     image: python:3.11-slim
-    container_name: hbot-bot-metrics-exporter
+    container_name: bot-metrics-exporter
     restart: unless-stopped
     logging: *default-logging
     command: >
@@ -1032,6 +1463,7 @@ services:
       - METRICS_PORT=9400
       - METRICS_PATH=/metrics
       - EXPORTER_LOG_TAIL_LINES=200
+      - EXPORTER_CACHE_TTL_S=30
     volumes:
       - ..:/workspace/hbot:ro
     networks:
@@ -1042,10 +1474,10 @@ services:
           "CMD",
           "python",
           "-c",
-          "import urllib.request; urllib.request.urlopen('http://localhost:9400/metrics')",
+          "import urllib.request; urllib.request.urlopen('http://localhost:9400/health')",
         ]
       interval: 30s
-      timeout: 10s
+      timeout: 15s
       retries: 3
       start_period: 10s
     deploy:
@@ -1057,7 +1489,7 @@ services:
   # ---- Control-plane KPI Exporter ----
   control-plane-metrics-exporter:
     <<: *control-plane-image
-    container_name: hbot-control-plane-metrics-exporter
+    container_name: control-plane-metrics-exporter
     restart: unless-stopped
     logging: *default-logging
     command: >
@@ -1068,10 +1500,24 @@ services:
       - CONTROL_PLANE_METRICS_PORT=9401
       - CONTROL_PLANE_METRICS_PATH=/metrics
       - CONTROL_PLANE_FRESHNESS_MAX_SEC=${CONTROL_PLANE_FRESHNESS_MAX_SEC:-1800}
+      - REDIS_ENABLED=${REDIS_STREAMS_ENABLED:-true}
+      - REDIS_HOST=${REDIS_HOST:-redis}
+      - REDIS_PORT=${REDIS_PORT:-6379}
+      - REDIS_DB=${REDIS_DB:-0}
+      - REDIS_PASSWORD=${REDIS_PASSWORD:-}
+      - PAPER_EXCHANGE_HEARTBEAT_STREAM=${PAPER_EXCHANGE_HEARTBEAT_STREAM:-hb.paper_exchange.heartbeat.v1}
+      - PAPER_EXCHANGE_HEARTBEAT_MAX_AGE_SEC=${PAPER_EXCHANGE_HEARTBEAT_MAX_AGE_SEC:-30}
+      - PAPER_EXCHANGE_LOAD_REPORT_PATH=${PAPER_EXCHANGE_LOAD_REPORT_PATH:-verification/paper_exchange_load_latest.json}
+      - PAPER_EXCHANGE_THRESHOLD_INPUTS_PATH=${PAPER_EXCHANGE_THRESHOLD_INPUTS_PATH:-verification/paper_exchange_threshold_inputs_latest.json}
+      - PAPER_EXCHANGE_COMMAND_JOURNAL_PATH=${PAPER_EXCHANGE_COMMAND_JOURNAL_PATH:-verification/paper_exchange_command_journal_latest.json}
+      - PAPER_EXCHANGE_STATE_SNAPSHOT_PATH=${PAPER_EXCHANGE_STATE_SNAPSHOT_PATH:-verification/paper_exchange_state_snapshot_latest.json}
+      - PAPER_EXCHANGE_PAIR_SNAPSHOT_PATH=${PAPER_EXCHANGE_PAIR_SNAPSHOT_PATH:-verification/paper_exchange_pair_snapshot_latest.json}
+      - PAPER_EXCHANGE_MARKET_FILL_JOURNAL_PATH=${PAPER_EXCHANGE_MARKET_FILL_JOURNAL_PATH:-verification/paper_exchange_market_fill_journal_latest.json}
     volumes:
       - ..:/workspace/hbot:ro
     networks:
       - monitoring
+      - trading
     healthcheck:
       test:
         [
@@ -1093,14 +1539,19 @@ services:
   # ---- PostgreSQL Operational Store (Day 25) ----
   postgres:
     image: ${OPS_DB_IMAGE:-timescale/timescaledb:latest-pg16}
-    container_name: hbot-postgres
+    container_name: postgres
     restart: unless-stopped
     logging: *default-logging
-    command: ["postgres", "-c", "shared_preload_libraries=${OPS_DB_SHARED_PRELOAD_LIBRARIES:-timescaledb}"]
+    command:
+      [
+        "postgres",
+        "-c",
+        "shared_preload_libraries=${OPS_DB_SHARED_PRELOAD_LIBRARIES:-timescaledb}",
+      ]
     environment:
-      - POSTGRES_DB=${OPS_DB_NAME:-hbot_ops}
-      - POSTGRES_USER=${OPS_DB_USER:-hbot}
-      - POSTGRES_PASSWORD=${OPS_DB_PASSWORD:-hbot_dev_password}
+      - POSTGRES_DB=${OPS_DB_NAME:-kzay_capital_ops}
+      - POSTGRES_USER=${OPS_DB_USER:-kzay_capital}
+      - POSTGRES_PASSWORD=${OPS_DB_PASSWORD:-kzay_capital_dev_password}
       - PGDATA=/var/lib/postgresql/data/pgdata
     ports:
       - "${OPS_DB_BIND_IP:-127.0.0.1}:${OPS_DB_PORT:-5432}:5432"
@@ -1113,7 +1564,7 @@ services:
       test:
         [
           "CMD-SHELL",
-          "pg_isready -U ${OPS_DB_USER:-hbot} -d ${OPS_DB_NAME:-hbot_ops}",
+          "pg_isready -U ${OPS_DB_USER:-kzay_capital} -d ${OPS_DB_NAME:-kzay_capital_ops}",
         ]
       interval: 10s
       timeout: 5s
@@ -1127,13 +1578,13 @@ services:
   # ---- Optional pgAdmin for local ops DB management ----
   pgadmin:
     image: dpage/pgadmin4:8.14
-    container_name: hbot-pgadmin
+    container_name: pgadmin
     profiles:
       - ops-tools
     restart: unless-stopped
     logging: *default-logging
     environment:
-      - PGADMIN_DEFAULT_EMAIL=${PGADMIN_DEFAULT_EMAIL:-ops@example.local}
+      - PGADMIN_DEFAULT_EMAIL=${PGADMIN_DEFAULT_EMAIL:-ops@example.com}
       - PGADMIN_DEFAULT_PASSWORD=${PGADMIN_DEFAULT_PASSWORD:-admin}
       - PGADMIN_CONFIG_SERVER_MODE=False
     ports:
@@ -1144,94 +1595,10 @@ services:
       postgres:
         condition: service_healthy
 
-  # ---- TradeNote (self-hosted trading journal, optional profile) ----
-  tradenote-mongo:
-    image: mongo:7
-    container_name: hbot-tradenote-mongo
-    profiles:
-      - tradenote
-    restart: unless-stopped
-    logging: *default-logging
-    environment:
-      - MONGO_INITDB_ROOT_USERNAME=${TRADENOTE_MONGO_USER:-tradenote}
-      - MONGO_INITDB_ROOT_PASSWORD=${TRADENOTE_MONGO_PASSWORD:-tradenote_change_me}
-      - MONGO_INITDB_DATABASE=${TRADENOTE_MONGO_DB:-tradenote}
-    volumes:
-      - tradenote-mongo-data:/data/db
-    networks:
-      - trading
-
-  tradenote:
-    image: eleventrading/tradenote:latest
-    container_name: hbot-tradenote
-    profiles:
-      - tradenote
-    restart: unless-stopped
-    logging: *default-logging
-    environment:
-      - MONGO_URI=mongodb://${TRADENOTE_MONGO_USER:-tradenote}:${TRADENOTE_MONGO_PASSWORD:-tradenote_change_me}@tradenote-mongo:27017/${TRADENOTE_MONGO_DB:-tradenote}?authSource=admin
-      - TRADENOTE_DATABASE=${TRADENOTE_MONGO_DB:-tradenote}
-      - APP_ID=${TRADENOTE_APP_ID:-replace_me_app_id}
-      - MASTER_KEY=${TRADENOTE_MASTER_KEY:-replace_me_master_key}
-      - TRADENOTE_PORT=8080
-    ports:
-      - "${TRADENOTE_BIND_IP:-127.0.0.1}:${TRADENOTE_PORT:-8080}:8080"
-    depends_on:
-      tradenote-mongo:
-        condition: service_started
-    networks:
-      - trading
-
-  tradenote-sync:
-    <<: *control-plane-image
-    container_name: hbot-tradenote-sync
-    profiles:
-      - tradenote
-    restart: unless-stopped
-    logging: *default-logging
-    command: >
-      /bin/sh -lc "python /workspace/hbot/scripts/ops/tradenote_sync.py --interval-sec ${TRADENOTE_SYNC_INTERVAL_SEC:-1800}"
-    environment:
-      - HB_DATA_ROOT=/workspace/hbot/data
-      - TRADENOTE_URL=${TRADENOTE_URL:-http://tradenote:8080}
-      - TRADENOTE_API_KEY=${TRADENOTE_API_KEY:-}
-      - TRADENOTE_SELECTED_BROKER=${TRADENOTE_SELECTED_BROKER:-template}
-      - TRADENOTE_UPLOAD_MFE=${TRADENOTE_UPLOAD_MFE:-false}
-      - TRADENOTE_SYNC_INCLUDE_TODAY=${TRADENOTE_SYNC_INCLUDE_TODAY:-false}
-      - TRADENOTE_SYNC_LOOKBACK_DAYS=${TRADENOTE_SYNC_LOOKBACK_DAYS:-14}
-      - TRADENOTE_SYNC_BOT_VARIANTS=${TRADENOTE_SYNC_BOT_VARIANTS:-}
-      - TRADENOTE_ACCOUNT_PREFIX=${TRADENOTE_ACCOUNT_PREFIX:-hbot}
-      - TRADENOTE_SECURITY_TYPE=${TRADENOTE_SECURITY_TYPE:-0}
-      - TRADENOTE_SETTLEMENT_DAYS=${TRADENOTE_SETTLEMENT_DAYS:-0}
-      - TRADENOTE_SYNC_MAX_DAYS_PER_RUN=${TRADENOTE_SYNC_MAX_DAYS_PER_RUN:-2}
-      - TRADENOTE_SYNC_MAX_ROWS_PER_POST=${TRADENOTE_SYNC_MAX_ROWS_PER_POST:-100}
-      - TRADENOTE_SYNC_REQUEST_TIMEOUT_SEC=${TRADENOTE_SYNC_REQUEST_TIMEOUT_SEC:-20}
-      - TRADENOTE_SYNC_REQUEST_MAX_ATTEMPTS=${TRADENOTE_SYNC_REQUEST_MAX_ATTEMPTS:-3}
-      - TRADENOTE_SYNC_STATE_PATH=${TRADENOTE_SYNC_STATE_PATH:-/workspace/hbot/reports/tradenote/sync_state.json}
-      - TRADENOTE_SYNC_REPORT_PATH=${TRADENOTE_SYNC_REPORT_PATH:-/workspace/hbot/reports/tradenote/sync_latest.json}
-      - TRADENOTE_SYNC_HEALTH_MAX_SEC=${TRADENOTE_SYNC_HEALTH_MAX_SEC:-5400}
-    volumes:
-      - ..:/workspace/hbot
-    depends_on:
-      tradenote:
-        condition: service_started
-    networks:
-      - trading
-    healthcheck:
-      test:
-        [
-          "CMD-SHELL",
-          'python -c "import os,time,sys; from pathlib import Path; p=Path(os.getenv(''TRADENOTE_SYNC_REPORT_PATH'',''/workspace/hbot/reports/tradenote/sync_latest.json'')); mx=float(os.getenv(''TRADENOTE_SYNC_HEALTH_MAX_SEC'',''5400'')); sys.exit(0 if p.exists() and (time.time()-p.stat().st_mtime)<=mx else 1)"',
-        ]
-      interval: 60s
-      timeout: 10s
-      retries: 3
-      start_period: 30s
-
   # ---- Prometheus ----
   prometheus:
     image: prom/prometheus:v2.51.2
-    container_name: hbot-prometheus
+    container_name: prometheus
     restart: unless-stopped
     logging: *default-logging
     command:
@@ -1273,7 +1640,7 @@ services:
   # ---- Grafana ----
   grafana:
     image: grafana/grafana:10.4.2
-    container_name: hbot-grafana
+    container_name: grafana
     restart: unless-stopped
     logging: *default-logging
     environment:
@@ -1288,9 +1655,9 @@ services:
       - GF_INSTALL_PLUGINS=${GF_INSTALL_PLUGINS:-grafana-clock-panel}
       - OPS_DB_HOST=${OPS_DB_HOST:-postgres}
       - OPS_DB_PORT=${OPS_DB_PORT:-5432}
-      - OPS_DB_NAME=${OPS_DB_NAME:-hbot_ops}
-      - OPS_DB_USER=${OPS_DB_USER:-hbot}
-      - OPS_DB_PASSWORD=${OPS_DB_PASSWORD:-hbot_dev_password}
+      - OPS_DB_NAME=${OPS_DB_NAME:-kzay_capital_ops}
+      - OPS_DB_USER=${OPS_DB_USER:-kzay_capital}
+      - OPS_DB_PASSWORD=${OPS_DB_PASSWORD:-kzay_capital_dev_password}
     volumes:
       - grafana-data:/var/lib/grafana
       - ../monitoring/grafana/provisioning:/etc/grafana/provisioning:ro
@@ -1327,7 +1694,7 @@ services:
   # ---- Node Exporter ----
   node-exporter:
     image: prom/node-exporter:v1.8.1
-    container_name: hbot-node-exporter
+    container_name: node-exporter
     restart: unless-stopped
     logging: *default-logging
     command:
@@ -1366,7 +1733,7 @@ services:
   # ---- cAdvisor ----
   cadvisor:
     image: gcr.io/cadvisor/cadvisor:v0.49.1
-    container_name: hbot-cadvisor
+    container_name: cadvisor
     restart: unless-stopped
     logging: *default-logging
     volumes:
@@ -1404,7 +1771,7 @@ services:
   # ---- Loki ----
   loki:
     image: grafana/loki:2.9.8
-    container_name: hbot-loki
+    container_name: loki
     restart: unless-stopped
     logging: *default-logging
     command: ["-config.file=/etc/loki/loki-config.yml"]
@@ -1438,7 +1805,7 @@ services:
   # ---- Promtail ----
   promtail:
     image: grafana/promtail:2.9.8
-    container_name: hbot-promtail
+    container_name: promtail
     restart: unless-stopped
     logging: *default-logging
     command: ["-config.file=/etc/promtail/promtail-config.yml"]
@@ -1459,7 +1826,7 @@ services:
   # ---- Alertmanager (optional, activate with profile) ----
   alertmanager:
     image: prom/alertmanager:v0.27.0
-    container_name: hbot-alertmanager
+    container_name: alertmanager
     restart: unless-stopped
     logging: *default-logging
     profiles:
@@ -1467,7 +1834,6 @@ services:
     command:
       - "--config.file=/etc/alertmanager/alertmanager.yml"
       - "--storage.path=/alertmanager"
-      - "--config.expand-env=true"
     environment:
       - TELEGRAM_BOT_TOKEN=${TELEGRAM_BOT_TOKEN:-}
       - TELEGRAM_CHAT_ID=${TELEGRAM_CHAT_ID:-0}
@@ -1486,7 +1852,7 @@ services:
   # ---- Local webhook sink for alert delivery tests ----
   alert-webhook-sink:
     image: python:3.11-slim
-    container_name: hbot-alert-webhook-sink
+    container_name: alert-webhook-sink
     restart: unless-stopped
     logging: *default-logging
     profiles:
@@ -1528,7 +1894,7 @@ services:
   # ==========================================
   desk-snapshot-service:
     <<: *control-plane-image
-    container_name: hbot-desk-snapshot
+    container_name: desk-snapshot
     restart: unless-stopped
     volumes:
       - ..:/workspace/hbot:ro
@@ -1555,7 +1921,7 @@ services:
   # ==========================================
   bot-watchdog:
     <<: *control-plane-image
-    container_name: hbot-bot-watchdog
+    container_name: bot-watchdog
     restart: unless-stopped
     volumes:
       - /var/run/docker.sock:/var/run/docker.sock
@@ -1565,7 +1931,7 @@ services:
       - PYTHONPATH=/workspace/hbot
       - PYTHONPYCACHEPREFIX=/tmp/pycache
       - HB_DATA_ROOT=/workspace/hbot/data
-      - WATCHDOG_BOTS=bot1
+      - WATCHDOG_BOTS=bot1,bot2,bot3,bot4,bot5,bot6,bot7
       - WATCHDOG_STALE_THRESHOLD_S=300
       - WATCHDOG_CHECK_INTERVAL_S=60
       - WATCHDOG_PAUSE_BEFORE_RESTART_S=120
@@ -1577,7 +1943,7 @@ services:
       - REDIS_PORT=${REDIS_PORT:-6379}
       - REDIS_PASSWORD=${REDIS_PASSWORD:-}
       - EXT_SIGNAL_RISK_ENABLED=${EXT_SIGNAL_RISK_ENABLED:-false}
-      - WATCHDOG_CONTAINER_PREFIX=hbot-
+      - WATCHDOG_CONTAINER_PREFIX=${WATCHDOG_CONTAINER_PREFIX:-}
       - WATCHDOG_STATE_FILE=/tmp/watchdog_state.json
       - TELEGRAM_BOT_TOKEN=${TELEGRAM_BOT_TOKEN:-}
       - TELEGRAM_CHAT_ID=${TELEGRAM_CHAT_ID:-}

@@ -6,6 +6,7 @@ Implements the MarketDataFeed protocol with three adapters:
 - NullDataFeed: always returns None (for tests without live data)
 
 CCXTDataFeed is implemented but requires ccxt.pro and runs in a daemon thread.
+ReplayDataFeed accepts both legacy market_snapshot and canonical market_quote events.
 """
 from __future__ import annotations
 
@@ -179,9 +180,10 @@ class ReplayDataFeed:
                 continue
             try:
                 ev = json.loads(line)
-                if ev.get("event_type") == "market_snapshot":
-                    if ev.get("trading_pair") == self._trading_pair:
-                        self._snapshots.append(ev)
+                if ev.get("trading_pair") != self._trading_pair:
+                    continue
+                if ev.get("event_type") in {"market_snapshot", "market_quote"}:
+                    self._snapshots.append(ev)
             except Exception:
                 pass
         logger.info("ReplayDataFeed: loaded %d snapshots for %s", len(self._snapshots), self._trading_pair)
@@ -192,15 +194,20 @@ class ReplayDataFeed:
         ev = self._snapshots[self._idx]
         self._idx += 1
 
-        mid = Decimal(str(ev.get("mid_price", 0)))
-        if mid <= _ZERO:
-            return None
-
-        # Synthesize a minimal L1 book from mid price
-        spread_pct = Decimal("0.0005")  # 5bps synthetic spread
-        half = mid * spread_pct / 2
-        bid = BookLevel(price=mid - half, size=Decimal("1"))
-        ask = BookLevel(price=mid + half, size=Decimal("1"))
+        best_bid = Decimal(str(ev.get("best_bid", 0) or 0))
+        best_ask = Decimal(str(ev.get("best_ask", 0) or 0))
+        if best_bid > _ZERO and best_ask > _ZERO and best_ask >= best_bid:
+            bid = BookLevel(price=best_bid, size=Decimal(str(ev.get("best_bid_size", 1) or 1)))
+            ask = BookLevel(price=best_ask, size=Decimal(str(ev.get("best_ask_size", 1) or 1)))
+        else:
+            mid = Decimal(str(ev.get("mid_price", 0) or 0))
+            if mid <= _ZERO:
+                return None
+            # Synthesize a minimal L1 book from mid price for legacy snapshots.
+            spread_pct = Decimal("0.0005")  # 5bps synthetic spread
+            half = mid * spread_pct / 2
+            bid = BookLevel(price=mid - half, size=Decimal("1"))
+            ask = BookLevel(price=mid + half, size=Decimal("1"))
 
         return OrderBookSnapshot(
             instrument_id=instrument_id,

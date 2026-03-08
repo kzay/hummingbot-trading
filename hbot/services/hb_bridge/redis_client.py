@@ -5,6 +5,8 @@ import logging
 import time
 from typing import Dict, List, Optional, Tuple
 
+from services.contracts.stream_names import STREAM_RETENTION_MAXLEN
+
 try:
     import redis  # type: ignore
     from redis.exceptions import ConnectionError as RedisConnectionError
@@ -149,8 +151,9 @@ class RedisStreamClient:
             return None
         body = {"payload": json.dumps(payload)}
         kwargs: Dict[str, object] = {"name": stream, "fields": body}
-        if maxlen is not None:
-            kwargs.update({"maxlen": maxlen, "approximate": True})
+        effective_maxlen = maxlen if maxlen is not None else STREAM_RETENTION_MAXLEN.get(stream)
+        if effective_maxlen is not None:
+            kwargs.update({"maxlen": int(effective_maxlen), "approximate": True})
         try:
             result = str(self._client.xadd(**kwargs))
             self._consecutive_failures = 0
@@ -176,6 +179,45 @@ class RedisStreamClient:
             if self._consecutive_failures == 1:
                 self._redis_down_since = time.time()
                 self._logger.warning("Redis xadd failed (first failure): %s", e)
+            elif self._consecutive_failures >= 5:
+                duration = time.time() - self._redis_down_since
+                self._logger.error(
+                    "Redis down for %.1fs (%d consecutive failures): %s",
+                    duration,
+                    self._consecutive_failures,
+                    e,
+                )
+            return None
+
+    def xtrim(self, stream: str, maxlen: int, *, approximate: bool = True) -> Optional[int]:
+        if not self.enabled and not self._ensure_connected():
+            return None
+        safe_maxlen = max(1, int(maxlen))
+        try:
+            result = self._client.xtrim(name=stream, maxlen=safe_maxlen, approximate=bool(approximate))
+            self._consecutive_failures = 0
+            self._redis_down_since = 0.0
+            return int(result)
+        except (RedisConnectionError, OSError) as e:
+            self._consecutive_failures += 1
+            if self._consecutive_failures == 1:
+                self._redis_down_since = time.time()
+                self._logger.warning("Redis xtrim failed (first failure): %s", e)
+            elif self._consecutive_failures >= 5:
+                duration = time.time() - self._redis_down_since
+                self._logger.error(
+                    "Redis down for %.1fs (%d consecutive failures): %s",
+                    duration,
+                    self._consecutive_failures,
+                    e,
+                )
+            self._client = None
+            return None
+        except Exception as e:
+            self._consecutive_failures += 1
+            if self._consecutive_failures == 1:
+                self._redis_down_since = time.time()
+                self._logger.warning("Redis xtrim failed (first failure): %s", e)
             elif self._consecutive_failures >= 5:
                 duration = time.time() - self._redis_down_since
                 self._logger.error(
@@ -475,4 +517,36 @@ class RedisStreamClient:
                     e,
                 )
             return None
+
+    def read_recent(self, stream: str, count: int = 20) -> List[Tuple[str, Dict[str, object]]]:
+        """Fetch recent payloads in reverse order without consumer-group state changes."""
+        if not self.enabled and not self._ensure_connected():
+            return []
+        try:
+            records = self._client.xrevrange(name=stream, max="+", min="-", count=max(1, int(count)))
+            out: List[Tuple[str, Dict[str, object]]] = []
+            for entry_id, data in records:
+                payload_raw = data.get("payload")
+                try:
+                    payload = json.loads(payload_raw) if isinstance(payload_raw, str) else {}
+                except Exception:
+                    payload = {}
+                out.append((str(entry_id), payload))
+            self._consecutive_failures = 0
+            self._redis_down_since = 0.0
+            return out
+        except Exception as e:
+            self._consecutive_failures += 1
+            if self._consecutive_failures == 1:
+                self._redis_down_since = time.time()
+                self._logger.warning("Redis read_recent failed (first failure): %s", e)
+            elif self._consecutive_failures >= 5:
+                duration = time.time() - self._redis_down_since
+                self._logger.error(
+                    "Redis down for %.1fs (%d consecutive failures): %s",
+                    duration,
+                    self._consecutive_failures,
+                    e,
+                )
+            return []
 

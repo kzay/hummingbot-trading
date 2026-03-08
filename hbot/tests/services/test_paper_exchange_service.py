@@ -4,7 +4,10 @@ import json
 import time
 from pathlib import Path
 
+import pytest
+
 from services.paper_exchange_service.main import (
+    FillCandidate,
     _load_market_fill_journal,
     _load_state_snapshot,
     _prune_orders,
@@ -16,7 +19,36 @@ from services.paper_exchange_service.main import (
     ingest_market_snapshot_payload,
     process_command_rows,
     process_market_rows,
+    run,
 )
+
+
+def _market_quote_payload(
+    connector_name: str = "bitget_perpetual",
+    timestamp_ms: int = 1000,
+    *,
+    best_bid: float = 9_999.0,
+    best_ask: float = 10_001.0,
+    best_bid_size: float | None = 1.0,
+    best_ask_size: float | None = 1.0,
+) -> dict:
+    payload = {
+        "schema_version": "1.0",
+        "event_type": "market_quote",
+        "event_id": "evt-quote-1",
+        "producer": "market_data_service",
+        "timestamp_ms": timestamp_ms,
+        "connector_name": connector_name,
+        "trading_pair": "BTC-USDT",
+        "best_bid": best_bid,
+        "best_ask": best_ask,
+        "mid_price": (best_bid + best_ask) / 2.0,
+    }
+    if best_bid_size is not None:
+        payload["best_bid_size"] = best_bid_size
+    if best_ask_size is not None:
+        payload["best_ask_size"] = best_ask_size
+    return payload
 
 
 def _market_snapshot_payload(
@@ -27,6 +59,8 @@ def _market_snapshot_payload(
     best_ask: float | None = None,
     best_bid_size: float | None = None,
     best_ask_size: float | None = None,
+    bids: list[list[float]] | None = None,
+    asks: list[list[float]] | None = None,
 ) -> dict:
     payload = {
         "schema_version": "1.0",
@@ -56,6 +90,10 @@ def _market_snapshot_payload(
         payload["best_bid_size"] = best_bid_size
     if best_ask_size is not None:
         payload["best_ask_size"] = best_ask_size
+    if bids is not None:
+        payload["bids"] = bids
+    if asks is not None:
+        payload["asks"] = asks
     return payload
 
 
@@ -94,6 +132,36 @@ def _privileged_metadata() -> dict:
     }
 
 
+def test_handle_command_payload_preserves_hedge_metadata_on_submit() -> None:
+    state = PaperExchangeState()
+    ok, _ = ingest_market_snapshot_payload(
+        payload=_market_snapshot_payload(timestamp_ms=1_000, best_bid=9_990.0, best_ask=10_010.0),
+        state=state,
+        allowed_connectors={"bitget_perpetual"},
+    )
+    assert ok is True
+    payload = _command_payload("submit_order", event_id="cmd-hedge-submit")
+    payload["side"] = "sell"
+    payload["position_action"] = "open_short"
+    payload["position_mode"] = "HEDGE"
+    payload["metadata"]["reduce_only"] = "1"
+
+    result = handle_command_payload(
+        payload=payload,
+        state=state,
+        service_instance_name="paper_exchange",
+        allowed_connectors={"bitget_perpetual"},
+        market_stale_after_ms=5_000,
+        now_ms=1_010,
+    )
+
+    order = state.orders_by_id["ord-cmd-hedge-submit"]
+    assert result.status == "processed"
+    assert order.position_action == "open_short"
+    assert order.position_mode == "HEDGE"
+    assert order.reduce_only is True
+
+
 class _FakeRedisClient:
     def __init__(self, *, xadd_result: str | None = "1-0"):
         self._xadd_result = xadd_result
@@ -122,6 +190,339 @@ class _SequencedFakeRedisClient(_FakeRedisClient):
         if not self._results:
             return None
         return self._results.pop(0)
+
+
+class _RunLoopFakeRedisClient(_FakeRedisClient):
+    def __init__(
+        self,
+        *,
+        reclaimed_rows_by_stream: dict[str, list[tuple[str, dict[str, object]]] | BaseException] | None = None,
+        new_rows_by_stream: dict[str, list[tuple[str, dict[str, object]]] | BaseException] | None = None,
+    ) -> None:
+        super().__init__(xadd_result="1-0")
+        self._reclaimed_rows_by_stream = dict(reclaimed_rows_by_stream or {})
+        self._new_rows_by_stream = dict(new_rows_by_stream or {})
+        self.create_group_calls: list[tuple[str, str]] = []
+        self.claim_pending_calls: list[dict[str, object]] = []
+        self.read_group_calls: list[dict[str, object]] = []
+
+    @staticmethod
+    def _rows_or_raise(
+        configured: list[tuple[str, dict[str, object]]] | BaseException | None,
+    ) -> list[tuple[str, dict[str, object]]]:
+        if isinstance(configured, BaseException):
+            raise configured
+        return list(configured or [])
+
+    def create_group(self, stream: str, group: str) -> None:
+        self.create_group_calls.append((stream, group))
+
+    def claim_pending(
+        self,
+        *,
+        stream: str,
+        group: str,
+        consumer: str,
+        min_idle_ms: int,
+        count: int,
+        start_id: str,
+    ) -> list[tuple[str, dict[str, object]]]:
+        self.claim_pending_calls.append(
+            {
+                "stream": stream,
+                "group": group,
+                "consumer": consumer,
+                "min_idle_ms": min_idle_ms,
+                "count": count,
+                "start_id": start_id,
+            }
+        )
+        return self._rows_or_raise(self._reclaimed_rows_by_stream.get(stream))
+
+    def read_group(
+        self,
+        *,
+        stream: str,
+        group: str,
+        consumer: str,
+        count: int,
+        block_ms: int,
+    ) -> list[tuple[str, dict[str, object]]]:
+        self.read_group_calls.append(
+            {
+                "stream": stream,
+                "group": group,
+                "consumer": consumer,
+                "count": count,
+                "block_ms": block_ms,
+            }
+        )
+        return self._rows_or_raise(self._new_rows_by_stream.get(stream))
+
+
+def _run_loop_settings(tmp_path: Path, **overrides: object) -> ServiceSettings:
+    settings = ServiceSettings(
+        service_instance_name="paper_exchange",
+        consumer_group="grp",
+        consumer_name="consumer",
+        command_stream="hb.paper_exchange.command.v1",
+        market_data_stream="hb.market_quote.v1",
+        event_stream="hb.paper_exchange.event.v1",
+        heartbeat_stream="hb.paper_exchange.heartbeat.v1",
+        audit_stream="hb.audit.v1",
+        allowed_connectors={"bitget_perpetual"},
+        read_block_ms=1,
+        command_journal_path=str(tmp_path / "command_journal.json"),
+        state_snapshot_path=str(tmp_path / "state_snapshot.json"),
+        pair_snapshot_path=str(tmp_path / "pair_snapshot.json"),
+        market_fill_journal_path=str(tmp_path / "market_fill_journal.json"),
+        heartbeat_interval_ms=60_000,
+    )
+    for key, value in overrides.items():
+        setattr(settings, key, value)
+    return settings
+
+
+def test_run_claims_pending_commands_and_processes_reclaimed_before_new(monkeypatch, tmp_path: Path) -> None:
+    settings = _run_loop_settings(
+        tmp_path,
+        pending_reclaim_enabled=True,
+        market_pending_reclaim_enabled=False,
+        pending_reclaim_interval_ms=1_000,
+        pending_reclaim_idle_ms=30_000,
+        pending_reclaim_count=25,
+    )
+    fake_client = _RunLoopFakeRedisClient(
+        reclaimed_rows_by_stream={
+            settings.command_stream: [("10-0", _command_payload("sync_state", event_id="cmd-reclaimed"))]
+        },
+        new_rows_by_stream={
+            settings.command_stream: [("11-0", _command_payload("sync_state", event_id="cmd-new"))]
+        },
+    )
+    call_order: list[str] = []
+
+    def _fake_process_command_rows(
+        *,
+        rows: list[tuple[str, dict[str, object]]],
+        source: str,
+        client,
+        state,
+        settings,
+        command_journal_path: Path,
+        state_snapshot_path: Path | None = None,
+    ) -> None:
+        call_order.append(source)
+        if source == "new":
+            raise KeyboardInterrupt()
+
+    def _noop_process_market_rows(
+        *,
+        rows: list[tuple[str, dict[str, object]]],
+        source: str,
+        client,
+        state,
+        settings,
+        state_snapshot_path: Path | None = None,
+        pair_snapshot_path: Path | None = None,
+        market_fill_journal_path: Path | None = None,
+    ) -> None:
+        return None
+
+    monkeypatch.setattr("services.paper_exchange_service.main.RedisStreamClient", lambda **_kwargs: fake_client)
+    monkeypatch.setattr("services.paper_exchange_service.main.process_command_rows", _fake_process_command_rows)
+    monkeypatch.setattr("services.paper_exchange_service.main.process_market_rows", _noop_process_market_rows)
+    monkeypatch.setattr("services.paper_exchange_service.main._now_ms", lambda: 1_000)
+
+    with pytest.raises(KeyboardInterrupt):
+        run(settings)
+
+    assert call_order == ["reclaimed", "new"]
+    assert len(fake_client.claim_pending_calls) == 1
+    claim_call = fake_client.claim_pending_calls[0]
+    assert claim_call["stream"] == settings.command_stream
+    assert claim_call["group"] == settings.consumer_group
+    assert claim_call["consumer"] == settings.consumer_name
+    assert claim_call["min_idle_ms"] == settings.pending_reclaim_idle_ms
+    assert claim_call["count"] == settings.pending_reclaim_count
+    assert claim_call["start_id"] == "0-0"
+
+
+def test_run_claims_pending_market_rows_and_processes_reclaimed_before_new(monkeypatch, tmp_path: Path) -> None:
+    settings = _run_loop_settings(
+        tmp_path,
+        pending_reclaim_enabled=False,
+        market_pending_reclaim_enabled=True,
+        market_pending_reclaim_interval_ms=1_000,
+        market_pending_reclaim_idle_ms=30_000,
+        market_pending_reclaim_count=25,
+    )
+    reclaimed_payload = _market_quote_payload(timestamp_ms=1_000)
+    reclaimed_payload["event_id"] = "evt-reclaimed"
+    new_payload = _market_quote_payload(timestamp_ms=1_001)
+    new_payload["event_id"] = "evt-new"
+    fake_client = _RunLoopFakeRedisClient(
+        reclaimed_rows_by_stream={settings.market_data_stream: [("20-0", reclaimed_payload)]},
+        new_rows_by_stream={settings.market_data_stream: [("21-0", new_payload)]},
+    )
+    call_order: list[str] = []
+
+    def _fake_process_market_rows(
+        *,
+        rows: list[tuple[str, dict[str, object]]],
+        source: str,
+        client,
+        state,
+        settings,
+        state_snapshot_path: Path | None = None,
+        pair_snapshot_path: Path | None = None,
+        market_fill_journal_path: Path | None = None,
+    ) -> None:
+        call_order.append(source)
+        if source == "new":
+            raise KeyboardInterrupt()
+
+    def _noop_process_command_rows(
+        *,
+        rows: list[tuple[str, dict[str, object]]],
+        source: str,
+        client,
+        state,
+        settings,
+        command_journal_path: Path,
+        state_snapshot_path: Path | None = None,
+    ) -> None:
+        return None
+
+    monkeypatch.setattr("services.paper_exchange_service.main.RedisStreamClient", lambda **_kwargs: fake_client)
+    monkeypatch.setattr("services.paper_exchange_service.main.process_market_rows", _fake_process_market_rows)
+    monkeypatch.setattr("services.paper_exchange_service.main.process_command_rows", _noop_process_command_rows)
+    monkeypatch.setattr("services.paper_exchange_service.main._now_ms", lambda: 1_000)
+
+    with pytest.raises(KeyboardInterrupt):
+        run(settings)
+
+    assert call_order == ["reclaimed", "new"]
+    assert len(fake_client.claim_pending_calls) == 1
+    claim_call = fake_client.claim_pending_calls[0]
+    assert claim_call["stream"] == settings.market_data_stream
+    assert claim_call["group"] == settings.consumer_group
+    assert claim_call["consumer"] == settings.consumer_name
+    assert claim_call["min_idle_ms"] == settings.market_pending_reclaim_idle_ms
+    assert claim_call["count"] == settings.market_pending_reclaim_count
+    assert claim_call["start_id"] == "0-0"
+
+
+def test_ingest_market_snapshot_payload_accepts_market_quote() -> None:
+    state = PaperExchangeState()
+    ok, reason = ingest_market_snapshot_payload(
+        payload=_market_quote_payload(),
+        state=state,
+        allowed_connectors={"bitget_perpetual"},
+    )
+    assert ok is True
+    assert reason == "accepted"
+    snapshot = state.pairs.get("::bitget_perpetual::BTC-USDT")
+    assert snapshot is not None
+    assert snapshot.instance_name == ""
+    assert snapshot.mid_price == 10_000.0
+
+
+def test_ingest_market_snapshot_payload_accepts_depth_snapshot_and_derives_top_of_book() -> None:
+    state = PaperExchangeState()
+    ok, reason = ingest_market_snapshot_payload(
+        payload={
+            "schema_version": "1.0",
+            "event_type": "market_depth_snapshot",
+            "event_id": "evt-depth-1",
+            "instance_name": "bot1",
+            "connector_name": "bitget_perpetual",
+            "trading_pair": "BTC-USDT",
+            "timestamp_ms": 2_000,
+            "exchange_ts_ms": 1_990,
+            "ingest_ts_ms": 1_995,
+            "market_sequence": 9,
+            "bids": [{"price": 9_998.0, "size": 1.2}],
+            "asks": [{"price": 10_002.0, "size": 0.8}],
+        },
+        state=state,
+        allowed_connectors={"bitget_perpetual"},
+    )
+    assert ok is True
+    assert reason == "accepted"
+    snapshot = state.pairs.get("bot1::bitget_perpetual::BTC-USDT")
+    assert snapshot is not None
+    assert snapshot.best_bid == 9_998.0
+    assert snapshot.best_ask == 10_002.0
+    assert snapshot.best_bid_size == 1.2
+    assert snapshot.best_ask_size == 0.8
+    assert snapshot.source_event_type == "market_depth_snapshot"
+    assert snapshot.market_sequence == 9
+
+
+def test_ingest_market_snapshot_payload_accepts_depth_snapshot_levels_as_lists() -> None:
+    state = PaperExchangeState()
+    ok, reason = ingest_market_snapshot_payload(
+        payload={
+            "schema_version": "1.0",
+            "event_type": "market_depth_snapshot",
+            "event_id": "evt-depth-list-1",
+            "connector_name": "bitget_perpetual",
+            "trading_pair": "BTC-USDT",
+            "timestamp_ms": 2_100,
+            "market_sequence": 10,
+            "bids": [["9998.0", "1.2"]],
+            "asks": [["10002.0", "0.8"]],
+        },
+        state=state,
+        allowed_connectors={"bitget_perpetual"},
+    )
+    assert ok is True
+    assert reason == "accepted"
+    snapshot = state.pairs.get("::bitget_perpetual::BTC-USDT")
+    assert snapshot is not None
+    assert snapshot.best_bid == 9998.0
+    assert snapshot.best_ask == 10002.0
+    assert snapshot.best_bid_size == 1.2
+    assert snapshot.best_ask_size == 0.8
+
+
+def test_handle_command_payload_uses_shared_market_quote_snapshot() -> None:
+    state = PaperExchangeState()
+    ok, reason = ingest_market_snapshot_payload(
+        payload=_market_quote_payload(timestamp_ms=2_000),
+        state=state,
+        allowed_connectors={"bitget_perpetual"},
+    )
+    assert ok is True
+    assert reason == "accepted"
+
+    result = handle_command_payload(
+        payload=_command_payload("submit_order", event_id="cmd-submit-shared"),
+        state=state,
+        service_instance_name="paper_exchange",
+        allowed_connectors={"bitget_perpetual"},
+        now_ms=2_100,
+    )
+    assert result.status == "processed"
+    assert result.reason == "order_accepted"
+
+
+def test_run_skips_claim_pending_when_reclaim_disabled(monkeypatch, tmp_path: Path) -> None:
+    settings = _run_loop_settings(
+        tmp_path,
+        pending_reclaim_enabled=False,
+        market_pending_reclaim_enabled=False,
+    )
+    fake_client = _RunLoopFakeRedisClient(
+        new_rows_by_stream={settings.command_stream: KeyboardInterrupt()},
+    )
+    monkeypatch.setattr("services.paper_exchange_service.main.RedisStreamClient", lambda **_kwargs: fake_client)
+
+    with pytest.raises(KeyboardInterrupt):
+        run(settings)
+
+    assert fake_client.claim_pending_calls == []
 
 
 def test_ingest_market_snapshot_accepts_allowed_connector() -> None:
@@ -384,6 +785,50 @@ def test_handle_command_submit_market_order_fills_immediately() -> None:
     assert result.metadata["fill_price"] == "10000.0"
 
 
+def test_handle_command_submit_market_order_emits_accounting_contract_fields() -> None:
+    state = PaperExchangeState()
+    market_payload = _market_snapshot_payload(timestamp_ms=1_000)
+    market_payload["funding_rate"] = -0.0002
+    ok, _ = ingest_market_snapshot_payload(
+        payload=market_payload,
+        state=state,
+        allowed_connectors={"bitget_perpetual"},
+    )
+    assert ok is True
+    payload = _command_payload("submit_order", event_id="cmd-market-contract")
+    payload["order_type"] = "market"
+    payload["price"] = None
+    payload["metadata"] = {
+        "time_in_force": "gtc",
+        "maker_fee_pct": "0.0002",
+        "taker_fee_pct": "0.0006",
+        "leverage": "5",
+        "margin_mode": "leveraged",
+        "funding_rate": "-0.0001",
+        "accounting_contract_version": "paper_exchange_v1",
+    }
+    result = handle_command_payload(
+        payload=payload,
+        state=state,
+        service_instance_name="paper_exchange",
+        allowed_connectors={"bitget_perpetual"},
+        market_stale_after_ms=500,
+        now_ms=1_080,
+    )
+    assert result.status == "processed"
+    assert result.reason == "order_filled_market"
+    assert abs(float(result.metadata["fill_fee_quote"]) - 0.06) < 1e-12
+    assert abs(float(result.metadata["fill_fee_rate_pct"]) - 0.0006) < 1e-12
+    assert abs(float(result.metadata["margin_reserve_quote"]) - 20.0) < 1e-9
+    assert result.metadata["margin_mode"] == "leveraged"
+    assert result.metadata["funding_rate"] == "-0.0001"
+    assert result.metadata["snapshot_funding_rate"] == "-0.0002"
+
+    order = state.orders_by_id["ord-cmd-market-contract"]
+    assert abs(order.filled_fee_quote - 0.06) < 1e-12
+    assert abs(order.margin_reserve_quote - 20.0) < 1e-9
+
+
 def test_handle_command_limit_buy_crossing_fills_at_best_ask() -> None:
     state = PaperExchangeState()
     ok, _ = ingest_market_snapshot_payload(
@@ -441,6 +886,75 @@ def test_handle_command_limit_buy_crossing_partial_when_top_of_book_size_small()
     order = state.orders_by_id["ord-cmd-cross-partial"]
     assert order.state == "partially_filled"
     assert abs(order.filled_base - 0.01) < 1e-9
+
+
+def test_handle_command_limit_buy_ioc_partial_fill_expires_remainder() -> None:
+    state = PaperExchangeState()
+    ok, _ = ingest_market_snapshot_payload(
+        payload=_market_snapshot_payload(
+            timestamp_ms=1_000,
+            best_bid=9_999.0,
+            best_ask=10_001.0,
+            best_ask_size=0.01,
+        ),
+        state=state,
+        allowed_connectors={"bitget_perpetual"},
+    )
+    assert ok is True
+    payload = _command_payload("submit_order", event_id="cmd-cross-ioc-partial")
+    payload["amount_base"] = 0.03
+    payload["price"] = 10_002.0
+    payload["metadata"] = {"time_in_force": "ioc"}
+    result = handle_command_payload(
+        payload=payload,
+        state=state,
+        service_instance_name="paper_exchange",
+        allowed_connectors={"bitget_perpetual"},
+        market_stale_after_ms=500,
+        now_ms=1_080,
+    )
+    assert result.status == "processed"
+    assert result.reason == "time_in_force_ioc_partial_fill_expired"
+    assert result.metadata["order_state"] == "expired"
+    assert result.metadata["fill_amount_base"] == "0.01"
+    assert abs(float(result.metadata["remaining_amount_base"]) - 0.02) < 1e-9
+    order = state.orders_by_id["ord-cmd-cross-ioc-partial"]
+    assert order.state == "expired"
+    assert abs(order.filled_base - 0.01) < 1e-9
+
+
+def test_handle_command_limit_buy_fok_partial_cross_expires_without_fill() -> None:
+    state = PaperExchangeState()
+    ok, _ = ingest_market_snapshot_payload(
+        payload=_market_snapshot_payload(
+            timestamp_ms=1_000,
+            best_bid=9_999.0,
+            best_ask=10_001.0,
+            best_ask_size=0.01,
+        ),
+        state=state,
+        allowed_connectors={"bitget_perpetual"},
+    )
+    assert ok is True
+    payload = _command_payload("submit_order", event_id="cmd-cross-fok-partial")
+    payload["amount_base"] = 0.03
+    payload["price"] = 10_002.0
+    payload["metadata"] = {"time_in_force": "fok"}
+    result = handle_command_payload(
+        payload=payload,
+        state=state,
+        service_instance_name="paper_exchange",
+        allowed_connectors={"bitget_perpetual"},
+        market_stale_after_ms=500,
+        now_ms=1_080,
+    )
+    assert result.status == "processed"
+    assert result.reason == "time_in_force_fok_no_full_fill"
+    assert result.metadata["order_state"] == "expired"
+    assert "fill_amount_base" not in result.metadata
+    order = state.orders_by_id["ord-cmd-cross-fok-partial"]
+    assert order.state == "expired"
+    assert abs(order.filled_base - 0.0) < 1e-9
 
 
 def test_handle_command_post_only_crossing_rejected() -> None:
@@ -635,6 +1149,88 @@ def test_handle_command_rejects_when_market_snapshot_stale() -> None:
     assert state.rejected_commands_stale_market == 1
 
 
+def test_handle_command_market_snapshot_namespace_isolation_prevents_cross_bot_overwrite() -> None:
+    state = PaperExchangeState()
+    bot1_snapshot = _market_snapshot_payload(timestamp_ms=1_000)
+    bot1_snapshot["instance_name"] = "bot1"
+    ok, _ = ingest_market_snapshot_payload(
+        payload=bot1_snapshot,
+        state=state,
+        allowed_connectors={"bitget_perpetual"},
+    )
+    assert ok is True
+
+    bot3_snapshot = _market_snapshot_payload(timestamp_ms=5_000)
+    bot3_snapshot["instance_name"] = "bot3"
+    ok, _ = ingest_market_snapshot_payload(
+        payload=bot3_snapshot,
+        state=state,
+        allowed_connectors={"bitget_perpetual"},
+    )
+    assert ok is True
+
+    # Bot1 command must only consider bot1 snapshot (stale), not the fresher bot3 snapshot.
+    result = handle_command_payload(
+        payload=_command_payload("submit_order", event_id="cmd-bot1-stale"),
+        state=state,
+        service_instance_name="paper_exchange",
+        allowed_connectors={"bitget_perpetual"},
+        market_stale_after_ms=2_000,
+        now_ms=6_000,
+    )
+    assert result.status == "rejected"
+    assert result.reason == "stale_market_snapshot"
+    assert state.rejected_commands_stale_market == 1
+
+
+def test_handle_command_rejects_cross_namespace_order_id_collision() -> None:
+    state = PaperExchangeState()
+    bot1_snapshot = _market_snapshot_payload(timestamp_ms=1_000)
+    bot1_snapshot["instance_name"] = "bot1"
+    ok, _ = ingest_market_snapshot_payload(
+        payload=bot1_snapshot,
+        state=state,
+        allowed_connectors={"bitget_perpetual"},
+    )
+    assert ok is True
+
+    bot3_snapshot = _market_snapshot_payload(timestamp_ms=1_000)
+    bot3_snapshot["instance_name"] = "bot3"
+    ok, _ = ingest_market_snapshot_payload(
+        payload=bot3_snapshot,
+        state=state,
+        allowed_connectors={"bitget_perpetual"},
+    )
+    assert ok is True
+
+    payload_bot1 = _command_payload("submit_order", event_id="cmd-bot1-order")
+    payload_bot1["order_id"] = "shared-order-id"
+    first = handle_command_payload(
+        payload=payload_bot1,
+        state=state,
+        service_instance_name="paper_exchange",
+        allowed_connectors={"bitget_perpetual"},
+        market_stale_after_ms=5_000,
+        now_ms=1_050,
+    )
+    assert first.status == "processed"
+
+    payload_bot3 = _command_payload("submit_order", event_id="cmd-bot3-order")
+    payload_bot3["instance_name"] = "bot3"
+    payload_bot3["order_id"] = "shared-order-id"
+    second = handle_command_payload(
+        payload=payload_bot3,
+        state=state,
+        service_instance_name="paper_exchange",
+        allowed_connectors={"bitget_perpetual"},
+        market_stale_after_ms=5_000,
+        now_ms=1_060,
+    )
+    assert second.status == "rejected"
+    assert second.reason == "order_id_namespace_collision"
+    assert state.rejected_commands_namespace_collision == 1
+
+
 def test_process_command_rows_deduplicates_command_event_id(tmp_path: Path) -> None:
     state = PaperExchangeState()
     state.command_results_by_id["cmd-dup"] = {"status": "processed", "reason": "sync_state_accepted"}
@@ -684,6 +1280,41 @@ def test_process_command_rows_persists_result_and_acks(tmp_path: Path) -> None:
     assert "cmd-new" in state.command_results_by_id
     payload = json.loads(journal_path.read_text(encoding="utf-8"))
     assert payload["commands"]["cmd-new"]["status"] == "processed"
+    assert payload["commands"]["cmd-new"]["command_producer"] == "hb"
+    assert payload["commands"]["cmd-new"]["producer_authorized"] is True
+    assert payload["commands"]["cmd-new"]["namespace_key"] == "bot1::bitget_perpetual::BTC-USDT"
+    assert payload["commands"]["cmd-new"]["namespace_order_key"] == ""
+
+
+def test_process_command_rows_tracks_unauthorized_producer_in_command_journal(tmp_path: Path) -> None:
+    state = PaperExchangeState()
+    settings = ServiceSettings(
+        service_instance_name="paper_exchange",
+        consumer_group="grp",
+        command_stream="hb.paper_exchange.command.v1",
+        event_stream="hb.paper_exchange.event.v1",
+        allowed_connectors={"bitget_perpetual"},
+        allowed_command_producers={"hb_bridge_active_adapter"},
+    )
+    fake_client = _FakeRedisClient(xadd_result="109-0")
+    journal_path = tmp_path / "journal.json"
+    payload = _command_payload("submit_order", event_id="cmd-unauthorized-journal")
+    payload["producer"] = "untrusted_sender"
+    process_command_rows(
+        rows=[("8-0", payload)],
+        source="new",
+        client=fake_client,  # type: ignore[arg-type]
+        state=state,
+        settings=settings,
+        command_journal_path=journal_path,
+    )
+    assert len(fake_client.xadd_calls) == 1
+    assert len(fake_client.acks) == 1
+    command_record = state.command_results_by_id["cmd-unauthorized-journal"]
+    assert command_record["status"] == "rejected"
+    assert command_record["reason"] == "unauthorized_producer"
+    assert command_record["command_producer"] == "untrusted_sender"
+    assert command_record["producer_authorized"] is False
 
 
 def test_process_command_rows_can_skip_sync_state_journal_persist(tmp_path: Path) -> None:
@@ -976,6 +1607,302 @@ def test_process_market_rows_generates_partial_then_full_fill_events(tmp_path: P
     assert loaded["ord-cmd-resting-fill"].state == "filled"
 
 
+def test_process_market_rows_respects_resting_fill_latency_and_queue_fraction(tmp_path: Path) -> None:
+    state = PaperExchangeState()
+    ok, _ = ingest_market_snapshot_payload(
+        payload=_market_snapshot_payload(timestamp_ms=1_000, best_bid=9_990.0, best_ask=10_010.0, best_ask_size=0.10),
+        state=state,
+        allowed_connectors={"bitget_perpetual"},
+    )
+    assert ok is True
+
+    submit_payload = _command_payload("submit_order", event_id="cmd-resting-realism")
+    submit_payload["amount_base"] = 0.05
+    submit_payload["price"] = 10_006.0
+    submit_result = handle_command_payload(
+        payload=submit_payload,
+        state=state,
+        service_instance_name="paper_exchange",
+        allowed_connectors={"bitget_perpetual"},
+        market_stale_after_ms=5_000,
+        now_ms=1_010,
+    )
+    assert submit_result.metadata["order_state"] == "working"
+
+    settings = ServiceSettings(
+        service_instance_name="paper_exchange",
+        consumer_group="grp",
+        market_data_stream="hb.market_data.v1",
+        event_stream="hb.paper_exchange.event.v1",
+        allowed_connectors={"bitget_perpetual"},
+        resting_fill_latency_ms=200,
+        maker_queue_participation=0.5,
+    )
+    fake_client = _FakeRedisClient(xadd_result="251-0")
+    state_snapshot_path = tmp_path / "state_snapshot_resting_realism.json"
+
+    early_payload = _market_snapshot_payload(
+        timestamp_ms=1_100,
+        best_bid=10_005.0,
+        best_ask=10_006.0,
+        best_ask_size=0.10,
+    )
+    early_payload["event_id"] = "evt-resting-realism-early"
+    process_market_rows(
+        rows=[("21-0", early_payload)],
+        source="new",
+        client=fake_client,  # type: ignore[arg-type]
+        state=state,
+        settings=settings,
+        state_snapshot_path=state_snapshot_path,
+    )
+    assert fake_client.xadd_calls == []
+
+    mature_payload = _market_snapshot_payload(
+        timestamp_ms=1_250,
+        best_bid=10_005.0,
+        best_ask=10_006.0,
+        best_ask_size=0.10,
+    )
+    mature_payload["event_id"] = "evt-resting-realism-mature"
+    process_market_rows(
+        rows=[("22-0", mature_payload)],
+        source="new",
+        client=fake_client,  # type: ignore[arg-type]
+        state=state,
+        settings=settings,
+        state_snapshot_path=state_snapshot_path,
+    )
+    order = state.orders_by_id["ord-cmd-resting-realism"]
+    assert order.state == "filled"
+    assert abs(order.filled_base - 0.05) < 1e-9
+    assert len(fake_client.xadd_calls) == 1
+    assert abs(float(fake_client.xadd_calls[0][1]["metadata"]["fill_amount_base"]) - 0.05) < 1e-9
+
+
+def test_handle_command_payload_crossing_limit_uses_depth_sweep_vwap() -> None:
+    state = PaperExchangeState()
+    ok, _ = ingest_market_snapshot_payload(
+        payload=_market_snapshot_payload(
+            timestamp_ms=1_000,
+            best_bid=9_990.0,
+            best_ask=10_001.0,
+            best_ask_size=0.01,
+            asks=[[10_001.0, 0.01], [10_002.0, 0.02]],
+        ),
+        state=state,
+        allowed_connectors={"bitget_perpetual"},
+    )
+    assert ok is True
+
+    submit_payload = _command_payload("submit_order", event_id="cmd-cross-sweep")
+    submit_payload["amount_base"] = 0.03
+    submit_payload["price"] = 10_003.0
+    result = handle_command_payload(
+        payload=submit_payload,
+        state=state,
+        service_instance_name="paper_exchange",
+        allowed_connectors={"bitget_perpetual"},
+        market_stale_after_ms=5_000,
+        market_sweep_depth_levels=3,
+        now_ms=1_010,
+    )
+    assert result.metadata["order_state"] == "filled"
+    assert abs(float(result.metadata["fill_price"]) - ((0.01 * 10001.0 + 0.02 * 10002.0) / 0.03)) < 1e-9
+    assert abs(float(result.metadata["fill_amount_base"]) - 0.03) < 1e-9
+
+
+def test_process_market_rows_resting_fill_uses_maker_fee_and_standard_margin_mode(tmp_path: Path) -> None:
+    state = PaperExchangeState()
+    ok, _ = ingest_market_snapshot_payload(
+        payload=_market_snapshot_payload(timestamp_ms=1_000, best_bid=9_990.0, best_ask=10_010.0, best_ask_size=0.05),
+        state=state,
+        allowed_connectors={"bitget_perpetual"},
+    )
+    assert ok is True
+
+    submit_payload = _command_payload("submit_order", event_id="cmd-resting-accounting")
+    submit_payload["amount_base"] = 0.03
+    submit_payload["price"] = 10_005.0
+    submit_payload["metadata"] = {
+        "time_in_force": "gtc",
+        "maker_fee_pct": "0.0002",
+        "taker_fee_pct": "0.0006",
+        "leverage": "3",
+        "margin_mode": "standard",
+        "funding_rate": "0.0005",
+    }
+    submit_result = handle_command_payload(
+        payload=submit_payload,
+        state=state,
+        service_instance_name="paper_exchange",
+        allowed_connectors={"bitget_perpetual"},
+        market_stale_after_ms=5_000,
+        now_ms=1_010,
+    )
+    assert submit_result.status == "processed"
+    assert submit_result.metadata["order_state"] == "working"
+
+    settings = ServiceSettings(
+        service_instance_name="paper_exchange",
+        consumer_group="grp",
+        market_data_stream="hb.market_data.v1",
+        event_stream="hb.paper_exchange.event.v1",
+        allowed_connectors={"bitget_perpetual"},
+    )
+    fake_client = _FakeRedisClient(xadd_result="301-0")
+    state_snapshot_path = tmp_path / "state_snapshot_resting_accounting.json"
+    market_payload = _market_snapshot_payload(
+        timestamp_ms=1_100,
+        best_bid=10_003.0,
+        best_ask=10_004.0,
+        best_ask_size=0.01,
+    )
+    market_payload["event_id"] = "evt-resting-accounting-fill-1"
+    market_payload["funding_rate"] = 0.0004
+
+    process_market_rows(
+        rows=[("31-0", market_payload)],
+        source="new",
+        client=fake_client,  # type: ignore[arg-type]
+        state=state,
+        settings=settings,
+        state_snapshot_path=state_snapshot_path,
+    )
+
+    assert len(fake_client.xadd_calls) == 1
+    payload = fake_client.xadd_calls[0][1]
+    metadata = payload["metadata"]
+    assert payload["command"] == "order_fill"
+    assert metadata["order_state"] == "partially_filled"
+    assert abs(float(metadata["fill_fee_rate_pct"]) - 0.0002) < 1e-12
+    assert abs(float(metadata["fill_fee_quote"]) - 0.02001) < 1e-9
+    assert abs(float(metadata["margin_reserve_quote"]) - 100.05) < 1e-9
+    assert metadata["margin_mode"] == "standard"
+    assert metadata["funding_rate"] == "0.0005"
+    assert metadata["snapshot_funding_rate"] == "0.0004"
+
+    order = state.orders_by_id["ord-cmd-resting-accounting"]
+    assert abs(order.filled_fee_quote - 0.02001) < 1e-9
+    assert abs(order.margin_reserve_quote - 100.05) < 1e-9
+
+
+def test_process_market_rows_resting_fill_uses_reachable_depth_not_only_l1(tmp_path: Path) -> None:
+    state = PaperExchangeState()
+    ok, _ = ingest_market_snapshot_payload(
+        payload=_market_snapshot_payload(timestamp_ms=1_000, best_bid=9_990.0, best_ask=10_010.0, best_ask_size=0.05),
+        state=state,
+        allowed_connectors={"bitget_perpetual"},
+    )
+    assert ok is True
+
+    submit_payload = _command_payload("submit_order", event_id="cmd-resting-depth-aware")
+    submit_payload["amount_base"] = 0.20
+    submit_payload["price"] = 10_006.0
+    submit_result = handle_command_payload(
+        payload=submit_payload,
+        state=state,
+        service_instance_name="paper_exchange",
+        allowed_connectors={"bitget_perpetual"},
+        market_stale_after_ms=5_000,
+        now_ms=1_010,
+    )
+    assert submit_result.status == "processed"
+    assert submit_result.metadata["order_state"] == "working"
+
+    settings = ServiceSettings(
+        service_instance_name="paper_exchange",
+        consumer_group="grp",
+        market_data_stream="hb.market_data.v1",
+        event_stream="hb.paper_exchange.event.v1",
+        allowed_connectors={"bitget_perpetual"},
+        maker_queue_participation=0.5,
+        market_sweep_depth_levels=3,
+    )
+    fake_client = _FakeRedisClient(xadd_result="311-0")
+    state_snapshot_path = tmp_path / "state_snapshot_resting_depth_aware.json"
+    market_payload = _market_snapshot_payload(
+        timestamp_ms=1_100,
+        best_bid=10_004.0,
+        best_ask=10_005.0,
+        best_ask_size=0.04,
+        asks=[[10_005.0, 0.04], [10_006.0, 0.10], [10_007.0, 0.50]],
+    )
+    market_payload["event_id"] = "evt-resting-depth-aware"
+
+    process_market_rows(
+        rows=[("41-0", market_payload)],
+        source="new",
+        client=fake_client,  # type: ignore[arg-type]
+        state=state,
+        settings=settings,
+        state_snapshot_path=state_snapshot_path,
+    )
+
+    assert len(fake_client.xadd_calls) == 1
+    metadata = fake_client.xadd_calls[0][1]["metadata"]
+    assert abs(float(metadata["fill_price"]) - 10_006.0) < 1e-9
+    assert abs(float(metadata["fill_amount_base"]) - 0.055) < 1e-9
+
+
+def test_process_market_rows_expires_legacy_immediate_tif_orders_before_matching() -> None:
+    state = PaperExchangeState()
+    ok, _ = ingest_market_snapshot_payload(
+        payload=_market_snapshot_payload(timestamp_ms=1_000, best_bid=9_990.0, best_ask=10_010.0, best_ask_size=0.05),
+        state=state,
+        allowed_connectors={"bitget_perpetual"},
+    )
+    assert ok is True
+
+    state.orders_by_id["ord-legacy-ioc"] = OrderRecord(
+        order_id="ord-legacy-ioc",
+        instance_name="bot1",
+        connector_name="bitget_perpetual",
+        trading_pair="BTC-USDT",
+        side="buy",
+        order_type="limit",
+        amount_base=0.01,
+        price=10_005.0,
+        time_in_force="ioc",
+        reduce_only=False,
+        post_only=False,
+        state="working",
+        created_ts_ms=900,
+        updated_ts_ms=900,
+        last_command_event_id="cmd-legacy-ioc",
+    )
+
+    settings = ServiceSettings(
+        service_instance_name="paper_exchange",
+        consumer_group="grp",
+        market_data_stream="hb.market_data.v1",
+        event_stream="hb.paper_exchange.event.v1",
+        allowed_connectors={"bitget_perpetual"},
+    )
+    fake_client = _FakeRedisClient(xadd_result="900-0")
+    payload = _market_snapshot_payload(
+        timestamp_ms=1_100,
+        best_bid=10_003.0,
+        best_ask=10_004.0,
+        best_ask_size=0.05,
+    )
+    payload["event_id"] = "evt-legacy-ioc-guard"
+
+    process_market_rows(
+        rows=[("90-0", payload)],
+        source="new",
+        client=fake_client,  # type: ignore[arg-type]
+        state=state,
+        settings=settings,
+    )
+
+    order = state.orders_by_id["ord-legacy-ioc"]
+    assert order.state == "expired"
+    assert order.filled_base == 0.0
+    assert len(fake_client.xadd_calls) == 0
+    assert state.generated_fill_events == 0
+
+
 def test_process_market_rows_replay_same_snapshot_does_not_duplicate_fill() -> None:
     state = PaperExchangeState()
     ok, _ = ingest_market_snapshot_payload(
@@ -1037,6 +1964,88 @@ def test_process_market_rows_replay_same_snapshot_does_not_duplicate_fill() -> N
     assert abs(order.filled_base - 0.01) < 1e-9
     assert len(fake_client.xadd_calls) == 1
     assert state.reclaimed_pending_market_entries == 1
+
+
+def test_process_market_rows_skips_invalid_transition_candidate_on_replay(monkeypatch) -> None:
+    state = PaperExchangeState()
+    ok, _ = ingest_market_snapshot_payload(
+        payload=_market_snapshot_payload(timestamp_ms=1_000, best_bid=9_990.0, best_ask=10_010.0, best_ask_size=0.05),
+        state=state,
+        allowed_connectors={"bitget_perpetual"},
+    )
+    assert ok is True
+    now_ms = int(time.time() * 1000)
+    state.orders_by_id["ord-invalid-replay"] = OrderRecord(
+        order_id="ord-invalid-replay",
+        instance_name="bot1",
+        connector_name="bitget_perpetual",
+        trading_pair="BTC-USDT",
+        side="buy",
+        order_type="limit",
+        amount_base=0.01,
+        price=10_005.0,
+        time_in_force="gtc",
+        reduce_only=False,
+        post_only=False,
+        state="cancelled",
+        created_ts_ms=now_ms,
+        updated_ts_ms=now_ms,
+        last_command_event_id="cmd-invalid-replay",
+    )
+
+    settings = ServiceSettings(
+        service_instance_name="paper_exchange",
+        consumer_group="grp",
+        market_data_stream="hb.market_data.v1",
+        event_stream="hb.paper_exchange.event.v1",
+        allowed_connectors={"bitget_perpetual"},
+    )
+    fake_client = _FakeRedisClient(xadd_result="204-0")
+    replay_payload = _market_snapshot_payload(
+        timestamp_ms=1_100,
+        best_bid=10_003.0,
+        best_ask=10_004.0,
+        best_ask_size=0.01,
+    )
+    replay_payload["event_id"] = "evt-invalid-transition-replay"
+
+    invalid_candidate = FillCandidate(
+        event_id="pe-fill-evt-invalid-transition-replay-ord-invalid-replay-1",
+        command_event_id="market_snapshot:evt-invalid-transition-replay",
+        order_id="ord-invalid-replay",
+        new_state="filled",
+        fill_price=10_004.0,
+        fill_amount_base=0.01,
+        fill_notional_quote=100.04,
+        remaining_amount_base=0.0,
+        is_maker=True,
+        snapshot_event_id="evt-invalid-transition-replay",
+        snapshot_market_sequence=1,
+        fill_count=1,
+    )
+
+    def _fake_fill_candidates_for_snapshot(**kwargs) -> list[FillCandidate]:
+        return [invalid_candidate]
+
+    monkeypatch.setattr(
+        "services.paper_exchange_service.main._build_fill_candidates_for_snapshot",
+        _fake_fill_candidates_for_snapshot,
+    )
+
+    process_market_rows(
+        rows=[("23-0", replay_payload)],
+        source="reclaimed",
+        client=fake_client,  # type: ignore[arg-type]
+        state=state,
+        settings=settings,
+    )
+    order = state.orders_by_id["ord-invalid-replay"]
+    assert order.state == "cancelled"
+    assert abs(order.filled_base - 0.0) < 1e-12
+    assert len(fake_client.xadd_calls) == 0
+    assert state.market_fill_invalid_transition_drops == 1
+    assert state.reclaimed_pending_market_entries == 1
+    assert len(fake_client.acks) == 1
 
 
 def test_process_market_rows_skips_republish_when_fill_event_already_journaled() -> None:

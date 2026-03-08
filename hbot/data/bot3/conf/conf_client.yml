@@ -38,7 +38,7 @@ mqtt_bridge:
   mqtt_commands: true
   mqtt_events: true
   mqtt_external_events: true
-  mqtt_autostart: false
+  mqtt_autostart: true
 
 # Error log sharing
 send_error_logs: true
@@ -63,7 +63,8 @@ db_mode:
 #     BTC: 0.1
 #     USDT: 1000
 balance_asset_limit:
-  bitget: {}
+  bitget:
+    USDT: 100.0
 
 # Fixed gas price (in Gwei) for Ethereum transactions
 manual_gas_price: 50.0
@@ -107,7 +108,7 @@ paper_trade:
   paper_trade_account_balance:
     BTC: 0.02
     USDT: 6600.0
-    ETH: 10.0
+    ETH: 20.0
 
 color:
   top_pane: '#000000'

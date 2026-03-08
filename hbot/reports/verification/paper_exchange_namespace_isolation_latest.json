@@ -1,0 +1,19 @@
+{
+  "ts_utc": "2026-03-07T13:22:52.422261+00:00",
+  "status": "pass",
+  "metrics": {
+    "p1_15_cross_instance_state_violation_count": 0.0,
+    "p1_15_namespace_key_collision_count_72h": 0.0,
+    "p1_15_command_event_routing_correctness_rate_pct": 100.0
+  },
+  "diagnostics": {
+    "total_routing_checks": 768,
+    "correct_routing_checks": 768,
+    "routing_violation_count": 0,
+    "accepted_namespace_collision_count": 0,
+    "state_collision_count": 0,
+    "malformed_order_records": 0,
+    "pair_namespace_mismatch_count": 0,
+    "violation_samples": []
+  }
+}

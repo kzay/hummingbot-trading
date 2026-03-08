@@ -361,7 +361,7 @@ class TestContainerStop:
 
         import sys
         with patch.dict(sys.modules, {"socket": mock_socket_mod}):
-            result = _stop_bot_container("hbot-bot1-1")
+            result = _stop_bot_container("bot1")
         assert result is True
         mock_sock.connect.assert_called_once()
 
@@ -375,7 +375,7 @@ class TestContainerStop:
 
         import sys
         with patch.dict(sys.modules, {"socket": mock_socket_mod}):
-            result = _stop_bot_container("hbot-bot1-1")
+            result = _stop_bot_container("bot1")
         assert result is False
 
 

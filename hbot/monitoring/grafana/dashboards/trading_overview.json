@@ -1,10 +1,10 @@
 {
-  "uid": "hbot-trading-overview",
-  "title": "Trading Desk",
-  "tags": ["hummingbot", "trading", "desk"],
+  "uid": "kzay-capital-trading-overview",
+  "title": "Kzay Capital Trading Desk",
+  "tags": ["kzay-capital", "trading", "desk"],
   "timezone": "utc",
   "schemaVersion": 39,
-  "version": 9,
+  "version": 11,
   "style": "dark",
   "editable": true,
   "graphTooltip": 1,
@@ -15,7 +15,7 @@
     {
       "title": "Bot Deep Dive",
       "type": "link",
-      "url": "/d/hbot-bot-deep-dive",
+      "url": "/d/kzay-capital-bot-deep-dive",
       "keepTime": true,
       "includeVars": true,
       "targetBlank": false,
@@ -24,9 +24,18 @@
     {
       "title": "Ops & Infrastructure",
       "type": "link",
-      "url": "/d/hbot-cp-health",
+      "url": "/d/kzay-capital-cp-health",
       "keepTime": true,
       "includeVars": false,
+      "targetBlank": false,
+      "icon": "external link"
+    },
+    {
+      "title": "Paper Engine Supervision",
+      "type": "link",
+      "url": "/d/kzay-capital-paper-engine-supervision",
+      "keepTime": true,
+      "includeVars": true,
       "targetBlank": false,
       "icon": "external link"
     }
@@ -54,7 +63,7 @@
       {
         "datasource": { "type": "prometheus", "uid": "prometheus" },
         "enable": true,
-        "expr": "increase(container_restart_count{name=~\"hbot-$bot\"}[15m]) > 0",
+        "expr": "increase(container_restart_count{name=~\"kzay-capital-$bot\"}[15m]) > 0",
         "hide": false,
         "iconColor": "orange",
         "name": "Container Restart",
@@ -170,7 +179,8 @@
         "allValue": ".+",
         "refresh": 2,
         "sort": 1,
-        "current": { "text": "All", "value": ["$__all"] }
+        "skipUrlSync": true,
+        "current": { "text": "paper", "value": ["paper"] }
       },
       {
         "name": "regime",
@@ -1079,7 +1089,7 @@
                 "value": [
                   {
                     "title": "Open Bot Deep Dive",
-                    "url": "/d/hbot-bot-deep-dive?var-bot=${__value.raw}&var-exchange=$exchange&var-symbol=$symbol&var-strategy=$strategy&var-venue=$venue&var-regime=$regime",
+                    "url": "/d/kzay-capital-bot-deep-dive?var-bot=${__value.raw}&var-exchange=$exchange&var-symbol=$symbol&var-strategy=$strategy&var-venue=$venue&var-regime=$regime",
                     "targetBlank": false
                   }
                 ]
@@ -1156,6 +1166,149 @@
         "sortOrder": "Descending",
         "dedupStrategy": "none"
       }
+    },
+    {
+      "id": 600,
+      "type": "row",
+      "title": "Paper Exchange Simulator",
+      "collapsed": false,
+      "gridPos": { "h": 1, "w": 24, "x": 0, "y": 71 }
+    },
+    {
+      "id": 601,
+      "type": "stat",
+      "title": "Simulator Service Up",
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "gridPos": { "h": 4, "w": 4, "x": 0, "y": 72 },
+      "targets": [
+        { "expr": "max(hbot_paper_exchange_service_up{cluster=~\"$cluster\",environment=~\"$environment\"})", "refId": "A" }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "bool",
+          "decimals": 0,
+          "thresholds": { "mode": "absolute", "steps": [{ "color": "red", "value": null }, { "color": "green", "value": 1 }] }
+        },
+        "overrides": []
+      },
+      "options": { "reduceOptions": { "calcs": ["lastNotNull"] }, "textMode": "value", "colorMode": "value", "graphMode": "none", "justifyMode": "center" }
+    },
+    {
+      "id": 602,
+      "type": "stat",
+      "title": "Heartbeat Age (s)",
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "gridPos": { "h": 4, "w": 4, "x": 4, "y": 72 },
+      "targets": [
+        { "expr": "max(hbot_paper_exchange_heartbeat_age_seconds{cluster=~\"$cluster\",environment=~\"$environment\"})", "refId": "A" }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "s",
+          "decimals": 1,
+          "thresholds": { "mode": "absolute", "steps": [{ "color": "green", "value": null }, { "color": "yellow", "value": 10 }, { "color": "red", "value": 30 }] }
+        },
+        "overrides": []
+      },
+      "options": { "reduceOptions": { "calcs": ["lastNotNull"] }, "textMode": "value", "colorMode": "value", "graphMode": "none", "justifyMode": "center" }
+    },
+    {
+      "id": 606,
+      "type": "stat",
+      "title": "Submit->First Fill p95 (ms)",
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "gridPos": { "h": 4, "w": 4, "x": 8, "y": 72 },
+      "targets": [
+        { "expr": "max(hbot_paper_exchange_submit_to_first_fill_latency_p95_ms{cluster=~\"$cluster\",environment=~\"$environment\"})", "refId": "A" }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "ms",
+          "decimals": 0,
+          "thresholds": { "mode": "absolute", "steps": [{ "color": "green", "value": null }, { "color": "yellow", "value": 150 }, { "color": "red", "value": 600 }] }
+        },
+        "overrides": []
+      },
+      "options": { "reduceOptions": { "calcs": ["lastNotNull"] }, "textMode": "value", "colorMode": "value", "graphMode": "none", "justifyMode": "center" }
+    },
+    {
+      "id": 607,
+      "type": "stat",
+      "title": "Margin/Liquidation Events",
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "gridPos": { "h": 4, "w": 4, "x": 12, "y": 72 },
+      "targets": [
+        { "expr": "max(hbot_bot_paper_margin_call_events_total{cluster=~\"$cluster\",environment=~\"$environment\",bot=~\"$bot\",exchange=~\"$exchange\",pair=~\"$symbol\",variant=~\"$strategy\",mode=~\"$venue\",regime=~\"$regime\"}) + max(hbot_bot_paper_liquidation_events_total{cluster=~\"$cluster\",environment=~\"$environment\",bot=~\"$bot\",exchange=~\"$exchange\",pair=~\"$symbol\",variant=~\"$strategy\",mode=~\"$venue\",regime=~\"$regime\"})", "refId": "A" }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "decimals": 0,
+          "thresholds": { "mode": "absolute", "steps": [{ "color": "green", "value": null }, { "color": "yellow", "value": 1 }, { "color": "red", "value": 5 }] }
+        },
+        "overrides": []
+      },
+      "options": { "reduceOptions": { "calcs": ["lastNotNull"] }, "textMode": "value", "colorMode": "value", "graphMode": "none", "justifyMode": "center" }
+    },
+    {
+      "id": 608,
+      "type": "stat",
+      "title": "Backlog Growth (%/10m)",
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "gridPos": { "h": 4, "w": 8, "x": 16, "y": 72 },
+      "targets": [
+        { "expr": "max(hbot_paper_exchange_load_backlog_growth_pct_per_10m{cluster=~\"$cluster\",environment=~\"$environment\"})", "refId": "A" }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "percent",
+          "decimals": 1,
+          "thresholds": { "mode": "absolute", "steps": [{ "color": "green", "value": null }, { "color": "yellow", "value": 10 }, { "color": "red", "value": 20 }] }
+        },
+        "overrides": []
+      },
+      "options": { "reduceOptions": { "calcs": ["lastNotNull"] }, "textMode": "value", "colorMode": "value", "graphMode": "none", "justifyMode": "center" }
+    },
+    {
+      "id": 603,
+      "type": "timeseries",
+      "title": "Oldest Snapshot Age (ms)",
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "gridPos": { "h": 8, "w": 8, "x": 0, "y": 76 },
+      "targets": [
+        { "expr": "max(hbot_paper_exchange_oldest_snapshot_age_ms{cluster=~\"$cluster\",environment=~\"$environment\"})", "refId": "A" }
+      ],
+      "fieldConfig": { "defaults": { "unit": "ms", "decimals": 0 }, "overrides": [] },
+      "options": { "tooltip": { "mode": "single" }, "legend": { "displayMode": "hidden" } }
+    },
+    {
+      "id": 605,
+      "type": "timeseries",
+      "title": "Command Reject Rate (%)",
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "gridPos": { "h": 8, "w": 8, "x": 8, "y": 76 },
+      "targets": [
+        { "expr": "100 * (sum(hbot_paper_exchange_command_total{cluster=~\"$cluster\",environment=~\"$environment\",status=\"rejected\"}) / clamp_min(sum(hbot_paper_exchange_command_total{cluster=~\"$cluster\",environment=~\"$environment\"}), 1))", "refId": "A" }
+      ],
+      "fieldConfig": { "defaults": { "unit": "percent", "decimals": 2 }, "overrides": [] },
+      "options": { "tooltip": { "mode": "single" }, "legend": { "displayMode": "hidden" } }
+    },
+    {
+      "id": 604,
+      "type": "table",
+      "title": "Staleness per Pair (Top Worst)",
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "gridPos": { "h": 8, "w": 8, "x": 16, "y": 76 },
+      "targets": [
+        {
+          "expr": "sort_desc(max by (pair) (hbot_paper_exchange_pair_snapshot_age_seconds{cluster=~\"$cluster\",environment=~\"$environment\"}))",
+          "format": "table",
+          "instant": true,
+          "refId": "A"
+        }
+      ],
+      "fieldConfig": { "defaults": { "unit": "s", "decimals": 1 }, "overrides": [] },
+      "options": { "showHeader": true, "cellHeight": "sm", "footer": { "show": false } }
     }
   ]
 }

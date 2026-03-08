@@ -1,14 +1,18 @@
 {
-  "ts_utc": "2026-03-02T03:32:33.185733+00:00",
+  "ts_utc": "2026-03-05T15:06:02.936841+00:00",
   "status": "pass",
   "bot": "bot3",
-  "mode": "active",
+  "mode": "auto",
   "apply_env": true,
   "run_gates": true,
   "dry_run": false,
+  "target_canary_duration_hours": 24.0,
+  "canary_critical_alert_count": 0.0,
+  "active_mode_rollout_concurrency_bots": 1.0,
+  "service_only_mode": "true",
   "env_path": "F:\\Environement\\git-repo\\hummingbot_custo\\hbot\\env\\.env",
   "compose_path": "F:\\Environement\\git-repo\\hummingbot_custo\\hbot\\compose\\docker-compose.yml",
-  "env_backup_path": "",
+  "env_backup_path": "F:\\Environement\\git-repo\\hummingbot_custo\\hbot\\reports\\ops\\paper_exchange_canary_env_backup_20260305T150516Z.env",
   "streams": {
     "command_stream": "hb.paper_exchange.command.v1",
     "event_stream": "hb.paper_exchange.event.v1",
@@ -21,12 +25,13 @@
       "name": "env_patch",
       "pass": true,
       "reason": "env updated for canary mode",
-      "backup_path": "",
+      "backup_path": "F:\\Environement\\git-repo\\hummingbot_custo\\hbot\\reports\\ops\\paper_exchange_canary_env_backup_20260305T150516Z.env",
       "updated_keys": [
         "PAPER_EXCHANGE_ALLOWED_COMMAND_PRODUCERS",
         "PAPER_EXCHANGE_ALLOWED_CONNECTORS",
         "PAPER_EXCHANGE_MODE_BOT3",
-        "PAPER_EXCHANGE_PERSIST_SYNC_STATE_RESULTS"
+        "PAPER_EXCHANGE_PERSIST_SYNC_STATE_RESULTS",
+        "PAPER_EXCHANGE_SERVICE_ONLY"
       ]
     },
     {
@@ -50,7 +55,7 @@
         "redis",
         "paper-exchange-service"
       ],
-      "output": "Container hbot-redis Recreate \n Container hbot-redis Recreated \n Container hbot-paper-exchange-service Recreate \n Container hbot-paper-exchange-service Recreated \n Container hbot-redis Starting \n Container hbot-redis Started \n Container hbot-redis Waiting \n Container hbot-redis Healthy \n Container hbot-paper-exchange-service Starting \n Container hbot-paper-exchange-service Started"
+      "output": "Container kzay-capital-redis Recreate \n Container kzay-capital-redis Recreated \n Container kzay-capital-paper-exchange-service Recreate \n Container kzay-capital-paper-exchange-service Recreated \n Container kzay-capital-redis Starting \n Container kzay-capital-redis Started \n Container kzay-capital-redis Waiting \n Container kzay-capital-redis Healthy \n Container kzay-capital-paper-exchange-service Starting \n Container kzay-capital-paper-exchange-service Started"
     },
     {
       "name": "recreate_bot",
@@ -70,7 +75,7 @@
         "--force-recreate",
         "bot3"
       ],
-      "output": "Container hbot-bot3 Recreate \n Container hbot-bot3 Recreated \n Container hbot-bot3 Starting \n Container hbot-bot3 Started"
+      "output": "Container kzay-capital-bot3 Recreate \n Container kzay-capital-bot3 Recreated \n Container kzay-capital-bot3 Starting \n Container kzay-capital-bot3 Started"
     },
     {
       "name": "paper_exchange_preflight",
@@ -92,11 +97,11 @@
         "F:\\Environement\\git-repo\\hummingbot_custo\\hbot\\scripts\\release\\run_paper_exchange_load_harness.py",
         "--strict",
         "--duration-sec",
-        "60.0",
+        "20.0",
         "--target-cmd-rate",
         "60.0",
         "--min-commands",
-        "3000",
+        "300",
         "--command-stream",
         "hb.paper_exchange.command.v1",
         "--event-stream",
@@ -104,13 +109,13 @@
         "--heartbeat-stream",
         "hb.paper_exchange.heartbeat.v1"
       ],
-      "output": "[paper-exchange-load-harness] status=pass published=3600 matched=3600\n[paper-exchange-load-harness] evidence=F:\\Environement\\git-repo\\hummingbot_custo\\hbot\\reports\\verification\\paper_exchange_load_harness_20260302T033232Z.json"
+      "output": "[paper-exchange-load-harness] status=pass published=1200 matched=1200\n[paper-exchange-load-harness] evidence=F:\\Environement\\git-repo\\hummingbot_custo\\hbot\\reports\\verification\\paper_exchange_load_harness_20260305T150601Z.json"
     },
     {
       "name": "paper_exchange_load_check",
       "pass": true,
       "rc": 0,
-      "run_id": "20260302T033131775841Z",
+      "run_id": "20260305T150540813116Z",
       "command": [
         "C:\\Users\\kzaY\\.pyenv\\pyenv-win\\versions\\3.9.13\\python.exe",
         "F:\\Environement\\git-repo\\hummingbot_custo\\hbot\\scripts\\release\\check_paper_exchange_load.py",
@@ -118,7 +123,7 @@
         "--lookback-sec",
         "600",
         "--min-window-sec",
-        "30",
+        "10",
         "--command-stream",
         "hb.paper_exchange.command.v1",
         "--event-stream",
@@ -132,9 +137,9 @@
         "--heartbeat-consumer-name",
         "paper_exchange_1",
         "--load-run-id",
-        "20260302T033131775841Z"
+        "20260305T150540813116Z"
       ],
-      "output": "[paper-exchange-load] status=pass throughput=60.013002817277076\n[paper-exchange-load] evidence=F:\\Environement\\git-repo\\hummingbot_custo\\hbot\\reports\\verification\\paper_exchange_load_20260302T033233Z.json"
+      "output": "[paper-exchange-load] status=pass throughput=60.01500375093773\n[paper-exchange-load] evidence=F:\\Environement\\git-repo\\hummingbot_custo\\hbot\\reports\\verification\\paper_exchange_load_20260305T150602Z.json"
     }
   ]
 }

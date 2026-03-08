@@ -63,7 +63,7 @@ Comprehensive hardening backlog combining Day 27 readiness audit (original v1) w
 ### 6) Enforce immutable runtime for control-plane services (v1 item #1)
 - Status: DONE (Day 8/28)
 - Scope: all external profile services
-- Evidence: pinned `hbot-control-plane:20260222` image; no runtime pip install
+- Evidence: pinned `kzay-capital-control-plane:20260222` image; no runtime pip install
 
 ### 7) Add healthchecks for all control-plane services (v1 item #2)
 - Status: DONE (Day 28)

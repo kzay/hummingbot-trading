@@ -535,7 +535,7 @@ These are optional building blocks to improve repeatability, observability, and 
   - `cancel_per_min`, `risk_reasons` (as label/info metric)
 
 ### Deliverables
-- Extended `bot-metrics-exporter` metrics set + updated `Hummingbot Trading Desk Overview` panels.
+- Extended `bot-metrics-exporter` metrics set + updated `Kzay Capital Trading Desk` panels.
 - `docs/ops/dashboard_kpi_contract_v1.md` (what each panel means + the metric source).
 
 ### Done Criteria
@@ -1015,7 +1015,7 @@ Grafana handles **analytics panels** (stats, heatmap, tables, curves). A separat
 Grafana cannot render a TradingView-style candlestick chart with interactive fill marker overlays. We use **`lightweight-charts`** (TradingView's own open-source charting library, MIT licensed) for the chart view, and Grafana for all analytics panels.
 
 ### Tasks
-**Part A — Grafana analytics dashboard** (`hbot-backtest-review`):
+**Part A — Grafana analytics dashboard** (`kzay-capital-backtest-review`):
 - **Run selector**: dropdown (strategy_name + run_id + venue/pair/dates + data_source label + fill_bias)
 - **Performance summary stats** (TradingView-inspired, market-making adapted):
   - Net Profit (total PnL)
@@ -1279,7 +1279,7 @@ No `setup.py`, `pyproject.toml`, or project-level dependency pins exist. The pro
   - Project metadata (name, version, Python requirement ≥3.11)
   - Runtime dependencies (redis, pydantic, ccxt, psycopg, joblib, scikit-learn, requests, boto3)
   - Dev dependencies (pytest, pytest-cov, hypothesis, mypy, ruff)
-  - Entry points for services (e.g., `hbot-event-store = services.event_store.main:run`)
+  - Entry points for services (e.g., `kzay-capital-event-store = services.event_store.main:run`)
 - Configure `mypy` with a `mypy.ini` or `[tool.mypy]` section:
   - Strict mode for `controllers/` and `services/contracts/`
   - Gradual mode for `services/` (allow untyped calls initially)

@@ -1,0 +1,176 @@
+{
+  "ts_utc": "2026-03-08T01:21:59.823104+00:00",
+  "cycle_sleep_minutes": 10.0,
+  "dry_run": false,
+  "analysis_ok": true,
+  "analysis": {
+    "commands": [
+      {
+        "command": [
+          "C:\\Users\\kzaY\\.pyenv\\pyenv-win\\versions\\3.9.13\\python.exe",
+          "F:\\Environement\\git-repo\\hummingbot_custo\\hbot\\scripts\\analysis\\performance_dossier.py",
+          "--root",
+          "F:\\Environement\\git-repo\\hummingbot_custo\\hbot",
+          "--bot-log-root",
+          "F:\\Environement\\git-repo\\hummingbot_custo\\hbot\\data\\bot1\\logs\\epp_v24\\bot1_a",
+          "--lookback-days",
+          "7",
+          "--save"
+        ],
+        "returncode": 0,
+        "stdout_tail": "95_high_quote\": -0.01588638704140153\n      },\n      \"maker_bias_sell\": {\n        \"fills\": 18.0,\n        \"expectancy_per_fill_quote\": -0.022372998485919962,\n        \"ci95_low_quote\": -0.029301871157257423,\n        \"ci95_high_quote\": -0.015444125814582502\n      },\n      \"maker_two_sided\": {\n        \"fills\": 19.0,\n        \"expectancy_per_fill_quote\": -0.050307509913278474,\n        \"ci95_low_quote\": -0.09943529170971267,\n        \"ci95_high_quote\": -0.0011797281168442753\n      }\n    },\n    \"regime_expectancy\": {\n      \"neutral_low_vol\": {\n        \"fills\": 69.0,\n        \"expectancy_per_fill_quote\": -0.03113802622164436,\n        \"ci95_low_quote\": -0.04518845486798874,\n        \"ci95_high_quote\": -0.017087597575299977\n      },\n      \"up\": {\n        \"fills\": 6.0,\n        \"expectancy_per_fill_quote\": -0.014157153408114938,\n        \"ci95_low_quote\": -0.04293440277964244,\n        \"ci95_high_quote\": 0.014620095963412563\n      },\n      \"down\": {\n        \"fills\": 13.0,\n        \"expectancy_per_fill_quote\": -0.038258978291921424,\n        \"ci95_low_quote\": -0.0556006452616699,\n        \"ci95_high_quote\": -0.020917311322172952\n      },\n      \"high_vol_shock\": {\n        \"fills\": 1.0,\n        \"expectancy_per_fill_quote\": -0.0001350272,\n        \"ci95_low_quote\": -0.0001350272,\n        \"ci95_high_quote\": -0.0001350272\n      }\n    }\n  },\n  \"checks\": [\n    {\n      \"name\": \"net_pnl_non_negative\",\n      \"pass\": false,\n      \"value\": -2.7309684747371294,\n      \"threshold\": 0.0\n    },\n    {\n      \"name\": \"mean_fee_bps_within_0_to_12\",\n      \"pass\": true,\n      \"value\": 2.742939288036775,\n      \"threshold\": [\n        0.0,\n        12.0\n      ]\n    },\n    {\n      \"name\": \"maker_ratio_at_least_45pct\",\n      \"pass\": false,\n      \"value\": 0.3146067415730337,\n      \"threshold\": 0.45,\n      \"note\": \"weighted_by_fills\"\n    },\n    {\n      \"name\": \"slippage_p95_below_25bps\",\n      \"pass\": true,\n      \"value\": 2.732479905961875,\n      \"threshold\": 25.0\n    },\n    {\n      \"name\": \"drawdown_below_2pct\",\n      \"pass\": true,\n      \"value\": 0.0012283157501984951,\n      \"threshold\": 0.02\n    },\n    {\n      \"name\": \"soft_pause_state_ratio_below_30pct\",\n      \"pass\": true,\n      \"value\": 0.13553113553113552,\n      \"threshold\": 0.3\n    },\n    {\n      \"name\": \"reconciliation_not_critical\",\n      \"pass\": false,\n      \"value\": 11.0,\n      \"threshold\": 0.0\n    },\n    {\n      \"name\": \"portfolio_risk_not_critical\",\n      \"pass\": true,\n      \"value\": 0.0,\n      \"threshold\": 0.0\n    },\n    {\n      \"name\": \"rolling_expectancy_ci95_upper_non_negative\",\n      \"pass\": false,\n      \"value\": -0.01932440977307106,\n      \"threshold\": 0.0,\n      \"note\": \"window_fills=300; sample=89; gate_min_fills=300; gate_ready=False\"\n    }\n  ],\n  \"daily_breakdown\": [\n    {\n      \"day\": \"2026-03-07\",\n      \"fills\": 85,\n      \"realized_pnl_quote\": -2.044896071116553,\n      \"fees_quote\": 0.6365239946119289,\n      \"net_pnl_quote\": -2.681420065728482,\n      \"fee_bps\": 3.4858785760735502,\n      \"maker_ratio\": 0.3176470588235294,\n      \"slippage_median_bps\": -0.3309814039936952,\n      \"slippage_p95_bps\": 2.732479905961875\n    },\n    {\n      \"day\": \"2026-03-08\",\n      \"fills\": 4,\n      \"realized_pnl_quote\": -0.0009829856703457915,\n      \"fees_quote\": 0.04856542333830191,\n      \"net_pnl_quote\": -0.0495484090086477,\n      \"fee_bps\": 2.0,\n      \"maker_ratio\": 0.25,\n      \"slippage_median_bps\": -4.2207630276055506,\n      \"slippage_p95_bps\": -0.2895032791809417\n    }\n  ],\n  \"external\": {\n    \"reconciliation\": {\n      \"status\": \"critical\",\n      \"critical_count\": 11,\n      \"warning_count\": 0\n    },\n    \"portfolio_risk\": {\n      \"status\": \"ok\",\n      \"critical_count\": 0,\n      \"warning_count\": 0\n    },\n    \"strict_cycle\": {\n      \"status\": \"FAIL\",\n      \"rc\": 2\n    }\n  }\n}\n[performance-dossier] saved_json=F:\\Environement\\git-repo\\hummingbot_custo\\hbot\\reports\\analysis\\performance_dossier_latest.json\n[performance-dossier] saved_md=F:\\Environement\\git-repo\\hummingbot_custo\\hbot\\reports\\analysis\\performance_dossier_latest.md\n",
+        "stderr_tail": "",
+        "elapsed_s": 0.206
+      },
+      {
+        "command": [
+          "C:\\Users\\kzaY\\.pyenv\\pyenv-win\\versions\\3.9.13\\python.exe",
+          "F:\\Environement\\git-repo\\hummingbot_custo\\hbot\\scripts\\analysis\\bot1_multi_day_summary.py",
+          "--start",
+          "2026-02-17",
+          "--end",
+          "2026-03-08",
+          "--root",
+          "F:\\Environement\\git-repo\\hummingbot_custo\\hbot\\data\\bot1\\logs\\epp_v24\\bot1_a",
+          "--save"
+        ],
+        "returncode": 0,
+        "stdout_tail": "\": {\n        \"confidence\": \"high\",\n        \"minute_rows\": 1242,\n        \"has_equity_quote\": true,\n        \"has_regime_counts\": true\n      }\n    },\n    {\n      \"date\": \"2026-03-06\",\n      \"realized_pnl_usdt\": 0.0,\n      \"fees_usdt\": 0.0,\n      \"net_pnl_usdt\": 0.0,\n      \"net_pnl_bps\": 0.0,\n      \"funding_cost_usdt\": 0.0,\n      \"net_pnl_including_funding_usdt\": 0.0,\n      \"net_pnl_including_funding_bps\": 0.0,\n      \"spread_capture_estimate_usdt\": 0.0,\n      \"carry_component_usdt\": 0.0,\n      \"edge_notional_quote\": 0.0,\n      \"avg_edge_vs_mid_pct\": 0.0,\n      \"pos_edge_frac\": 0.0,\n      \"drawdown_pct\": 0.0009582891768585402,\n      \"daily_loss_pct\": 6.422119428784245e-05,\n      \"fills\": 0,\n      \"turnover_x\": 2.383878200118727,\n      \"dominant_regime\": \"neutral_low_vol\",\n      \"equity_quote\": 999.9357788057122,\n      \"regime_counts\": {\n        \"neutral_low_vol\": 721,\n        \"high_vol_shock\": 54,\n        \"down\": 152,\n        \"up\": 229\n      },\n      \"spread_competitiveness_cap_active_rows\": 46,\n      \"spread_competitiveness_cap_observed_rows\": 1156,\n      \"spread_competitiveness_cap_hit_ratio\": 0.039792387543252594,\n      \"data_source_mode\": \"csv\",\n      \"data_quality\": {\n        \"confidence\": \"high\",\n        \"minute_rows\": 1156,\n        \"has_equity_quote\": true,\n        \"has_regime_counts\": true\n      }\n    },\n    {\n      \"date\": \"2026-03-07\",\n      \"realized_pnl_usdt\": -2.0448960711165527,\n      \"fees_usdt\": 0.6365239946119289,\n      \"net_pnl_usdt\": -2.6814200657284815,\n      \"net_pnl_bps\": -26.842075219736525,\n      \"funding_cost_usdt\": 0.0,\n      \"net_pnl_including_funding_usdt\": -2.6814200657284815,\n      \"net_pnl_including_funding_bps\": -26.842075219736525,\n      \"spread_capture_estimate_usdt\": 0.05772265212208879,\n      \"carry_component_usdt\": -2.7391427178505703,\n      \"edge_notional_quote\": 1826.0073629096441,\n      \"avg_edge_vs_mid_pct\": 3.161140162661275e-05,\n      \"pos_edge_frac\": 0.5176470588235295,\n      \"drawdown_pct\": 0.001057568559951825,\n      \"daily_loss_pct\": 0.0009690180746774045,\n      \"fills\": 85,\n      \"turnover_x\": 2.280386377157342,\n      \"dominant_regime\": \"neutral_low_vol\",\n      \"equity_quote\": 998.9615347463442,\n      \"regime_counts\": {\n        \"neutral_low_vol\": 773,\n        \"up\": 148,\n        \"high_vol_shock\": 109,\n        \"down\": 210\n      },\n      \"spread_competitiveness_cap_active_rows\": 0,\n      \"spread_competitiveness_cap_observed_rows\": 1240,\n      \"spread_competitiveness_cap_hit_ratio\": 0.0,\n      \"data_source_mode\": \"csv\",\n      \"data_quality\": {\n        \"confidence\": \"high\",\n        \"minute_rows\": 1240,\n        \"has_equity_quote\": true,\n        \"has_regime_counts\": true\n      }\n    },\n    {\n      \"date\": \"2026-03-08\",\n      \"realized_pnl_usdt\": -0.000982985670345785,\n      \"fees_usdt\": 0.04856542333830191,\n      \"net_pnl_usdt\": -0.049548409008647695,\n      \"net_pnl_bps\": -0.4960207367732772,\n      \"funding_cost_usdt\": 0.0,\n      \"net_pnl_including_funding_usdt\": -0.049548409008647695,\n      \"net_pnl_including_funding_bps\": -0.4960207367732772,\n      \"spread_capture_estimate_usdt\": 0.06612218400276013,\n      \"carry_component_usdt\": -0.11567059301140782,\n      \"edge_notional_quote\": 242.82711669150956,\n      \"avg_edge_vs_mid_pct\": 0.0002723014830619701,\n      \"pos_edge_frac\": 1.0,\n      \"drawdown_pct\": 0.00010669471821073639,\n      \"daily_loss_pct\": 3.7348417860077136e-05,\n      \"fills\": 4,\n      \"turnover_x\": 0.24309011679634643,\n      \"dominant_regime\": \"neutral_low_vol\",\n      \"equity_quote\": 998.9180962669197,\n      \"regime_counts\": {\n        \"high_vol_shock\": 3,\n        \"neutral_low_vol\": 22,\n        \"up\": 6,\n        \"down\": 8\n      },\n      \"spread_competitiveness_cap_active_rows\": 0,\n      \"spread_competitiveness_cap_observed_rows\": 39,\n      \"spread_competitiveness_cap_hit_ratio\": 0.0,\n      \"data_source_mode\": \"csv\",\n      \"data_quality\": {\n        \"confidence\": \"high\",\n        \"minute_rows\": 39,\n        \"has_equity_quote\": true,\n        \"has_regime_counts\": true\n      }\n    }\n  ]\n}\n",
+        "stderr_tail": "Saved to F:\\Environement\\git-repo\\hummingbot_custo\\hbot\\reports\\strategy\\multi_day_summary_latest.json\n\n\\u2717 ROAD-1 gate: FAIL \u2014 criteria not met: min_days_gte_20, consecutive_days_complete, mean_daily_net_pnl_bps_positive, sharpe_gte_1_5, max_drawdown_lt_2pct, no_hard_stop_days, spread_capture_dominant_source, mean_daily_pnl_positive, sharpe_ci90_excludes_zero\n",
+        "elapsed_s": 14.615
+      }
+    ],
+    "ok": true,
+    "failure_count": 0
+  },
+  "dossier_summary": {
+    "days_included": 2,
+    "total_net_pnl_quote": -2.7309684747371294,
+    "mean_fee_bps": 2.742939288036775,
+    "mean_maker_ratio": 0.2838235294117647,
+    "maker_ratio_mean_daily": 0.2838235294117647,
+    "maker_ratio_weighted": 0.3146067415730337,
+    "max_slippage_p95_bps": 2.732479905961875,
+    "max_drawdown_pct": 0.0012283157501984951,
+    "soft_pause_ratio": 0.13553113553113552,
+    "soft_pause_state_ratio": 0.13553113553113552,
+    "soft_pause_edge_ratio": 0.016483516483516484,
+    "soft_pause_state_rows": 74,
+    "soft_pause_edge_rows": 9,
+    "selective_quote_block_rows": 0,
+    "selective_quote_block_ratio": 0.0,
+    "selective_quote_reduce_rows": 0,
+    "selective_quote_reduce_ratio": 0.0,
+    "alpha_no_trade_rows": 198,
+    "alpha_no_trade_ratio": 0.3626373626373626,
+    "alpha_aggressive_rows": 0,
+    "alpha_aggressive_ratio": 0.0,
+    "order_book_stale_rows": 0,
+    "cancel_before_fill_rows": 2,
+    "cancel_before_fill_rate": 0.003663003663003663,
+    "expectancy_sample_count": 89,
+    "expectancy_per_fill_quote": -0.030685039041990214,
+    "expectancy_ci95_low_quote": -0.04204566831090937,
+    "expectancy_ci95_high_quote": -0.01932440977307106,
+    "rolling_expectancy_window_fills": 300,
+    "rolling_expectancy_sample_count": 89,
+    "rolling_expectancy_per_fill_quote": -0.030685039041990214,
+    "rolling_expectancy_ci95_low_quote": -0.04204566831090937,
+    "rolling_expectancy_ci95_high_quote": -0.01932440977307106,
+    "rolling_expectancy_gate_min_fills": 300,
+    "rolling_expectancy_gate_ready": false,
+    "rolling_expectancy_gate_fail": false,
+    "maker_expectancy_sample_count": 28,
+    "maker_expectancy_per_fill_quote": -0.02058142211814153,
+    "maker_expectancy_ci95_low_quote": -0.03091153500859878,
+    "maker_expectancy_ci95_high_quote": -0.010251309227684283,
+    "maker_rolling_expectancy_sample_count": 28,
+    "maker_rolling_expectancy_per_fill_quote": -0.02058142211814153,
+    "maker_rolling_expectancy_ci95_low_quote": -0.03091153500859878,
+    "maker_rolling_expectancy_ci95_high_quote": -0.010251309227684283,
+    "taker_expectancy_sample_count": 61,
+    "taker_expectancy_per_fill_quote": -0.03532276484310108,
+    "taker_expectancy_ci95_low_quote": -0.05112666866958047,
+    "taker_expectancy_ci95_high_quote": -0.019518861016621696,
+    "taker_rolling_expectancy_sample_count": 61,
+    "taker_rolling_expectancy_per_fill_quote": -0.03532276484310108,
+    "taker_rolling_expectancy_ci95_low_quote": -0.05112666866958047,
+    "taker_rolling_expectancy_ci95_high_quote": -0.019518861016621696,
+    "alpha_policy_expectancy": {
+      "no_trade": {
+        "fills": 25.0,
+        "expectancy_per_fill_quote": -0.026311969735343693,
+        "ci95_low_quote": -0.03593426100428003,
+        "ci95_high_quote": -0.016689678466407353
+      },
+      "maker_bias_buy": {
+        "fills": 27.0,
+        "expectancy_per_fill_quote": -0.026467132231655064,
+        "ci95_low_quote": -0.0370478774219086,
+        "ci95_high_quote": -0.01588638704140153
+      },
+      "maker_bias_sell": {
+        "fills": 18.0,
+        "expectancy_per_fill_quote": -0.022372998485919962,
+        "ci95_low_quote": -0.029301871157257423,
+        "ci95_high_quote": -0.015444125814582502
+      },
+      "maker_two_sided": {
+        "fills": 19.0,
+        "expectancy_per_fill_quote": -0.050307509913278474,
+        "ci95_low_quote": -0.09943529170971267,
+        "ci95_high_quote": -0.0011797281168442753
+      }
+    },
+    "regime_expectancy": {
+      "neutral_low_vol": {
+        "fills": 69.0,
+        "expectancy_per_fill_quote": -0.03113802622164436,
+        "ci95_low_quote": -0.04518845486798874,
+        "ci95_high_quote": -0.017087597575299977
+      },
+      "up": {
+        "fills": 6.0,
+        "expectancy_per_fill_quote": -0.014157153408114938,
+        "ci95_low_quote": -0.04293440277964244,
+        "ci95_high_quote": 0.014620095963412563
+      },
+      "down": {
+        "fills": 13.0,
+        "expectancy_per_fill_quote": -0.038258978291921424,
+        "ci95_low_quote": -0.0556006452616699,
+        "ci95_high_quote": -0.020917311322172952
+      },
+      "high_vol_shock": {
+        "fills": 1.0,
+        "expectancy_per_fill_quote": -0.0001350272,
+        "ci95_low_quote": -0.0001350272,
+        "ci95_high_quote": -0.0001350272
+      }
+    }
+  },
+  "minute_state": {
+    "last_minute_ts": "2026-03-08T01:22:04.084992+00:00",
+    "state": "running",
+    "risk_reasons": "",
+    "base_pct": 0.010210449682919395,
+    "max_base_pct": 0.1,
+    "soft_pause_edge": false,
+    "alpha_policy_state": "no_trade",
+    "fills_count_today": 4
+  },
+  "fill_state": {
+    "last_fill_ts": "2026-03-08T00:58:18.080627+00:00",
+    "last_fill_side": "sell",
+    "last_fill_realized_pnl_quote": -0.061580982715346864,
+    "last_fill_alpha_policy_state": "maker_two_sided",
+    "last_fill_regime": "down"
+  },
+  "decision_reasons": [
+    "no_new_fill_evidence_since_last_cycle"
+  ],
+  "proposed_changes": {},
+  "applied_changes": {},
+  "restart_bot": false,
+  "restart_result": null
+}

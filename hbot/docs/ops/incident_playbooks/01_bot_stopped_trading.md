@@ -18,7 +18,7 @@
 
 1. **Check state and reason:**
    ```bash
-   docker logs hbot-bot1 --tail 30 2>&1 | grep -E "HARD_STOP|SOFT_PAUSE|guard|risk"
+   docker logs kzay-capital-bot1 --tail 30 2>&1 | grep -E "HARD_STOP|SOFT_PAUSE|guard|risk"
    ```
 2. **Check minute.csv last row:**
    ```bash
@@ -56,7 +56,7 @@
 **For `hard_stop`:**
 ```bash
 # Inspect last 50 log lines
-docker logs hbot-bot1 --tail 50 2>&1
+docker logs kzay-capital-bot1 --tail 50 2>&1
 # Check if kill_switch intent was published
 cat hbot/reports/kill_switch/latest.json
 ```
@@ -85,7 +85,7 @@ Bot auto-resumes. If pause lasts > 30 minutes, consider reducing `min_net_edge_b
 3. If API key is expired: rotate per `docs/ops/secrets_and_key_rotation.md`.
 
 ### HARD_STOP — Unknown / Unexpected:
-1. Capture full logs: `docker logs hbot-bot1 > /tmp/bot1_incident.log 2>&1`
+1. Capture full logs: `docker logs kzay-capital-bot1 > /tmp/bot1_incident.log 2>&1`
 2. Check for exceptions: `grep -i "error\|exception\|traceback" /tmp/bot1_incident.log | tail -20`
 3. If crash without recovery: `docker compose --env-file hbot/env/.env ... restart bot1`
 

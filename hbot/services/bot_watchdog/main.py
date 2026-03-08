@@ -27,7 +27,7 @@ Env vars:
   WATCHDOG_MAX_RESTARTS          - max restarts per window before breaker trips (default 5)
   WATCHDOG_WINDOW_S              - circuit breaker window in seconds (default 3600)
   WATCHDOG_BOTS                  - comma-separated list of bot names to watch (default: bot1)
-  WATCHDOG_CONTAINER_PREFIX      - container name prefix (default: hbot-)
+  WATCHDOG_CONTAINER_PREFIX      - container name prefix (default: empty)
   HB_DATA_ROOT                   - path to hbot/data inside container
   TELEGRAM_BOT_TOKEN             - Telegram bot token for alerts
   TELEGRAM_CHAT_ID               - Telegram chat ID for alerts
@@ -69,7 +69,7 @@ if not RESTART_BACKOFF_S:
     RESTART_BACKOFF_S = [60, 120, 300]
 FINGERPRINT_COOLDOWN_S = int(os.environ.get("WATCHDOG_FINGERPRINT_COOLDOWN_S", "600"))
 BOT_NAMES = [b.strip() for b in os.environ.get("WATCHDOG_BOTS", "bot1").split(",") if b.strip()]
-CONTAINER_PREFIX = os.environ.get("WATCHDOG_CONTAINER_PREFIX", "hbot-")
+CONTAINER_PREFIX = os.environ.get("WATCHDOG_CONTAINER_PREFIX", "")
 DATA_ROOT = Path(os.environ.get("HB_DATA_ROOT", "/workspace/hbot/data"))
 TG_TOKEN = os.environ.get("TELEGRAM_BOT_TOKEN", "")
 TG_CHAT = os.environ.get("TELEGRAM_CHAT_ID", "")

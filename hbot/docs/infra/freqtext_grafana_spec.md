@@ -1,6 +1,6 @@
 # FreqText → Grafana Dashboard Spec
 
-**Target dashboard:** `FTUI Bot Monitor` (uid: `hbot-ftui`,
+**Target dashboard:** `Kzay Capital FTUI Bot Monitor` (uid: `kzay-capital-ftui`,
 file: `hbot/monitoring/grafana/dashboards/ftui_bot_monitor.json`)
 
 **Canonical terminal reference:** `hbot/scripts/analysis/ftui_dashboard.py`  
@@ -12,7 +12,7 @@ file: `hbot/monitoring/grafana/dashboards/ftui_bot_monitor.json`)
 
 | Setting | Value |
 |---|---|
-| uid | `hbot-ftui` |
+| uid | `kzay-capital-ftui` |
 | title | `FTUI Bot Monitor` |
 | timezone | `utc` |
 | style | `dark` |

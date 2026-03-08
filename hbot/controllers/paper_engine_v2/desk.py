@@ -33,6 +33,7 @@ from controllers.paper_engine_v2.types import (
     OrderSide,
     PaperOrder,
     PaperOrderType,
+    PositionAction,
     OrderStatus,
     _ZERO,
     _uuid,
@@ -74,6 +75,8 @@ class DeskConfig:
     fill_queue_participation: Decimal = Decimal("0.35")
     fill_slippage_bps: Decimal = Decimal("1.0")
     fill_adverse_selection_bps: Decimal = Decimal("1.5")
+    fill_prob_fill_on_limit: float = 0.4
+    fill_prob_slippage: float = 0.0
     fill_partial_min_ratio: Decimal = Decimal("0.15")
     fill_partial_max_ratio: Decimal = Decimal("0.85")
     fill_depth_levels: int = 3
@@ -87,6 +90,7 @@ class DeskConfig:
     state_file_path: str = "/tmp/paper_desk_v2_state.json"
     redis_key: str = "paper_desk:v2:state"
     redis_url: Optional[str] = None
+    reset_state_on_startup: bool = False
     event_log_max_size: int = 100_000
     seed: int = 7
     fee_profiles_path: str = "config/fee_profiles.json"
@@ -119,6 +123,16 @@ class PaperDesk:
         self._event_log: Deque[EngineEvent] = deque(maxlen=config.event_log_max_size)
         self._rng = random.Random(config.seed)
         self._order_counter: int = 0
+        self._risk_margin_call_events_total: int = 0
+        self._risk_liquidation_events_total: int = 0
+        self._risk_liquidation_actions_total: int = 0
+        self._risk_last_margin_level: str = "unknown"
+        if config.reset_state_on_startup:
+            logger.warning(
+                "PaperDesk: clearing persisted state on startup for %s",
+                config.redis_key,
+            )
+            self._state_store.clear()
         self._restore_state()
 
     # -- Registration -------------------------------------------------------
@@ -143,6 +157,8 @@ class PaperDesk:
             queue_participation=cfg.fill_queue_participation,
             slippage_bps=cfg.fill_slippage_bps,
             adverse_selection_bps=cfg.fill_adverse_selection_bps,
+            prob_fill_on_limit=cfg.fill_prob_fill_on_limit,
+            prob_slippage=cfg.fill_prob_slippage,
             partial_fill_min_ratio=cfg.fill_partial_min_ratio,
             partial_fill_max_ratio=cfg.fill_partial_max_ratio,
             depth_levels=cfg.fill_depth_levels,
@@ -190,6 +206,8 @@ class PaperDesk:
         price: Decimal,
         quantity: Decimal,
         source_bot: str = "",
+        position_action: PositionAction = PositionAction.AUTO,
+        position_mode: str = "ONEWAY",
     ) -> EngineEvent:
         """Submit an order. Routes to the correct engine. Never raises."""
         key = instrument_id.key
@@ -245,6 +263,8 @@ class PaperDesk:
             created_at_ns=now_ns,
             updated_at_ns=now_ns,
             source_bot=source_bot,
+            position_action=position_action,
+            position_mode=str(position_mode or "ONEWAY").upper(),
         )
         event = engine.submit_order(order, now_ns)
         _trace_paper_desk(
@@ -373,7 +393,17 @@ class PaperDesk:
         # Post-trade risk evaluation (advisory liquidation actions)
         try:
             margin_level, liq_actions = self._portfolio.evaluate_risk(current_prices)
+            current_margin_level = str(getattr(margin_level, "value", margin_level)).strip().lower() or "unknown"
+            if current_margin_level in {"critical", "liquidate", "bankrupt"} and self._risk_last_margin_level in {
+                "safe",
+                "warn",
+                "unknown",
+            }:
+                self._risk_margin_call_events_total += 1
+            self._risk_last_margin_level = current_margin_level
             if liq_actions:
+                self._risk_liquidation_events_total += 1
+                self._risk_liquidation_actions_total += len(liq_actions)
                 logger.warning(
                     "PaperDesk risk: %s level, %d liquidation actions required",
                     margin_level.value, len(liq_actions),
@@ -429,6 +459,13 @@ class PaperDesk:
         return {
             "portfolio": self._portfolio.snapshot(),
             "funding_timestamps": dict(self._funding_sim._last_funding_ns),
+            "order_counter": int(self._order_counter),
+            "risk_counters": {
+                "margin_call_events_total": int(self._risk_margin_call_events_total),
+                "liquidation_events_total": int(self._risk_liquidation_events_total),
+                "liquidation_actions_total": int(self._risk_liquidation_actions_total),
+                "last_margin_level": str(self._risk_last_margin_level),
+            },
         }
 
     def event_log(self) -> List[EngineEvent]:
@@ -473,6 +510,18 @@ class PaperDesk:
                 self._funding_sim._last_funding_ns.update(
                     {k: int(v) for k, v in data["funding_timestamps"].items()}
                 )
+            try:
+                restored_order_counter = int(data.get("order_counter", 0) or 0)
+            except Exception:
+                restored_order_counter = 0
+            self._order_counter = max(0, restored_order_counter)
+            risk_counters = data.get("risk_counters", {}) if isinstance(data.get("risk_counters"), dict) else {}
+            self._risk_margin_call_events_total = int(risk_counters.get("margin_call_events_total", 0) or 0)
+            self._risk_liquidation_events_total = int(risk_counters.get("liquidation_events_total", 0) or 0)
+            self._risk_liquidation_actions_total = int(risk_counters.get("liquidation_actions_total", 0) or 0)
+            self._risk_last_margin_level = (
+                str(risk_counters.get("last_margin_level", self._risk_last_margin_level)).strip().lower() or "unknown"
+            )
             logger.info("PaperDesk: state restored from persistence")
         except Exception as exc:
             logger.warning("PaperDesk: state restore failed: %s", exc, exc_info=True)
@@ -505,6 +554,8 @@ class PaperDesk:
             fill_queue_participation=cfg.paper_queue_participation,
             fill_slippage_bps=cfg.paper_slippage_bps,
             fill_adverse_selection_bps=cfg.paper_adverse_selection_bps,
+            fill_prob_fill_on_limit=cfg.paper_prob_fill_on_limit,
+            fill_prob_slippage=cfg.paper_prob_slippage,
             fill_partial_min_ratio=cfg.paper_partial_fill_min_ratio,
             fill_partial_max_ratio=cfg.paper_partial_fill_max_ratio,
             fill_depth_levels=cfg.paper_depth_levels,
@@ -515,13 +566,21 @@ class PaperDesk:
             insert_latency_ms=cfg.paper_insert_latency_ms,
             cancel_latency_ms=cfg.paper_cancel_latency_ms,
             default_engine_config=engine_config,
-            state_file_path=f"{cfg.log_dir}/epp_v24/{cfg.instance_name}_{cfg.variant}/paper_desk_v2.json",
+            state_file_path=(
+                f"{cfg.log_dir}/{cfg.artifact_namespace}/{cfg.instance_name}_{cfg.variant}/paper_desk_v2.json"
+            ),
             redis_key=f"paper_desk:v2:{cfg.instance_name}:{cfg.variant}",
             redis_url=redis_url,
+            reset_state_on_startup=cfg.paper_reset_state_on_startup,
             seed=cfg.paper_seed,
         ))
 
     @classmethod
-    def from_epp_config(cls, cfg: Any) -> "PaperDesk":
-        """Adapter from Epp config object with nested paper_engine block."""
+    def from_controller_config(cls, cfg: Any) -> "PaperDesk":
+        """Adapter from a controller config object with nested `paper_engine` block."""
         return cls.from_paper_config(PaperEngineConfig.from_controller_config(cfg))
+
+    @classmethod
+    def from_epp_config(cls, cfg: Any) -> "PaperDesk":
+        """Backward-compatible alias for legacy EPP integrations."""
+        return cls.from_controller_config(cfg)

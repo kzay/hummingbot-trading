@@ -298,7 +298,7 @@ Wave summary:
 - Full backlog with acceptance criteria: `docs/ops/prod_hardening_backlog_v1.md` (v2 update)
 
 ## Extended Plan Status (Day 8-40)
-- Day 8 (Reproducible Builds): COMPLETED (shared pinned `hbot-control-plane:20260222` image + compose migration + build/run doc + manifest update)
+- Day 8 (Reproducible Builds): COMPLETED (shared pinned `kzay-capital-control-plane:20260222` image + compose migration + build/run doc + manifest update)
 - Day 9 (Game Day Fail-Closed): COMPLETED (controlled Redis outage drill executed; strict promotion remained blocked; recovery steps documented)
 - Day 10 (Replay + Regression Harness): COMPLETED (single entrypoint added; two-run deterministic repeat check passing; promotion gates consume replay cycle output)
 - Day 11 (Local Dev Acceleration): COMPLETED (canonical quickstart + one-command profile bring-up + fast checks wrapper + stale-cache helper)
@@ -462,10 +462,10 @@ Wave summary:
   - external control-plane image added with pinned dependencies:
     - `compose/images/control_plane/Dockerfile`
     - `compose/images/control_plane/requirements-control-plane.txt`
-  - compose external services now use shared image anchor `hbot-control-plane:20260222` (no runtime `pip install` paths).
+  - compose external services now use shared image anchor `kzay-capital-control-plane:20260222` (no runtime `pip install` paths).
   - build verification:
     - `docker compose --env-file ../env/.env --profile external -f compose/docker-compose.yml config` passed
-    - `docker compose --env-file ../env/.env --profile external -f compose/docker-compose.yml build daily-ops-reporter` built `hbot-control-plane:20260222`
+    - `docker compose --env-file ../env/.env --profile external -f compose/docker-compose.yml build daily-ops-reporter` built `kzay-capital-control-plane:20260222`
   - release manifest updated with external control-plane runtime provenance.
 - Day9 game day fail-closed drill completed:
   - scenario: controlled Redis outage and recovery

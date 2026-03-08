@@ -26,8 +26,8 @@ from pathlib import Path
 from typing import Dict, List, Optional
 
 _SCRIPT_DIR = Path(__file__).resolve().parent
-_HBOT_ROOT = _SCRIPT_DIR.parents[1]
-sys.path.insert(0, str(_HBOT_ROOT))
+_PROJECT_ROOT = _SCRIPT_DIR.parents[1]
+sys.path.insert(0, str(_PROJECT_ROOT))
 
 from services.common.utils import safe_float, utc_now, write_json
 
@@ -168,7 +168,7 @@ def main() -> None:
     parser.add_argument("--variant", default="a", help="Controller variant")
     parser.add_argument("--window-hours", type=float, default=2.0, help="Lookback window in hours")
     parser.add_argument("--minutes", type=float, default=None, help="Lookback window in minutes (overrides --window-hours)")
-    parser.add_argument("--data-root", default=str(_HBOT_ROOT / "data"), help="Data root path")
+    parser.add_argument("--data-root", default=str(_PROJECT_ROOT / "data"), help="Data root path")
     parser.add_argument("--cancel-budget", type=int, default=50, help="Cancel budget per minute")
     args = parser.parse_args()
 
@@ -191,7 +191,7 @@ def main() -> None:
     result["fills_path"] = str(fills_path)
     result["fills_in_window"] = len(fills_rows)
 
-    out_dir = _HBOT_ROOT / "reports" / "paper_soak"
+    out_dir = _PROJECT_ROOT / "reports" / "paper_soak"
     out_dir.mkdir(parents=True, exist_ok=True)
     stamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
     out_path = out_dir / f"paper_soak_{stamp}.json"

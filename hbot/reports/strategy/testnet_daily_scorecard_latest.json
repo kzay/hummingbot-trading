@@ -1,21 +1,72 @@
 {
-  "ts_utc": "2026-02-27T23:42:36.879323+00:00",
-  "day": "2026-02-27",
-  "status": "pass",
-  "failures": [],
+  "ts_utc": "2026-03-05T20:28:46.291051+00:00",
+  "day": "2026-03-05",
+  "status": "fail",
+  "failures": [
+    "hard_stop_incident_detected"
+  ],
   "inputs": {
     "testnet_root": "F:\\Environement\\git-repo\\hummingbot_custo\\hbot\\data\\bot1\\logs\\epp_v24\\bot1_a",
     "paper_root": "F:\\Environement\\git-repo\\hummingbot_custo\\hbot\\data\\bot3\\logs\\epp_v24\\bot3_a",
     "reports_root": "F:\\Environement\\git-repo\\hummingbot_custo\\hbot\\reports"
   },
   "metrics": {
-    "testnet_fill_count": 138,
-    "paper_fill_count": 0,
-    "fill_count_ratio": 0.0,
-    "avg_slippage_pct": 0.0,
+    "testnet_fill_count": 129,
+    "paper_fill_count": 122,
+    "fill_count_ratio": 1.0573770491803278,
+    "testnet_fill_rate": 0.12146892655367232,
+    "paper_fill_rate": 0.324468085106383,
+    "avg_testnet_slippage_bps": 0.0,
+    "avg_paper_slippage_bps": 0.0,
     "rejection_count": 0,
     "rejection_rate": 0.0,
+    "paper_rejection_count": 0,
+    "paper_rejection_rate": 0.0,
     "cancel_before_fill_rate": 0.0,
+    "paper_cancel_before_fill_rate": 0.0,
+    "testnet_net_pnl_quote": -17.292115594300167,
+    "testnet_realized_pnl_quote": -11.737116266966115,
+    "testnet_fees_quote": 5.554999327334052,
+    "paper_net_pnl_quote": 55.038033886495754,
+    "paper_realized_pnl_quote": 56.84180619415585,
+    "paper_fees_quote": 1.803772307660091,
+    "hard_stop_row_count": 129,
+    "hard_stop_incident_count": 3,
     "drift_alarm_count": 0
+  },
+  "micro_benchmark": {
+    "status": "pass",
+    "thresholds": {
+      "max_fill_rate_delta": 0.5,
+      "max_slippage_delta_bps": 10.0,
+      "max_reject_rate_delta": 0.05,
+      "max_cancel_before_fill_rate_delta": 0.2
+    },
+    "checks": [
+      {
+        "name": "fill_rate_delta",
+        "pass": true,
+        "delta": 0.20299915855271067,
+        "max_allowed": 0.5
+      },
+      {
+        "name": "slippage_delta_bps",
+        "pass": true,
+        "delta": 0.0,
+        "max_allowed": 10.0
+      },
+      {
+        "name": "reject_rate_delta",
+        "pass": true,
+        "delta": 0.0,
+        "max_allowed": 0.05
+      },
+      {
+        "name": "cancel_before_fill_rate_delta",
+        "pass": true,
+        "delta": 0.0,
+        "max_allowed": 0.2
+      }
+    ]
   }
 }

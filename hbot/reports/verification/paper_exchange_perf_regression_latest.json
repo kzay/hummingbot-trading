@@ -1,0 +1,47 @@
+{
+  "ts_utc": "2026-03-05T21:28:29.326585+00:00",
+  "status": "pass",
+  "failed_checks": [],
+  "checks": {
+    "current_report_present": true,
+    "baseline_report_present": true,
+    "current_report_pass": true,
+    "baseline_report_pass": true,
+    "comparison_metrics_present": true,
+    "throughput_within_budget": true,
+    "latency_p95_within_budget": true,
+    "latency_p99_within_budget": true,
+    "backlog_within_budget": true,
+    "restart_within_budget": true
+  },
+  "metrics": {
+    "throughput_ratio": 0.98808625,
+    "latency_p95_regression_pct": -88.70056497175142,
+    "latency_p99_regression_pct": -70.58823529411765,
+    "backlog_regression_pct": 0.0,
+    "restart_delta": 0.0,
+    "min_throughput_ratio": 0.85,
+    "max_latency_regression_pct": 20.0,
+    "max_backlog_regression_pct": 25.0,
+    "max_restart_regression": 0.0
+  },
+  "input": {
+    "current_report_path": "F:\\Environement\\git-repo\\hummingbot_custo\\hbot\\reports\\verification\\paper_exchange_load_latest.json",
+    "current_report_status": "pass",
+    "baseline_report_path": "F:\\Environement\\git-repo\\hummingbot_custo\\hbot\\reports\\verification\\paper_exchange_load_baseline_latest.json",
+    "baseline_report_status": "pass",
+    "waiver_path": "F:\\Environement\\git-repo\\hummingbot_custo\\hbot\\reports\\verification\\paper_exchange_perf_regression_waiver_latest.json",
+    "max_waiver_hours": 24.0
+  },
+  "waiver": {
+    "present": false,
+    "valid": false,
+    "applied": false,
+    "reason": "",
+    "approved_by": "",
+    "change_ticket": "",
+    "created_ts_utc": "",
+    "expires_at_utc": "",
+    "validity_reason": "waiver_missing"
+  }
+}

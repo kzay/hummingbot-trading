@@ -3,14 +3,12 @@
 # ============================================
 
 groups:
-
   # ---- Infrastructure Alerts ----
   - name: infrastructure
     rules:
-
       - alert: ContainerDown
         expr: |
-          time() - container_last_seen{name=~"hbot-.*"} > 60
+          time() - container_last_seen{name=~"kzay-capital-.*"} > 60
         for: 2m
         labels:
           severity: critical
@@ -20,7 +18,7 @@ groups:
 
       - alert: ContainerRestartLoop
         expr: |
-          increase(container_restart_count{name=~"hbot-.*"}[15m]) > 3
+          increase(container_restart_count{name=~"kzay-capital-.*"}[15m]) > 3
         for: 5m
         labels:
           severity: critical
@@ -71,10 +69,9 @@ groups:
   # ---- Container Resource Alerts ----
   - name: container_resources
     rules:
-
       - alert: ContainerHighCpu
         expr: |
-          rate(container_cpu_usage_seconds_total{name=~"hbot-.*"}[5m]) * 100 > 80
+          rate(container_cpu_usage_seconds_total{name=~"kzay-capital-.*"}[5m]) * 100 > 80
         for: 10m
         labels:
           severity: warning
@@ -84,7 +81,7 @@ groups:
 
       - alert: ContainerHighMemory
         expr: |
-          container_memory_usage_bytes{name=~"hbot-.*"} / container_spec_memory_reservation_limit_bytes{name=~"hbot-.*"} * 100 > 90
+          container_memory_usage_bytes{name=~"kzay-capital-.*"} / container_spec_memory_reservation_limit_bytes{name=~"kzay-capital-.*"} * 100 > 90
         for: 5m
         labels:
           severity: warning
@@ -94,7 +91,7 @@ groups:
 
       - alert: ContainerOomKilled
         expr: |
-          increase(container_oom_events_total{name=~"hbot-.*"}[5m]) > 0
+          increase(container_oom_events_total{name=~"kzay-capital-.*"}[5m]) > 0
         for: 0m
         labels:
           severity: critical
@@ -105,7 +102,6 @@ groups:
   # ---- Network Alerts ----
   - name: network
     rules:
-
       - alert: HighNetworkErrorRate
         expr: |
           rate(node_network_receive_errs_total[5m]) + rate(node_network_transmit_errs_total[5m]) > 10
@@ -119,7 +115,6 @@ groups:
   # ---- Trading / Bot KPI Alerts ----
   - name: trading_kpis
     rules:
-
       - alert: BotHardStopActive
         expr: |
           hbot_bot_state{state="hard_stop"} == 1
@@ -139,6 +134,16 @@ groups:
         annotations:
           summary: "Bot {{ $labels.bot }} in soft_pause for too long"
           description: "Bot {{ $labels.bot }} remained soft_pause for more than 20 minutes."
+
+      - alert: BotDeriskStall
+        expr: |
+          hbot_bot_derisk_stall_active == 1 and hbot_bot_derisk_stall_seconds > 1800 and hbot_bot_minute_last_age_seconds < 180
+        for: 5m
+        labels:
+          severity: critical
+        annotations:
+          summary: "Derisk flatten stalled on {{ $labels.bot }}"
+          description: "Bot {{ $labels.bot }} kept a non-zero unchanged position for >30 minutes while in derisk/hard-stop flatten context."
 
       - alert: BotNoFillsWhileRunning
         expr: |
@@ -193,7 +198,6 @@ groups:
   # ---- Control Plane Alerts ----
   - name: control_plane
     rules:
-
       - alert: ControlPlaneReportMissing
         expr: |
           hbot_control_plane_report_present{report=~"reconciliation|parity|portfolio_risk|market_data|ops_db_writer|coordination|coordination_policy|promotion_gate|day2_gate|event_store_integrity|soak"} == 0
@@ -287,7 +291,6 @@ groups:
   # ---- Execution & Risk Alerts (Day 78) ----
   - name: execution_risk
     rules:
-
       - alert: TickDurationHigh
         expr: |
           hbot_bot_tick_duration_seconds > 0.1
@@ -427,3 +430,100 @@ groups:
         annotations:
           summary: "⚠️ Data plane consistency check failed"
           description: "One or more active bots have a stale or incomplete desk snapshot (hbot_data_plane_consistency=0). Telegram and Grafana may be reading inconsistent data. Check desk_snapshot_service logs."
+
+  # ---- Paper Exchange Simulator Alerts ----
+  - name: paper_exchange_simulator
+    rules:
+      - alert: PaperExchangeServiceDown
+        expr: |
+          max(hbot_paper_exchange_service_up) == 0
+        for: 2m
+        labels:
+          severity: critical
+        annotations:
+          summary: "Paper exchange simulator service is down"
+          description: "No fresh simulator heartbeat was observed via Redis for more than 2 minutes."
+
+      - alert: PaperExchangeHeartbeatStale
+        expr: |
+          max(hbot_paper_exchange_heartbeat_age_seconds) > 30
+        for: 2m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Paper exchange heartbeat is stale"
+          description: "Latest simulator heartbeat age exceeded 30s. Check paper-exchange-service and Redis connectivity."
+
+      - alert: PaperExchangeFeedStalenessHigh
+        expr: |
+          max(hbot_paper_exchange_oldest_snapshot_age_ms) > 60000
+        for: 3m
+        labels:
+          severity: critical
+        annotations:
+          summary: "Paper exchange market snapshot lag is high"
+          description: "Oldest tracked simulator market snapshot age is above 60s."
+
+      - alert: PaperExchangePairStaleCountHigh
+        expr: |
+          sum(hbot_paper_exchange_pair_stale) > 0
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "One or more simulator pairs are stale"
+          description: "At least one connector/pair snapshot in the simulator is flagged stale for over 5 minutes."
+
+      - alert: PaperExchangeRejectRateSpike
+        expr: |
+          (
+            sum(clamp_min(delta(hbot_paper_exchange_command_total{status="rejected"}[15m]), 0))
+            /
+            clamp_min(sum(clamp_min(delta(hbot_paper_exchange_command_total[15m]), 0)), 1)
+          ) > 0.20
+        for: 10m
+        labels:
+          severity: critical
+        annotations:
+          summary: "Simulator command reject-rate spike"
+          description: "Rejected command ratio stayed above 20% over the trailing 15m window."
+
+      - alert: PaperExchangeRunawayOrderLoop
+        expr: |
+          sum(clamp_min(delta(hbot_paper_exchange_command_total{command="submit_order",status="processed"}[10m]), 0)) > 200
+          and
+          (
+            sum(clamp_min(delta(hbot_paper_exchange_command_total{command=~"cancel_order|cancel_all",status="processed"}[10m]), 0))
+            /
+            clamp_min(sum(clamp_min(delta(hbot_paper_exchange_command_total{command="submit_order",status="processed"}[10m]), 0)), 1)
+          ) > 0.90
+        for: 10m
+        labels:
+          severity: critical
+        annotations:
+          summary: "Potential simulator runaway order loop"
+          description: "Submit volume is high and cancel/submit ratio exceeded 90% for a sustained period."
+
+      - alert: PaperExchangeBacklogGrowthTrend
+        expr: |
+          max(hbot_paper_exchange_load_backlog_growth_pct_per_10m) > 20
+        for: 10m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Simulator backlog growth trend elevated"
+          description: "Backlog growth trend from load diagnostics exceeded 20% per 10 minutes."
+
+      - alert: PaperExchangePublishFailures
+        expr: |
+          (
+            sum(clamp_min(delta(hbot_paper_exchange_market_rows_not_acked[10m]), 0))
+            +
+            sum(clamp_min(delta(hbot_paper_exchange_command_publish_failures[10m]), 0))
+          ) > 0
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Simulator publish/ack failures detected"
+          description: "market_rows_not_acked or command_publish_failures increased in the last 10 minutes."

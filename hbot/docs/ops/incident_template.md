@@ -8,9 +8,9 @@
 | **Detected** | YYYY-MM-DD HH:MM UTC |
 | **Resolved** | YYYY-MM-DD HH:MM UTC |
 | **Duration** | X minutes |
-| **Impact** | e.g., "Bot1 placed orders with stale pricing for 5 minutes" |
+| **Impact** | e.g., "One or more bots placed orders with stale pricing for 5 minutes" |
 | **Financial impact** | e.g., "$X estimated loss / no loss" |
-| **Affected bots** | bot1, bot4 |
+| **Affected bots** | bot1, bot3, bot4, bot5 |
 | **Reporter** | Name |
 
 ## Timeline
@@ -43,10 +43,10 @@ Detection delay: X minutes from first impact to detection.
 
 ## Evidence
 - `reports/kill_switch/latest.json` — kill switch status
-- `data/bot1/logs/epp_v24/bot1_a/minute.csv` — last N rows
-- `data/bot1/logs/epp_v24/bot1_a/fills.csv` — fills during incident window
+- `data/<bot>/logs/epp_v24/<bot_variant>/minute.csv` — last N rows for each affected bot
+- `data/<bot>/logs/epp_v24/<bot_variant>/fills.csv` — fills during incident window
 - `reports/reconciliation/latest.json` — position reconciliation
-- Docker logs: `docker logs hbot-bot1 --since YYYY-MM-DDTHH:MM:SSZ`
+- Docker logs: `docker logs kzay-capital-<bot> --since YYYY-MM-DDTHH:MM:SSZ`
 - Grafana screenshot: [link]
 
 ## Analysis

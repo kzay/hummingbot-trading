@@ -3,31 +3,10 @@ from __future__ import annotations
 import csv
 import json
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import List
 
 from services.ops_db_writer.main import _ingest_fills, _ingest_minutes
-
-
-class _CaptureCursor:
-    def __init__(self) -> None:
-        self.calls: List[Dict[str, Any]] = []
-
-    def __enter__(self) -> "_CaptureCursor":
-        return self
-
-    def __exit__(self, exc_type, exc, tb) -> bool:  # noqa: ANN001
-        return False
-
-    def execute(self, _sql: str, params: Optional[Dict[str, Any]] = None) -> None:
-        self.calls.append(params or {})
-
-
-class _CaptureConn:
-    def __init__(self) -> None:
-        self.cur = _CaptureCursor()
-
-    def cursor(self) -> _CaptureCursor:
-        return self.cur
+from tests.services.conftest import _CaptureConn
 
 
 def _write_csv(path: Path, header: List[str], row: List[str]) -> None:

@@ -1,12 +1,12 @@
-## HBot Grafana dashboards (Trading Desk)
+## Kzay Capital Grafana Dashboards
 
 This repo provisions Grafana dashboards from disk (no manual import needed) and uses **Prometheus** + **Loki** only (both OSS, already in `hbot/compose/docker-compose.yml`).
 
 ### Dashboards
 
-- **Trading Desk**: `hbot/monitoring/grafana/dashboards/trading_overview.json` (UID: `hbot-trading-overview`)
-- **Bot Deep Dive** (drilldown): `hbot/monitoring/grafana/dashboards/bot_deep_dive.json` (UID: `hbot-bot-deep-dive`)
-- **Ops & Infrastructure**: `hbot/monitoring/grafana/dashboards/control_plane_health.json` (UID: `hbot-cp-health`)
+- **Kzay Capital Trading Desk**: `hbot/monitoring/grafana/dashboards/trading_overview.json` (UID: `kzay-capital-trading-overview`)
+- **Kzay Capital Bot Deep Dive** (drilldown): `hbot/monitoring/grafana/dashboards/bot_deep_dive.json` (UID: `kzay-capital-bot-deep-dive`)
+- **Kzay Capital Ops & Infrastructure**: `hbot/monitoring/grafana/dashboards/control_plane_health.json` (UID: `kzay-capital-cp-health`)
 
 ### Data sources (provisioned)
 
@@ -14,7 +14,7 @@ Defined in `hbot/monitoring/grafana/provisioning/datasources/datasource.yml`:
 - **Prometheus** (uid `prometheus`, default)
 - **Loki** (uid `loki`)
 
-### Variables (Trading Desk + Deep Dive)
+### Variables (Kzay Capital Trading Desk + Deep Dive)
 
 All time is **UTC**.
 
@@ -29,7 +29,7 @@ All time is **UTC**.
 - **regime**: label `regime`
 - **timeframe**: a dashboard interval (`5m`, `15m`, `1h`) used for deltas/rollups
 
-### Panel guide (Trading Desk)
+### Panel guide (Kzay Capital Trading Desk)
 
 **Desk Health**
 - Quick decision row: bots running, desk equity, today’s MTM PnL, realized PnL, max drawdown, and a desk **uptime proxy**.
@@ -47,12 +47,15 @@ All time is **UTC**.
 **Ops**
 - Active alerts + recent WARN/ERROR logs.
 
+**Paper Exchange Simulator**
+- Service liveness/heartbeat, snapshot staleness, reject-rate trend, submit->first-fill latency, backlog growth, and paper risk event counters.
+
 ### Post-import / post-deploy verification checklist
 
 After bringing the stack up (or after updating dashboards/exporters):
 
 - **Grafana provisioning**
-  - Confirm the dashboards appear under the `Hummingbot` folder.
+  - Confirm the dashboards appear under the `Kzay Capital` folder.
   - Confirm datasources exist with UIDs `prometheus` and `loki`.
 
 - **Prometheus targets**

@@ -37,6 +37,7 @@ def _load_policy(path: Path) -> Dict[str, object]:
             "rebalance_cooldown_hours": 24,
             "variance_window_days": 20,
             "min_total_equity_quote": 100.0,
+            "included_modes": ["live", "paper_only"],
             "daily_goal": {
                 "enabled": False,
                 "target_pct_total_equity": 0.0,
@@ -74,6 +75,15 @@ def _symbol_bucket_from_cfg(cfg: Dict[str, object]) -> str:
 
 def _eligible_bots(policy: Dict[str, object], snapshots: Dict[str, object]) -> Dict[str, Dict[str, object]]:
     out: Dict[str, Dict[str, object]] = {}
+    allocator_cfg = policy.get("allocator", {}) if isinstance(policy.get("allocator"), dict) else {}
+    included_modes_raw = allocator_cfg.get("included_modes", ["live", "paper_only"])
+    included_modes = (
+        {str(mode).strip().lower() for mode in included_modes_raw}
+        if isinstance(included_modes_raw, list)
+        else {"live", "paper_only"}
+    )
+    if not included_modes:
+        included_modes = {"live", "paper_only"}
     bots_cfg = policy.get("bots", {})
     snap_bots = snapshots.get("bots", {}) if isinstance(snapshots.get("bots"), dict) else {}
     if not isinstance(bots_cfg, dict):
@@ -84,6 +94,8 @@ def _eligible_bots(policy: Dict[str, object], snapshots: Dict[str, object]) -> D
         enabled = bool(cfg.get("enabled", False))
         mode = str(cfg.get("mode", "")).strip().lower()
         if (not enabled) or mode == "disabled":
+            continue
+        if mode not in included_modes:
             continue
         snap = snap_bots.get(bot, {}) if isinstance(snap_bots.get(bot, {}), dict) else {}
         equity = _safe_float(snap.get("equity_quote"), 0.0)
@@ -426,6 +438,43 @@ def _daily_goal_intent_signature(
     )
 
 
+def _rebalance_signature(proposals: List[Dict[str, object]]) -> str:
+    rows: List[Tuple[str, float, float]] = []
+    for row in sorted(proposals, key=lambda r: str(r.get("bot", ""))):
+        bot = str(row.get("bot", ""))
+        allocation_pct = _safe_float(row.get("allocation_pct"), 0.0)
+        target_notional = _safe_float(row.get("target_notional_quote"), 0.0)
+        rows.append((bot, round(allocation_pct, 8), round(target_notional, 8)))
+    return json.dumps(rows, separators=(",", ":"), ensure_ascii=True)
+
+
+def _extract_last_rebalance_state(state: Dict[str, object]) -> Optional[Tuple[float, str]]:
+    ts = _safe_float(state.get("last_rebalance_ts_epoch_s"), -1.0)
+    signature = str(state.get("last_rebalance_signature", "")).strip()
+    if ts <= 0.0 or not signature:
+        return None
+    return ts, signature
+
+
+def _should_publish_rebalance_intents(
+    *,
+    now_ts: float,
+    signature: str,
+    last_state: Optional[Tuple[float, str]],
+    cooldown_hours: float,
+) -> bool:
+    if not signature:
+        return False
+    if last_state is None:
+        return True
+    last_ts, last_signature = last_state
+    # No-op rebalance is suppressed even after cooldown.
+    if signature == last_signature:
+        return False
+    cooldown_s = max(0.0, float(cooldown_hours) * 3600.0)
+    return (now_ts - float(last_ts)) >= cooldown_s
+
+
 def _should_publish_daily_goal_intent(
     *,
     now_ts: float,
@@ -456,6 +505,9 @@ def run(once: bool = False) -> None:
     report_path = Path(
         os.getenv("PORTFOLIO_ALLOCATOR_REPORT_PATH", str(root / "reports" / "policy" / "portfolio_allocator_latest.json"))
     )
+    state_path = Path(
+        os.getenv("PORTFOLIO_ALLOCATOR_STATE_PATH", str(root / "reports" / "policy" / "portfolio_allocator_state_latest.json"))
+    )
     interval_sec = int(os.getenv("PORTFOLIO_ALLOCATOR_INTERVAL_SEC", "300"))
     emit_intents = _safe_bool(os.getenv("PORTFOLIO_ALLOCATOR_PUBLISH_INTENTS", "false"), False)
     enforce_diversification = _safe_bool(os.getenv("PORTFOLIO_ALLOCATOR_ENFORCE_DIVERSIFICATION", "false"), False)
@@ -476,6 +528,7 @@ def run(once: bool = False) -> None:
         allocator_cfg = policy.get("allocator", {}) if isinstance(policy.get("allocator"), dict) else {}
         allocator_enabled = bool(allocator_cfg.get("enabled", False))
         min_total_equity = _safe_float(allocator_cfg.get("min_total_equity_quote"), 100.0)
+        rebalance_cooldown_hours = max(0.0, _safe_float(allocator_cfg.get("rebalance_cooldown_hours"), 24.0))
         snapshots = _read_json(snapshots_path)
         eligible = _eligible_bots(policy, snapshots)
         diversification_report = _read_json(diversification_path)
@@ -515,18 +568,54 @@ def run(once: bool = False) -> None:
             status = "blocked"
             reasons.append("diversification_correlation_exceeds_threshold")
 
+        rebalance_intents_published = 0
+        rebalance_intents_suppressed_unchanged = 0
+        rebalance_intents_suppressed_cooldown = 0
+        rebalance_signature = _rebalance_signature(proposals)
+        allocator_state = _read_json(state_path)
+        last_rebalance_state = _extract_last_rebalance_state(allocator_state)
+        should_publish_rebalance = False
+        now_ts = time.time()
+        if emit_intents and redis_client.enabled and status == "pass":
+            should_publish_rebalance = _should_publish_rebalance_intents(
+                now_ts=now_ts,
+                signature=rebalance_signature,
+                last_state=last_rebalance_state,
+                cooldown_hours=rebalance_cooldown_hours,
+            )
+
         daily_goal_intents_published = 0
         daily_goal_intents_suppressed_unchanged = 0
         if emit_intents and redis_client.enabled and status == "pass":
-            for row in proposals:
-                if not bool(row.get("portfolio_action_enabled", False)):
-                    continue
-                _publish_allocator_intent(
-                    redis_client,
-                    bot=str(row["bot"]),
-                    allocation_pct=float(row["allocation_pct"]),
-                    target_notional=float(row["target_notional_quote"]),
+            if should_publish_rebalance:
+                for row in proposals:
+                    if not bool(row.get("portfolio_action_enabled", False)):
+                        continue
+                    _publish_allocator_intent(
+                        redis_client,
+                        bot=str(row["bot"]),
+                        allocation_pct=float(row["allocation_pct"]),
+                        target_notional=float(row["target_notional_quote"]),
+                    )
+                    rebalance_intents_published += 1
+                state_path.parent.mkdir(parents=True, exist_ok=True)
+                state_path.write_text(
+                    json.dumps(
+                        {
+                            "ts_utc": _utc_now(),
+                            "last_rebalance_ts_epoch_s": now_ts,
+                            "last_rebalance_signature": rebalance_signature,
+                            "rebalance_cooldown_hours": rebalance_cooldown_hours,
+                        },
+                        indent=2,
+                    ),
+                    encoding="utf-8",
                 )
+            elif last_rebalance_state is not None and rebalance_signature == str(last_rebalance_state[1]):
+                rebalance_intents_suppressed_unchanged = 1
+            else:
+                rebalance_intents_suppressed_cooldown = 1
+
             if bool(daily_goal_plan.get("enabled", False)) and str(daily_goal_plan.get("status", "")) == "pass":
                 goal_rows = daily_goal_plan.get("rows", [])
                 if isinstance(goal_rows, list):
@@ -583,6 +672,13 @@ def run(once: bool = False) -> None:
             "diversification": diversification_diag,
             "total_equity_quote": total_equity,
             "daily_goal_intent_republish_s": daily_goal_intent_republish_s,
+            "rebalance_cooldown_hours": rebalance_cooldown_hours,
+            "state_path": str(state_path),
+            "rebalance_signature": rebalance_signature,
+            "rebalance_intents_published": rebalance_intents_published,
+            "rebalance_intents_suppressed_unchanged": rebalance_intents_suppressed_unchanged,
+            "rebalance_intents_suppressed_cooldown": rebalance_intents_suppressed_cooldown,
+            "rebalance_due": bool(should_publish_rebalance),
             "daily_goal_intents_published": daily_goal_intents_published,
             "daily_goal_intents_suppressed_unchanged": daily_goal_intents_suppressed_unchanged,
             "daily_goal": daily_goal_plan,

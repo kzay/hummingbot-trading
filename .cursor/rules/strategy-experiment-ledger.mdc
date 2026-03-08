@@ -1,0 +1,22 @@
+---
+description: Require experiment-ledger updates for strategy tuning and bot1 experiments
+alwaysApply: true
+---
+
+# Strategy Experiment Ledger
+
+When working on strategy experiments or tuning, always use `hbot/docs/strategy/experiment_ledger.md`.
+
+Required workflow:
+- Before changing strategy logic or tuning config, read the latest relevant ledger entries.
+- If you change `hbot/controllers/epp_v2_4.py`, `hbot/data/bot1/conf/controllers/epp_v2_4_bot_a.yml`, strategy-facing paper execution logic, or strategy analysis for an experiment, update the ledger in the same task.
+- Record: hypothesis, exact code/config changes, observation window, metrics checked, and decision (`keep`, `revert`, or `inconclusive`).
+- If you revert an experiment, add that outcome to the ledger instead of silently overwriting history.
+- Do not claim a strategy improvement without naming the evidence window and the metrics used.
+
+Minimum entry content example:
+- `Hypothesis:` reduce neutral adverse fills
+- `Changes:` `epp_v2_4.py` neutral-side guard, `epp_v2_4_bot_a.yml` threshold update
+- `Observation window:` 30m paper run after restart
+- `Metrics checked:` fills, net pnl, pnl/fill, maker ratio, soft-pause ratio, drawdown
+- `Result:` `keep`

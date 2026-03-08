@@ -10,7 +10,7 @@ from decimal import Decimal
 from typing import TypedDict
 
 
-PROCESSED_STATE_SCHEMA_VERSION: int = 8
+PROCESSED_STATE_SCHEMA_VERSION: int = 10
 """Increment whenever a field is added, removed, or changes semantics.
 Consumers should check this on deserialization and drop/log on mismatch."""
 
@@ -63,6 +63,8 @@ class ProcessedState(TypedDict, total=False):
     """Active spread percentage (half-spread on each side)."""
     spread_floor_pct: Decimal
     """Minimum spread that clears the edge gate."""
+    base_spread_pct: Decimal
+    """Base spread selected before drift/adverse/vol wideners are applied."""
     net_edge_pct: Decimal
     """Estimated net edge after fees/slippage/drift."""
     net_edge_gate_pct: Decimal
@@ -121,6 +123,14 @@ class ProcessedState(TypedDict, total=False):
     """JSON map of cumulative size-boost reason counters for current runtime/day."""
     skew: Decimal
     """Inventory skew applied to buy/sell spread asymmetry."""
+    reservation_price_adjustment_pct: Decimal
+    """Signed reservation-price shift from combined inventory and alpha biases."""
+    inventory_urgency_pct: Decimal
+    """Normalized inventory urgency [0..1] for quote steering and unwind decisions."""
+    inventory_skew_pct: Decimal
+    """Signed inventory-driven component of reservation-price shift."""
+    alpha_skew_pct: Decimal
+    """Signed alpha-driven component of reservation-price shift."""
     adverse_drift_30s: Decimal
     """Raw absolute mid price drift over the last 30 seconds (used for regime detection)."""
     adverse_drift_smooth_30s: Decimal
@@ -159,6 +169,30 @@ class ProcessedState(TypedDict, total=False):
     """True if edge gate is currently blocking execution."""
     edge_gate_blocked: bool
     """True if edge gate is in blocked state."""
+    selective_quote_state: str
+    """Backward-compatible selective quote state: inactive | reduced | blocked."""
+    selective_quote_score: Decimal
+    """Backward-compatible selective quote score [0..1]."""
+    selective_quote_reason: str
+    """Backward-compatible selective quote reason string."""
+    selective_quote_adverse_ratio: Decimal
+    """Adverse-fill contribution to the selective quote score."""
+    selective_quote_slippage_p95_bps: Decimal
+    """Recent positive slippage p95 used by selective quote quality logic."""
+    alpha_policy_state: str
+    """Forward-looking policy state: no_trade | maker_two_sided | maker_bias_* | aggressive_*."""
+    alpha_policy_reason: str
+    """Primary reason branch for alpha policy state."""
+    alpha_maker_score: Decimal
+    """Normalized maker-entry score [0..1]."""
+    alpha_aggressive_score: Decimal
+    """Normalized aggressive-entry score [0..1]."""
+    alpha_cross_allowed: bool
+    """True when bounded aggressive entry is permitted."""
+    quote_side_mode: str
+    """Resolved side mode applied to runtime quotes."""
+    quote_side_reason: str
+    """Reason for the resolved quote side mode."""
     edge_pause_threshold_pct: Decimal
     """Net edge below this triggers edge gate block."""
     edge_resume_threshold_pct: Decimal
@@ -209,8 +243,18 @@ class ProcessedState(TypedDict, total=False):
     """Current margin ratio (perps only, 1 for spot)."""
     avg_entry_price: Decimal
     """Average entry price for the current position (perps)."""
+    avg_entry_price_long: Decimal
+    """Average entry price for the long leg when hedge mode is active."""
+    avg_entry_price_short: Decimal
+    """Average entry price for the short leg when hedge mode is active."""
     position_base: Decimal
     """Current position size in base (signed for perps)."""
+    position_gross_base: Decimal
+    """Current gross open base across long and short legs."""
+    position_long_base: Decimal
+    """Current long-leg size in base."""
+    position_short_base: Decimal
+    """Current short-leg size in base."""
     position_drift_pct: Decimal
     """Position drift as fraction of equity (perps)."""
 

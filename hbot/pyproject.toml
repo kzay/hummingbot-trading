@@ -1,5 +1,5 @@
 [project]
-name = "hbot-desk"
+name = "kzay-capital-desk"
 version = "0.1.0"
 description = "Semi-pro crypto trading desk automation built on Hummingbot"
 requires-python = ">=3.11"

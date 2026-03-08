@@ -5,6 +5,7 @@ from pathlib import Path
 
 from scripts.ops.run_paper_exchange_canary import (
     _build_bot_recreate_cmd,
+    _critical_alert_count_from_steps,
     _latest_harness_run_id,
     _mode_env_key,
     _upsert_env_text,
@@ -52,3 +53,13 @@ def test_latest_harness_run_id_reads_diagnostics_field(tmp_path: Path) -> None:
         encoding="utf-8",
     )
     assert _latest_harness_run_id(tmp_path) == "20260302T010000000000Z"
+
+
+def test_critical_alert_count_from_steps_counts_failed_critical_steps() -> None:
+    steps = [
+        {"name": "env_patch", "pass": False},
+        {"name": "compose_start_paper_exchange", "pass": True},
+        {"name": "recreate_bot", "pass": False},
+        {"name": "paper_exchange_preflight", "pass": False},
+    ]
+    assert _critical_alert_count_from_steps(steps) == 2

@@ -1,12 +1,12 @@
 # Incident Playbook 03 — Redis Down Mid-Session
 
-**Scenario:** `hbot-redis` container stopped, crashed, or became unreachable. Services depending on Redis (signal_service, risk_service, kill_switch, coordination, event_store) are affected.
+**Scenario:** `kzay-capital-redis` container stopped, crashed, or became unreachable. Services depending on Redis (signal_service, risk_service, kill_switch, coordination, event_store) are affected.
 
 ---
 
 ## Trigger Indicators
 
-- `docker ps` shows `hbot-redis` in `Restarting` or `Exited` state
+- `docker ps` shows `kzay-capital-redis` in `Restarting` or `Exited` state
 - Bot logs: `Redis stream client disabled` or `xread failed (Redis may be down)`
 - `reports/risk_service/latest.json`: `redis_stream_enabled: false` (if was previously true)
 - `reports/event_store/*.jsonl` files being written (fallback JSONL path active)
@@ -19,15 +19,15 @@
 
 1. **Confirm Redis is down:**
    ```bash
-   docker ps --filter name=hbot-redis --format "{{.Status}}"
-   docker logs hbot-redis --tail 20 2>&1
+   docker ps --filter name=kzay-capital-redis --format "{{.Status}}"
+   docker logs kzay-capital-redis --tail 20 2>&1
    ```
 
 2. **Is bot1 still trading?** The controller and paper engine are Redis-independent. Check:
    ```bash
    # minute.csv should still be written if bot is running
    # Look at mtime of minute.csv
-   docker exec hbot-bot1 ls -la /home/hummingbot/logs/epp_v24/bot1_a/minute.csv
+   docker exec kzay-capital-bot1 ls -la /home/hummingbot/logs/epp_v24/bot1_a/minute.csv
    ```
    If bot is still trading: **trading continues normally** (Redis is a side-channel, not on critical path).
 
@@ -38,7 +38,7 @@
 
 4. **Verify Redis recovered:**
    ```bash
-   docker exec hbot-redis redis-cli ping
+   docker exec kzay-capital-redis redis-cli ping
    # Expected: PONG
    ```
 
@@ -64,8 +64,8 @@
 ```bash
 docker compose --env-file hbot/env/.env -f hbot/compose/docker-compose.yml restart redis
 sleep 10
-docker exec hbot-redis redis-cli ping  # should return PONG
-docker ps --filter name=hbot-redis     # should show (healthy)
+docker exec kzay-capital-redis redis-cli ping  # should return PONG
+docker ps --filter name=kzay-capital-redis     # should show (healthy)
 ```
 
 ### 2. Restart dependent services to reconnect consumer groups
@@ -78,7 +78,7 @@ docker compose --env-file hbot/env/.env -f hbot/compose/docker-compose.yml \
 ### 3. Verify signal pipeline resumed
 ```bash
 # Check signal_service is publishing
-docker logs hbot-signal-service --tail 20 2>&1
+docker logs kzay-capital-signal-service --tail 20 2>&1
 # Should see: xadd to hb.signal.v1
 ```
 

@@ -3,7 +3,7 @@ from __future__ import annotations
 from decimal import Decimal
 from unittest.mock import MagicMock
 
-from controllers.core import MarketConditions, SpreadEdgeState
+from controllers.core import MarketConditions, QuoteGeometry, SpreadEdgeState
 from controllers.ops_guard import GuardState
 from controllers.tick_emitter import TickEmitter
 
@@ -78,6 +78,14 @@ def test_build_tick_output_defaults_missing_adaptive_keys():
         min_edge_threshold=Decimal("0.0001"),
         edge_resume_threshold=Decimal("0.0002"),
         fill_factor=Decimal("0.4"),
+        quote_geometry=QuoteGeometry(
+            base_spread_pct=Decimal("0.002"),
+            spread_floor_pct=Decimal("0.001"),
+            reservation_price_adjustment_pct=Decimal("0"),
+            inventory_urgency=Decimal("0"),
+            inventory_skew=Decimal("0"),
+            alpha_skew=Decimal("0"),
+        ),
     )
     market = MarketConditions(
         is_high_vol=False,

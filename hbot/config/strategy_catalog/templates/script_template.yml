@@ -7,7 +7,7 @@ markets:
 
 # Controller file names resolved from /home/hummingbot/conf/controllers
 controllers_config:
-  - epp_v2_4_botX_bitget_paper_smoke.yml
+  - <lane_name>_botX_bitget_paper_smoke.yml
 
 # Optional drawdown controls at script level
 max_global_drawdown_quote: null

@@ -26,9 +26,9 @@
         "BTC-USDT"
       ],
       "max_notional_quote": 100.0,
-      "target_alloc_pct": 1.0,
+      "target_alloc_pct": 0.6878168348344116,
       "max_alloc_pct": 1.0,
-      "alloc_variance_proxy": 1.0,
+      "alloc_variance_proxy": 1.3545584222647123e-06,
       "compose_profiles": [],
       "failure_isolation": "bot-local restart only; no policy broadening"
     },
@@ -55,9 +55,9 @@
         "ETH-USDT"
       ],
       "max_notional_quote": 100.0,
-      "target_alloc_pct": 0.0,
-      "max_alloc_pct": 0.0,
-      "alloc_variance_proxy": 1.5,
+      "target_alloc_pct": 0.31218316516558847,
+      "max_alloc_pct": 0.31218316516558847,
+      "alloc_variance_proxy": 2.9844277032242333e-06,
       "compose_profiles": [
         "test"
       ],

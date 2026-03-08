@@ -191,6 +191,10 @@ def _fire_fill_event(strategy: Any, connector_name: str, fill_event: OrderFilled
             amount=fill_event.fill_quantity,
             trade_fee=fee,
         )
+        try:
+            setattr(hb_fill, "position_action", str(getattr(fill_event, "position_action", "auto") or "auto"))
+        except Exception:
+            pass
 
         controller = _find_controller_for_connector(strategy, connector_name)
         realized_before = _safe_float(getattr(controller, "_realized_pnl_today", 0.0), 0.0)

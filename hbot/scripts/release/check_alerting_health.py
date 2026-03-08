@@ -12,8 +12,10 @@ Priority:
                           non-strict mode so the gate is not blocked locally)
 
 Exit codes:
-  0 – at least one probe passed (or local_dev fallback allowed)
-  2 – strict mode and no probe passed
+  0 – healthy alerting path validated (or local_dev fallback allowed)
+  2 – fail-closed condition:
+      - Telegram is configured but probe fails, OR
+      - strict mode and no probe passed
 
 Usage::
 
@@ -108,16 +110,27 @@ def run_check(
     telegram_token: str,
     telegram_chat_id: str,
     strict: bool,
+    *,
+    root: Path | None = None,
 ) -> int:
-    root = Path("/workspace/hbot") if Path("/.dockerenv").exists() else Path(__file__).resolve().parents[2]
+    root = (
+        root
+        if root is not None
+        else (Path("/workspace/hbot") if Path("/.dockerenv").exists() else Path(__file__).resolve().parents[2])
+    )
     out_path = root / "reports" / "reconciliation" / "last_webhook_sent.json"
 
     probes: list[dict] = []
     ok = False
+    telegram_configured = bool(str(telegram_token or "").strip() or str(telegram_chat_id or "").strip())
+    telegram_probe_ok = False
+    telegram_probe_reason = "not_configured"
 
     # --- 1. Telegram API (primary for watchdog/alertmanager) -------------------
-    if telegram_token and telegram_chat_id:
+    if telegram_configured:
         ok_tg, reason_tg = _probe_telegram(telegram_token, telegram_chat_id)
+        telegram_probe_ok = bool(ok_tg)
+        telegram_probe_reason = str(reason_tg)
         probes.append({
             "endpoint": "telegram",
             "url": "https://api.telegram.org/bot***/sendMessage",
@@ -151,10 +164,21 @@ def run_check(
             ok = True
             print(f"[alerting-health] slack webhook verified: {reason3}")
 
-    # --- 5. local_dev fallback ------------------------------------------------
-    if not ok:
+    telegram_required_failure = telegram_configured and (not telegram_probe_ok)
+
+    # --- 5. result / local_dev fallback ----------------------------------------
+    if telegram_required_failure:
+        mode = "telegram_configured_unhealthy"
+        rc = 2
+        status = "error"
+        print(
+            "[alerting-health] ERROR: Telegram configured but probe failed "
+            f"(reason={telegram_probe_reason})"
+        )
+    elif not ok:
         mode = "local_dev_degraded"
         rc = 2 if strict else 0
+        status = mode
         print(
             f"[alerting-health] WARNING: no alerting endpoint reachable "
             f"({'FAIL strict' if strict else 'OK local_dev'})"
@@ -162,12 +186,17 @@ def run_check(
     else:
         mode = "live"
         rc = 0
+        status = "ok"
 
     evidence = {
         "ts_utc": _utc_now(),
         "mode": mode,
+        "telegram_configured": telegram_configured,
+        "telegram_probe_ok": telegram_probe_ok,
+        "telegram_probe_reason": telegram_probe_reason,
+        "telegram_required_failure": telegram_required_failure,
         "probes": probes,
-        "status": "ok" if ok else mode,
+        "status": status,
     }
     _write_json(out_path, evidence)
     print(f"[alerting-health] status={evidence['status']} mode={mode}")

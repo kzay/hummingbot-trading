@@ -20,8 +20,8 @@ from pathlib import Path
 from typing import Dict, List, Optional, Tuple
 
 _SCRIPT_DIR = Path(__file__).resolve().parent
-_HBOT_ROOT = _SCRIPT_DIR.parents[1]
-sys.path.insert(0, str(_HBOT_ROOT))
+_PROJECT_ROOT = _SCRIPT_DIR.parents[1]
+sys.path.insert(0, str(_PROJECT_ROOT))
 
 from services.common.utils import safe_float, utc_now, write_json
 
@@ -157,7 +157,7 @@ def main() -> None:
     parser.add_argument("--variant-a", default="a")
     parser.add_argument("--env-b", default="bot4", help="Second environment bot name")
     parser.add_argument("--variant-b", default="a")
-    parser.add_argument("--data-root", default=str(_HBOT_ROOT / "data"))
+    parser.add_argument("--data-root", default=str(_PROJECT_ROOT / "data"))
     args = parser.parse_args()
 
     data_root = Path(args.data_root)
@@ -180,7 +180,7 @@ def main() -> None:
         "comparison": comparison,
     }
 
-    out_dir = _HBOT_ROOT / "reports" / "analysis"
+    out_dir = _PROJECT_ROOT / "reports" / "analysis"
     out_dir.mkdir(parents=True, exist_ok=True)
     write_json(out_dir / "parity_report.json", result)
 

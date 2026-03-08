@@ -40,6 +40,7 @@ from controllers.paper_engine_v2.types import (
     OrderSide,
     PaperOrder,
     PaperPosition,
+    PositionAction,
     PositionChanged,
     _EPS,
     _ONE,
@@ -48,6 +49,18 @@ from controllers.paper_engine_v2.types import (
 )
 
 logger = logging.getLogger(__name__)
+
+
+def _is_open_action(position_action: PositionAction) -> bool:
+    return position_action in {PositionAction.OPEN_LONG, PositionAction.OPEN_SHORT}
+
+
+def _is_close_action(position_action: PositionAction) -> bool:
+    return position_action in {PositionAction.CLOSE_LONG, PositionAction.CLOSE_SHORT}
+
+
+def _is_hedge_mode(position_mode: str) -> bool:
+    return "HEDGE" in str(position_mode or "").upper()
 
 
 # ---------------------------------------------------------------------------
@@ -147,7 +160,20 @@ class RiskGuard:
 
         # Position notional cap
         pos = self._portfolio.get_position(spec.instrument_id)
-        new_notional = (pos.abs_quantity + order.quantity) * mid_price
+        action = getattr(order, "position_action", PositionAction.AUTO)
+        if not isinstance(action, PositionAction):
+            try:
+                action = PositionAction(str(action or "auto").lower())
+            except Exception:
+                action = PositionAction.AUTO
+        current_abs = pos.gross_quantity if getattr(pos, "has_hedge_legs", False) else pos.abs_quantity
+        if action == PositionAction.CLOSE_LONG:
+            projected_abs = max(_ZERO, current_abs - min(order.quantity, pos.long_quantity))
+        elif action == PositionAction.CLOSE_SHORT:
+            projected_abs = max(_ZERO, current_abs - min(order.quantity, pos.short_quantity))
+        else:
+            projected_abs = current_abs + order.quantity
+        new_notional = projected_abs * mid_price
         if new_notional > self._cfg.max_position_notional_per_instrument:
             return (
                 f"position_notional_cap: {new_notional:.2f} > "
@@ -171,6 +197,16 @@ class RiskGuard:
             return False
         pos = self._portfolio.get_position(spec.instrument_id)
         qty = pos.quantity if pos is not None else _ZERO
+        action = getattr(order, "position_action", PositionAction.AUTO)
+        if not isinstance(action, PositionAction):
+            try:
+                action = PositionAction(str(action or "auto").lower())
+            except Exception:
+                action = PositionAction.AUTO
+        if action == PositionAction.CLOSE_LONG:
+            return order.side == OrderSide.SELL and order.quantity <= pos.long_quantity + _EPS
+        if action == PositionAction.CLOSE_SHORT:
+            return order.side == OrderSide.BUY and order.quantity <= pos.short_quantity + _EPS
         if qty >= _ZERO and order.side == OrderSide.BUY:
             return False
         if qty <= _ZERO and order.side == OrderSide.SELL:
@@ -261,6 +297,70 @@ class PaperPortfolio:
         if self._daily_open_equity is None:
             self._daily_open_equity = equity_quote
 
+    @staticmethod
+    def _collapse_oneway_legs(pos: PaperPosition) -> None:
+        """Enforce netted semantics for non-hedge position modes.
+
+        Some upstream order flows can still attach explicit open/close leg hints
+        even when the connector runs in one-way mode. In one-way, opposite-side
+        fills must net the position, not accumulate synthetic long+short hedge
+        legs. Collapse any dual-leg state back to a single net leg.
+        """
+        if _is_hedge_mode(getattr(pos, "position_mode", "ONEWAY")):
+            return
+        pos.ensure_leg_consistency()
+        pos.long_quantity = max(_ZERO, pos.long_quantity)
+        pos.short_quantity = max(_ZERO, pos.short_quantity)
+        net_qty = pos.long_quantity - pos.short_quantity
+        net_realized = pos.long_realized_pnl + pos.short_realized_pnl
+        net_unrealized = pos.long_unrealized_pnl + pos.short_unrealized_pnl
+        net_funding = pos.long_funding_paid + pos.short_funding_paid
+        if net_qty > _EPS:
+            pos.long_quantity = net_qty
+            if pos.long_avg_entry_price <= _ZERO:
+                pos.long_avg_entry_price = max(_ZERO, pos.avg_entry_price)
+            pos.long_realized_pnl = net_realized
+            pos.long_unrealized_pnl = net_unrealized
+            pos.long_funding_paid = net_funding
+            if pos.long_opened_at_ns <= 0:
+                pos.long_opened_at_ns = pos.opened_at_ns
+            pos.short_quantity = _ZERO
+            pos.short_avg_entry_price = _ZERO
+            pos.short_realized_pnl = _ZERO
+            pos.short_unrealized_pnl = _ZERO
+            pos.short_funding_paid = _ZERO
+            pos.short_opened_at_ns = 0
+        elif net_qty < -_EPS:
+            pos.short_quantity = abs(net_qty)
+            if pos.short_avg_entry_price <= _ZERO:
+                pos.short_avg_entry_price = max(_ZERO, pos.avg_entry_price)
+            pos.short_realized_pnl = net_realized
+            pos.short_unrealized_pnl = net_unrealized
+            pos.short_funding_paid = net_funding
+            if pos.short_opened_at_ns <= 0:
+                pos.short_opened_at_ns = pos.opened_at_ns
+            pos.long_quantity = _ZERO
+            pos.long_avg_entry_price = _ZERO
+            pos.long_realized_pnl = _ZERO
+            pos.long_unrealized_pnl = _ZERO
+            pos.long_funding_paid = _ZERO
+            pos.long_opened_at_ns = 0
+        else:
+            pos.long_quantity = _ZERO
+            pos.short_quantity = _ZERO
+            pos.long_avg_entry_price = _ZERO
+            pos.short_avg_entry_price = _ZERO
+            # Keep aggregate realized/funding totals on the legacy net fields.
+            pos.long_realized_pnl = net_realized
+            pos.short_realized_pnl = _ZERO
+            pos.long_unrealized_pnl = _ZERO
+            pos.short_unrealized_pnl = _ZERO
+            pos.long_funding_paid = net_funding
+            pos.short_funding_paid = _ZERO
+            pos.long_opened_at_ns = 0
+            pos.short_opened_at_ns = 0
+        pos.sync_derived_fields()
+
     # -- Balance -----------------------------------------------------------
 
     def can_reserve(self, asset: str, amount: Decimal) -> bool:
@@ -297,20 +397,89 @@ class PaperPortfolio:
 
     # -- Positions ---------------------------------------------------------
 
-    def get_position(self, instrument_id: InstrumentId) -> PaperPosition:
-        return self._positions.get(instrument_id.key, PaperPosition.flat(instrument_id))
+    def get_position(
+        self,
+        instrument_id: InstrumentId,
+        position_action: Optional[PositionAction] = None,
+    ) -> PaperPosition:
+        pos = self._positions.get(instrument_id.key)
+        if pos is None:
+            return PaperPosition.flat(instrument_id)
+        pos.ensure_leg_consistency()
+        PaperPortfolio._collapse_oneway_legs(pos)
+        pos.sync_derived_fields()
+        if position_action is None:
+            return pos
+        if not _is_hedge_mode(pos.position_mode):
+            return pos
+        if not isinstance(position_action, PositionAction):
+            try:
+                position_action = PositionAction(str(position_action or "auto").lower())
+            except Exception:
+                position_action = PositionAction.AUTO
+        if position_action in {PositionAction.OPEN_LONG, PositionAction.CLOSE_LONG}:
+            return PaperPosition(
+                instrument_id=instrument_id,
+                quantity=pos.long_quantity,
+                avg_entry_price=pos.long_avg_entry_price,
+                realized_pnl=pos.long_realized_pnl,
+                unrealized_pnl=pos.long_unrealized_pnl,
+                total_fees_paid=pos.total_fees_paid,
+                funding_paid=pos.long_funding_paid,
+                opened_at_ns=pos.long_opened_at_ns,
+                last_fill_at_ns=pos.last_fill_at_ns,
+                position_mode=pos.position_mode,
+                long_quantity=pos.long_quantity,
+                long_avg_entry_price=pos.long_avg_entry_price,
+                long_realized_pnl=pos.long_realized_pnl,
+                long_unrealized_pnl=pos.long_unrealized_pnl,
+                long_funding_paid=pos.long_funding_paid,
+                long_opened_at_ns=pos.long_opened_at_ns,
+            )
+        if position_action in {PositionAction.OPEN_SHORT, PositionAction.CLOSE_SHORT}:
+            return PaperPosition(
+                instrument_id=instrument_id,
+                quantity=-pos.short_quantity,
+                avg_entry_price=pos.short_avg_entry_price,
+                realized_pnl=pos.short_realized_pnl,
+                unrealized_pnl=pos.short_unrealized_pnl,
+                total_fees_paid=pos.total_fees_paid,
+                funding_paid=pos.short_funding_paid,
+                opened_at_ns=pos.short_opened_at_ns,
+                last_fill_at_ns=pos.last_fill_at_ns,
+                position_mode=pos.position_mode,
+                short_quantity=pos.short_quantity,
+                short_avg_entry_price=pos.short_avg_entry_price,
+                short_realized_pnl=pos.short_realized_pnl,
+                short_unrealized_pnl=pos.short_unrealized_pnl,
+                short_funding_paid=pos.short_funding_paid,
+                short_opened_at_ns=pos.short_opened_at_ns,
+            )
+        return pos
 
     def all_positions(self) -> Dict[str, PaperPosition]:
-        return dict(self._positions)
+        out: Dict[str, PaperPosition] = {}
+        for key, pos in self._positions.items():
+            pos.ensure_leg_consistency()
+            PaperPortfolio._collapse_oneway_legs(pos)
+            pos.sync_derived_fields()
+            out[key] = pos
+        return out
 
     def mark_to_market(self, prices: Dict[str, Decimal]) -> None:
         """Update unrealized PnL on all positions, and refresh maintenance margin reserves."""
         for key, pos in self._positions.items():
             price = prices.get(key)
-            if price is None or price <= _ZERO or pos.quantity == _ZERO:
+            pos.ensure_leg_consistency()
+            PaperPortfolio._collapse_oneway_legs(pos)
+            if price is None or price <= _ZERO or (pos.quantity == _ZERO and pos.gross_quantity <= _ZERO):
                 pos.unrealized_pnl = _ZERO
+                pos.long_unrealized_pnl = _ZERO
+                pos.short_unrealized_pnl = _ZERO
                 continue
-            pos.unrealized_pnl = _unrealized_pnl(pos.quantity, pos.avg_entry_price, price)
+            pos.long_unrealized_pnl = _unrealized_pnl(pos.long_quantity, pos.long_avg_entry_price, price)
+            pos.short_unrealized_pnl = _unrealized_pnl(-pos.short_quantity, pos.short_avg_entry_price, price)
+            pos.sync_derived_fields()
         self._refresh_position_margin_reserves(prices)
         eq = self.equity_quote(prices)
         if eq > self._peak_equity:
@@ -325,7 +494,8 @@ class PaperPortfolio:
         while positions are open.
         """
         for key, pos in self._positions.items():
-            if not pos.instrument_id.is_perp or pos.quantity == _ZERO:
+            pos.ensure_leg_consistency()
+            if not pos.instrument_id.is_perp or pos.gross_quantity == _ZERO:
                 self._set_position_margin_reserved(key, _ZERO, pos.instrument_id.quote_asset)
                 continue
             spec = self._spec_by_key.get(key)
@@ -337,7 +507,7 @@ class PaperPortfolio:
                 # If we can't price the position, keep prior reserve to avoid
                 # oscillation. (Availability will still clamp to zero safely.)
                 continue
-            target = spec.compute_margin_maint(pos.abs_quantity, px, lev)
+            target = spec.compute_margin_maint(pos.gross_quantity, px, lev)
             self._set_position_margin_reserved(key, target, pos.instrument_id.quote_asset)
 
     def _set_position_margin_reserved(self, key: str, target: Decimal, quote_asset: str) -> None:
@@ -369,7 +539,7 @@ class PaperPortfolio:
         return eq / mm
 
     def apply_funding(
-        self, instrument_id: InstrumentId, charge: Decimal, now_ns: int
+        self, instrument_id: InstrumentId, charge: Decimal, now_ns: int, leg_side: Optional[str] = None
     ) -> FundingApplied:
         """Apply signed funding transfer and record on position.
 
@@ -379,8 +549,27 @@ class PaperPortfolio:
         pos = self._positions.get(instrument_id.key)
         notional = _ZERO
         if pos is not None:
-            pos.funding_paid += charge
-            notional = pos.abs_quantity * pos.avg_entry_price
+            pos.ensure_leg_consistency()
+            leg = str(leg_side or "").strip().lower()
+            if leg == "long":
+                pos.long_funding_paid += charge
+                notional = pos.long_quantity * pos.long_avg_entry_price
+            elif leg == "short":
+                pos.short_funding_paid += charge
+                notional = pos.short_quantity * pos.short_avg_entry_price
+            else:
+                pos.funding_paid += charge
+                notional = pos.abs_quantity * pos.avg_entry_price
+                if pos.quantity > _ZERO:
+                    pos.long_funding_paid = pos.funding_paid
+                    pos.short_funding_paid = _ZERO
+                elif pos.quantity < _ZERO:
+                    pos.short_funding_paid = pos.funding_paid
+                    pos.long_funding_paid = _ZERO
+                else:
+                    pos.long_funding_paid = _ZERO
+                    pos.short_funding_paid = _ZERO
+            pos.sync_derived_fields()
         if charge >= _ZERO:
             self._ledger.debit(instrument_id.quote_asset, charge)
         else:
@@ -410,6 +599,8 @@ class PaperPortfolio:
         now_ns: int,
         spec: InstrumentSpec,
         leverage: int,
+        position_action: PositionAction = PositionAction.AUTO,
+        position_mode: str = "ONEWAY",
     ) -> PositionChanged:
         """Settle a fill: update position and ledger.
 
@@ -421,34 +612,122 @@ class PaperPortfolio:
         Fees debited separately (Nautilus convention).
         """
         pos = self._positions.get(instrument_id.key, PaperPosition.flat(instrument_id))
+        pos.ensure_leg_consistency()
+        pos.position_mode = str(position_mode or pos.position_mode or "ONEWAY").upper()
+        PaperPortfolio._collapse_oneway_legs(pos)
 
         # Cache per-instrument metadata for later mtm/margin refresh.
         self._spec_by_key[instrument_id.key] = spec
         self._leverage_by_key[instrument_id.key] = max(1, int(leverage))
 
         # ---- Pure accounting via dedicated core ----
-        old_state = PositionState(
-            quantity=pos.quantity,
-            avg_entry_price=pos.avg_entry_price,
-            realized_pnl=pos.realized_pnl,
-            opened_at_ns=pos.opened_at_ns,
-        )
-        result = _apply_fill(
-            old=old_state,
-            fill_side=side.value,
-            fill_qty=quantity,
-            fill_price=price,
-            now_ns=now_ns,
-        )
-        new_state = result.new_state
-        realized_pnl = result.fill_realized_pnl
-        is_closing = result.is_closing
-
-        # ---- Update position fields ----
-        pos.quantity = new_state.quantity
-        pos.avg_entry_price = new_state.avg_entry_price
-        pos.realized_pnl = new_state.realized_pnl
-        pos.opened_at_ns = new_state.opened_at_ns
+        if not isinstance(position_action, PositionAction):
+            try:
+                position_action = PositionAction(str(position_action or "auto").lower())
+            except Exception:
+                position_action = PositionAction.AUTO
+        if not _is_hedge_mode(pos.position_mode) and (_is_open_action(position_action) or _is_close_action(position_action)):
+            # One-way perps/spot should net by signed quantity regardless of
+            # upstream leg hints.
+            position_action = PositionAction.AUTO
+        if position_action in {
+            PositionAction.OPEN_LONG,
+            PositionAction.CLOSE_LONG,
+            PositionAction.OPEN_SHORT,
+            PositionAction.CLOSE_SHORT,
+        }:
+            leg_side = "long" if position_action in {PositionAction.OPEN_LONG, PositionAction.CLOSE_LONG} else "short"
+            leg_quantity = pos.long_quantity if leg_side == "long" else -pos.short_quantity
+            leg_avg_entry = pos.long_avg_entry_price if leg_side == "long" else pos.short_avg_entry_price
+            leg_realized = pos.long_realized_pnl if leg_side == "long" else pos.short_realized_pnl
+            leg_opened_at = pos.long_opened_at_ns if leg_side == "long" else pos.short_opened_at_ns
+            old_state = PositionState(
+                quantity=leg_quantity,
+                avg_entry_price=leg_avg_entry,
+                realized_pnl=leg_realized,
+                opened_at_ns=leg_opened_at,
+            )
+            result = _apply_fill(
+                old=old_state,
+                fill_side=side.value,
+                fill_qty=quantity,
+                fill_price=price,
+                now_ns=now_ns,
+            )
+            new_state = result.new_state
+            realized_pnl = result.fill_realized_pnl
+            is_closing = result.is_closing
+            if leg_side == "long":
+                pos.long_quantity = max(_ZERO, new_state.quantity)
+                pos.long_avg_entry_price = new_state.avg_entry_price if pos.long_quantity > _ZERO else _ZERO
+                pos.long_realized_pnl = new_state.realized_pnl
+                pos.long_opened_at_ns = new_state.opened_at_ns
+            else:
+                pos.short_quantity = max(_ZERO, abs(new_state.quantity))
+                pos.short_avg_entry_price = new_state.avg_entry_price if pos.short_quantity > _ZERO else _ZERO
+                pos.short_realized_pnl = new_state.realized_pnl
+                pos.short_opened_at_ns = new_state.opened_at_ns
+            pos.sync_derived_fields()
+        else:
+            old_state = PositionState(
+                quantity=pos.quantity,
+                avg_entry_price=pos.avg_entry_price,
+                realized_pnl=pos.realized_pnl,
+                opened_at_ns=pos.opened_at_ns,
+            )
+            result = _apply_fill(
+                old=old_state,
+                fill_side=side.value,
+                fill_qty=quantity,
+                fill_price=price,
+                now_ns=now_ns,
+            )
+            new_state = result.new_state
+            realized_pnl = result.fill_realized_pnl
+            is_closing = result.is_closing
+            pos.quantity = new_state.quantity
+            pos.avg_entry_price = new_state.avg_entry_price
+            pos.realized_pnl = new_state.realized_pnl
+            pos.opened_at_ns = new_state.opened_at_ns
+            if pos.quantity > _ZERO:
+                pos.long_quantity = pos.quantity
+                pos.long_avg_entry_price = pos.avg_entry_price
+                pos.long_realized_pnl = pos.realized_pnl
+                pos.long_unrealized_pnl = pos.unrealized_pnl
+                pos.long_funding_paid = pos.funding_paid
+                pos.long_opened_at_ns = pos.opened_at_ns
+                pos.short_quantity = _ZERO
+                pos.short_avg_entry_price = _ZERO
+                pos.short_realized_pnl = _ZERO
+                pos.short_unrealized_pnl = _ZERO
+                pos.short_funding_paid = _ZERO
+                pos.short_opened_at_ns = 0
+            elif pos.quantity < _ZERO:
+                pos.short_quantity = abs(pos.quantity)
+                pos.short_avg_entry_price = pos.avg_entry_price
+                pos.short_realized_pnl = pos.realized_pnl
+                pos.short_unrealized_pnl = pos.unrealized_pnl
+                pos.short_funding_paid = pos.funding_paid
+                pos.short_opened_at_ns = pos.opened_at_ns
+                pos.long_quantity = _ZERO
+                pos.long_avg_entry_price = _ZERO
+                pos.long_realized_pnl = _ZERO
+                pos.long_unrealized_pnl = _ZERO
+                pos.long_funding_paid = _ZERO
+                pos.long_opened_at_ns = 0
+            else:
+                pos.long_quantity = _ZERO
+                pos.long_avg_entry_price = _ZERO
+                pos.long_realized_pnl = pos.realized_pnl
+                pos.long_unrealized_pnl = _ZERO
+                pos.long_funding_paid = pos.funding_paid
+                pos.long_opened_at_ns = 0
+                pos.short_quantity = _ZERO
+                pos.short_avg_entry_price = _ZERO
+                pos.short_realized_pnl = _ZERO
+                pos.short_unrealized_pnl = _ZERO
+                pos.short_funding_paid = _ZERO
+                pos.short_opened_at_ns = 0
         pos.total_fees_paid += fee           # fees separate from PnL (Nautilus)
         pos.last_fill_at_ns = now_ns
 
@@ -481,6 +760,7 @@ class PaperPortfolio:
             fill_price=price,
             fill_quantity=quantity,
             realized_pnl=realized_pnl,
+            position_action=position_action.value,
         )
 
     def _settle_ledger(

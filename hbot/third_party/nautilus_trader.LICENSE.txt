@@ -1,0 +1,21 @@
+NautilusTrader Attribution Notice
+=================================
+
+Upstream project:
+  nautilus_trader
+  https://github.com/nautechsystems/nautilus_trader
+
+Upstream license:
+  GNU Lesser General Public License v3.0 (LGPL-3.0-or-later)
+
+License text source:
+  https://github.com/nautechsystems/nautilus_trader/blob/develop/LICENSE
+
+Repository usage boundary:
+  This repository uses selective, documented reuse of concepts/interfaces only,
+  as defined in:
+    docs/validation/nautilus_reuse_matrix.json
+    docs/validation/nautilus_license_boundary.md
+
+  No direct vendoring of broad NautilusTrader framework internals is permitted
+  without explicit matrix updates, attribution, and regression tests.

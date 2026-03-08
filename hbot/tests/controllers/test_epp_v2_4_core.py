@@ -15,6 +15,7 @@ import types as _types_mod
 from datetime import datetime, timezone
 from decimal import Decimal
 from types import SimpleNamespace
+from typing import Optional
 from unittest.mock import MagicMock
 
 import pytest
@@ -94,8 +95,15 @@ def _install_hb_stubs() -> None:
 _install_hb_stubs()
 
 # Now safe to import the controller ----------------------------------------
-from controllers.core import MarketConditions, RegimeSpec, SpreadEdgeState  # noqa: E402
-from controllers.epp_v2_4 import EppV24Controller, _ZERO, _ONE, _10K  # noqa: E402
+from controllers.core import MarketConditions, QuoteGeometry, RegimeSpec, SpreadEdgeState  # noqa: E402
+from controllers.epp_v2_4 import (  # noqa: E402
+    EppV24Controller,
+    _ZERO,
+    _ONE,
+    _10K,
+    _paper_reset_state_on_startup_enabled,
+)
+from controllers.ops_guard import GuardState  # noqa: E402
 from controllers.regime_detector import RegimeDetector  # noqa: E402
 from controllers.spread_engine import SpreadEngine  # noqa: E402
 from controllers.risk_evaluator import RiskEvaluator  # noqa: E402
@@ -110,6 +118,7 @@ _DEFAULT_SPECS = dict(EppV24Controller.PHASE0_SPECS)
 def _make_config(**overrides) -> SimpleNamespace:
     """Minimal config with sane defaults for unit-testing individual methods."""
     defaults = dict(
+        id="epp_v2_4_bot_a",
         connector_name="binance_paper_trade",
         trading_pair="BTC-USDT",
         variant="a",
@@ -163,8 +172,33 @@ def _make_config(**overrides) -> SimpleNamespace:
         adverse_drift_ewma_alpha=Decimal("0.25"),
         drift_spike_threshold_bps=5,
         drift_spike_mult_max=Decimal("1.8"),
+        neutral_trend_guard_pct=Decimal("0"),
         adverse_fill_spread_multiplier=Decimal("1.3"),
         adverse_fill_count_threshold=20,
+        adverse_fill_soft_pause_enabled=False,
+        adverse_fill_soft_pause_min_fills=120,
+        adverse_fill_soft_pause_cost_floor_mult=Decimal("1.0"),
+        edge_confidence_soft_pause_enabled=False,
+        edge_confidence_soft_pause_min_fills=120,
+        edge_confidence_soft_pause_z_score=Decimal("1.96"),
+        edge_confidence_soft_pause_cost_floor_mult=Decimal("1.0"),
+        slippage_soft_pause_enabled=False,
+        slippage_soft_pause_window_fills=300,
+        slippage_soft_pause_min_fills=100,
+        slippage_soft_pause_p95_bps=Decimal("25"),
+        selective_quoting_enabled=False,
+        selective_quality_min_fills=40,
+        selective_quality_reduce_threshold=Decimal("0.45"),
+        selective_quality_block_threshold=Decimal("0.85"),
+        selective_quality_edge_tighten_max_bps=Decimal("2.0"),
+        selective_neutral_extra_edge_bps=Decimal("1.0"),
+        selective_side_bias_pct=Decimal("0.00025"),
+        selective_max_levels_per_side=1,
+        alpha_policy_enabled=True,
+        alpha_policy_no_trade_threshold=Decimal("0.35"),
+        alpha_policy_aggressive_threshold=Decimal("0.78"),
+        alpha_policy_inventory_relief_threshold=Decimal("0.55"),
+        alpha_policy_cross_spread_mult=Decimal("1.05"),
         override_spread_pct=None,
         min_base_pct=Decimal("0.15"),
         max_base_pct=Decimal("0.90"),
@@ -177,6 +211,12 @@ def _make_config(**overrides) -> SimpleNamespace:
         margin_ratio_hard_stop_pct=Decimal("0.10"),
         position_drift_soft_pause_pct=Decimal("0.05"),
         edge_state_hold_s=120,
+        derisk_force_taker_min_base_mult=Decimal("2.0"),
+        derisk_force_taker_expectancy_guard_enabled=False,
+        derisk_force_taker_expectancy_window_fills=300,
+        derisk_force_taker_expectancy_min_taker_fills=40,
+        derisk_force_taker_expectancy_min_quote=Decimal("-0.02"),
+        derisk_force_taker_expectancy_override_base_mult=Decimal("10"),
         startup_position_sync=True,
         is_paper=False,
     )
@@ -274,6 +314,8 @@ def _make_spread_ctrl(
     ctrl._funding_rate = funding_rate
     ctrl._adverse_fill_count = adverse_fill_count
     ctrl._fill_edge_ewma = fill_edge_ewma
+    ctrl._fill_count_for_kelly = 0 if fill_edge_ewma is None else 100
+    ctrl._auto_calibration_fill_history = []
     ctrl._traded_notional_today = turnover_notional
     ctrl._spread_floor_pct = Decimal("0.0025")
     ctrl._ob_imbalance = _ZERO
@@ -296,6 +338,17 @@ def _make_spread_ctrl(
     ctrl._pnl_governor_size_mult = _ONE
     ctrl._pnl_governor_size_boost_active = False
     ctrl._external_daily_pnl_target_pct_override = None
+    ctrl._selective_quote_score = _ZERO
+    ctrl._selective_quote_state = "inactive"
+    ctrl._selective_quote_reason = "disabled"
+    ctrl._selective_quote_adverse_ratio = _ZERO
+    ctrl._selective_quote_slippage_p95_bps = _ZERO
+    ctrl._alpha_policy_state = "maker_two_sided"
+    ctrl._alpha_policy_reason = "startup"
+    ctrl._alpha_maker_score = _ZERO
+    ctrl._alpha_aggressive_score = _ZERO
+    ctrl._alpha_cross_allowed = False
+    ctrl._inventory_urgency_score = _ZERO
 
     ctrl._spread_engine = SpreadEngine(
         turnover_cap_x=cfg.turnover_cap_x,
@@ -327,6 +380,15 @@ def _make_spread_ctrl(
     )
     ctrl._compute_adaptive_spread_knobs = _types_mod.MethodType(
         EppV24Controller._compute_adaptive_spread_knobs, ctrl,
+    )
+    ctrl._recent_positive_slippage_p95_bps = _types_mod.MethodType(
+        EppV24Controller._recent_positive_slippage_p95_bps, ctrl,
+    )
+    ctrl._compute_selective_quote_quality = _types_mod.MethodType(
+        EppV24Controller._compute_selective_quote_quality, ctrl,
+    )
+    ctrl._compute_alpha_policy = _types_mod.MethodType(
+        EppV24Controller._compute_alpha_policy, ctrl,
     )
     return ctrl
 
@@ -370,6 +432,17 @@ def _make_risk_ctrl(
     ctrl._startup_position_sync_done = startup_sync_done
     ctrl._position_drift_pct = position_drift
     ctrl._pending_eod_close = pending_eod_close
+    ctrl._fill_edge_ewma = None
+    ctrl._fill_edge_variance = None
+    ctrl._fill_count_for_kelly = 0
+    ctrl._adverse_fill_count = 0
+    ctrl._selective_quote_score = _ZERO
+    ctrl._selective_quote_state = "inactive"
+    ctrl._selective_quote_reason = "disabled"
+    ctrl._selective_quote_adverse_ratio = _ZERO
+    ctrl._selective_quote_slippage_p95_bps = _ZERO
+    ctrl._maker_fee_pct = cfg.spot_fee_pct
+    ctrl._auto_calibration_fill_history = []
 
     ctrl._risk_evaluator = RiskEvaluator(
         min_base_pct=cfg.min_base_pct,
@@ -392,6 +465,31 @@ def _make_risk_ctrl(
     return ctrl
 
 
+def _make_edge_gate_ctrl(*, config_overrides=None, hold_s=30):
+    ctrl = SimpleNamespace()
+    cfg = _make_config(**(config_overrides or {}))
+    ctrl.config = cfg
+    ctrl._risk_evaluator = RiskEvaluator(
+        min_base_pct=cfg.min_base_pct,
+        max_base_pct=cfg.max_base_pct,
+        max_total_notional_quote=cfg.max_total_notional_quote,
+        max_daily_turnover_x_hard=cfg.max_daily_turnover_x_hard,
+        max_daily_loss_pct_hard=cfg.max_daily_loss_pct_hard,
+        max_drawdown_pct_hard=cfg.max_drawdown_pct_hard,
+        edge_state_hold_s=hold_s,
+        margin_ratio_hard_stop_pct=cfg.margin_ratio_hard_stop_pct,
+        margin_ratio_soft_pause_pct=cfg.margin_ratio_soft_pause_pct,
+        position_drift_soft_pause_pct=cfg.position_drift_soft_pause_pct,
+    )
+    ctrl._net_edge_ewma = None
+    ctrl._net_edge_gate = None
+    ctrl._edge_gate_blocked = False
+    ctrl._soft_pause_edge = False
+    ctrl._edge_gate_update = _types_mod.MethodType(EppV24Controller._edge_gate_update, ctrl)
+    ctrl._update_edge_gate_ewma = _types_mod.MethodType(EppV24Controller._update_edge_gate_ewma, ctrl)
+    return ctrl
+
+
 def _make_spread_state(**overrides):
     defaults = dict(
         band_pct=Decimal("0.002"),
@@ -405,6 +503,14 @@ def _make_spread_state(**overrides):
         min_edge_threshold=Decimal("0.0001"),
         edge_resume_threshold=Decimal("0.0004"),
         fill_factor=Decimal("0.4"),
+        quote_geometry=QuoteGeometry(
+            base_spread_pct=Decimal("0.0025"),
+            spread_floor_pct=Decimal("0.0020"),
+            reservation_price_adjustment_pct=_ZERO,
+            inventory_urgency=_ZERO,
+            inventory_skew=_ZERO,
+            alpha_skew=_ZERO,
+        ),
     )
     defaults.update(overrides)
     return SpreadEdgeState(**defaults)
@@ -429,11 +535,11 @@ def _make_market(**overrides):
 
 # --- fill helpers ---
 
-def _make_fill_event(price, amount, trade_type_name="buy"):
+def _make_fill_event(price, amount, trade_type_name="buy", order_id="test_order_1"):
     ev = MagicMock()
     ev.price = price
     ev.amount = amount
-    ev.order_id = "test_order_1"
+    ev.order_id = order_id
     ev.timestamp = 1_700_000_000.0
 
     trade_type = MagicMock()
@@ -577,6 +683,219 @@ class TestDetectRegime:
         assert ctrl._active_regime == "up", "must switch after regime_hold_ticks=3"
 
 
+class TestQuoteSideMode:
+    def test_alpha_policy_can_disable_quoting(self):
+        buy_executor = SimpleNamespace(
+            is_active=True,
+            id="exec-buy",
+            custom_info={"level_id": "buy_0"},
+        )
+        ctrl = SimpleNamespace(
+            config=_make_config(neutral_trend_guard_pct=Decimal("0.0002")),
+            executors_info=[buy_executor],
+            _regime_ema_value=Decimal("100"),
+            _quote_side_mode="buy_only",
+            _quote_side_reason="regime",
+            _pending_stale_cancel_actions=[],
+            _alpha_policy_state="no_trade",
+        )
+        ctrl._cancel_stale_side_executors = _types_mod.MethodType(
+            EppV24Controller._cancel_stale_side_executors, ctrl,
+        )
+
+        mode = EppV24Controller._resolve_quote_side_mode(
+            ctrl,
+            mid=Decimal("100"),
+            regime_name="neutral_low_vol",
+            regime_spec=_DEFAULT_SPECS["neutral_low_vol"],
+        )
+
+        assert mode == "off"
+        assert ctrl._quote_side_reason == "alpha_no_trade"
+        assert len(ctrl._pending_stale_cancel_actions) == 1
+
+    def test_alpha_policy_no_trade_cancels_quotes_even_when_mode_already_off(self):
+        buy_executor = SimpleNamespace(
+            is_active=True,
+            id="exec-buy",
+            custom_info={"level_id": "buy_0"},
+        )
+        sell_executor = SimpleNamespace(
+            is_active=True,
+            id="exec-sell",
+            custom_info={"level_id": "sell_0"},
+        )
+        ctrl = SimpleNamespace(
+            config=_make_config(neutral_trend_guard_pct=Decimal("0.0002")),
+            executors_info=[buy_executor, sell_executor],
+            _regime_ema_value=Decimal("100"),
+            _quote_side_mode="off",
+            _quote_side_reason="regime",
+            _pending_stale_cancel_actions=[],
+            _alpha_policy_state="no_trade",
+            _alpha_no_trade_cancel_requested_ids=set(),
+        )
+        ctrl._cancel_stale_side_executors = _types_mod.MethodType(
+            EppV24Controller._cancel_stale_side_executors, ctrl,
+        )
+        ctrl._cancel_active_quote_executors = _types_mod.MethodType(
+            EppV24Controller._cancel_active_quote_executors, ctrl,
+        )
+
+        mode = EppV24Controller._resolve_quote_side_mode(
+            ctrl,
+            mid=Decimal("100"),
+            regime_name="neutral_low_vol",
+            regime_spec=_DEFAULT_SPECS["neutral_low_vol"],
+        )
+
+        assert mode == "off"
+        assert ctrl._quote_side_reason == "alpha_no_trade"
+        assert len(ctrl._pending_stale_cancel_actions) == 2
+        assert {getattr(a, "executor_id", "") for a in ctrl._pending_stale_cancel_actions} == {"exec-buy", "exec-sell"}
+
+        # Re-running in the same no-trade state should not enqueue duplicates.
+        EppV24Controller._resolve_quote_side_mode(
+            ctrl,
+            mid=Decimal("100"),
+            regime_name="neutral_low_vol",
+            regime_spec=_DEFAULT_SPECS["neutral_low_vol"],
+        )
+        assert len(ctrl._pending_stale_cancel_actions) == 2
+
+    def test_alpha_no_trade_paper_cleanup_is_throttled(self, monkeypatch):
+        now = {"ts": 1000.0}
+        cancel_calls = []
+
+        def _fake_cancel_stale(self, stale_age_s: float, now_ts=None):
+            cancel_calls.append((float(stale_age_s), float(now_ts or 0.0)))
+            return 1
+
+        monkeypatch.setattr(EppV24Controller, "_cancel_stale_paper_orders", _fake_cancel_stale)
+
+        ctrl = SimpleNamespace(
+            config=_make_config(is_paper=True),
+            market_data_provider=SimpleNamespace(time=lambda: now["ts"]),
+            _alpha_no_trade_last_paper_cancel_ts=0.0,
+        )
+
+        first = EppV24Controller._cancel_alpha_no_trade_paper_orders(ctrl)
+        second = EppV24Controller._cancel_alpha_no_trade_paper_orders(ctrl)
+        now["ts"] = 1006.0
+        third = EppV24Controller._cancel_alpha_no_trade_paper_orders(ctrl)
+
+        assert first == 1
+        assert second == 0
+        assert third == 1
+        assert len(cancel_calls) == 2
+        assert cancel_calls[0][0] == 0.25
+
+    def test_neutral_trend_guard_blocks_buys_when_mid_below_ema(self):
+        buy_executor = SimpleNamespace(
+            is_active=True,
+            id="exec-buy",
+            custom_info={"level_id": "buy_0"},
+        )
+        ctrl = SimpleNamespace(
+            config=_make_config(neutral_trend_guard_pct=Decimal("0.0002")),
+            executors_info=[buy_executor],
+            _regime_ema_value=Decimal("100"),
+            _quote_side_mode="off",
+            _quote_side_reason="regime",
+            _pending_stale_cancel_actions=[],
+        )
+        ctrl._cancel_stale_side_executors = _types_mod.MethodType(
+            EppV24Controller._cancel_stale_side_executors, ctrl,
+        )
+
+        mode = EppV24Controller._resolve_quote_side_mode(
+            ctrl,
+            mid=Decimal("99.97"),
+            regime_name="neutral_low_vol",
+            regime_spec=_DEFAULT_SPECS["neutral_low_vol"],
+        )
+
+        assert mode == "sell_only"
+        assert ctrl._quote_side_reason == "neutral_trend_guard_down"
+        assert len(ctrl._pending_stale_cancel_actions) == 1
+
+    def test_neutral_trend_guard_ignores_small_mid_ema_deviation(self):
+        ctrl = SimpleNamespace(
+            config=_make_config(neutral_trend_guard_pct=Decimal("0.0002")),
+            executors_info=[],
+            _regime_ema_value=Decimal("100"),
+            _quote_side_mode="off",
+            _quote_side_reason="regime",
+            _pending_stale_cancel_actions=[],
+        )
+        ctrl._cancel_stale_side_executors = _types_mod.MethodType(
+            EppV24Controller._cancel_stale_side_executors, ctrl,
+        )
+
+        mode = EppV24Controller._resolve_quote_side_mode(
+            ctrl,
+            mid=Decimal("99.99"),
+            regime_name="neutral_low_vol",
+            regime_spec=_DEFAULT_SPECS["neutral_low_vol"],
+        )
+
+        assert mode == "off"
+        assert ctrl._quote_side_reason == "regime"
+        assert ctrl._pending_stale_cancel_actions == []
+
+    def test_selective_reduced_mode_quotes_with_trend_only(self):
+        ctrl = SimpleNamespace(
+            config=_make_config(
+                neutral_trend_guard_pct=Decimal("0"),
+                selective_side_bias_pct=Decimal("0.0002"),
+            ),
+            executors_info=[],
+            _regime_ema_value=Decimal("100"),
+            _quote_side_mode="off",
+            _quote_side_reason="regime",
+            _pending_stale_cancel_actions=[],
+            _selective_quote_state="reduced",
+        )
+        ctrl._cancel_stale_side_executors = _types_mod.MethodType(
+            EppV24Controller._cancel_stale_side_executors, ctrl,
+        )
+
+        mode = EppV24Controller._resolve_quote_side_mode(
+            ctrl,
+            mid=Decimal("100.03"),
+            regime_name="neutral_low_vol",
+            regime_spec=_DEFAULT_SPECS["neutral_low_vol"],
+        )
+
+        assert mode == "buy_only"
+        assert ctrl._quote_side_reason == "selective_with_trend_up"
+
+    def test_alpha_policy_bias_overrides_neutral_trend_guard(self):
+        ctrl = SimpleNamespace(
+            config=_make_config(neutral_trend_guard_pct=Decimal("0.0002")),
+            executors_info=[],
+            _regime_ema_value=Decimal("100"),
+            _quote_side_mode="off",
+            _quote_side_reason="regime",
+            _pending_stale_cancel_actions=[],
+            _alpha_policy_state="maker_bias_buy",
+            _selective_quote_state="inactive",
+        )
+        ctrl._cancel_stale_side_executors = _types_mod.MethodType(
+            EppV24Controller._cancel_stale_side_executors, ctrl,
+        )
+
+        mode = EppV24Controller._resolve_quote_side_mode(
+            ctrl,
+            mid=Decimal("99.97"),
+            regime_name="neutral_low_vol",
+            regime_spec=_DEFAULT_SPECS["neutral_low_vol"],
+        )
+
+        assert mode == "buy_only"
+        assert ctrl._quote_side_reason == "alpha_buy_bias"
+
+
 # ===================================================================
 # 2. _compute_spread_and_edge  (6 tests)
 # ===================================================================
@@ -588,6 +907,166 @@ class TestComputeSpreadAndEdge:
         ctrl = _make_spread_ctrl(band_pct=_ZERO)
         se = _compute_se(ctrl)
         assert se.spread_pct >= ctrl._spread_floor_pct
+
+    def test_edge_resume_threshold_tracks_effective_min_edge_gap(self):
+        """Resume threshold should preserve only the configured gap above the effective pause floor."""
+        ctrl = _make_spread_ctrl(
+            band_pct=_ZERO,
+            config_overrides={
+                "min_net_edge_bps": 10,
+                "edge_resume_bps": 14,
+            },
+        )
+        state_base, _floor = ctrl._spread_engine.compute_spread_and_edge(
+            regime_name="neutral_low_vol",
+            regime_spec=_DEFAULT_SPECS["neutral_low_vol"],
+            band_pct=_ZERO,
+            raw_drift=_ZERO,
+            smooth_drift=_ZERO,
+            target_base_pct=_DEFAULT_SPECS["neutral_low_vol"].target_base_pct,
+            base_pct=Decimal("0.5"),
+            equity_quote=Decimal("1000"),
+            traded_notional_today=_ZERO,
+            ob_imbalance=_ZERO,
+            ob_imbalance_skew_weight=_ZERO,
+            maker_fee_pct=Decimal("0.001"),
+            is_perp=False,
+            funding_rate=_ZERO,
+            adverse_fill_count=0,
+            fill_edge_ewma=None,
+        )
+        assert state_base.min_edge_threshold == Decimal("0.001")
+        assert state_base.edge_resume_threshold == Decimal("0.0014")
+
+        state, _floor = ctrl._spread_engine.compute_spread_and_edge(
+            regime_name="neutral_low_vol",
+            regime_spec=_DEFAULT_SPECS["neutral_low_vol"],
+            band_pct=_ZERO,
+            raw_drift=_ZERO,
+            smooth_drift=_ZERO,
+            target_base_pct=_DEFAULT_SPECS["neutral_low_vol"].target_base_pct,
+            base_pct=Decimal("0.5"),
+            equity_quote=Decimal("1000"),
+            traded_notional_today=_ZERO,
+            ob_imbalance=_ZERO,
+            ob_imbalance_skew_weight=_ZERO,
+            maker_fee_pct=Decimal("0.001"),
+            is_perp=False,
+            funding_rate=_ZERO,
+            adverse_fill_count=0,
+            fill_edge_ewma=None,
+            min_edge_threshold_override_pct=Decimal("0.00038"),
+        )
+        assert state.min_edge_threshold == Decimal("0.00038")
+        assert state.edge_resume_threshold == Decimal("0.00078")
+
+    def test_selective_quote_quality_tightens_effective_min_edge(self):
+        state_base = _compute_se(
+            _make_spread_ctrl(
+                fill_edge_ewma=Decimal("-35"),
+                config_overrides={
+                    "selective_quoting_enabled": False,
+                },
+            )
+        )
+        ctrl = _make_spread_ctrl(
+            fill_edge_ewma=Decimal("-35"),
+            config_overrides={
+                "selective_quoting_enabled": True,
+                "selective_quality_min_fills": 20,
+                "selective_quality_edge_tighten_max_bps": Decimal("2.0"),
+                "selective_neutral_extra_edge_bps": Decimal("1.0"),
+            },
+        )
+        ctrl._fill_count_for_kelly = 50
+
+        state = _compute_se(ctrl)
+
+        assert state.min_edge_threshold > state_base.min_edge_threshold
+        assert ctrl._selective_quote_state == "reduced"
+        assert ctrl._selective_quote_reason == "negative_fill_edge"
+
+    def test_spread_state_contains_quote_geometry_breakout(self):
+        ctrl = _make_spread_ctrl()
+        state = _compute_se(ctrl, base_pct=Decimal("0.35"))
+
+        assert state.quote_geometry.base_spread_pct > 0
+        assert state.quote_geometry.spread_floor_pct == ctrl._spread_floor_pct
+        assert state.quote_geometry.reservation_price_adjustment_pct == state.skew
+        assert state.quote_geometry.inventory_urgency > 0
+
+    def test_alpha_policy_blocks_neutral_when_edge_buffer_is_weak(self):
+        ctrl = _make_spread_ctrl()
+        ctrl._ob_imbalance = _ZERO
+        weak_state = _make_spread_state(
+            net_edge=Decimal("0.0001"),
+            min_edge_threshold=Decimal("0.0001"),
+        )
+        metrics = EppV24Controller._compute_alpha_policy(
+            ctrl,
+            regime_name="neutral_low_vol",
+            spread_state=weak_state,
+            market=_make_market(),
+            target_net_base_pct=Decimal("0.50"),
+            base_pct_net=Decimal("0.50"),
+        )
+
+        assert metrics["state"] == "no_trade"
+        assert ctrl._alpha_policy_reason == "neutral_low_edge"
+
+    def test_alpha_policy_allows_neutral_quote_when_edge_above_resume_threshold(self):
+        ctrl = _make_spread_ctrl(
+            config_overrides={
+                "alpha_policy_no_trade_threshold": Decimal("0.60"),
+            }
+        )
+        ctrl._ob_imbalance = _ZERO
+        tradable_state = _make_spread_state(
+            net_edge=Decimal("0.00045"),
+            min_edge_threshold=Decimal("0.00035"),
+            edge_resume_threshold=Decimal("0.00040"),
+        )
+        metrics = EppV24Controller._compute_alpha_policy(
+            ctrl,
+            regime_name="neutral_low_vol",
+            spread_state=tradable_state,
+            market=_make_market(),
+            target_net_base_pct=Decimal("0.50"),
+            base_pct_net=Decimal("0.50"),
+        )
+
+        assert metrics["maker_score"] < Decimal("0.60")
+        assert metrics["state"] == "maker_two_sided"
+        assert ctrl._alpha_policy_reason == "maker_baseline"
+
+    def test_alpha_policy_allows_aggressive_inventory_relief(self):
+        ctrl = _make_spread_ctrl()
+        ctrl._ob_imbalance = Decimal("0.60")
+        strong_state = _make_spread_state(
+            net_edge=Decimal("0.0008"),
+            min_edge_threshold=Decimal("0.0001"),
+            adverse_drift=Decimal("0.00002"),
+            smooth_drift=Decimal("0.00001"),
+            quote_geometry=QuoteGeometry(
+                base_spread_pct=Decimal("0.0025"),
+                spread_floor_pct=Decimal("0.0020"),
+                reservation_price_adjustment_pct=Decimal("0.0004"),
+                inventory_urgency=Decimal("0.80"),
+                inventory_skew=Decimal("0.00025"),
+                alpha_skew=Decimal("0.00015"),
+            ),
+        )
+        metrics = EppV24Controller._compute_alpha_policy(
+            ctrl,
+            regime_name="up",
+            spread_state=strong_state,
+            market=_make_market(),
+            target_net_base_pct=Decimal("0.70"),
+            base_pct_net=Decimal("0.05"),
+        )
+
+        assert metrics["state"] == "aggressive_buy"
+        assert ctrl._alpha_cross_allowed is True
 
     def test_funding_rate_adds_cost_for_long_perp(self):
         """Positive funding rate on a net-long position increases costs (longs pay shorts)."""
@@ -616,6 +1095,47 @@ class TestComputeSpreadAndEdge:
         assert se_with_funding.spread_pct > se_no_funding.spread_pct, (
             "Short position should pay a cost when funding_rate < 0"
         )
+
+
+class TestEdgeGateEwma:
+    def test_raw_edge_above_pause_threshold_does_not_false_pause_from_lagging_ewma(self):
+        ctrl = _make_edge_gate_ctrl(config_overrides={"edge_gate_ewma_period": 8}, hold_s=30)
+        ctrl._net_edge_ewma = Decimal("0.00046")
+        ctrl._risk_evaluator._edge_gate_changed_ts = 10.0
+
+        spread_state = _make_spread_state(
+            net_edge=Decimal("0.00093"),
+            min_edge_threshold=Decimal("0.000775"),
+            edge_resume_threshold=Decimal("0.000825"),
+        )
+
+        ctrl._update_edge_gate_ewma(100.0, spread_state)
+
+        assert ctrl._edge_gate_blocked is False
+        assert ctrl._soft_pause_edge is False
+        assert ctrl._net_edge_gate == spread_state.net_edge
+        assert ctrl._net_edge_ewma < spread_state.min_edge_threshold
+
+    def test_raw_edge_above_resume_threshold_unblocks_even_if_ewma_lags(self):
+        ctrl = _make_edge_gate_ctrl(config_overrides={"edge_gate_ewma_period": 8}, hold_s=30)
+        ctrl._net_edge_ewma = Decimal("0.00057")
+        ctrl._risk_evaluator._edge_gate_blocked = True
+        ctrl._edge_gate_blocked = True
+        ctrl._soft_pause_edge = True
+        ctrl._risk_evaluator._edge_gate_changed_ts = 10.0
+
+        spread_state = _make_spread_state(
+            net_edge=Decimal("0.00093"),
+            min_edge_threshold=Decimal("0.000775"),
+            edge_resume_threshold=Decimal("0.000825"),
+        )
+
+        ctrl._update_edge_gate_ewma(100.0, spread_state)
+
+        assert ctrl._edge_gate_blocked is False
+        assert ctrl._soft_pause_edge is False
+        assert ctrl._net_edge_gate == spread_state.net_edge
+        assert ctrl._net_edge_ewma < spread_state.edge_resume_threshold
 
     def test_positive_funding_is_free_for_short_perp(self):
         """Positive funding rate on a net-short position should add ZERO cost (shorts receive)."""
@@ -742,6 +1262,82 @@ class TestEvaluateAllRisk:
         assert "base_pct_below_min" in reasons
         assert hard is False
 
+    def test_adverse_fill_soft_pause_reason_when_edge_below_cost_floor(self):
+        ctrl = _make_risk_ctrl(
+            config_overrides={
+                "adverse_fill_soft_pause_enabled": True,
+                "adverse_fill_soft_pause_min_fills": 10,
+                "adverse_fill_count_threshold": 3,
+                "adverse_fill_soft_pause_cost_floor_mult": Decimal("1.0"),
+            }
+        )
+        ctrl._fill_count_for_kelly = 12
+        ctrl._adverse_fill_count = 3
+        ctrl._fill_edge_ewma = Decimal("-30")
+        ctrl._maker_fee_pct = Decimal("0.0010")
+        ss = _make_spread_state(turnover_x=Decimal("1.0"))
+        reasons, hard, _, _ = EppV24Controller._evaluate_all_risk(
+            ctrl, ss, Decimal("0.5"), Decimal("1000"), Decimal("100"), _make_market(),
+        )
+        assert "adverse_fill_soft_pause" in reasons
+        assert hard is False
+
+    def test_edge_confidence_soft_pause_reason_when_upper_bound_below_cost_floor(self):
+        ctrl = _make_risk_ctrl(
+            config_overrides={
+                "edge_confidence_soft_pause_enabled": True,
+                "edge_confidence_soft_pause_min_fills": 20,
+                "edge_confidence_soft_pause_z_score": Decimal("1.96"),
+                "edge_confidence_soft_pause_cost_floor_mult": Decimal("1.0"),
+            }
+        )
+        ctrl._fill_count_for_kelly = 50
+        ctrl._fill_edge_ewma = Decimal("-25")
+        ctrl._fill_edge_variance = Decimal("1")
+        ctrl._maker_fee_pct = Decimal("0.0010")
+        ss = _make_spread_state(turnover_x=Decimal("1.0"))
+        reasons, hard, _, _ = EppV24Controller._evaluate_all_risk(
+            ctrl, ss, Decimal("0.5"), Decimal("1000"), Decimal("100"), _make_market(),
+        )
+        assert "edge_confidence_soft_pause" in reasons
+        assert hard is False
+
+    def test_slippage_soft_pause_reason_when_recent_p95_above_budget(self):
+        ctrl = _make_risk_ctrl(
+            config_overrides={
+                "slippage_soft_pause_enabled": True,
+                "slippage_soft_pause_window_fills": 10,
+                "slippage_soft_pause_min_fills": 5,
+                "slippage_soft_pause_p95_bps": Decimal("10"),
+            }
+        )
+        ctrl._auto_calibration_fill_history = [
+            {"slippage_bps": Decimal("1")},
+            {"slippage_bps": Decimal("2")},
+            {"slippage_bps": Decimal("3")},
+            {"slippage_bps": Decimal("12")},
+            {"slippage_bps": Decimal("25")},
+            {"slippage_bps": Decimal("40")},
+        ]
+        ss = _make_spread_state(turnover_x=Decimal("1.0"))
+        reasons, hard, _, _ = EppV24Controller._evaluate_all_risk(
+            ctrl, ss, Decimal("0.5"), Decimal("1000"), Decimal("100"), _make_market(),
+        )
+        assert "slippage_soft_pause" in reasons
+        assert hard is False
+
+    def test_selective_quote_soft_pause_reason_when_quality_blocked(self):
+        ctrl = _make_risk_ctrl()
+        ctrl._selective_quote_state = "blocked"
+        ss = _make_spread_state(turnover_x=Decimal("1.0"))
+
+        reasons, hard, _, _ = EppV24Controller._evaluate_all_risk(
+            ctrl, ss, Decimal("0.5"), Decimal("1000"), Decimal("100"), _make_market(),
+        )
+
+        assert "selective_quote_soft_pause" in reasons
+        assert hard is False
+
 
 # ===================================================================
 # 4. did_fill_order — fill edge EWMA & adverse counter  (4 tests)
@@ -814,6 +1410,71 @@ class TestDidFillOrder:
         EppV24Controller.did_fill_order(ctrl, ev)
 
         assert ctrl._adverse_fill_count == 0
+
+    def test_probe_fill_is_excluded_from_strategy_accounting(self):
+        """probe-ord fills should be logged but not mutate strategy state."""
+        ctrl = _make_fill_ctrl(mid=Decimal("50000"))
+        ctrl._auto_calibration_record_fill = MagicMock()
+        ctrl._save_daily_state = MagicMock()
+        ev = _make_fill_event(
+            price=Decimal("50010"),
+            amount=Decimal("0.02"),
+            trade_type_name="buy",
+            order_id="probe-ord-12345",
+        )
+        ev.trade_fee.fee_amount_in_token.return_value = Decimal("0.7")
+
+        EppV24Controller.did_fill_order(ctrl, ev)
+
+        # Probe fills should not affect position/PnL/fill-age state.
+        assert ctrl._position_base == _ZERO
+        assert ctrl._realized_pnl_today == _ZERO
+        assert not hasattr(ctrl, "_last_fill_ts")
+        # Turnover/fill-risk counters must ignore probe fills.
+        assert ctrl._fills_count_today == 0
+        assert ctrl._traded_notional_today == _ZERO
+        assert ctrl._fees_paid_today_quote == _ZERO
+        assert ctrl._fill_edge_ewma is None
+        assert ctrl._fill_count_for_kelly == 0
+        ctrl._auto_calibration_record_fill.assert_not_called()
+        ctrl._save_daily_state.assert_not_called()
+        ctrl._csv.log_fill.assert_called_once()
+
+    def test_regular_fill_still_updates_turnover_and_fill_counters(self):
+        """Non-probe fills must continue updating all risk counters."""
+        ctrl = _make_fill_ctrl(mid=Decimal("50000"))
+        ev = _make_fill_event(
+            price=Decimal("50000"),
+            amount=Decimal("0.01"),
+            trade_type_name="buy",
+            order_id="pe-test-1",
+        )
+        ev.trade_fee.fee_amount_in_token.return_value = Decimal("0.5")
+
+        EppV24Controller.did_fill_order(ctrl, ev)
+
+        assert ctrl._fills_count_today == 1
+        assert ctrl._traded_notional_today == Decimal("500")
+        assert ctrl._fees_paid_today_quote == Decimal("0.5")
+
+    def test_duplicate_fill_event_is_ignored(self):
+        """Replayed identical fill events should not double-count accounting."""
+        ctrl = _make_fill_ctrl(mid=Decimal("50000"))
+        ev = _make_fill_event(
+            price=Decimal("50000"),
+            amount=Decimal("0.01"),
+            trade_type_name="buy",
+            order_id="dup_fill_order",
+        )
+        ev.trade_fee.fee_amount_in_token.return_value = Decimal("0.25")
+
+        EppV24Controller.did_fill_order(ctrl, ev)
+        EppV24Controller.did_fill_order(ctrl, ev)
+
+        assert ctrl._fills_count_today == 1
+        assert ctrl._traded_notional_today == Decimal("500")
+        assert ctrl._fees_paid_today_quote == Decimal("0.25")
+        ctrl._csv.log_fill.assert_called_once()
 
 
 # ===================================================================
@@ -892,11 +1553,17 @@ class TestDeriskForceMode:
             config=SimpleNamespace(
                 derisk_force_taker_after_s=60.0,
                 derisk_progress_reset_ratio=Decimal("0.05"),
+                derisk_force_taker_expectancy_guard_enabled=False,
+                derisk_force_taker_expectancy_window_fills=300,
+                derisk_force_taker_expectancy_min_taker_fills=40,
+                derisk_force_taker_expectancy_min_quote=Decimal("-0.02"),
+                derisk_force_taker_expectancy_override_base_mult=Decimal("10"),
             ),
             _position_base=Decimal("-1"),
             _derisk_cycle_started_ts=0.0,
             _derisk_cycle_start_abs_base=_ZERO,
             _derisk_force_taker=False,
+            _auto_calibration_fill_history=[],
             _recently_issued_levels={"buy_0": 1.0},
             _enqueue_force_derisk_executor_cancels=lambda: None,
         )
@@ -940,9 +1607,259 @@ class TestDeriskForceMode:
         assert ctrl._derisk_force_taker is False
         assert ctrl._derisk_cycle_started_ts == 0.0
 
+    def test_force_mode_requires_material_abs_position(self):
+        ctrl = self._ctrl()
+        ctrl.config.derisk_force_taker_min_base_mult = Decimal("2.0")
+        ctrl._position_base = Decimal("-0.0015")
+        ctrl._avg_entry_price = Decimal("50000")
+        ctrl.processed_data = {"reference_price": Decimal("50000")}
+        ctrl._min_base_amount = lambda _ref: Decimal("0.001")
+        active = EppV24Controller._update_derisk_force_mode(
+            ctrl, 100.0, True, {"base_pct_above_max"}
+        )
+        assert active is False
+        active = EppV24Controller._update_derisk_force_mode(
+            ctrl, 180.0, True, {"base_pct_above_max"}
+        )
+        assert active is False
+        assert ctrl._derisk_force_taker is False
+
+    def test_force_mode_blocked_by_negative_taker_expectancy(self):
+        ctrl = self._ctrl()
+        ctrl.config.derisk_force_taker_expectancy_guard_enabled = True
+        ctrl.config.derisk_force_taker_expectancy_window_fills = 20
+        ctrl.config.derisk_force_taker_expectancy_min_taker_fills = 3
+        ctrl.config.derisk_force_taker_expectancy_min_quote = Decimal("0.0")
+        ctrl._auto_calibration_fill_history = [
+            {"is_maker": False, "net_pnl_quote": Decimal("-0.30")},
+            {"is_maker": False, "net_pnl_quote": Decimal("-0.25")},
+            {"is_maker": False, "net_pnl_quote": Decimal("-0.10")},
+        ]
+        active = EppV24Controller._update_derisk_force_mode(
+            ctrl, 100.0, True, {"base_pct_above_max"}
+        )
+        assert active is False
+        active = EppV24Controller._update_derisk_force_mode(
+            ctrl, 180.0, True, {"base_pct_above_max"}
+        )
+        assert active is False
+        assert ctrl._derisk_force_taker is False
+        assert ctrl._derisk_force_taker_expectancy_guard_blocked is True
+        assert ctrl._derisk_force_taker_expectancy_guard_reason == "negative_taker_expectancy"
+
+    def test_force_mode_expectancy_guard_overridden_for_large_inventory(self):
+        ctrl = self._ctrl()
+        ctrl.config.derisk_force_taker_min_base_mult = Decimal("2.0")
+        ctrl.config.derisk_force_taker_expectancy_guard_enabled = True
+        ctrl.config.derisk_force_taker_expectancy_window_fills = 20
+        ctrl.config.derisk_force_taker_expectancy_min_taker_fills = 3
+        ctrl.config.derisk_force_taker_expectancy_min_quote = Decimal("0.0")
+        ctrl.config.derisk_force_taker_expectancy_override_base_mult = Decimal("3")
+        ctrl._position_base = Decimal("-1.0")
+        ctrl._avg_entry_price = Decimal("50000")
+        ctrl.processed_data = {"reference_price": Decimal("50000")}
+        ctrl._min_base_amount = lambda _ref: Decimal("0.1")
+        ctrl._auto_calibration_fill_history = [
+            {"is_maker": False, "net_pnl_quote": Decimal("-0.30")},
+            {"is_maker": False, "net_pnl_quote": Decimal("-0.25")},
+            {"is_maker": False, "net_pnl_quote": Decimal("-0.10")},
+        ]
+        EppV24Controller._update_derisk_force_mode(ctrl, 100.0, True, {"base_pct_above_max"})
+        active = EppV24Controller._update_derisk_force_mode(
+            ctrl, 180.0, True, {"base_pct_above_max"}
+        )
+        assert active is True
+        assert ctrl._derisk_force_taker is True
+        assert ctrl._derisk_force_taker_expectancy_guard_blocked is False
+        assert ctrl._derisk_force_taker_expectancy_guard_reason == "override_large_inventory"
+
+    def test_mixed_inventory_reasons_keep_force_timer_active(self):
+        ctrl = self._ctrl()
+        mixed_reasons = {"base_pct_above_max", "eod_close_pending"}
+        active = EppV24Controller._update_derisk_force_mode(
+            ctrl, 100.0, True, mixed_reasons
+        )
+        assert active is False
+        active = EppV24Controller._update_derisk_force_mode(
+            ctrl, 160.0, True, mixed_reasons
+        )
+        assert active is True
+        assert ctrl._derisk_force_taker is True
+
     def test_force_mode_skips_level_creation(self):
         ctrl = SimpleNamespace(_derisk_force_taker=True)
         assert EppV24Controller.get_levels_to_execute(ctrl) == []
+
+    def test_paper_open_orders_block_duplicate_level_creation(self):
+        open_buy = SimpleNamespace(side=SimpleNamespace(value="buy"), source_bot="bitget_perpetual")
+        engine = SimpleNamespace(open_orders=lambda: [open_buy])
+        connector = SimpleNamespace(
+            _paper_desk_v2=SimpleNamespace(_engines={"bitget:BTC-USDT:perp": engine}),
+            _paper_desk_v2_instrument_id=SimpleNamespace(key="bitget:BTC-USDT:perp"),
+        )
+        ctrl = SimpleNamespace(
+            _derisk_force_taker=False,
+            config=SimpleNamespace(
+                is_paper=True,
+                bot_mode="paper",
+                connector_name="bitget_perpetual",
+                max_active_executors=8,
+            ),
+            _runtime_levels=SimpleNamespace(
+                cooldown_time=8,
+                executor_refresh_time=120,
+                buy_spreads=[Decimal("0.001")],
+                sell_spreads=[Decimal("0.001")],
+            ),
+            market_data_provider=SimpleNamespace(time=lambda: 100.0),
+            _recently_issued_levels={},
+            executors_info=[],
+            filter_executors=lambda executors, filter_func: [],
+            get_not_active_levels_ids=lambda active_levels_ids: [
+                lid for lid in ["buy_0", "sell_0"] if lid not in active_levels_ids
+            ],
+            _connector=lambda: connector,
+            get_level_id_from_side=lambda side, level: ("buy" if "BUY" in str(side) else "sell") + f"_{level}",
+        )
+
+        assert EppV24Controller.get_levels_to_execute(ctrl) == ["sell_0"]
+
+    def test_paper_open_order_count_filters_to_controller_connector(self):
+        open_buy = SimpleNamespace(side=SimpleNamespace(value="buy"), source_bot="bitget_perpetual")
+        foreign_sell = SimpleNamespace(side=SimpleNamespace(value="sell"), source_bot="other_connector")
+        engine = SimpleNamespace(open_orders=lambda: [open_buy, foreign_sell])
+        connector = SimpleNamespace(
+            _paper_desk_v2=SimpleNamespace(_engines={"bitget:BTC-USDT:perp": engine}),
+            _paper_desk_v2_instrument_id=SimpleNamespace(key="bitget:BTC-USDT:perp"),
+        )
+        ctrl = SimpleNamespace(
+            config=SimpleNamespace(is_paper=True, bot_mode="paper", connector_name="bitget_perpetual"),
+            _connector=lambda: connector,
+            strategy=None,
+            _strategy=None,
+        )
+
+        assert EppV24Controller._paper_open_order_count(ctrl) == 1
+
+    def test_paper_inflight_accept_blocks_duplicate_level_reissue(self):
+        inflight_buy = SimpleNamespace(side=SimpleNamespace(value="buy"), source_bot="bitget_perpetual")
+        foreign_inflight_sell = SimpleNamespace(side=SimpleNamespace(value="sell"), source_bot="other_connector")
+        engine = SimpleNamespace(
+            open_orders=lambda: [],
+            _inflight=[
+                (101_000, "accept", inflight_buy),
+                (101_000, "accept", foreign_inflight_sell),
+            ],
+        )
+        connector = SimpleNamespace(
+            _paper_desk_v2=SimpleNamespace(_engines={"bitget:BTC-USDT:perp": engine}),
+            _paper_desk_v2_instrument_id=SimpleNamespace(key="bitget:BTC-USDT:perp"),
+        )
+        ctrl = SimpleNamespace(
+            _derisk_force_taker=False,
+            config=SimpleNamespace(
+                is_paper=True,
+                bot_mode="paper",
+                connector_name="bitget_perpetual",
+                max_active_executors=8,
+            ),
+            _runtime_levels=SimpleNamespace(
+                cooldown_time=8,
+                executor_refresh_time=120,
+                buy_spreads=[Decimal("0.001")],
+                sell_spreads=[Decimal("0.001")],
+            ),
+            market_data_provider=SimpleNamespace(time=lambda: 100.0),
+            _recently_issued_levels={},
+            executors_info=[],
+            filter_executors=lambda executors, filter_func: [],
+            get_not_active_levels_ids=lambda active_levels_ids: [
+                lid for lid in ["buy_0", "sell_0"] if lid not in active_levels_ids
+            ],
+            _connector=lambda: connector,
+            strategy=None,
+            _strategy=None,
+            get_level_id_from_side=lambda side, level: ("buy" if "BUY" in str(side) else "sell") + f"_{level}",
+        )
+
+        assert EppV24Controller._paper_open_order_count(ctrl) == 1
+        assert EppV24Controller.get_levels_to_execute(ctrl) == ["sell_0"]
+
+    def test_recently_issued_levels_expire_on_cooldown_not_refresh_window(self):
+        ctrl = SimpleNamespace(
+            _derisk_force_taker=False,
+            config=SimpleNamespace(is_paper=False, bot_mode="live", max_active_executors=8),
+            _runtime_levels=SimpleNamespace(
+                cooldown_time=8,
+                executor_refresh_time=120,
+                buy_spreads=[Decimal("0.001")],
+                sell_spreads=[Decimal("0.001")],
+            ),
+            market_data_provider=SimpleNamespace(time=lambda: 110.0),
+            _recently_issued_levels={"buy_0": 100.0},
+            executors_info=[],
+            filter_executors=lambda executors, filter_func: [],
+            get_not_active_levels_ids=lambda active_levels_ids: ["buy_0", "sell_0"],
+            get_level_id_from_side=lambda side, level: ("buy" if "BUY" in str(side) else "sell") + f"_{level}",
+        )
+
+        levels = EppV24Controller.get_levels_to_execute(ctrl)
+
+        assert levels == ["buy_0", "sell_0"]
+        assert ctrl._recently_issued_levels["buy_0"] == 110.0
+        assert ctrl._recently_issued_levels["sell_0"] == 110.0
+
+    def test_recently_issued_levels_still_block_inside_cooldown(self):
+        ctrl = SimpleNamespace(
+            _derisk_force_taker=False,
+            config=SimpleNamespace(is_paper=False, bot_mode="live", max_active_executors=8),
+            _runtime_levels=SimpleNamespace(
+                cooldown_time=8,
+                executor_refresh_time=120,
+                buy_spreads=[Decimal("0.001")],
+                sell_spreads=[Decimal("0.001")],
+            ),
+            market_data_provider=SimpleNamespace(time=lambda: 105.0),
+            _recently_issued_levels={"buy_0": 100.0},
+            executors_info=[],
+            filter_executors=lambda executors, filter_func: [],
+            get_not_active_levels_ids=lambda active_levels_ids: ["buy_0", "sell_0"],
+            get_level_id_from_side=lambda side, level: ("buy" if "BUY" in str(side) else "sell") + f"_{level}",
+        )
+
+        levels = EppV24Controller.get_levels_to_execute(ctrl)
+
+        assert levels == ["sell_0"]
+        assert ctrl._recently_issued_levels["buy_0"] == 100.0
+        assert ctrl._recently_issued_levels["sell_0"] == 105.0
+
+    def test_selective_reduced_mode_keeps_only_outermost_levels_per_side(self):
+        ctrl = SimpleNamespace(
+            _derisk_force_taker=False,
+            _selective_quote_state="reduced",
+            config=SimpleNamespace(
+                is_paper=False,
+                bot_mode="live",
+                max_active_executors=8,
+                selective_max_levels_per_side=1,
+            ),
+            _runtime_levels=SimpleNamespace(
+                cooldown_time=8,
+                executor_refresh_time=120,
+                buy_spreads=[Decimal("0.001"), Decimal("0.002")],
+                sell_spreads=[Decimal("0.001"), Decimal("0.002")],
+            ),
+            market_data_provider=SimpleNamespace(time=lambda: 105.0),
+            _recently_issued_levels={},
+            executors_info=[],
+            filter_executors=lambda executors, filter_func: [],
+            get_not_active_levels_ids=lambda active_levels_ids: ["buy_0", "buy_1", "sell_0", "sell_1"],
+            get_level_id_from_side=lambda side, level: ("buy" if "BUY" in str(side) else "sell") + f"_{level}",
+        )
+
+        levels = EppV24Controller.get_levels_to_execute(ctrl)
+
+        assert levels == ["buy_1", "sell_1"]
 
     def test_force_mode_allows_perp_market_rebalance(self):
         def _mk_rebalance(side, amount):
@@ -966,6 +1883,453 @@ class TestDeriskForceMode:
         action = EppV24Controller.check_position_rebalance(ctrl)
         assert action is not None
         assert action["amount"] == Decimal("0.003")
+
+    def test_rebalance_allowed_with_mixed_derisk_reasons_in_soft_pause(self):
+        def _mk_rebalance(side, amount):
+            return {"side": side, "amount": amount}
+
+        ctrl = SimpleNamespace(
+            config=SimpleNamespace(
+                connector_name="bitget_perpetual",
+                skip_rebalance=True,
+                position_rebalance_threshold_pct=Decimal("0.05"),
+            ),
+            _ops_guard=SimpleNamespace(
+                state=GuardState.SOFT_PAUSE,
+                reasons=["base_pct_above_max", "eod_close_pending"],
+            ),
+            _derisk_force_taker=False,
+            _position_base=Decimal("-0.003"),
+            processed_data={"reference_price": Decimal("66000")},
+            executors_info=[],
+            filter_executors=lambda executors, filter_func: [],
+            _runtime_required_base_amount=lambda _ref: Decimal("0"),
+            get_current_base_position=lambda: Decimal("0"),
+            create_position_rebalance_order=_mk_rebalance,
+        )
+        action = EppV24Controller.check_position_rebalance(ctrl)
+        assert action is not None
+        assert action["amount"] == Decimal("0.003")
+
+    def test_rebalance_allowed_for_inventory_flatten_in_hard_stop(self):
+        def _mk_rebalance(side, amount):
+            return {"side": side, "amount": amount}
+
+        ctrl = SimpleNamespace(
+            config=SimpleNamespace(
+                connector_name="bitget_perpetual",
+                skip_rebalance=True,
+                position_rebalance_threshold_pct=Decimal("0.05"),
+            ),
+            _ops_guard=SimpleNamespace(
+                state=GuardState.HARD_STOP,
+                reasons=["base_pct_above_max", "daily_loss_hard_limit", "eod_close_pending"],
+            ),
+            _derisk_force_taker=False,
+            _position_base=Decimal("-0.003"),
+            processed_data={"reference_price": Decimal("66000")},
+            executors_info=[],
+            filter_executors=lambda executors, filter_func: [],
+            _runtime_required_base_amount=lambda _ref: Decimal("0"),
+            get_current_base_position=lambda: Decimal("0"),
+            create_position_rebalance_order=_mk_rebalance,
+        )
+        action = EppV24Controller.check_position_rebalance(ctrl)
+        assert action is not None
+        assert action["amount"] == Decimal("0.003")
+
+    def test_rebalance_allowed_in_hard_stop_even_without_inventory_reason(self):
+        def _mk_rebalance(side, amount):
+            return {"side": side, "amount": amount}
+
+        ctrl = SimpleNamespace(
+            config=SimpleNamespace(
+                connector_name="bitget_perpetual",
+                skip_rebalance=True,
+                position_rebalance_threshold_pct=Decimal("0.05"),
+            ),
+            _ops_guard=SimpleNamespace(
+                state=GuardState.HARD_STOP,
+                reasons=["daily_loss_hard_limit"],
+            ),
+            _derisk_force_taker=False,
+            _position_base=Decimal("-0.003"),
+            processed_data={"reference_price": Decimal("66000")},
+            executors_info=[],
+            filter_executors=lambda executors, filter_func: [],
+            _runtime_required_base_amount=lambda _ref: Decimal("0"),
+            get_current_base_position=lambda: Decimal("0"),
+            create_position_rebalance_order=_mk_rebalance,
+        )
+        action = EppV24Controller.check_position_rebalance(ctrl)
+        assert action is not None
+        assert action["amount"] == Decimal("0.003")
+
+    def test_perp_rebalance_targets_signed_net_exposure_not_sell_ladder_inventory(self):
+        def _mk_rebalance(side, amount):
+            return {"side": side, "amount": amount}
+
+        ctrl = SimpleNamespace(
+            config=SimpleNamespace(
+                connector_name="bitget_perpetual",
+                skip_rebalance=True,
+                position_rebalance_threshold_pct=Decimal("0.05"),
+            ),
+            _ops_guard=SimpleNamespace(
+                state=GuardState.SOFT_PAUSE,
+                reasons=["base_pct_above_max"],
+            ),
+            _derisk_force_taker=False,
+            _position_base=Decimal("0.003"),
+            processed_data={
+                "reference_price": Decimal("66000"),
+                "equity_quote": Decimal("1000"),
+                "target_net_base_pct": Decimal("0"),
+            },
+            executors_info=[],
+            filter_executors=lambda executors, filter_func: [],
+            _runtime_required_base_amount=lambda _ref: Decimal("0.0005"),
+            get_current_base_position=lambda: Decimal("0"),
+            create_position_rebalance_order=_mk_rebalance,
+        )
+        action = EppV24Controller.check_position_rebalance(ctrl)
+        assert action is not None
+        assert action["side"] is not None
+        assert action["amount"] == Decimal("0.003")
+
+    def test_rebalance_skips_small_residual_position_below_min_floor(self):
+        def _mk_rebalance(side, amount):
+            return {"side": side, "amount": amount}
+
+        ctrl = SimpleNamespace(
+            config=SimpleNamespace(
+                connector_name="bitget_perpetual",
+                skip_rebalance=True,
+                position_rebalance_threshold_pct=Decimal("0.05"),
+            ),
+            _ops_guard=SimpleNamespace(
+                state=GuardState.HARD_STOP,
+                reasons=["daily_loss_hard_limit"],
+            ),
+            _derisk_force_taker=False,
+            _position_base=Decimal("0.001"),
+            processed_data={"reference_price": Decimal("66000")},
+            executors_info=[],
+            filter_executors=lambda executors, filter_func: [],
+            _runtime_required_base_amount=lambda _ref: Decimal("0"),
+            _min_base_amount=lambda _ref: Decimal("0.002"),
+            get_current_base_position=lambda: Decimal("0"),
+            create_position_rebalance_order=_mk_rebalance,
+        )
+        action = EppV24Controller.check_position_rebalance(ctrl)
+        assert action is None
+
+    def test_rebalance_skips_small_residual_position_below_min_floor_multiplier(self):
+        def _mk_rebalance(side, amount):
+            return {"side": side, "amount": amount}
+
+        ctrl = SimpleNamespace(
+            config=SimpleNamespace(
+                connector_name="bitget_perpetual",
+                skip_rebalance=True,
+                position_rebalance_threshold_pct=Decimal("0.05"),
+                position_rebalance_min_base_mult=Decimal("5.0"),
+            ),
+            _ops_guard=SimpleNamespace(
+                state=GuardState.HARD_STOP,
+                reasons=["daily_loss_hard_limit"],
+            ),
+            _derisk_force_taker=False,
+            _position_base=Decimal("0.0004"),
+            processed_data={"reference_price": Decimal("66000")},
+            executors_info=[],
+            filter_executors=lambda executors, filter_func: [],
+            _runtime_required_base_amount=lambda _ref: Decimal("0"),
+            _min_base_amount=lambda _ref: Decimal("0.0001"),
+            get_current_base_position=lambda: Decimal("0"),
+            create_position_rebalance_order=_mk_rebalance,
+        )
+        action = EppV24Controller.check_position_rebalance(ctrl)
+        assert action is None
+
+    def test_position_rebalance_floor_scales_with_multiplier(self):
+        ctrl = SimpleNamespace(
+            config=SimpleNamespace(position_rebalance_min_base_mult=Decimal("5.0")),
+            _min_base_amount=lambda _ref: Decimal("0.0001"),
+        )
+        floor = EppV24Controller._position_rebalance_floor(ctrl, Decimal("66000"))
+        assert floor == Decimal("0.0005")
+
+
+class TestSizingQuantizationAlignment:
+    def test_quantize_amount_respects_paper_spec_min_lot(self):
+        spec = SimpleNamespace(min_quantity=Decimal("0.001"), size_increment=Decimal("0.001"))
+        desk = SimpleNamespace(
+            _specs={"bitget:BTC-USDT:perp": spec},
+            _engines={},
+        )
+        connector = SimpleNamespace(
+            _paper_desk_v2=desk,
+            _paper_desk_v2_instrument_id=SimpleNamespace(key="bitget:BTC-USDT:perp"),
+        )
+        rule = SimpleNamespace(
+            min_order_size=Decimal("0.0001"),
+            min_base_amount_increment=Decimal("0.0001"),
+        )
+        ctrl = SimpleNamespace(
+            config=SimpleNamespace(is_paper=True, connector_name="bitget_perpetual"),
+            _connector=lambda: connector,
+            _trading_rule=lambda: rule,
+            strategy=None,
+            _strategy=None,
+        )
+
+        q_amount = EppV24Controller._quantize_amount(ctrl, Decimal("0.0001"))
+        assert q_amount == Decimal("0.001")
+
+    def test_quantize_amount_uses_paper_spec_when_trading_rule_missing(self):
+        spec = SimpleNamespace(min_quantity=Decimal("0.001"), size_increment=Decimal("0.001"))
+        desk = SimpleNamespace(
+            _specs={"bitget:BTC-USDT:perp": spec},
+            _engines={},
+        )
+        connector = SimpleNamespace(
+            _paper_desk_v2=desk,
+            _paper_desk_v2_instrument_id=SimpleNamespace(key="bitget:BTC-USDT:perp"),
+        )
+        ctrl = SimpleNamespace(
+            config=SimpleNamespace(is_paper=True, connector_name="bitget_perpetual"),
+            _connector=lambda: connector,
+            _trading_rule=lambda: None,
+            strategy=None,
+            _strategy=None,
+        )
+
+        q_amount = EppV24Controller._quantize_amount(ctrl, Decimal("0.0001"))
+        assert q_amount == Decimal("0.001")
+
+    def test_project_total_amount_quote_scales_min_base_by_levels(self):
+        ctrl = SimpleNamespace(
+            config=SimpleNamespace(
+                max_order_notional_quote=Decimal("250"),
+                max_total_notional_quote=Decimal("1000"),
+            ),
+            _min_notional_quote=lambda: Decimal("5"),
+            _min_base_amount=lambda _mid: Decimal("0.001"),
+        )
+
+        projected = EppV24Controller._project_total_amount_quote(
+            ctrl,
+            equity_quote=Decimal("1000"),
+            mid=Decimal("67000"),
+            quote_size_pct=Decimal("0.001"),
+            total_levels=2,
+            size_mult=Decimal("1"),
+        )
+        assert projected == Decimal("134")
+
+
+class TestExecutorRefreshResilience:
+    @staticmethod
+    def _make_ctrl(
+        *,
+        now: float,
+        reconnect_cooldown_until: float,
+        reconnect_grace_until: float,
+        is_paper: bool = False,
+        paper_executor_min_lifetime_s: int = 120,
+        order_ack_timeout_s: int = 10,
+        stale_timestamp: float = 0.0,
+        stuck_timestamp: Optional[float] = None,
+    ):
+        if stuck_timestamp is None:
+            stuck_timestamp = now - 15.0
+        stale_ex = SimpleNamespace(id="ex-stale", is_trading=False, is_active=True, timestamp=0.0)
+        stale_ex.timestamp = stale_timestamp
+        stuck_ex = SimpleNamespace(id="ex-stuck", is_trading=False, is_active=True, timestamp=stuck_timestamp)
+        ctrl = SimpleNamespace(
+            config=SimpleNamespace(
+                id="ctrl_1",
+                order_ack_timeout_s=order_ack_timeout_s,
+                is_paper=is_paper,
+                paper_executor_min_lifetime_s=paper_executor_min_lifetime_s,
+            ),
+            _runtime_levels=SimpleNamespace(executor_refresh_time=40),
+            market_data_provider=SimpleNamespace(time=lambda: now),
+            executors_info=[stale_ex, stuck_ex],
+            filter_executors=lambda executors, filter_func: [e for e in executors if filter_func(e)],
+            _pending_stale_cancel_actions=[],
+            _consecutive_stuck_ticks=7,
+            _reconnect_cooldown_until=reconnect_cooldown_until,
+            _book_reconnect_grace_until_ts=reconnect_grace_until,
+        )
+        ctrl._in_reconnect_refresh_suppression_window = _types_mod.MethodType(
+            EppV24Controller._in_reconnect_refresh_suppression_window, ctrl
+        )
+        return ctrl
+
+    def test_refresh_actions_suppressed_during_reconnect_window(self):
+        ctrl = self._make_ctrl(now=100.0, reconnect_cooldown_until=130.0, reconnect_grace_until=0.0)
+        actions = EppV24Controller.executors_to_refresh(ctrl)
+        assert actions == []
+        assert ctrl._consecutive_stuck_ticks == 0
+
+    def test_refresh_actions_resume_after_reconnect_window(self):
+        ctrl = self._make_ctrl(now=100.0, reconnect_cooldown_until=0.0, reconnect_grace_until=0.0)
+        ctrl._consecutive_stuck_ticks = 0
+        actions = EppV24Controller.executors_to_refresh(ctrl)
+        assert len(actions) == 2
+        assert ctrl._consecutive_stuck_ticks == 1
+
+    def test_paper_mode_uses_min_lifetime_for_stale_refresh(self):
+        # Stale candidate age=60s: stale under refresh_s=40, but not stale under paper min-lifetime=120.
+        ctrl = self._make_ctrl(
+            now=100.0,
+            reconnect_cooldown_until=0.0,
+            reconnect_grace_until=0.0,
+            is_paper=True,
+            paper_executor_min_lifetime_s=120,
+            order_ack_timeout_s=90,
+            stale_timestamp=40.0,
+            stuck_timestamp=85.0,
+        )
+        ctrl._consecutive_stuck_ticks = 0
+        actions = EppV24Controller.executors_to_refresh(ctrl)
+        assert actions == []
+        assert ctrl._consecutive_stuck_ticks == 0
+
+    def test_paper_mode_cancels_stale_open_orders_during_refresh(self):
+        canceled: list[str] = []
+        open_sell = SimpleNamespace(
+            order_id="paper_v2_200",
+            side=SimpleNamespace(value="sell"),
+            source_bot="bitget_perpetual",
+            created_at_ns=20_000_000_000,
+        )
+        engine = SimpleNamespace(open_orders=lambda: [open_sell])
+        desk = SimpleNamespace(
+            _engines={"bitget:BTC-USDT:perp": engine},
+            cancel_order=lambda iid, order_id: canceled.append(f"{iid.key}:{order_id}") or object(),
+        )
+        connector = SimpleNamespace(
+            _paper_desk_v2=desk,
+            _paper_desk_v2_instrument_id=SimpleNamespace(key="bitget:BTC-USDT:perp"),
+        )
+        ctrl = self._make_ctrl(
+            now=100.0,
+            reconnect_cooldown_until=0.0,
+            reconnect_grace_until=0.0,
+            is_paper=True,
+            paper_executor_min_lifetime_s=0,
+            order_ack_timeout_s=90,
+            stale_timestamp=0.0,
+            stuck_timestamp=85.0,
+        )
+        ctrl.config.paper_state_reconcile_enabled = True
+        ctrl.config.connector_name = "bitget_perpetual"
+        ctrl.config.trading_pair = "BTC-USDT"
+        ctrl._connector = lambda: connector
+        ctrl.strategy = None
+        ctrl._strategy = None
+        ctrl._recently_issued_levels = {"sell_0": 12.0}
+        ctrl._consecutive_stuck_ticks = 0
+
+        actions = EppV24Controller.executors_to_refresh(ctrl)
+
+        assert len(actions) == 1
+        assert canceled == ["bitget:BTC-USDT:perp:paper_v2_200"]
+        assert ctrl._recently_issued_levels == {}
+        assert ctrl._consecutive_stuck_ticks == 0
+
+
+class TestRestartFillAgeHydration:
+    def test_hydrate_seen_fill_order_ids_from_csv_restores_last_fill_ts(self, tmp_path):
+        fills_path = tmp_path / "fills.csv"
+        fills_path.write_text(
+            "\n".join(
+                [
+                    "ts,bot_variant,exchange,trading_pair,side,price,amount_base,notional_quote,fee_quote,order_id,state,mid_ref,expected_spread_pct,adverse_drift_30s,fee_source,is_maker,realized_pnl_quote",
+                    "2026-03-06T18:10:00+00:00,a,bitget_perpetual,BTC-USDT,buy,68000,0.001,68,0.01,ord-1,running,68000,0.004,0,fee,true,0",
+                    "2026-03-06T18:12:30+00:00,a,bitget_perpetual,BTC-USDT,sell,68100,0.001,68.1,0.01,ord-2,running,68100,0.004,0,fee,true,0",
+                ]
+            ),
+            encoding="utf-8",
+        )
+        ctrl = SimpleNamespace(
+            _fills_csv_path=lambda: fills_path,
+            _seen_fill_order_ids_cap=10,
+            _seen_fill_order_ids=set(),
+            _seen_fill_order_ids_fifo=[],
+            _last_fill_ts=0.0,
+        )
+
+        EppV24Controller._hydrate_seen_fill_order_ids_from_csv(ctrl)
+
+        assert ctrl._seen_fill_order_ids == {"ord-1", "ord-2"}
+        assert ctrl._seen_fill_order_ids_fifo == ["ord-1", "ord-2"]
+        assert ctrl._last_fill_ts == pytest.approx(
+            datetime(2026, 3, 6, 18, 12, 30, tzinfo=timezone.utc).timestamp()
+        )
+
+    def test_load_daily_state_restores_last_fill_ts(self):
+        today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+        ctrl = SimpleNamespace(
+            _state_store=SimpleNamespace(
+                load=lambda: {
+                    "day_key": today,
+                    "equity_open": "1000",
+                    "equity_peak": "1005",
+                    "traded_notional": "123",
+                    "fills_count": 7,
+                    "fees_paid": "0.5",
+                    "funding_cost": "0",
+                    "realized_pnl": "1.2",
+                    "last_fill_ts": 1772822127.942416,
+                    "position_base": "0.001",
+                    "avg_entry_price": "68442.6",
+                }
+            ),
+            _last_fill_ts=0.0,
+            _daily_key=None,
+            _daily_equity_open=None,
+            _daily_equity_peak=None,
+            _traded_notional_today=Decimal("0"),
+            _fills_count_today=0,
+            _fees_paid_today_quote=Decimal("0"),
+            _funding_cost_today_quote=Decimal("0"),
+            _realized_pnl_today=Decimal("0"),
+            _position_base=Decimal("0"),
+            _avg_entry_price=Decimal("0"),
+        )
+
+        EppV24Controller._load_daily_state(ctrl)
+
+        assert ctrl._last_fill_ts == pytest.approx(1772822127.942416)
+        assert ctrl._fills_count_today == 7
+        assert ctrl._position_base == Decimal("0.001")
+
+    def test_save_daily_state_persists_last_fill_ts(self):
+        save_mock = MagicMock()
+        ctrl = SimpleNamespace(
+            market_data_provider=SimpleNamespace(time=lambda: 1234.5),
+            _state_store=SimpleNamespace(save=save_mock),
+            _daily_key="2026-03-06",
+            _daily_equity_open=Decimal("1000"),
+            _daily_equity_peak=Decimal("1005"),
+            _traded_notional_today=Decimal("123"),
+            _fills_count_today=7,
+            _fees_paid_today_quote=Decimal("0.5"),
+            _funding_cost_today_quote=Decimal("0"),
+            _realized_pnl_today=Decimal("1.2"),
+            _last_fill_ts=1772822127.942416,
+            _position_base=Decimal("0.001"),
+            _avg_entry_price=Decimal("68442.6"),
+        )
+
+        EppV24Controller._save_daily_state(ctrl, force=True)
+
+        saved_data = save_mock.call_args.args[0]
+        assert saved_data["last_fill_ts"] == 1772822127.942416
 
 
 # ===================================================================
@@ -1156,6 +2520,52 @@ class TestPnlGovernor:
         assert ctrl._pnl_governor_active is True
         assert ctrl._pnl_governor_edge_relax_bps == Decimal("3")
 
+    def test_stale_fill_relaxation_reduces_edge_floor_without_negative_fill_edge(self):
+        ctrl = _make_spread_ctrl(
+            equity=Decimal("1000"),
+            config_overrides={
+                "min_net_edge_bps": 10,
+                "pnl_governor_enabled": False,
+                "adaptive_fill_target_age_s": 900,
+                "adaptive_edge_relax_max_bps": Decimal("8"),
+            },
+        )
+        now_ts = datetime(2026, 1, 1, 12, 0, 0, tzinfo=timezone.utc).timestamp()
+        ctrl._last_fill_ts = now_ts - 1800.0
+        ctrl._market_spread_bps_ewma = _ZERO
+        ctrl._band_pct_ewma = _ZERO
+
+        effective_min_edge_pct, _floor_pct, _vol_ratio = EppV24Controller._compute_adaptive_spread_knobs(
+            ctrl, now_ts, Decimal("1000")
+        )
+
+        assert effective_min_edge_pct is not None
+        assert effective_min_edge_pct == Decimal("0.0002")
+
+    def test_stale_fill_relaxation_blocked_when_fill_edge_below_cost_floor(self):
+        ctrl = _make_spread_ctrl(
+            equity=Decimal("1000"),
+            fill_edge_ewma=Decimal("-20"),
+            config_overrides={
+                "min_net_edge_bps": 10,
+                "pnl_governor_enabled": False,
+                "adaptive_fill_target_age_s": 900,
+                "adaptive_edge_relax_max_bps": Decimal("8"),
+                "slippage_est_pct": Decimal("0.0005"),
+            },
+        )
+        now_ts = datetime(2026, 1, 1, 12, 0, 0, tzinfo=timezone.utc).timestamp()
+        ctrl._last_fill_ts = now_ts - 1800.0
+        ctrl._market_spread_bps_ewma = _ZERO
+        ctrl._band_pct_ewma = _ZERO
+
+        effective_min_edge_pct, _floor_pct, _vol_ratio = EppV24Controller._compute_adaptive_spread_knobs(
+            ctrl, now_ts, Decimal("1000")
+        )
+
+        assert effective_min_edge_pct is not None
+        assert effective_min_edge_pct == Decimal("0.001")
+
     def test_does_not_relax_when_ahead_target(self):
         ctrl = _make_spread_ctrl(
             equity=Decimal("1000"),
@@ -1180,6 +2590,34 @@ class TestPnlGovernor:
         assert effective_min_edge_pct == Decimal("0.001")
         assert ctrl._pnl_governor_active is False
         assert ctrl._pnl_governor_edge_relax_bps == _ZERO
+
+    def test_does_not_relax_when_fill_edge_below_cost_floor(self):
+        ctrl = _make_spread_ctrl(
+            equity=Decimal("1000"),
+            fill_edge_ewma=Decimal("-20"),
+            config_overrides={
+                "min_net_edge_bps": 10,
+                "pnl_governor_enabled": True,
+                "daily_pnl_target_quote": Decimal("100"),
+                "pnl_governor_activation_buffer_pct": Decimal("0.0"),
+                "pnl_governor_max_edge_bps_cut": Decimal("6"),
+                "slippage_est_pct": Decimal("0.0005"),
+            },
+        )
+        now_ts = datetime(2026, 1, 1, 12, 0, 0, tzinfo=timezone.utc).timestamp()
+        ctrl._last_fill_ts = now_ts - float(ctrl.config.adaptive_fill_target_age_s)
+        ctrl._market_spread_bps_ewma = _ZERO
+        ctrl._band_pct_ewma = _ZERO
+
+        effective_min_edge_pct, _floor_pct, _vol_ratio = EppV24Controller._compute_adaptive_spread_knobs(
+            ctrl, now_ts, Decimal("1000")
+        )
+
+        assert effective_min_edge_pct is not None
+        assert effective_min_edge_pct == Decimal("0.001")
+        assert ctrl._pnl_governor_active is False
+        assert ctrl._pnl_governor_edge_relax_bps == _ZERO
+        assert ctrl._pnl_governor_activation_reason == "fill_edge_below_cost_floor"
 
     def test_target_pct_migrates_to_quote_target(self):
         ctrl = _make_spread_ctrl(
@@ -1260,6 +2698,32 @@ class TestPnlGovernor:
             ctrl, equity_quote=Decimal("1000"), turnover_x=Decimal("5.0")
         )
         assert mult_turnover == _ONE
+
+    def test_dynamic_size_boost_blocked_when_fill_edge_below_cost_floor(self):
+        ctrl = _make_spread_ctrl(
+            equity=Decimal("1000"),
+            fill_edge_ewma=Decimal("-20"),
+            config_overrides={
+                "pnl_governor_enabled": True,
+                "pnl_governor_max_size_boost_pct": Decimal("0.30"),
+                "pnl_governor_size_activation_deficit_pct": Decimal("0.10"),
+                "pnl_governor_turnover_soft_cap_x": Decimal("4.0"),
+                "pnl_governor_drawdown_soft_cap_pct": Decimal("0.02"),
+                "margin_ratio_soft_pause_pct": Decimal("0.20"),
+                "slippage_est_pct": Decimal("0.0005"),
+            },
+        )
+        ctrl._pnl_governor_deficit_ratio = Decimal("0.60")
+        ctrl._daily_equity_peak = Decimal("1000")
+        ctrl._daily_equity_open = Decimal("1000")
+        ctrl._margin_ratio = Decimal("0.40")
+
+        mult = EppV24Controller._compute_pnl_governor_size_mult(
+            ctrl, equity_quote=Decimal("1000"), turnover_x=Decimal("1.0")
+        )
+        assert mult == _ONE
+        assert ctrl._pnl_governor_size_boost_active is False
+        assert ctrl._pnl_governor_size_boost_reason == "fill_edge_below_cost_floor"
 
     def test_spread_competitiveness_cap(self):
         ctrl = _make_spread_ctrl(config_overrides={"max_quote_to_market_spread_mult": Decimal("1.2")})
@@ -1668,6 +3132,14 @@ class TestPortfolioRiskGuard:
 
 
 class TestPaperEquityStateReconciliation:
+    def test_paper_reset_state_on_startup_enabled_reads_nested_config(self):
+        cfg = _make_config(
+            is_paper=True,
+            paper_engine=SimpleNamespace(paper_reset_state_on_startup=True),
+        )
+
+        assert _paper_reset_state_on_startup_enabled(cfg) is True
+
     def test_compute_equity_prefers_paper_portfolio_equity_for_perp_risk(self):
         ctrl = SimpleNamespace()
         ctrl.config = _make_config(
@@ -1690,6 +3162,33 @@ class TestPaperEquityStateReconciliation:
         assert equity == Decimal("500")
         assert abs(base_pct_gross - Decimal("0.24")) < Decimal("0.000001")
         assert abs(base_pct_net - Decimal("0.24")) < Decimal("0.000001")
+
+    def test_compute_equity_collapses_oneway_perp_gross_to_net_exposure(self):
+        ctrl = SimpleNamespace()
+        ctrl.config = _make_config(
+            is_paper=True,
+            paper_use_portfolio_equity_for_risk=True,
+            position_mode="ONEWAY",
+        )
+        ctrl._is_perp = True
+        ctrl._position_base = Decimal("0.001")
+        ctrl._position_gross_base = Decimal("0.015")
+        ctrl._get_balances = lambda: (Decimal("0.001"), Decimal("200"))
+        ctrl._paper_portfolio_snapshot = lambda mid: {
+            "position_base": Decimal("0.001"),
+            "position_gross_base": Decimal("0.015"),
+            "position_mode": "ONEWAY",
+            "equity_quote": Decimal("1000"),
+        }
+        ctrl._refresh_margin_ratio = lambda mid, pos_base, quote_bal, gross_base=None: None
+
+        equity, base_pct_gross, base_pct_net = EppV24Controller._compute_equity_and_base_pcts(
+            ctrl, Decimal("60000")
+        )
+
+        assert equity == Decimal("1000")
+        assert abs(base_pct_gross - Decimal("0.06")) < Decimal("0.000001")
+        assert abs(base_pct_net - Decimal("0.06")) < Decimal("0.000001")
 
     def test_sync_from_paper_desk_reconciles_realized_state_and_persists(self):
         ctrl = SimpleNamespace()

@@ -130,6 +130,27 @@ def _latest_harness_run_id(root: Path) -> str:
         return ""
 
 
+def _critical_alert_count_from_steps(steps: List[Dict[str, object]]) -> int:
+    critical_steps = {
+        "compose_start_paper_exchange",
+        "recreate_bot",
+        "paper_exchange_preflight",
+        "paper_exchange_load_harness",
+        "paper_exchange_load_check",
+    }
+    failures = 0
+    for step in steps:
+        if not isinstance(step, dict):
+            continue
+        name = str(step.get("name", "")).strip()
+        if name not in critical_steps:
+            continue
+        if bool(step.get("pass", False)):
+            continue
+        failures += 1
+    return failures
+
+
 def run_canary(
     *,
     root: Path,
@@ -143,6 +164,9 @@ def run_canary(
     load_harness_min_commands: int,
     load_check_lookback_sec: int,
     load_check_min_window_sec: int,
+    target_canary_duration_hours: float,
+    active_mode_rollout_concurrency_bots: int,
+    service_only_mode: str,
 ) -> int:
     env_path = root / "env" / ".env"
     compose_path = root / "compose" / "docker-compose.yml"
@@ -180,6 +204,9 @@ def run_canary(
             "PAPER_EXCHANGE_ALLOWED_COMMAND_PRODUCERS": "hb_bridge_active_adapter",
             "PAPER_EXCHANGE_PERSIST_SYNC_STATE_RESULTS": "false",
         }
+        service_only_mode_norm = str(service_only_mode or "preserve").strip().lower()
+        if service_only_mode_norm in {"true", "false"}:
+            updates["PAPER_EXCHANGE_SERVICE_ONLY"] = service_only_mode_norm
         updated = _upsert_env_text(original, updates)
         if updated != original and not dry_run:
             stamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
@@ -355,6 +382,13 @@ def run_canary(
             rc_final = 2
 
     status = "pass" if rc_final == 0 else "fail"
+    critical_alert_count = _critical_alert_count_from_steps(steps)
+    if critical_alert_count == 0 and status != "pass":
+        # Fail-closed default for legacy/missing step diagnostics.
+        critical_alert_count = 1
+    rollout_concurrency_bots = max(0, int(active_mode_rollout_concurrency_bots))
+    if str(mode).strip().lower() in {"active", "auto"}:
+        rollout_concurrency_bots = max(1, rollout_concurrency_bots)
     report = {
         "ts_utc": _utc_now(),
         "status": status,
@@ -363,6 +397,10 @@ def run_canary(
         "apply_env": bool(apply_env),
         "run_gates": bool(run_gates),
         "dry_run": bool(dry_run),
+        "target_canary_duration_hours": float(max(0.0, float(target_canary_duration_hours))),
+        "canary_critical_alert_count": float(max(0, int(critical_alert_count))),
+        "active_mode_rollout_concurrency_bots": float(rollout_concurrency_bots),
+        "service_only_mode": str(service_only_mode or "preserve"),
         "env_path": str(env_path),
         "compose_path": str(compose_path),
         "env_backup_path": env_backup_path,
@@ -398,7 +436,7 @@ def main() -> int:
     parser.add_argument(
         "--mode",
         default="shadow",
-        choices=["disabled", "shadow", "active"],
+        choices=["disabled", "shadow", "active", "auto"],
         help="Paper exchange mode applied for the selected bot.",
     )
     parser.add_argument(
@@ -460,6 +498,27 @@ def main() -> int:
         default=10,
         help="Minimum command window enforced by canary load checker.",
     )
+    parser.add_argument(
+        "--target-canary-duration-hours",
+        type=float,
+        default=24.0,
+        help="Operational canary qualification duration target (used for rollout evidence).",
+    )
+    parser.add_argument(
+        "--active-rollout-concurrency-bots",
+        type=int,
+        default=1,
+        help="Declared max concurrently active bots during rollout stage.",
+    )
+    parser.add_argument(
+        "--service-only-mode",
+        default="preserve",
+        choices=["preserve", "true", "false"],
+        help=(
+            "Optionally patch PAPER_EXCHANGE_SERVICE_ONLY in env/.env "
+            "(preserve keeps existing value)."
+        ),
+    )
     args = parser.parse_args()
 
     root = Path("/workspace/hbot") if Path("/.dockerenv").exists() else Path(__file__).resolve().parents[2]
@@ -475,6 +534,9 @@ def main() -> int:
         load_harness_min_commands=int(args.load_harness_min_commands),
         load_check_lookback_sec=int(args.load_check_lookback_sec),
         load_check_min_window_sec=int(args.load_check_min_window_sec),
+        target_canary_duration_hours=float(args.target_canary_duration_hours),
+        active_mode_rollout_concurrency_bots=int(args.active_rollout_concurrency_bots),
+        service_only_mode=str(args.service_only_mode).strip().lower(),
     )
 
 

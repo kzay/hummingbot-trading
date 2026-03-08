@@ -1,23 +1,23 @@
 {
-  "ts_utc": "2026-03-01T13:27:37.851779+00:00",
-  "status": "fail",
+  "ts_utc": "2026-03-03T19:07:41.665778+00:00",
+  "status": "pass",
   "checks": [
     {
       "name": "kill_switch_non_dry_run_config",
-      "pass": false,
-      "reason": "KILL_SWITCH_DRY_RUN not set to false",
+      "pass": true,
+      "reason": "KILL_SWITCH_DRY_RUN=false",
       "evidence_paths": [
         "F:\\Environement\\git-repo\\hummingbot_custo\\hbot\\env\\.env"
       ]
     },
     {
       "name": "kill_switch_execution_evidence",
-      "pass": false,
-      "reason": "non-dry-run kill switch evidence failed checks: non_dry_run,execution_status_ok",
+      "pass": true,
+      "reason": "non-dry-run kill switch evidence present and fresh",
       "evidence_paths": [
         "F:\\Environement\\git-repo\\hummingbot_custo\\hbot\\reports\\kill_switch\\latest.json",
         "F:\\Environement\\git-repo\\hummingbot_custo\\hbot\\reports\\ops\\kill_switch_non_dry_run_evidence_latest.json",
-        "F:\\Environement\\git-repo\\hummingbot_custo\\hbot\\reports\\ops\\kill_switch_non_dry_run_evidence_20260301T132737Z.json"
+        "F:\\Environement\\git-repo\\hummingbot_custo\\hbot\\reports\\ops\\kill_switch_non_dry_run_evidence_20260303T190741Z.json"
       ]
     },
     {

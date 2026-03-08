@@ -1,6 +1,6 @@
 # Incident Playbook 02 — Kill Switch Fired
 
-**Scenario:** `hbot-kill-switch` executed a cancel-all on the exchange. `reports/kill_switch/latest.json` shows `trigger: execution_intent` or `trigger: api` with `result.status: executed`.
+**Scenario:** `kzay-capital-kill-switch` executed a cancel-all on the exchange. `reports/kill_switch/latest.json` shows `trigger: execution_intent` or `trigger: api` with `result.status: executed`.
 
 ---
 
@@ -33,7 +33,7 @@
 
 4. **Check what triggered it:**
    ```bash
-   docker logs hbot-bot1 --tail 50 2>&1 | grep -E "HARD_STOP|kill_switch|guard"
+   docker logs kzay-capital-bot1 --tail 50 2>&1 | grep -E "HARD_STOP|kill_switch|guard"
    tail -5 hbot/data/bot1/logs/epp_v24/bot1_a/minute.csv
    ```
 
@@ -83,7 +83,7 @@ tail -20 hbot/data/bot1/logs/epp_v24/bot1_a/minute.csv | cut -d',' -f<risk_reaso
 ### Step 4: Validate kill switch credentials (live mode only)
 ```bash
 # Confirm kill switch has active API key
-docker exec hbot-kill-switch env | grep KILL_SWITCH
+docker exec kzay-capital-kill-switch env | grep KILL_SWITCH
 # KILL_SWITCH_API_KEY and KILL_SWITCH_SECRET must be non-empty
 # KILL_SWITCH_DRY_RUN must be false
 ```

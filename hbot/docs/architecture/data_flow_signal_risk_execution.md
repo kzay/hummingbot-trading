@@ -16,6 +16,11 @@ flowchart LR
   coord --> intent[hb.execution_intent.v1]
   intent --> ks[kill_switch_service]
   intent --> hb[HBIntentConsumer]
+  hb --> pe_cmd[hb.paper_exchange.command.v1]
+  pe_cmd --> pe[paper_exchange_service]
+  md --> pe
+  pe --> pe_evt[hb.paper_exchange.event.v1]
+  pe --> pe_hb[hb.paper_exchange.heartbeat.v1]
   hb --> audit[hb.audit.v1]
   hb --> dead[hb.dead_letter.v1]
 ```
@@ -77,6 +82,39 @@ epp_v2_4 controller          hb_bridge                    kill_switch_service
 - Previous guard state tracked per controller in `_prev_guard_states` dict.
 - `epp_v2_4.py` and `ops_guard.py` are not modified.
 
+## Paper Exchange Command Lifecycle (Shadow/Active)
+
+```
+HB adapter/bridge              paper_exchange_service                  downstream observers
+       |                                |                                      |
+       |-- xadd(hb.paper_exchange.command.v1) -------------------------------->|
+       |                                |                                      |
+       |                         validate scope/provenance/freshness           |
+       |                         run deterministic matcher/FSM                 |
+       |                                |                                      |
+       |<--------- xadd(hb.paper_exchange.event.v1) (processed/rejected) -----|
+       |                                |                                      |
+       |<-------- xadd(hb.paper_exchange.heartbeat.v1) -----------------------|
+       |                                |                                      |
+```
+
+**Contract rules:**
+- Command correctness is at-least-once + idempotency-key based.
+- Lifecycle states are deterministic and replayable (`accepted`, `working`,
+  `partially_filled`, `filled`, `cancelled`, `rejected`, `expired`).
+- IOC/FOK behavior is immediate-only and must not rest across snapshots.
+- Active mode requires startup sync completion before quote emission.
+
+## Promotion-Gate Linkage (Execution + Reliability)
+
+- `run_promotion_gates.py` evaluates:
+  - paper-exchange preflight and heartbeat freshness,
+  - threshold-input readiness (resolved/stale/missing diagnostics),
+  - quantitative paper-exchange thresholds.
+- `run_strict_promotion_cycle.py` stores operator-facing diagnostics in:
+  - `reports/promotion_gates/strict_cycle_latest.json`
+  - including `paper_exchange_threshold_diagnostics` and remediation hints.
+
 ## Sequencing Rules
 
 - Every derived event sets `correlation_id` = upstream `event_id`.
@@ -95,9 +133,13 @@ epp_v2_4 controller          hb_bridge                    kill_switch_service
 - Intent expiry → dead-letter.
 - Redis outage → bridge logs warning, tick continues with last-known state.
 - Signal with unknown `instance_name` → silently skipped (logged at debug).
+- Paper-exchange command redelivery after restart → recovered via pending reclaim and
+  idempotent command journal.
+- Missing/stale threshold inputs or stale source artifacts → strict cycle fail-closed with
+  explicit blocking reasons.
 
 ## Owner
 
 - Engineering/Platform
-- Last-updated: 2026-02-26
+- Last-updated: 2026-03-03
 

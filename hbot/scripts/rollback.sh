@@ -19,7 +19,7 @@ BOT_NAME="${1:?Usage: rollback.sh <bot_name> [backup_file]}"
 BACKUP_FILE="${2:-}"
 
 echo "============================================"
-echo " Hummingbot Rollback - ${BOT_NAME}"
+echo " Kzay Capital Rollback - ${BOT_NAME}"
 echo "============================================"
 
 # Find backup file

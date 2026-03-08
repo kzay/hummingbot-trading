@@ -104,7 +104,7 @@ class FeeResolver:
             "ACCESS-TIMESTAMP": ts_ms,
             "locale": "en-US",
             "Content-Type": "application/json",
-            "User-Agent": "hbot-epp-fee-resolver/1.0",
+            "User-Agent": "kzay-capital-epp-fee-resolver/1.0",
         }
         try:
             _RATE_LIMITER.get_or_create("bitget").wait_if_needed()

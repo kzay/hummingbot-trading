@@ -1,8 +1,8 @@
 {
-  "uid": "hbot-ftui",
-  "title": "FTUI Bot Monitor",
+  "uid": "kzay-capital-ftui",
+  "title": "Kzay Capital FTUI Bot Monitor",
   "tags": [
-    "hummingbot",
+    "kzay-capital",
     "ftui",
     "trading",
     "monitor"
@@ -47,18 +47,18 @@
   },
   "links": [
     {
-      "title": "Trading Desk",
+      "title": "Kzay Capital Trading Desk",
       "type": "link",
-      "url": "/d/hbot-trading-overview",
+      "url": "/d/kzay-capital-trading-overview",
       "keepTime": true,
       "includeVars": true,
       "targetBlank": false,
       "icon": "arrow-left"
     },
     {
-      "title": "Bot Deep Dive",
+      "title": "Kzay Capital Bot Deep Dive",
       "type": "link",
-      "url": "/d/hbot-bot-deep-dive",
+      "url": "/d/kzay-capital-bot-deep-dive",
       "keepTime": true,
       "includeVars": true,
       "targetBlank": false,
@@ -110,8 +110,8 @@
       {
         "current": {
           "selected": true,
-          "text": "bot1",
-          "value": "bot1"
+          "text": "All",
+          "value": ""
         },
         "datasource": {
           "type": "prometheus",
@@ -119,7 +119,7 @@
         },
         "definition": "label_values(hbot_bot_equity_quote, bot)",
         "hide": 0,
-        "includeAll": false,
+        "includeAll": true,
         "label": "Bot",
         "multi": false,
         "name": "bot",
@@ -130,7 +130,8 @@
         },
         "refresh": 2,
         "sort": 1,
-        "type": "query"
+        "type": "query",
+        "allValue": ".+"
       },
       {
         "current": {

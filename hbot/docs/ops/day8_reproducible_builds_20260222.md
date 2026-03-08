@@ -4,8 +4,8 @@
 Convert external control-plane services to reproducible, pinned images with no runtime dependency installation.
 
 ## Build Artifact
-- Image tag (default): `hbot-control-plane:20260222`
-- Compose variable: `HBOT_CONTROL_PLANE_IMAGE`
+- Image tag (default): `kzay-capital-control-plane:20260222`
+- Compose variable: `KZAY_CAPITAL_CONTROL_PLANE_IMAGE`
 - Dockerfile: `hbot/compose/images/control_plane/Dockerfile`
 - Dependency lock file: `hbot/compose/images/control_plane/requirements-control-plane.txt`
 

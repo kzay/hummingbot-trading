@@ -156,6 +156,10 @@ class DeskStateStore:
         """Load snapshot. Redis first, file fallback. Returns None if nothing saved."""
         return self._store.load()
 
+    def clear(self) -> None:
+        """Best-effort delete of persisted snapshot backends."""
+        self._store.clear()
+
     def journal_event(self, event_type: str, payload: Dict[str, Any]) -> None:
         """Append an arbitrary event to the journal (for fills, funding, etc.)."""
         if self._journal is not None:

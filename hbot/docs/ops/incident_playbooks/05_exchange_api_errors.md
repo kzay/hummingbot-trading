@@ -6,7 +6,7 @@
 
 ## Trigger Indicators
 
-- `docker logs hbot-bot1`: `429 Too Many Requests` or `5xx` errors
+- `docker logs kzay-capital-bot1`: `429 Too Many Requests` or `5xx` errors
 - `minute.csv`: `ws_reconnect_count` increasing rapidly
 - `minute.csv`: `order_book_stale: True` for > 30 seconds
 - `minute.csv`: `cancel_per_min` exceeding `cancel_budget_per_min: 50`
@@ -19,7 +19,7 @@
 
 1. **Check bot logs for error type:**
    ```bash
-   docker logs hbot-bot1 --tail 50 2>&1 | grep -iE "429|503|502|504|rate.limit|too many"
+   docker logs kzay-capital-bot1 --tail 50 2>&1 | grep -iE "429|503|502|504|rate.limit|too many"
    ```
 
 2. **Check current rate limit headroom:**
@@ -70,7 +70,7 @@ tail -5 hbot/data/bot1/logs/epp_v24/bot1_a/minute.csv | grep order_book_stale
 
 **Check for IP ban or API key suspension:**
 ```bash
-docker logs hbot-bot1 2>&1 | grep -iE "ban|forbidden|unauthorized|invalid.*key"
+docker logs kzay-capital-bot1 2>&1 | grep -iE "ban|forbidden|unauthorized|invalid.*key"
 # If present: API key may be suspended — rotate per secrets_and_key_rotation.md
 ```
 
@@ -88,7 +88,7 @@ If HARD_STOP from cancel_budget_breach:
 
 ### Exchange 5xx / WS Disconnection:
 1. Hummingbot auto-reconnects. Wait 2-5 minutes.
-2. Verify reconnect: `docker logs hbot-bot1 --tail 10 2>&1 | grep -i "connected\|reconnect"`
+2. Verify reconnect: `docker logs kzay-capital-bot1 --tail 10 2>&1 | grep -i "connected\|reconnect"`
 3. If reconnect fails after 5 minutes: `docker compose ... restart bot1`
 
 ### Exchange Maintenance Window:

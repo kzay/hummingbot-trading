@@ -68,6 +68,10 @@ def _epoch_now() -> float:
     return time.time()
 
 
+def _non_negative_age(now_epoch: float, event_epoch: float) -> float:
+    return max(0.0, now_epoch - event_epoch)
+
+
 def _safe_float(v: Any, default: float = 0.0) -> float:
     try:
         return float(v)  # type: ignore[arg-type]
@@ -238,7 +242,7 @@ def build_snapshot(bot_name: str, bot_data_dir: Path) -> Dict[str, Any]:
             ts_str = str(m.get("ts", ""))
             try:
                 epoch = datetime.fromisoformat(ts_str.replace("Z", "+00:00")).timestamp()
-                minute_age_s = now_epoch - epoch
+                minute_age_s = _non_negative_age(now_epoch, epoch)
             except Exception:
                 pass
 
@@ -246,7 +250,7 @@ def build_snapshot(bot_name: str, bot_data_dir: Path) -> Dict[str, Any]:
         if fs.get("total", 0) > fills_stats.get("total", 0):
             fills_stats = fs
             if fs["last_epoch"] > 0:
-                fill_age_s = now_epoch - fs["last_epoch"]
+                fill_age_s = _non_negative_age(now_epoch, fs["last_epoch"])
 
         oo = _read_open_orders(bot_data_dir / "logs" / "recovery" / "open_orders_latest.json")
         if oo:

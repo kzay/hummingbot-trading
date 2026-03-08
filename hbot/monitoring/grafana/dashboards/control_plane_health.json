@@ -27,9 +27,9 @@
   "id": null,
   "links": [
     {
-      "title": "Trading Desk",
+      "title": "Kzay Capital Trading Desk",
       "type": "link",
-      "url": "/d/hbot-trading-overview",
+      "url": "/d/kzay-capital-trading-overview",
       "keepTime": true,
       "includeVars": false,
       "targetBlank": false,
@@ -38,9 +38,18 @@
     {
       "title": "Bot Deep Dive",
       "type": "link",
-      "url": "/d/hbot-bot-deep-dive",
+      "url": "/d/kzay-capital-bot-deep-dive",
       "keepTime": true,
       "includeVars": false,
+      "targetBlank": false,
+      "icon": "external link"
+    },
+    {
+      "title": "Paper Engine Supervision",
+      "type": "link",
+      "url": "/d/kzay-capital-paper-engine-supervision",
+      "keepTime": true,
+      "includeVars": true,
       "targetBlank": false,
       "icon": "external link"
     }
@@ -360,13 +369,13 @@
     },
     {
       "id": 18,
-      "title": "Container CPU % (hbot-*)",
+      "title": "Container CPU % (kzay-capital-*)",
       "description": "CPU usage per hbot container (5-minute rate). High sustained CPU on a bot = runaway loop or infinite backoff.",
       "type": "timeseries",
       "gridPos": {"h": 8, "w": 8, "x": 0, "y": 36},
       "datasource": {"type": "prometheus", "uid": "prometheus"},
       "targets": [
-        {"expr": "rate(container_cpu_usage_seconds_total{name=~\"hbot-.*\"}[5m]) * 100", "legendFormat": "{{name}}", "refId": "A"}
+        {"expr": "rate(container_cpu_usage_seconds_total{name=~\"kzay-capital-.*\"}[5m]) * 100", "legendFormat": "{{name}}", "refId": "A"}
       ],
       "fieldConfig": {
         "defaults": {
@@ -383,13 +392,13 @@
     },
     {
       "id": 19,
-      "title": "Container Memory (hbot-*)",
+      "title": "Container Memory (kzay-capital-*)",
       "description": "Memory usage per hbot container. Growing trend = memory leak.",
       "type": "timeseries",
       "gridPos": {"h": 8, "w": 8, "x": 8, "y": 36},
       "datasource": {"type": "prometheus", "uid": "prometheus"},
       "targets": [
-        {"expr": "container_memory_usage_bytes{name=~\"hbot-.*\"}", "legendFormat": "{{name}}", "refId": "A"}
+        {"expr": "container_memory_usage_bytes{name=~\"kzay-capital-.*\"}", "legendFormat": "{{name}}", "refId": "A"}
       ],
       "fieldConfig": {
         "defaults": {
@@ -406,13 +415,13 @@
     },
     {
       "id": 20,
-      "title": "Container Restarts 24h (hbot-*)",
+      "title": "Container Restarts 24h (kzay-capital-*)",
       "description": "Restart count in the last 24h. Any restart > 0 is a reliability event worth investigating.",
       "type": "stat",
       "gridPos": {"h": 8, "w": 8, "x": 16, "y": 36},
       "datasource": {"type": "prometheus", "uid": "prometheus"},
       "targets": [
-        {"expr": "increase(container_restart_count{name=~\"hbot-.*\"}[24h])", "legendFormat": "{{name}}", "refId": "A"}
+        {"expr": "increase(container_restart_count{name=~\"kzay-capital-.*\"}[24h])", "legendFormat": "{{name}}", "refId": "A"}
       ],
       "fieldConfig": {
         "defaults": {
@@ -654,7 +663,7 @@
   "refresh": "15s",
   "schemaVersion": 39,
   "style": "dark",
-  "tags": ["hummingbot", "ops", "infra", "control-plane"],
+  "tags": ["kzay-capital", "ops", "infra", "control-plane"],
   "templating": {
     "list": [
       {
@@ -680,6 +689,6 @@
   },
   "timezone": "utc",
   "title": "Ops & Infrastructure",
-  "uid": "hbot-cp-health",
+  "uid": "kzay-capital-cp-health",
   "version": 2
 }

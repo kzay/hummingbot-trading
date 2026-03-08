@@ -4,10 +4,16 @@ import argparse
 import csv
 import datetime as dt
 import json
+import os
 from dataclasses import dataclass
 from decimal import Decimal
 from pathlib import Path
 from typing import Dict, Iterable, List, Optional, Tuple
+
+try:
+    import psycopg
+except Exception:  # pragma: no cover - optional dependency.
+    psycopg = None  # type: ignore[assignment]
 
 
 _ZERO = Decimal("0")
@@ -39,6 +45,106 @@ def _d(x: object) -> Decimal:
 
 def _safe_bool(x: object) -> bool:
     return str(x).strip().lower() in {"1", "true", "yes", "y", "on"}
+
+
+def _env_bool(name: str, default: bool) -> bool:
+    raw = str(os.getenv(name, str(default))).strip().lower()
+    if raw in {"1", "true", "yes", "on"}:
+        return True
+    if raw in {"0", "false", "no", "off"}:
+        return False
+    return default
+
+
+def _infer_bot_variant(root: Path) -> Tuple[Optional[str], Optional[str]]:
+    # Expected: data/<bot>/logs/epp_v24/<variant_folder>
+    try:
+        return str(root.parts[-5]).lower(), str(root.parts[-1]).lower()
+    except Exception:
+        return None, None
+
+
+def _connect_ops_db():
+    if psycopg is None:
+        raise RuntimeError("psycopg_not_installed")
+    return psycopg.connect(
+        host=os.getenv("OPS_DB_HOST", "postgres"),
+        port=int(os.getenv("OPS_DB_PORT", "5432")),
+        dbname=os.getenv("OPS_DB_NAME", "kzay_capital_ops"),
+        user=os.getenv("OPS_DB_USER", "hbot"),
+        password=os.getenv("OPS_DB_PASSWORD", "kzay_capital_dev_password"),
+    )
+
+
+def _row_to_str_dict(row: Dict[str, object]) -> Dict[str, str]:
+    out: Dict[str, str] = {}
+    for k, v in row.items():
+        if hasattr(v, "astimezone"):
+            out[k] = v.astimezone(dt.timezone.utc).isoformat()
+        elif isinstance(v, bool):
+            out[k] = "true" if v else "false"
+        elif v is None:
+            out[k] = ""
+        else:
+            out[k] = str(v)
+    return out
+
+
+def _load_day_rows_from_db(root: Path, day: str) -> Tuple[List[Dict[str, str]], List[Dict[str, str]]]:
+    bot, variant = _infer_bot_variant(root)
+    if not bot or not variant:
+        raise RuntimeError("cannot_infer_bot_variant_from_root")
+    start, end = _day_window_utc(day)
+    conn = _connect_ops_db()
+    try:
+        fills_day: List[Dict[str, str]] = []
+        minute_day: List[Dict[str, str]] = []
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                SELECT ts_utc, exchange, trading_pair, side, price, amount_base, notional_quote,
+                       fee_quote, order_id, state, mid_ref, expected_spread_pct, adverse_drift_30s,
+                       fee_source, is_maker, realized_pnl_quote
+                FROM fills
+                WHERE bot = %s AND variant = %s AND ts_utc >= %s AND ts_utc < %s
+                ORDER BY ts_utc
+                """,
+                (bot, variant, start, end),
+            )
+            fill_cols = [str(desc[0]) for desc in (cur.description or [])]
+            for rec in cur.fetchall() or []:
+                row = _row_to_str_dict(dict(zip(fill_cols, rec)))
+                row["ts"] = row.pop("ts_utc", "")
+                fills_day.append(row)
+
+            cur.execute(
+                """
+                SELECT ts_utc, exchange, trading_pair, state, regime, equity_quote, base_pct, target_base_pct,
+                       daily_loss_pct, drawdown_pct, cancel_per_min, orders_active, fills_count_today,
+                       fees_paid_today_quote, risk_reasons, bot_mode, accounting_source, mid, spread_pct,
+                       net_edge_pct, turnover_today_x, raw_payload
+                FROM bot_snapshot_minute
+                WHERE bot = %s AND variant = %s AND ts_utc >= %s AND ts_utc < %s
+                ORDER BY ts_utc
+                """,
+                (bot, variant, start, end),
+            )
+            minute_cols = [str(desc[0]) for desc in (cur.description or [])]
+            for rec in cur.fetchall() or []:
+                raw_row = dict(zip(minute_cols, rec))
+                payload = raw_row.get("raw_payload")
+                row = _row_to_str_dict(raw_row)
+                row["ts"] = row.pop("ts_utc", "")
+                row.pop("raw_payload", None)
+                if isinstance(payload, dict):
+                    # Preserve compatibility with minute.csv-only fields.
+                    for k, v in payload.items():
+                        if k not in row or not str(row.get(k, "")).strip():
+                            row[str(k)] = "" if v is None else str(v)
+                minute_day.append(row)
+        return fills_day, minute_day
+    finally:
+        conn.close()
 
 
 @dataclass
@@ -194,8 +300,20 @@ def main() -> int:
     fills_path = root / "fills.csv"
     minute_path = root / "minute.csv"
 
-    fills_day = _filter_day(_iter_csv_rows(fills_path), args.day) if fills_path.exists() else []
-    minute_day = _collect_minute_rows_for_day(root, args.day)
+    data_source_mode = "csv"
+    data_source_fallback_reason: Optional[str] = None
+    if _env_bool("OPS_DB_READ_PREFERRED", False):
+        try:
+            fills_day, minute_day = _load_day_rows_from_db(root, args.day)
+            data_source_mode = "db"
+        except Exception as exc:
+            fills_day = _filter_day(_iter_csv_rows(fills_path), args.day) if fills_path.exists() else []
+            minute_day = _collect_minute_rows_for_day(root, args.day)
+            data_source_fallback_reason = f"db_unavailable:{exc}"
+            data_source_mode = "csv"
+    else:
+        fills_day = _filter_day(_iter_csv_rows(fills_path), args.day) if fills_path.exists() else []
+        minute_day = _collect_minute_rows_for_day(root, args.day)
 
     # Optional column filters (kept strict to avoid mixing runs)
     if args.exchange:
@@ -237,6 +355,8 @@ def main() -> int:
             "fills_count_today",
             "fees_paid_today_quote",
             "realized_pnl_today_quote",
+            "net_realized_pnl_today_quote",
+            "funding_cost_today_quote",
             "position_base",
             "avg_entry_price",
             "drawdown_pct",
@@ -287,6 +407,7 @@ def main() -> int:
 
     out = {
         "day": args.day,
+        "data_source_mode": data_source_mode,
         "paths": {
             "fills_csv": str(fills_path) if fills_path.exists() else None,
             "minute_csv": str(minute_path) if minute_path.exists() else None,
@@ -298,6 +419,8 @@ def main() -> int:
         "daily_state": daily_state,
         "paper_desk_snapshot": desk,
     }
+    if data_source_fallback_reason:
+        out["data_source_fallback_reason"] = data_source_fallback_reason
 
     print(json.dumps(out, indent=2, sort_keys=False))
     return 0

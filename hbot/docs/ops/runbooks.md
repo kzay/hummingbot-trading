@@ -6,7 +6,7 @@ Operational SOPs for startup, shutdown, recovery, and controlled changes.
 ## Startup (external orchestration)
 1. Validate `env/.env`.
 2. Start:
-   - `docker compose --env-file ../env/.env --profile multi --profile external up -d`
+   - `docker compose --env-file ../env/.env --profile multi --profile test --profile external up -d`
 3. Confirm service health (`ps`, logs, Redis ping).
 4. Start/verify strategy in bot terminal.
 
@@ -32,6 +32,20 @@ Operational SOPs for startup, shutdown, recovery, and controlled changes.
 - Graceful:
   - `docker compose --env-file ../env/.env --profile multi --profile external down`
 
+## Graceful Shutdown Verification
+Use this before deploy, rollback, or host maintenance so stateful services drain cleanly.
+
+1. Stop with a bounded timeout:
+   - `docker compose --env-file ../env/.env --profile multi --profile external stop --timeout 10`
+2. Confirm containers exit:
+   - `docker compose --env-file ../env/.env ps`
+3. Verify state artifacts were left in a readable state:
+   - `reports/verification/paper_exchange_state_snapshot_latest.json`
+   - `reports/verification/paper_exchange_pair_snapshot_latest.json`
+   - `reports/verification/paper_exchange_command_journal_latest.json`
+4. If shutdown was part of a planned restart, bring services back and confirm health before resuming bots.
+5. If any state artifact is missing or corrupt, keep promotion blocked and run the recovery/restore drill before restarting trading.
+
 ## Degraded Mode
 - Redis down:
   - restart without `--profile external`
@@ -40,6 +54,35 @@ Operational SOPs for startup, shutdown, recovery, and controlled changes.
 ## Rollback
 - Revert to previous image/config snapshot.
 - Run post-rollback health checks and log verification.
+
+## Postgres Backup + Restore Drill
+Run this at least once before any near-live promotion window and after any backup-path change.
+
+1. Create a fresh backup artifact:
+   - `python scripts/ops/pg_backup.py --once`
+2. Validate the restore path into a clean instance:
+   - `python scripts/ops/ops_db_restore_drill.py`
+3. Confirm evidence:
+   - `reports/ops/ops_db_backup_latest.json`
+   - `reports/ops/ops_db_restore_drill_latest.json`
+4. Keep promotion blocked if either report is stale, failed, or shows query mismatches after restore.
+
+## Near-Live Release Discipline
+Use this sequence when preparing a candidate build so ROAD-1 / ROAD-5 evidence and strict promotion stay aligned.
+
+1. Refresh analysis evidence:
+   - `python hbot/scripts/analysis/performance_dossier.py`
+   - `python hbot/scripts/analysis/bot1_multi_day_summary.py`
+   - `python hbot/scripts/analysis/testnet_multi_day_summary.py`
+2. Check the strategic ladders:
+   - `reports/analysis/performance_dossier_latest.json`
+   - `reports/strategy/multi_day_summary_latest.json`
+   - `reports/strategy/testnet_multi_day_summary_latest.json`
+3. Run strict promotion only after evidence is fresh:
+   - `python scripts/release/run_strict_promotion_cycle.py`
+4. Promotion interpretation:
+   - `performance_dossier_expectancy_ci` failing means strategy quality is still the blocker.
+   - `road1_gate` or `road5_gate` failing means the remaining blocker is campaign duration / validation evidence, not simulator ambiguity.
 
 ## Secrets Hygiene (Operational)
 - Canonical policy:
@@ -102,9 +145,10 @@ Canonical startup modes:
 1. Live primary bot + control plane:
    - `docker compose --env-file ../env/.env --profile external up -d bot1`
 2. Validation bots (paper + connector testnet):
-   - `docker compose --env-file ../env/.env --profile test up -d bot3 bot4`
+   - `docker compose --env-file ../env/.env --profile test up -d bot3 bot4 bot5`
 3. Reserved scale slot:
-   - `bot2` remains disabled unless an explicit policy revision is approved.
+   - `docker compose --env-file ../env/.env --profile multi up -d bot2`
+   - keep `bot2` in no-trade mode unless an explicit policy revision is approved.
 
 Required policy gate before promotion:
 - `python scripts/release/check_multi_bot_policy.py`
@@ -149,7 +193,7 @@ Controller refresh guidance:
 - Dev:
   - recreate affected bot container(s) after controller edits.
 - If stale code persists:
-  - `docker exec hbot-bot1 rm -rf /home/hummingbot/controllers/__pycache__ /home/hummingbot/controllers/market_making/__pycache__`
+  - `docker exec kzay-capital-bot1 rm -rf /home/hummingbot/controllers/__pycache__ /home/hummingbot/controllers/market_making/__pycache__`
 - Prod:
   - use controlled recreate; do not patch controller files inside running containers.
 
@@ -218,6 +262,34 @@ Controller refresh guidance:
 - If still FAIL:
   - inspect `reports/promotion_gates/latest.json`
   - inspect `reports/event_store/day2_gate_eval_latest.json`
+
+## Realtime UI + L2 Operations
+1. Enable services:
+   - `docker compose --env-file ../env/.env --profile external up -d realtime-ui-api realtime-ui-web`
+2. Set rollout mode:
+   - `REALTIME_UI_API_MODE=shadow` for parallel validation.
+   - `REALTIME_UI_API_MODE=active` when operator cutover is approved.
+3. Security gate before non-loopback exposure:
+   - set `REALTIME_UI_API_AUTH_ENABLED=true`
+   - set `REALTIME_UI_API_AUTH_TOKEN` through the operator secret path
+   - set `REALTIME_UI_API_ALLOWED_ORIGINS` to the approved UI origins
+   - keep `REALTIME_UI_API_ALLOW_QUERY_TOKEN=false`
+4. Degraded-mode fallback policy:
+   - keep `REALTIME_UI_API_DEGRADED_MODE_ENABLED=false` for normal operation
+   - enable degraded mode only for emergency CSV/JSON fallback during outage handling
+5. Verify health:
+   - API: `http://localhost:9910/health`
+   - Web UI: `http://localhost:8088`
+6. Run L2 quality gate manually:
+   - `python scripts/release/check_realtime_l2_data_quality.py`
+7. Strict-cycle evidence:
+   - `reports/verification/realtime_l2_data_quality_latest.json`
+   - `reports/promotion_gates/latest.json` must show `realtime_l2_data_quality=PASS`.
+
+Rollback:
+- set `REALTIME_UI_API_MODE=disabled`
+- keep `desk_snapshot_service` available, but do not enable degraded fallback unless incident response explicitly calls for it
+- rerun strict cycle before resuming promotion flow.
   - treat `day2_event_store_gate` as expected until elapsed window + delta tolerance both pass.
 
 ## Day2 Baseline Reanchor (Day 36)
@@ -353,26 +425,41 @@ Run before any promotion decision:
 
 ## Paper Trade Startup
 
-1. For EPP v2.4 controllers, keep `connector_name: bitget_paper_trade` and
-   `internal_paper_enabled: true`.
-2. In `conf_client.yml`, ensure:
-   - `paper_trade_exchanges: [bitget]`
+1. Runtime mode is controlled by `BOT_MODE=paper|live` (env), not by
+   `internal_paper_enabled`.
+2. For EPP v2.4 in paper mode, keep the production connector mapping
+   (for example `connector_name: bitget_perpetual`); Paper Engine v2 bridge
+   intercepts order routing.
+3. In `conf_client.yml`, ensure:
+   - `paper_trade_exchanges` includes the live connector name used by the bot
+     (for example `bitget_perpetual` for bot1/bot2/bot3/bot5).
    - `paper_trade_account_balance` includes realistic BTC/USDT balances.
-3. For standalone scripts (bot3): use `bitget_paper_trade` in the `markets` dict
-   and enable `paper_trade_exchanges: [bitget]` in `conf_client.yml`.
-4. Start the bot and verify `status` includes paper diagnostics (`paper fills`,
+4. Only legacy standalone scripts should use `bitget_paper_trade` directly.
+   Controller-based paper lanes now keep the live connector mapping and rely on
+   Paper Engine v2 interception.
+5. Start the bot and verify `status` includes paper diagnostics (`paper fills`,
    `rejects`, `avg_qdelay_ms`) plus controller regime/spread data.
-5. If you need emergency rollback, set `internal_paper_enabled: false` and
-   recreate the bot container.
+6. If you need emergency rollback from paper-exchange service integration, set
+   `PAPER_EXCHANGE_MODE_BOT<id>=disabled` and recreate that bot container.
 
 ## Paper Exchange Service Rollout (P1-9)
 
-Use this for controlled cutover of `PAPER_EXCHANGE_MODE` per bot.
+Use this for controlled cutover of `PAPER_EXCHANGE_MODE` per bot
+(`disabled|shadow|active|auto`).
+
+Optional strict-routing hardening:
+- set `PAPER_EXCHANGE_SERVICE_ONLY=true` to force fail-closed service routing.
+- optional per-bot override: `PAPER_EXCHANGE_SERVICE_ONLY_BOT<id>=true|false`.
+- when strict-routing is enabled, `auto` resolves to `active` even when heartbeat
+  is stale (no implicit shadow fallback).
 
 One-command canary launcher (recommended):
 - `python scripts/ops/run_paper_exchange_canary.py --bot bot3 --mode shadow`
+- `python scripts/ops/run_paper_exchange_canary.py --bot bot3 --mode auto`
+- `python scripts/ops/run_paper_exchange_canary.py --bot bot3 --mode auto --service-only-mode true`
 - Preview only (no changes/commands):
   - `python scripts/ops/run_paper_exchange_canary.py --bot bot3 --mode shadow --dry-run`
+  - `python scripts/ops/run_paper_exchange_canary.py --bot bot3 --mode auto --dry-run`
 
 1. Start service in isolated profile:
    - `docker compose --env-file ../env/.env --profile external --profile paper-exchange up -d redis paper-exchange-service`
@@ -388,6 +475,41 @@ One-command canary launcher (recommended):
    - set `PAPER_EXCHANGE_MODE_BOT1=shadow` (then `active` after parity re-check)
    - recreate `bot1` each step.
 
+### Sustained Load Qualification (P1-19)
+
+Use this before promoting active-mode desk concurrency claims.
+
+One-command sustained qualification (default 2h profile):
+- `python scripts/release/run_paper_exchange_sustained_qualification.py --strict`
+
+What it does:
+1. Runs multi-instance synthetic harness for sustained duration.
+2. Runs load/backpressure checker scoped to harness `run_id`.
+3. Emits consolidated artifact:
+   - `reports/verification/paper_exchange_sustained_qualification_latest.json`
+
+Common overrides:
+- shorter dry qualification window:
+  - `python scripts/release/run_paper_exchange_sustained_qualification.py --strict --duration-sec 1800 --sustained-window-sec 1800`
+- explicit instance coverage:
+  - `--instance-names bot1,bot3,bot4 --min-instance-coverage 3`
+
+Promotion integration (optional, long-running):
+- `python scripts/release/run_promotion_gates.py --ci --check-paper-exchange-thresholds --check-paper-exchange-sustained-qualification`
+- strict-cycle pass-through:
+  - `python scripts/release/run_strict_promotion_cycle.py --check-paper-exchange-sustained-qualification`
+
+### Performance Baseline Capture (QPRO-PERF-2)
+
+Use this when you intentionally re-anchor the regression baseline after a validated
+load profile update (for example, a sustained qualification profile refresh).
+
+One-command baseline capture:
+- `python scripts/release/capture_paper_exchange_perf_baseline.py --strict --profile-label sustained_2h`
+
+Optional strict-cycle wiring:
+- `python scripts/release/run_strict_promotion_cycle.py --capture-paper-exchange-perf-baseline --paper-exchange-perf-baseline-profile-label sustained_2h`
+
 ### Paper Exchange Rollback
 
 1. Immediate rollback for impacted bot:
@@ -399,6 +521,44 @@ One-command canary launcher (recommended):
 3. Confirm rollback health:
    - `python scripts/ops/preflight_paper_exchange.py`
    - `python scripts/release/run_promotion_gates.py --check-paper-exchange-thresholds`
+
+### Active-Mode Failure Policy (P1-16)
+
+For `PAPER_EXCHANGE_MODE_<BOT>=active`, controller behavior is deterministic:
+
+1. `service_down` failures (`redis_unavailable`, command publish failures/exceptions):
+   - action: `soft_pause`
+   - reason prefix: `paper_exchange_soft_pause:service_down:`
+2. `stale_feed` failures (`stale_market_snapshot`, `no_market_snapshot`):
+   - action: `soft_pause`
+   - reason prefix: `paper_exchange_soft_pause:stale_feed:`
+3. `command_backlog` failures (`expired_command`):
+   - action: `soft_pause`
+   - reason prefix: `paper_exchange_soft_pause:command_backlog:`
+4. Recovery loop (repeated failures on same `(instance, connector, pair)`):
+   - action: `hard_stop`
+   - reason prefix: `paper_exchange_recovery_loop:<class>:<reason>`
+5. Recovery:
+   - first successful `processed` outcome resets failure streak and emits `resume`.
+
+Operator checks:
+- In controller logs/telemetry, confirm standardized reason prefixes above.
+- Confirm no implicit fallback to legacy local execution while mode is `active`.
+- If `hard_stop` is raised, either:
+  - rollback to `PAPER_EXCHANGE_MODE_<BOT>=disabled`, or
+  - resolve service/feed condition and issue controlled restart.
+
+## Canonical Data Plane Rollback (TS8)
+
+Use this when canonical DB mode (`db_primary`) needs immediate fallback to CSV compatibility (`csv_compat`).
+
+1. Apply timed rollback drill (writes evidence + mode flags):
+   - `python scripts/ops/data_plane_rollback_drill.py --env-file env/.env --apply --from-mode db_primary --to-mode csv_compat`
+2. Verify promotion checks in fallback mode:
+   - `python scripts/release/run_promotion_gates.py --max-report-age-min 20`
+3. Validate drill evidence:
+   - `reports/ops/data_plane_rollback_drill_latest.json` has `status=pass`
+   - `duration_sec <= 300` (5-minute rollback target)
 
 ## EPP Paper Validation Checklist (24h minimum)
 
@@ -429,6 +589,9 @@ Track these KPIs from `minute.csv` / `fills.csv` before changing capital:
 
 ## Bot3 Dedicated V2 Paper Matrix
 - Bot3 is the mandatory test bot for V2 paper-controller scenarios.
+- Bot3 now mirrors Bot1's production connector mapping in paper mode
+  (`bitget_perpetual` via Paper Engine v2), rather than using the old direct
+  paper-trade wrapper path.
 - Start bot3:
   - `docker compose --env-file ../env/.env --profile test up -d bot3`
 - Active paper trading scenario:
@@ -440,6 +603,21 @@ Track these KPIs from `minute.csv` / `fills.csv` before changing capital:
   - connector ready
   - no API order errors
   - expected behavior per mode (orders in smoke, no orders in notrade)
+
+## Bot5 Dedicated IFT/JOTA Paper Lane
+- Bot5 is the institutional-flow paper-validation lane.
+- It preserves its distinct IFT/JOTA strategy configuration while using the same
+  hardened paper/runtime baseline as Bot1.
+- Start bot5:
+  - `docker compose --env-file ../env/.env --profile test up -d bot5`
+- Active paper trading scenario:
+  - `start --script v2_with_controllers.py --conf v2_epp_v2_4_bot5_ift_jota_paper.yml`
+- Pass criteria:
+  - preflight pass
+  - connector ready
+  - paper diagnostics populated
+  - fills/order flow match the intended IFT/JOTA lane behavior without bypassing
+    safety guards
 
 ## Bot4 Binance Testnet V2 Matrix
 - Bot4 is the dedicated V2 validation bot for Binance testnet scenarios.
@@ -505,10 +683,13 @@ Python bytecache may serve the old version. `docker restart` does NOT clear it.
 
 Fix:
 ```bash
-docker exec hbot-bot1 rm -rf /home/hummingbot/controllers/__pycache__ \
+docker exec kzay-capital-bot1 rm -rf /home/hummingbot/controllers/__pycache__ \
     /home/hummingbot/controllers/market_making/__pycache__
 docker compose --env-file ../env/.env -f docker-compose.yml up -d --force-recreate bot1
 ```
+
+For other bots, replace `kzay-capital-bot1` / `bot1` with the affected bot container
+and compose service name (`bot2`, `bot3`, `bot4`, or `bot5`).
 
 ## Checklist
 - Connector ready
@@ -529,8 +710,8 @@ docker compose --env-file ../env/.env -f docker-compose.yml up -d --force-recrea
    - `docker compose --env-file ../env/.env up -d prometheus grafana node-exporter cadvisor bot-metrics-exporter loki promtail`
 2. Verify Prometheus target health (`/targets`) and datasource health in Grafana.
 3. Open dashboards:
-   - `Hummingbot Trading Desk Overview`
-   - `Hummingbot Bot Deep Dive`
+   - `Kzay Capital Trading Desk`
+   - `Kzay Capital Bot Deep Dive`
    - `Trading Desk Control Plane`
    - `Trading Desk Wallet and Blotter`
    - `Trading Desk Ops DB Overview`
@@ -557,12 +738,12 @@ Startup:
    - `docker compose --env-file env/.env --profile ops -f compose/docker-compose.yml up -d ops-db-writer`
 
 Sanity check:
-- `docker compose --env-file env/.env --profile ops -f compose/docker-compose.yml exec -T postgres psql -U hbot -d hbot_ops -c "select now() as ts_utc;"`
+- `docker compose --env-file env/.env --profile ops -f compose/docker-compose.yml exec -T postgres psql -U kzay_capital -d kzay_capital_ops -c "select now() as ts_utc;"`
 - one-shot writer check:
   - `docker compose --env-file env/.env --profile ops -f compose/docker-compose.yml run --rm ops-db-writer python /workspace/hbot/services/ops_db_writer/main.py --once`
 
 Backup:
-- `docker compose --env-file env/.env --profile ops -f compose/docker-compose.yml exec -T postgres pg_dump -U hbot hbot_ops > reports/ops_db/postgres_dump_latest.sql`
+- `docker compose --env-file env/.env --profile ops -f compose/docker-compose.yml exec -T postgres pg_dump -U kzay_capital kzay_capital_ops > reports/ops_db/postgres_dump_latest.sql`
 
 ### Incident Triage (Trading)
 

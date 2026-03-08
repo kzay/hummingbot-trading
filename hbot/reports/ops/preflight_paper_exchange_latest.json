@@ -1,5 +1,5 @@
 {
-  "ts_utc": "2026-03-02T12:35:18.391977+00:00",
+  "ts_utc": "2026-03-05T21:27:47.395419+00:00",
   "status": "pass",
   "failed_checks": [],
   "checks": [
@@ -15,6 +15,22 @@
       "name": "paper_exchange_compose_service_wired",
       "pass": true,
       "reason": "compose service block + command wiring present",
+      "evidence_paths": [
+        "F:\\Environement\\git-repo\\hummingbot_custo\\hbot\\compose\\docker-compose.yml"
+      ]
+    },
+    {
+      "name": "paper_exchange_compose_healthcheck_present",
+      "pass": true,
+      "reason": "compose paper-exchange service healthcheck present",
+      "evidence_paths": [
+        "F:\\Environement\\git-repo\\hummingbot_custo\\hbot\\compose\\docker-compose.yml"
+      ]
+    },
+    {
+      "name": "paper_exchange_compose_mode_toggles_present",
+      "pass": true,
+      "reason": "compose per-bot PAPER_EXCHANGE_MODE toggles present",
       "evidence_paths": [
         "F:\\Environement\\git-repo\\hummingbot_custo\\hbot\\compose\\docker-compose.yml"
       ]
@@ -41,6 +57,23 @@
       "reason": "paper-exchange rollout mode keys present in env template",
       "evidence_paths": [
         "F:\\Environement\\git-repo\\hummingbot_custo\\hbot\\env\\.env.template"
+      ]
+    },
+    {
+      "name": "paper_exchange_mode_toggle_values_valid",
+      "pass": true,
+      "reason": "all PAPER_EXCHANGE_MODE_BOT* values are valid",
+      "evidence_paths": [
+        "F:\\Environement\\git-repo\\hummingbot_custo\\hbot\\env\\.env.template"
+      ]
+    },
+    {
+      "name": "paper_exchange_legacy_internal_paper_enabled_removed",
+      "pass": true,
+      "reason": "legacy internal_paper_enabled removed from controller/template YAMLs",
+      "evidence_paths": [
+        "F:\\Environement\\git-repo\\hummingbot_custo\\hbot\\data",
+        "F:\\Environement\\git-repo\\hummingbot_custo\\hbot\\config\\strategy_catalog\\templates"
       ]
     },
     {

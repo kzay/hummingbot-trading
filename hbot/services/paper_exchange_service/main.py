@@ -9,9 +9,13 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Dict, List, Optional, Set, Tuple
 
+from services.common.canonical_market_state import (
+    market_payload_freshness_ts_ms,
+    market_payload_order_key,
+    parse_canonical_market_state,
+)
 from services.contracts.event_schemas import (
     AuditEvent,
-    MarketSnapshotEvent,
     PaperExchangeCommandEvent,
     PaperExchangeEvent,
     PaperExchangeHeartbeatEvent,
@@ -19,12 +23,20 @@ from services.contracts.event_schemas import (
 from services.contracts.stream_names import (
     AUDIT_STREAM,
     MARKET_DATA_STREAM,
+    MARKET_QUOTE_STREAM,
     PAPER_EXCHANGE_COMMAND_STREAM,
     PAPER_EXCHANGE_EVENT_STREAM,
     PAPER_EXCHANGE_HEARTBEAT_STREAM,
     STREAM_RETENTION_MAXLEN,
 )
 from services.hb_bridge.redis_client import RedisStreamClient
+from services.paper_exchange_service.order_fsm import (
+    ACTIVE_ORDER_STATES as _ACTIVE_ORDER_STATES,
+    TERMINAL_ORDER_STATES as _TERMINAL_ORDER_STATES,
+    can_transition_state,
+    is_immediate_tif,
+    resolve_crossing_limit_order_outcome,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -41,8 +53,35 @@ def _csv_set(value: str) -> Set[str]:
     return {_normalize(x) for x in str(value or "").split(",") if _normalize(x)}
 
 
-def _pair_key(connector_name: str, trading_pair: str) -> str:
-    return f"{_normalize(connector_name)}::{str(trading_pair or '').strip().upper()}"
+def _namespace_base_key(instance_name: str, connector_name: str, trading_pair: str) -> str:
+    return (
+        f"{_normalize(instance_name)}::"
+        f"{_normalize(connector_name)}::"
+        f"{str(trading_pair or '').strip().upper()}"
+    )
+
+
+def _namespace_order_key(instance_name: str, connector_name: str, trading_pair: str, order_id: str) -> str:
+    return f"{_namespace_base_key(instance_name, connector_name, trading_pair)}::{str(order_id or '').strip()}"
+
+
+def _pair_key(instance_name: str, connector_name: str, trading_pair: str) -> str:
+    return _namespace_base_key(instance_name, connector_name, trading_pair)
+
+
+def _get_pair_snapshot(
+    state: "PaperExchangeState",
+    instance_name: str,
+    connector_name: str,
+    trading_pair: str,
+) -> Optional["PairSnapshot"]:
+    exact = state.pairs.get(_pair_key(instance_name, connector_name, trading_pair))
+    shared = state.pairs.get(_pair_key("", connector_name, trading_pair))
+    if exact is None:
+        return shared
+    if shared is None:
+        return exact
+    return shared if int(shared.freshness_ts_ms) >= int(exact.freshness_ts_ms) else exact
 
 
 def _resolve_path(path_value: str, root: Path) -> Path:
@@ -157,7 +196,15 @@ def _command_result_record(
     audit_required: bool = False,
     audit_published: bool = True,
     command_metadata: Optional[Dict[str, str]] = None,
+    command_producer: str = "",
+    producer_authorized: bool = True,
 ) -> Dict[str, object]:
+    namespace_key = _namespace_base_key(event.instance_name, event.connector_name, event.trading_pair)
+    namespace_order_key = (
+        _namespace_order_key(event.instance_name, event.connector_name, event.trading_pair, str(event.order_id or ""))
+        if str(event.order_id or "").strip()
+        else ""
+    )
     return {
         "instance_name": event.instance_name,
         "command": event.command,
@@ -170,10 +217,21 @@ def _command_result_record(
         "audit_required": bool(audit_required),
         "audit_published": bool(audit_published),
         "command_metadata": dict(command_metadata or {}),
+        "command_producer": str(command_producer or ""),
+        "producer_authorized": bool(producer_authorized),
+        "namespace_key": namespace_key,
+        "namespace_order_key": namespace_order_key,
     }
 
 
 def _order_record_to_dict(order: OrderRecord) -> Dict[str, object]:
+    namespace_key = _namespace_base_key(order.instance_name, order.connector_name, order.trading_pair)
+    namespace_order_key = _namespace_order_key(
+        order.instance_name,
+        order.connector_name,
+        order.trading_pair,
+        order.order_id,
+    )
     return {
         "order_id": order.order_id,
         "instance_name": order.instance_name,
@@ -191,10 +249,22 @@ def _order_record_to_dict(order: OrderRecord) -> Dict[str, object]:
         "updated_ts_ms": order.updated_ts_ms,
         "last_command_event_id": order.last_command_event_id,
         "last_fill_snapshot_event_id": order.last_fill_snapshot_event_id,
+        "first_fill_ts_ms": order.first_fill_ts_ms,
         "last_fill_amount_base": order.last_fill_amount_base,
         "filled_base": order.filled_base,
         "filled_quote": order.filled_quote,
         "fill_count": order.fill_count,
+        "filled_fee_quote": order.filled_fee_quote,
+        "margin_reserve_quote": order.margin_reserve_quote,
+        "maker_fee_pct": order.maker_fee_pct,
+        "taker_fee_pct": order.taker_fee_pct,
+        "leverage": order.leverage,
+        "margin_mode": order.margin_mode,
+        "funding_rate": order.funding_rate,
+        "position_action": order.position_action,
+        "position_mode": order.position_mode,
+        "namespace_key": namespace_key,
+        "namespace_order_key": namespace_order_key,
     }
 
 
@@ -217,10 +287,20 @@ def _order_record_from_payload(order_id: str, payload: Dict[str, object]) -> Opt
             updated_ts_ms=int(payload.get("updated_ts_ms", 0)),
             last_command_event_id=str(payload.get("last_command_event_id", "")),
             last_fill_snapshot_event_id=str(payload.get("last_fill_snapshot_event_id", "")),
+            first_fill_ts_ms=int(payload.get("first_fill_ts_ms", 0)),
             last_fill_amount_base=float(payload.get("last_fill_amount_base", 0.0)),
             filled_base=float(payload.get("filled_base", 0.0)),
             filled_quote=float(payload.get("filled_quote", 0.0)),
             fill_count=int(payload.get("fill_count", 0)),
+            filled_fee_quote=float(payload.get("filled_fee_quote", 0.0)),
+            margin_reserve_quote=float(payload.get("margin_reserve_quote", 0.0)),
+            maker_fee_pct=max(0.0, float(payload.get("maker_fee_pct", 0.0))),
+            taker_fee_pct=max(0.0, float(payload.get("taker_fee_pct", 0.0))),
+            leverage=max(1.0, float(payload.get("leverage", 1.0))),
+            margin_mode=_coerce_margin_mode(payload.get("margin_mode", "leveraged")),
+            funding_rate=float(payload.get("funding_rate", 0.0)),
+            position_action=str(payload.get("position_action", "auto") or "auto"),
+            position_mode=str(payload.get("position_mode", "ONEWAY") or "ONEWAY").upper(),
         )
     except Exception:
         return None
@@ -250,12 +330,49 @@ def _persist_state_snapshot(path: Path, orders_by_id: Dict[str, OrderRecord]) ->
     _write_json_atomic(path, payload)
 
 
+def _pair_snapshot_to_dict(snapshot: PairSnapshot) -> Dict[str, object]:
+    namespace_key = _namespace_base_key(snapshot.instance_name, snapshot.connector_name, snapshot.trading_pair)
+    return {
+        "connector_name": snapshot.connector_name,
+        "trading_pair": snapshot.trading_pair,
+        "instance_name": snapshot.instance_name,
+        "timestamp_ms": int(snapshot.timestamp_ms),
+        "freshness_ts_ms": int(snapshot.freshness_ts_ms),
+        "mid_price": float(snapshot.mid_price),
+        "best_bid": snapshot.best_bid,
+        "best_ask": snapshot.best_ask,
+        "best_bid_size": snapshot.best_bid_size,
+        "best_ask_size": snapshot.best_ask_size,
+        "last_trade_price": snapshot.last_trade_price,
+        "mark_price": snapshot.mark_price,
+        "funding_rate": snapshot.funding_rate,
+        "exchange_ts_ms": snapshot.exchange_ts_ms,
+        "ingest_ts_ms": snapshot.ingest_ts_ms,
+        "market_sequence": snapshot.market_sequence,
+        "event_id": snapshot.event_id,
+        "source_event_type": snapshot.source_event_type,
+        "bid_levels": [[float(price), float(size)] for price, size in snapshot.bid_levels],
+        "ask_levels": [[float(price), float(size)] for price, size in snapshot.ask_levels],
+        "namespace_key": namespace_key,
+    }
+
+
+def _persist_pair_snapshot(path: Path, pairs: Dict[str, PairSnapshot]) -> None:
+    payload = {
+        "ts_utc": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+        "pairs_total": len(pairs),
+        "pairs": {key: _pair_snapshot_to_dict(snapshot) for key, snapshot in pairs.items()},
+    }
+    _write_json_atomic(path, payload)
+
+
 @dataclass
 class PairSnapshot:
     connector_name: str
     trading_pair: str
     instance_name: str
     timestamp_ms: int
+    freshness_ts_ms: int
     mid_price: float
     best_bid: Optional[float]
     best_ask: Optional[float]
@@ -268,6 +385,9 @@ class PairSnapshot:
     ingest_ts_ms: Optional[int]
     market_sequence: Optional[int]
     event_id: str
+    source_event_type: str
+    bid_levels: Tuple[Tuple[float, float], ...] = ()
+    ask_levels: Tuple[Tuple[float, float], ...] = ()
 
 
 @dataclass
@@ -288,10 +408,20 @@ class OrderRecord:
     updated_ts_ms: int
     last_command_event_id: str
     last_fill_snapshot_event_id: str = ""
+    first_fill_ts_ms: int = 0
     last_fill_amount_base: float = 0.0
     filled_base: float = 0.0
     filled_quote: float = 0.0
     fill_count: int = 0
+    filled_fee_quote: float = 0.0
+    margin_reserve_quote: float = 0.0
+    maker_fee_pct: float = 0.0
+    taker_fee_pct: float = 0.0
+    leverage: float = 1.0
+    margin_mode: str = "leveraged"
+    funding_rate: float = 0.0
+    position_action: str = "auto"
+    position_mode: str = "ONEWAY"
 
 
 @dataclass
@@ -307,6 +437,7 @@ class PaperExchangeState:
     rejected_commands_disallowed_connector: int = 0
     rejected_commands_unauthorized_producer: int = 0
     rejected_commands_missing_privileged_metadata: int = 0
+    rejected_commands_namespace_collision: int = 0
     privileged_commands_processed: int = 0
     privileged_command_audit_published: int = 0
     privileged_command_audit_publish_failures: int = 0
@@ -324,6 +455,7 @@ class PaperExchangeState:
     reclaimed_pending_market_entries: int = 0
     market_rows_not_acked: int = 0
     deduplicated_market_fill_events: int = 0
+    market_fill_invalid_transition_drops: int = 0
     market_fill_journal_write_failures: int = 0
     market_fill_journal_next_seq: int = 0
     market_fill_events_by_id: Dict[str, int] = field(default_factory=dict)
@@ -341,7 +473,7 @@ class ServiceSettings:
     service_instance_name: str = "paper_exchange"
     consumer_group: str = "hb_group_paper_exchange"
     consumer_name: str = "paper-exchange-consumer"
-    market_data_stream: str = MARKET_DATA_STREAM
+    market_data_stream: str = MARKET_QUOTE_STREAM
     command_stream: str = PAPER_EXCHANGE_COMMAND_STREAM
     event_stream: str = PAPER_EXCHANGE_EVENT_STREAM
     heartbeat_stream: str = PAPER_EXCHANGE_HEARTBEAT_STREAM
@@ -349,12 +481,16 @@ class ServiceSettings:
     allowed_connectors: Set[str] = field(default_factory=set)
     allowed_command_producers: Set[str] = field(default_factory=set)
     market_stale_after_ms: int = 15_000
+    resting_fill_latency_ms: int = 0
+    maker_queue_participation: float = 1.0
+    market_sweep_depth_levels: int = 1
     max_fill_events_per_market_row: int = 200
     heartbeat_interval_ms: int = 5_000
     read_count: int = 100
     read_block_ms: int = 1_000
     command_journal_path: str = "reports/verification/paper_exchange_command_journal_latest.json"
     state_snapshot_path: str = "reports/verification/paper_exchange_state_snapshot_latest.json"
+    pair_snapshot_path: str = "reports/verification/paper_exchange_pair_snapshot_latest.json"
     market_fill_journal_path: str = "reports/verification/paper_exchange_market_fill_journal_latest.json"
     market_fill_journal_max_entries: int = 200_000
     pending_reclaim_enabled: bool = True
@@ -370,8 +506,6 @@ class ServiceSettings:
     persist_sync_state_results: bool = True
 
 
-_ACTIVE_ORDER_STATES = {"accepted", "working", "partially_filled"}
-_TERMINAL_ORDER_STATES = {"filled", "cancelled", "rejected", "expired"}
 _SUPPORTED_ORDER_TYPES = {"limit", "market", "post_only"}
 _SUPPORTED_TIME_IN_FORCE = {"gtc", "ioc", "fok"}
 _MIN_FILL_EPSILON = 1e-12
@@ -489,6 +623,10 @@ class FillCandidate:
     snapshot_event_id: str
     snapshot_market_sequence: int
     fill_count: int
+    fill_fee_quote: float = 0.0
+    fill_fee_rate_pct: float = 0.0
+    margin_reserve_quote: float = 0.0
+    funding_rate: float = 0.0
 
 
 def _parse_bool(value: object, *, default: bool = False) -> bool:
@@ -511,6 +649,98 @@ def _coerce_time_in_force(metadata: Dict[str, str]) -> str:
     return tif if tif in _SUPPORTED_TIME_IN_FORCE else ""
 
 
+def _try_float(value: object) -> Optional[float]:
+    try:
+        if value is None:
+            return None
+        return float(value)
+    except Exception:
+        return None
+
+
+def _coerce_margin_mode(value: object) -> str:
+    mode = str(value or "").strip().lower()
+    return mode if mode in {"leveraged", "standard"} else "leveraged"
+
+
+def _resolve_accounting_contract(
+    metadata: Dict[str, str],
+    *,
+    pair_snapshot: Optional[PairSnapshot],
+) -> Tuple[float, float, float, str, float]:
+    maker_fee_pct = _try_float(metadata.get("maker_fee_pct"))
+    taker_fee_pct = _try_float(metadata.get("taker_fee_pct"))
+    fallback_fee_pct = _try_float(metadata.get("fee_pct"))
+    if fallback_fee_pct is None:
+        fallback_fee_pct = _try_float(metadata.get("spot_fee_pct"))
+
+    if maker_fee_pct is None:
+        maker_fee_pct = fallback_fee_pct
+    if taker_fee_pct is None:
+        taker_fee_pct = fallback_fee_pct
+    if maker_fee_pct is None and taker_fee_pct is not None:
+        maker_fee_pct = taker_fee_pct
+    if taker_fee_pct is None and maker_fee_pct is not None:
+        taker_fee_pct = maker_fee_pct
+
+    maker_fee_pct = max(0.0, float(maker_fee_pct or 0.0))
+    taker_fee_pct = max(0.0, float(taker_fee_pct or 0.0))
+
+    leverage = _try_float(metadata.get("leverage"))
+    leverage = max(1.0, float(leverage if leverage is not None else 1.0))
+
+    margin_mode = _coerce_margin_mode(metadata.get("margin_mode"))
+
+    funding_rate = _try_float(metadata.get("funding_rate"))
+    if funding_rate is None and pair_snapshot is not None and pair_snapshot.funding_rate is not None:
+        funding_rate = float(pair_snapshot.funding_rate)
+    funding_rate = float(funding_rate if funding_rate is not None else 0.0)
+
+    return maker_fee_pct, taker_fee_pct, leverage, margin_mode, funding_rate
+
+
+def _fee_rate_for_fill(
+    *,
+    is_maker: bool,
+    maker_fee_pct: float,
+    taker_fee_pct: float,
+) -> float:
+    maker = max(0.0, float(maker_fee_pct))
+    taker = max(0.0, float(taker_fee_pct))
+    if is_maker:
+        return maker if maker > 0 else taker
+    return taker if taker > 0 else maker
+
+
+def _calc_fill_fee_quote(
+    *,
+    fill_notional_quote: float,
+    is_maker: bool,
+    maker_fee_pct: float,
+    taker_fee_pct: float,
+) -> Tuple[float, float]:
+    fee_rate_pct = _fee_rate_for_fill(
+        is_maker=is_maker,
+        maker_fee_pct=maker_fee_pct,
+        taker_fee_pct=taker_fee_pct,
+    )
+    fee_quote = max(0.0, abs(float(fill_notional_quote)) * fee_rate_pct)
+    return fee_quote, fee_rate_pct
+
+
+def _calc_margin_reserve_quote(
+    *,
+    filled_notional_quote_total: float,
+    leverage: float,
+    margin_mode: str,
+) -> float:
+    notional = max(0.0, abs(float(filled_notional_quote_total)))
+    if _coerce_margin_mode(margin_mode) == "standard":
+        return notional
+    lev = max(1.0, float(leverage))
+    return notional / lev
+
+
 def _order_metadata(order: OrderRecord) -> Dict[str, str]:
     remaining = _remaining_amount_base(order)
     return {
@@ -529,6 +759,13 @@ def _order_metadata(order: OrderRecord) -> Dict[str, str]:
         "updated_ts_ms": str(order.updated_ts_ms),
         "last_fill_snapshot_event_id": str(order.last_fill_snapshot_event_id or ""),
         "last_fill_amount_base": str(order.last_fill_amount_base),
+        "filled_fee_quote_total": str(order.filled_fee_quote),
+        "margin_reserve_quote": str(order.margin_reserve_quote),
+        "maker_fee_pct": str(order.maker_fee_pct),
+        "taker_fee_pct": str(order.taker_fee_pct),
+        "leverage": str(order.leverage),
+        "margin_mode": _coerce_margin_mode(order.margin_mode),
+        "funding_rate": str(order.funding_rate),
     }
 
 
@@ -550,6 +787,8 @@ def _event_for_command(
         connector_name=command.connector_name,
         trading_pair=command.trading_pair,
         order_id=command.order_id,
+        position_action=command.position_action,
+        position_mode=command.position_mode,
         metadata=dict(metadata or {}),
     )
 
@@ -572,8 +811,138 @@ def _market_execution_price(side: str, snapshot: Optional[PairSnapshot]) -> Opti
     return None
 
 
+def _extract_depth_levels(raw_levels: object, *, descending: bool, max_levels: int = 5) -> Tuple[Tuple[float, float], ...]:
+    levels: List[Tuple[float, float]] = []
+    if not isinstance(raw_levels, list):
+        return ()
+    for raw in raw_levels:
+        price: Optional[float] = None
+        size: Optional[float] = None
+        if isinstance(raw, dict):
+            price = _try_float(raw.get("price"))
+            size = _try_float(raw.get("size"))
+        elif isinstance(raw, (list, tuple)) and len(raw) >= 2:
+            price = _try_float(raw[0])
+            size = _try_float(raw[1])
+        if price is None or size is None or price <= 0 or size <= 0:
+            continue
+        levels.append((float(price), float(size)))
+        if len(levels) >= max(1, int(max_levels)):
+            break
+    levels.sort(key=lambda item: item[0], reverse=bool(descending))
+    return tuple(levels)
+
+
+def _contra_levels_for_snapshot(
+    snapshot: PairSnapshot,
+    *,
+    side: str,
+    max_levels: int,
+    limit_price: Optional[float] = None,
+) -> Tuple[Tuple[float, float], ...]:
+    levels = snapshot.ask_levels if side == "buy" else snapshot.bid_levels
+    if not levels:
+        top_price = _snapshot_best_ask(snapshot) if side == "buy" else _snapshot_best_bid(snapshot)
+        top_size = _snapshot_best_ask_size(snapshot) if side == "buy" else _snapshot_best_bid_size(snapshot)
+        if top_price is None:
+            return ()
+        levels = ((float(top_price), float(top_size) if top_size is not None else float("inf")),)
+    filtered: List[Tuple[float, float]] = []
+    for price, size in levels[: max(1, int(max_levels))]:
+        if limit_price is not None:
+            if side == "buy" and float(price) > float(limit_price):
+                continue
+            if side == "sell" and float(price) < float(limit_price):
+                continue
+        if float(size) <= _MIN_FILL_EPSILON:
+            continue
+        filtered.append((float(price), float(size)))
+    return tuple(filtered)
+
+
+def _sweep_fill_from_levels(
+    *,
+    amount_base: float,
+    levels: Tuple[Tuple[float, float], ...],
+) -> Tuple[float, Optional[float]]:
+    remaining = max(0.0, float(amount_base))
+    if remaining <= _MIN_FILL_EPSILON:
+        return 0.0, None
+    filled = 0.0
+    notional = 0.0
+    for price, size in levels:
+        take = min(remaining, max(0.0, float(size)))
+        if take <= _MIN_FILL_EPSILON:
+            continue
+        filled += take
+        notional += take * float(price)
+        remaining = max(0.0, remaining - take)
+        if remaining <= _MIN_FILL_EPSILON:
+            break
+    if filled <= _MIN_FILL_EPSILON:
+        return 0.0, None
+    return filled, (notional / filled)
+
+
+def _effective_depth_from_levels(
+    levels: Tuple[Tuple[float, float], ...],
+    *,
+    decay: float = 0.70,
+) -> float:
+    if not levels:
+        return 0.0
+    total = 0.0
+    weight = 1.0
+    bounded_decay = min(1.0, max(0.1, float(decay)))
+    for _price, size in levels:
+        if float(size) > _MIN_FILL_EPSILON:
+            total += float(size) * weight
+        weight *= bounded_decay
+    return max(0.0, float(total))
+
+
+def _consume_levels(
+    levels: List[Tuple[float, float]],
+    consumed: float,
+) -> List[Tuple[float, float]]:
+    remaining = max(0.0, float(consumed))
+    if remaining <= _MIN_FILL_EPSILON:
+        return [(float(price), float(size)) for price, size in levels]
+    out: List[Tuple[float, float]] = []
+    for price, size in levels:
+        level_size = max(0.0, float(size))
+        if remaining > _MIN_FILL_EPSILON and level_size > _MIN_FILL_EPSILON:
+            used = min(level_size, remaining)
+            level_size = max(0.0, level_size - used)
+            remaining = max(0.0, remaining - used)
+        if level_size > _MIN_FILL_EPSILON:
+            out.append((float(price), level_size))
+    return out
+
+
+def _filter_levels_for_limit(
+    levels: List[Tuple[float, float]],
+    *,
+    side: str,
+    limit_price: float,
+    max_levels: int,
+) -> Tuple[Tuple[float, float], ...]:
+    filtered: List[Tuple[float, float]] = []
+    for price, size in levels[: max(1, int(max_levels))]:
+        if side == "buy" and float(price) > float(limit_price):
+            continue
+        if side == "sell" and float(price) < float(limit_price):
+            continue
+        if float(size) <= _MIN_FILL_EPSILON:
+            continue
+        filtered.append((float(price), float(size)))
+    return tuple(filtered)
+
+
 def _order_matches_snapshot(order: OrderRecord, snapshot: PairSnapshot) -> bool:
     return (
+        _normalize(order.instance_name) == _normalize(snapshot.instance_name)
+        and
         _normalize(order.connector_name) == _normalize(snapshot.connector_name)
         and str(order.trading_pair).upper() == str(snapshot.trading_pair).upper()
     )
@@ -593,14 +962,17 @@ def _build_fill_candidates_for_snapshot(
     *,
     state: PaperExchangeState,
     snapshot: PairSnapshot,
+    resting_fill_latency_ms: int = 0,
+    maker_queue_participation: float = 1.0,
+    market_sweep_depth_levels: int = 1,
 ) -> List[FillCandidate]:
     best_bid = _snapshot_best_bid(snapshot)
     best_ask = _snapshot_best_ask(snapshot)
     if best_bid is None and best_ask is None:
         return []
 
-    bid_liquidity = _snapshot_best_bid_size(snapshot)
-    ask_liquidity = _snapshot_best_ask_size(snapshot)
+    bid_levels = list(_contra_levels_for_snapshot(snapshot, side="sell", max_levels=max(1, int(market_sweep_depth_levels))))
+    ask_levels = list(_contra_levels_for_snapshot(snapshot, side="buy", max_levels=max(1, int(market_sweep_depth_levels))))
     candidates: List[FillCandidate] = []
 
     # Replay guard for partially processed snapshot rows:
@@ -611,12 +983,26 @@ def _build_fill_candidates_for_snapshot(
         consumed = max(0.0, float(historical_order.last_fill_amount_base))
         if consumed <= _MIN_FILL_EPSILON:
             continue
-        if historical_order.side == "buy" and ask_liquidity is not None:
-            ask_liquidity = max(0.0, ask_liquidity - consumed)
-        elif historical_order.side == "sell" and bid_liquidity is not None:
-            bid_liquidity = max(0.0, bid_liquidity - consumed)
+        if historical_order.side == "buy":
+            ask_levels = _consume_levels(ask_levels, consumed)
+        elif historical_order.side == "sell":
+            bid_levels = _consume_levels(bid_levels, consumed)
 
     for order in _ordered_active_orders_for_snapshot(state, snapshot):
+        if is_immediate_tif(order.time_in_force):
+            # Defensive migration guard: immediate-only orders must never keep resting
+            # across snapshots (e.g., after version upgrades or legacy snapshots).
+            if can_transition_state(order.state, "expired"):
+                order.state = "expired"
+                order.updated_ts_ms = _now_ms()
+            else:
+                state.market_fill_invalid_transition_drops += 1
+                logger.warning(
+                    "paper_exchange invalid transition dropped | order_id=%s from=%s to=expired source=immediate_tif_guard",
+                    order.order_id,
+                    order.state,
+                )
+            continue
         if str(order.last_fill_snapshot_event_id or "") == str(snapshot.event_id):
             # Replay guard: one fill step per order per snapshot event_id.
             continue
@@ -625,26 +1011,59 @@ def _build_fill_candidates_for_snapshot(
             continue
         if not _crosses_book(order.side, float(order.price), best_bid, best_ask):
             continue
+        if int(snapshot.timestamp_ms) - int(order.created_ts_ms) < max(0, int(resting_fill_latency_ms)):
+            continue
 
         if order.side == "buy":
-            available = ask_liquidity
-            fill_price = float(best_ask if best_ask is not None else order.price)
+            contra_levels = _filter_levels_for_limit(
+                ask_levels,
+                side=order.side,
+                limit_price=float(order.price),
+                max_levels=max(1, int(market_sweep_depth_levels)),
+            )
         else:
-            available = bid_liquidity
-            fill_price = float(best_bid if best_bid is not None else order.price)
+            contra_levels = _filter_levels_for_limit(
+                bid_levels,
+                side=order.side,
+                limit_price=float(order.price),
+                max_levels=max(1, int(market_sweep_depth_levels)),
+            )
+        if order.side == "buy":
+            fill_price = float(order.price)
+        else:
+            fill_price = float(order.price)
         if fill_price <= 0:
             continue
 
-        fill_amount = remaining if available is None else min(remaining, float(available))
+        effective_depth = _effective_depth_from_levels(contra_levels)
+        fillable_available = (
+            remaining
+            if effective_depth <= _MIN_FILL_EPSILON
+            else float(effective_depth) * max(0.0, float(maker_queue_participation))
+        )
+        fill_amount = min(remaining, max(0.0, fillable_available))
         if fill_amount <= _MIN_FILL_EPSILON:
             continue
 
         remaining_after = max(0.0, remaining - fill_amount)
-        if order.side == "buy" and ask_liquidity is not None:
-            ask_liquidity = max(0.0, ask_liquidity - fill_amount)
-        if order.side == "sell" and bid_liquidity is not None:
-            bid_liquidity = max(0.0, bid_liquidity - fill_amount)
+        if order.side == "buy":
+            ask_levels = _consume_levels(ask_levels, fill_amount)
+        else:
+            bid_levels = _consume_levels(bid_levels, fill_amount)
 
+        fill_notional_quote = fill_amount * fill_price
+        fill_fee_quote, fill_fee_rate_pct = _calc_fill_fee_quote(
+            fill_notional_quote=fill_notional_quote,
+            is_maker=True,
+            maker_fee_pct=order.maker_fee_pct,
+            taker_fee_pct=order.taker_fee_pct,
+        )
+        filled_notional_quote_total = max(0.0, float(order.filled_quote) + float(fill_notional_quote))
+        margin_reserve_quote = _calc_margin_reserve_quote(
+            filled_notional_quote_total=filled_notional_quote_total,
+            leverage=order.leverage,
+            margin_mode=order.margin_mode,
+        )
         fill_count = int(order.fill_count) + 1
         candidates.append(
             FillCandidate(
@@ -654,12 +1073,16 @@ def _build_fill_candidates_for_snapshot(
                 new_state="filled" if remaining_after <= _MIN_FILL_EPSILON else "partially_filled",
                 fill_price=fill_price,
                 fill_amount_base=fill_amount,
-                fill_notional_quote=fill_amount * fill_price,
+                fill_notional_quote=fill_notional_quote,
                 remaining_amount_base=remaining_after,
                 is_maker=True,
                 snapshot_event_id=str(snapshot.event_id),
                 snapshot_market_sequence=int(snapshot.market_sequence or 0),
                 fill_count=fill_count,
+                fill_fee_quote=float(fill_fee_quote),
+                fill_fee_rate_pct=float(fill_fee_rate_pct),
+                margin_reserve_quote=float(margin_reserve_quote),
+                funding_rate=float(order.funding_rate),
             )
         )
     return candidates
@@ -672,6 +1095,9 @@ def _market_fill_event_from_candidate(
     candidate: FillCandidate,
 ) -> PaperExchangeEvent:
     reason = "resting_order_filled" if candidate.new_state == "filled" else "resting_order_partial_fill"
+    filled_base_total = max(0.0, float(order.filled_base) + float(candidate.fill_amount_base))
+    filled_notional_quote_total = max(0.0, float(order.filled_quote) + float(candidate.fill_notional_quote))
+    filled_fee_quote_total = max(0.0, float(order.filled_fee_quote) + float(candidate.fill_fee_quote))
     return PaperExchangeEvent(
         producer="paper_exchange_service",
         event_id=str(candidate.event_id),
@@ -696,11 +1122,20 @@ def _market_fill_event_from_candidate(
             "fill_price": str(candidate.fill_price),
             "fill_amount_base": str(candidate.fill_amount_base),
             "fill_notional_quote": str(candidate.fill_notional_quote),
-            "fill_fee_quote": "0",
+            "fill_fee_quote": str(candidate.fill_fee_quote),
+            "fill_fee_rate_pct": str(candidate.fill_fee_rate_pct),
             "is_maker": "1" if candidate.is_maker else "0",
             "remaining_amount_base": str(candidate.remaining_amount_base),
-            "filled_amount_base_total": str(max(0.0, (order.filled_base + candidate.fill_amount_base))),
-            "filled_notional_quote_total": str(max(0.0, (order.filled_quote + candidate.fill_notional_quote))),
+            "filled_amount_base_total": str(filled_base_total),
+            "filled_notional_quote_total": str(filled_notional_quote_total),
+            "filled_fee_quote_total": str(filled_fee_quote_total),
+            "maker_fee_pct": str(order.maker_fee_pct),
+            "taker_fee_pct": str(order.taker_fee_pct),
+            "leverage": str(order.leverage),
+            "margin_mode": _coerce_margin_mode(order.margin_mode),
+            "funding_rate": str(candidate.funding_rate),
+            "snapshot_funding_rate": str(snapshot.funding_rate) if snapshot.funding_rate is not None else "",
+            "margin_reserve_quote": str(candidate.margin_reserve_quote),
             "fill_count": str(candidate.fill_count),
             "snapshot_event_id": str(candidate.snapshot_event_id),
             "snapshot_market_sequence": str(candidate.snapshot_market_sequence),
@@ -710,14 +1145,28 @@ def _market_fill_event_from_candidate(
     )
 
 
-def _apply_fill_candidate(order: OrderRecord, candidate: FillCandidate, *, now_ms: int) -> None:
+def _apply_fill_candidate(order: OrderRecord, candidate: FillCandidate, *, now_ms: int) -> bool:
+    target_state = str(candidate.new_state or "").strip().lower()
+    if not can_transition_state(order.state, target_state):
+        logger.warning(
+            "paper_exchange invalid transition dropped | order_id=%s from=%s to=%s source=apply_fill_candidate",
+            order.order_id,
+            order.state,
+            target_state,
+        )
+        return False
     order.filled_base = max(0.0, float(order.filled_base) + float(candidate.fill_amount_base))
     order.filled_quote = max(0.0, float(order.filled_quote) + float(candidate.fill_notional_quote))
+    order.filled_fee_quote = max(0.0, float(order.filled_fee_quote) + float(candidate.fill_fee_quote))
+    order.margin_reserve_quote = max(0.0, float(candidate.margin_reserve_quote))
     order.fill_count = int(candidate.fill_count)
-    order.state = str(candidate.new_state)
+    if float(candidate.fill_amount_base) > _MIN_FILL_EPSILON and int(order.first_fill_ts_ms) <= 0:
+        order.first_fill_ts_ms = int(now_ms)
+    order.state = target_state
     order.last_fill_snapshot_event_id = str(candidate.snapshot_event_id)
     order.last_fill_amount_base = max(0.0, float(candidate.fill_amount_base))
     order.updated_ts_ms = int(now_ms)
+    return True
 
 
 def _prune_orders(
@@ -764,73 +1213,112 @@ def ingest_market_snapshot_payload(
     payload: Dict[str, object],
     state: PaperExchangeState,
     allowed_connectors: Set[str],
+    *,
+    entry_id: str = "",
 ) -> Tuple[bool, str]:
-    """Ingest a market snapshot from real exchange feed used by bots."""
-    try:
-        event = MarketSnapshotEvent(**payload)
-    except Exception:
+    """Ingest a canonical market quote or legacy controller snapshot."""
+    for field_name, reason in (
+        ("best_bid_size", "non_positive_best_bid_size"),
+        ("best_ask_size", "non_positive_best_ask_size"),
+    ):
+        if field_name not in payload or payload.get(field_name) in (None, ""):
+            continue
+        try:
+            if float(payload.get(field_name) or 0.0) <= 0.0:
+                state.rejected_snapshots += 1
+                return False, reason
+        except Exception:
+            state.rejected_snapshots += 1
+            return False, reason
+
+    state_view = parse_canonical_market_state(payload, entry_id=entry_id)
+    if state_view is None:
         state.rejected_snapshots += 1
         return False, "invalid_schema"
 
-    if event.mid_price <= 0:
+    event_type = state_view.event_type
+    instance_name = state_view.instance_name
+    mid_price = float(state_view.mid_price)
+    best_bid = float(state_view.best_bid) if state_view.best_bid > 0 else None
+    best_ask = float(state_view.best_ask) if state_view.best_ask > 0 else None
+    best_bid_size = float(state_view.best_bid_size) if state_view.best_bid_size > 0 else None
+    best_ask_size = float(state_view.best_ask_size) if state_view.best_ask_size > 0 else None
+    last_trade_price = float(state_view.last_trade_price) if state_view.last_trade_price > 0 else None
+    mark_price = float(state_view.mark_price) if state_view.mark_price > 0 else None
+    funding_rate = float(state_view.funding_rate) if state_view.funding_rate != 0 else 0.0
+    exchange_ts_ms = int(state_view.exchange_ts_ms) if state_view.exchange_ts_ms > 0 else None
+    ingest_ts_ms = int(state_view.ingest_ts_ms) if state_view.ingest_ts_ms > 0 else None
+    market_sequence = int(state_view.market_sequence) if state_view.market_sequence > 0 else None
+    connector_name = state_view.connector_name
+    trading_pair = state_view.trading_pair
+    timestamp_ms = int(state_view.timestamp_ms)
+    freshness_ts_ms = int(state_view.freshness_ts_ms)
+    bid_levels = _extract_depth_levels(payload.get("bids"), descending=True)
+    ask_levels = _extract_depth_levels(payload.get("asks"), descending=False)
+    if not bid_levels and best_bid is not None and best_bid_size is not None:
+        bid_levels = ((float(best_bid), float(best_bid_size)),)
+    if not ask_levels and best_ask is not None and best_ask_size is not None:
+        ask_levels = ((float(best_ask), float(best_ask_size)),)
+
+    if mid_price <= 0:
         state.rejected_snapshots += 1
         return False, "non_positive_mid_price"
-    if event.best_bid is not None and float(event.best_bid) <= 0:
+    if best_bid is not None and float(best_bid) <= 0:
         state.rejected_snapshots += 1
         return False, "non_positive_best_bid"
-    if event.best_ask is not None and float(event.best_ask) <= 0:
+    if best_ask is not None and float(best_ask) <= 0:
         state.rejected_snapshots += 1
         return False, "non_positive_best_ask"
-    if event.best_bid_size is not None and float(event.best_bid_size) <= 0:
+    if best_bid_size is not None and float(best_bid_size) <= 0:
         state.rejected_snapshots += 1
         return False, "non_positive_best_bid_size"
-    if event.best_ask_size is not None and float(event.best_ask_size) <= 0:
+    if best_ask_size is not None and float(best_ask_size) <= 0:
         state.rejected_snapshots += 1
         return False, "non_positive_best_ask_size"
-    if event.best_bid is not None and event.best_ask is not None and float(event.best_bid) >= float(event.best_ask):
+    if best_bid is not None and best_ask is not None and float(best_bid) >= float(best_ask):
         state.rejected_snapshots += 1
         return False, "invalid_top_of_book"
 
-    normalized_connector = _normalize(event.connector_name)
+    normalized_connector = _normalize(connector_name)
     if allowed_connectors and normalized_connector not in allowed_connectors:
         state.rejected_snapshots += 1
         return False, "connector_not_allowed"
 
-    key = _pair_key(event.connector_name, event.trading_pair)
+    key = _pair_key(instance_name, connector_name, trading_pair)
     previous = state.pairs.get(key)
-    incoming_exchange_ts = int(event.exchange_ts_ms) if event.exchange_ts_ms is not None else int(event.timestamp_ms)
-    incoming_sequence = int(event.market_sequence) if event.market_sequence is not None else 0
-    incoming_order_key = (incoming_exchange_ts, incoming_sequence, int(event.timestamp_ms))
+    incoming_order_key = market_payload_order_key(payload, entry_id=entry_id)
     previous_order_key = None
     if previous is not None:
-        previous_exchange_ts = (
-            int(previous.exchange_ts_ms)
-            if previous.exchange_ts_ms is not None
-            else int(previous.timestamp_ms)
+        previous_order_key = (
+            int(previous.exchange_ts_ms or previous.ingest_ts_ms or previous.timestamp_ms or previous.freshness_ts_ms),
+            int(previous.market_sequence or 0),
+            int(previous.timestamp_ms),
         )
-        previous_sequence = int(previous.market_sequence) if previous.market_sequence is not None else 0
-        previous_order_key = (previous_exchange_ts, previous_sequence, int(previous.timestamp_ms))
     if previous_order_key is not None and incoming_order_key < previous_order_key:
         state.rejected_snapshots += 1
         return False, "out_of_order_snapshot"
 
     state.pairs[key] = PairSnapshot(
-        connector_name=event.connector_name,
-        trading_pair=event.trading_pair,
-        instance_name=event.instance_name,
-        timestamp_ms=int(event.timestamp_ms),
-        mid_price=float(event.mid_price),
-        best_bid=float(event.best_bid) if event.best_bid is not None else None,
-        best_ask=float(event.best_ask) if event.best_ask is not None else None,
-        best_bid_size=float(event.best_bid_size) if event.best_bid_size is not None else None,
-        best_ask_size=float(event.best_ask_size) if event.best_ask_size is not None else None,
-        last_trade_price=float(event.last_trade_price) if event.last_trade_price is not None else None,
-        mark_price=float(event.mark_price) if event.mark_price is not None else None,
-        funding_rate=float(event.funding_rate) if event.funding_rate is not None else None,
-        exchange_ts_ms=int(event.exchange_ts_ms) if event.exchange_ts_ms is not None else None,
-        ingest_ts_ms=int(event.ingest_ts_ms) if event.ingest_ts_ms is not None else None,
-        market_sequence=int(event.market_sequence) if event.market_sequence is not None else None,
-        event_id=str(event.event_id),
+        connector_name=connector_name,
+        trading_pair=trading_pair,
+        instance_name=instance_name,
+        timestamp_ms=timestamp_ms,
+        freshness_ts_ms=freshness_ts_ms or market_payload_freshness_ts_ms(payload, entry_id=entry_id) or timestamp_ms,
+        mid_price=mid_price,
+        best_bid=best_bid,
+        best_ask=best_ask,
+        best_bid_size=best_bid_size,
+        best_ask_size=best_ask_size,
+        last_trade_price=last_trade_price,
+        mark_price=mark_price,
+        funding_rate=funding_rate,
+        exchange_ts_ms=exchange_ts_ms,
+        ingest_ts_ms=ingest_ts_ms,
+        market_sequence=market_sequence,
+        event_id=str(state_view.event_id or ""),
+        source_event_type=event_type,
+        bid_levels=bid_levels,
+        ask_levels=ask_levels,
     )
     state.accepted_snapshots += 1
     return True, "accepted"
@@ -846,7 +1334,7 @@ def build_heartbeat_event(
     now_ms: Optional[int] = None,
 ) -> PaperExchangeHeartbeatEvent:
     now = int(now_ms if now_ms is not None else _now_ms())
-    ages = [max(0, now - int(s.timestamp_ms)) for s in state.pairs.values()]
+    ages = [max(0, now - int(s.freshness_ts_ms or s.timestamp_ms)) for s in state.pairs.values()]
     stale_pairs = sum(1 for age in ages if age > stale_after_ms)
     l1_ready_pairs = sum(
         1 for snapshot in state.pairs.values() if snapshot.best_bid is not None and snapshot.best_ask is not None
@@ -879,6 +1367,7 @@ def build_heartbeat_event(
             "rejected_commands_missing_market": str(state.rejected_commands_missing_market),
             "rejected_commands_disallowed_connector": str(state.rejected_commands_disallowed_connector),
             "rejected_commands_unauthorized_producer": str(state.rejected_commands_unauthorized_producer),
+            "rejected_commands_namespace_collision": str(state.rejected_commands_namespace_collision),
             "rejected_commands_missing_privileged_metadata": str(
                 state.rejected_commands_missing_privileged_metadata
             ),
@@ -904,6 +1393,7 @@ def build_heartbeat_event(
             "reclaimed_pending_market_entries": str(state.reclaimed_pending_market_entries),
             "market_rows_not_acked": str(state.market_rows_not_acked),
             "deduplicated_market_fill_events": str(state.deduplicated_market_fill_events),
+            "market_fill_invalid_transition_drops": str(state.market_fill_invalid_transition_drops),
             "market_fill_journal_write_failures": str(state.market_fill_journal_write_failures),
             "market_fill_journal_size": str(len(state.market_fill_events_by_id)),
             "market_row_fill_cap_hits": str(state.market_row_fill_cap_hits),
@@ -918,6 +1408,7 @@ def handle_command_payload(
     allowed_connectors: Optional[Set[str]] = None,
     allowed_command_producers: Optional[Set[str]] = None,
     market_stale_after_ms: int = 15_000,
+    market_sweep_depth_levels: int = 1,
     command_sequence: int = 0,
     now_ms: Optional[int] = None,
 ) -> PaperExchangeEvent:
@@ -984,12 +1475,17 @@ def handle_command_payload(
     # Non-sync commands require fresh market snapshots from real exchange feed.
     pair_snapshot: Optional[PairSnapshot] = None
     if command.command != "sync_state":
-        pair_snapshot = state.pairs.get(_pair_key(command.connector_name, command.trading_pair))
+        pair_snapshot = _get_pair_snapshot(
+            state,
+            command.instance_name,
+            command.connector_name,
+            command.trading_pair,
+        )
         if pair_snapshot is None:
             state.rejected_commands += 1
             state.rejected_commands_missing_market += 1
             return _event_for_command(command=command, status="rejected", reason="no_market_snapshot")
-        snapshot_age_ms = max(0, now - int(pair_snapshot.timestamp_ms))
+        snapshot_age_ms = max(0, now - int(pair_snapshot.freshness_ts_ms or pair_snapshot.timestamp_ms))
         if snapshot_age_ms > int(max(1_000, market_stale_after_ms)):
             state.rejected_commands += 1
             state.rejected_commands_stale_market += 1
@@ -1021,6 +1517,28 @@ def handle_command_payload(
 
         existing_order = state.orders_by_id.get(order_id)
         if existing_order is not None:
+            existing_namespace = _namespace_base_key(
+                existing_order.instance_name,
+                existing_order.connector_name,
+                existing_order.trading_pair,
+            )
+            command_namespace = _namespace_base_key(
+                command.instance_name,
+                command.connector_name,
+                command.trading_pair,
+            )
+            if existing_namespace != command_namespace:
+                state.rejected_commands += 1
+                state.rejected_commands_namespace_collision += 1
+                return _event_for_command(
+                    command=command,
+                    status="rejected",
+                    reason="order_id_namespace_collision",
+                    metadata={
+                        "existing_namespace": existing_namespace,
+                        "command_namespace": command_namespace,
+                    },
+                )
             state.rejected_commands += 1
             return _event_for_command(
                 command=command,
@@ -1050,6 +1568,10 @@ def handle_command_payload(
             )
 
         metadata = dict(command.metadata or {})
+        maker_fee_pct, taker_fee_pct, leverage, margin_mode, funding_rate = _resolve_accounting_contract(
+            metadata,
+            pair_snapshot=pair_snapshot,
+        )
         time_in_force = _coerce_time_in_force(metadata)
         if not time_in_force:
             state.rejected_commands += 1
@@ -1061,6 +1583,8 @@ def handle_command_payload(
             )
 
         reduce_only = _parse_bool(metadata.get("reduce_only"), default=False)
+        position_action = str(command.position_action or metadata.get("position_action") or "auto").strip().lower() or "auto"
+        position_mode = str(command.position_mode or metadata.get("position_mode") or "ONEWAY").strip().upper() or "ONEWAY"
         post_only = bool(order_type == "post_only" or _parse_bool(metadata.get("post_only"), default=False))
         best_bid = _snapshot_best_bid(pair_snapshot)
         best_ask = _snapshot_best_ask(pair_snapshot)
@@ -1073,6 +1597,9 @@ def handle_command_payload(
         is_maker = True
         initial_filled_base = 0.0
         initial_filled_quote = 0.0
+        initial_filled_fee_quote = 0.0
+        initial_fill_fee_rate_pct = 0.0
+        initial_margin_reserve_quote = 0.0
         initial_fill_count = 0
         initial_last_fill_snapshot_event_id = ""
 
@@ -1109,15 +1636,17 @@ def handle_command_payload(
                 )
 
             if crosses:
-                cross_fill_amount = amount_base
-                if side == "buy":
-                    fill_price = float(best_ask if best_ask is not None else order_price)
-                    if best_ask_size is not None:
-                        cross_fill_amount = min(cross_fill_amount, float(best_ask_size))
-                else:
-                    fill_price = float(best_bid if best_bid is not None else order_price)
-                    if best_bid_size is not None:
-                        cross_fill_amount = min(cross_fill_amount, float(best_bid_size))
+                cross_levels = _contra_levels_for_snapshot(
+                    pair_snapshot,
+                    side=side,
+                    max_levels=max(1, int(market_sweep_depth_levels)),
+                    limit_price=order_price,
+                )
+                cross_fill_amount, cross_fill_price = _sweep_fill_from_levels(
+                    amount_base=amount_base,
+                    levels=cross_levels,
+                )
+                fill_price = float(cross_fill_price if cross_fill_price is not None else order_price)
                 cross_fill_amount = max(0.0, float(cross_fill_amount))
                 if cross_fill_amount <= _MIN_FILL_EPSILON:
                     state.rejected_commands += 1
@@ -1126,21 +1655,35 @@ def handle_command_payload(
                         status="rejected",
                         reason="insufficient_top_of_book_liquidity",
                     )
-                if cross_fill_amount + _MIN_FILL_EPSILON < amount_base:
-                    initial_state = "partially_filled"
-                    reason = "order_partially_filled_crossing"
-                else:
-                    initial_state = "filled"
-                    reason = "order_filled_crossing"
-                fill_notional_quote = cross_fill_amount * fill_price
-                is_maker = False
-                initial_filled_base = cross_fill_amount
-                initial_filled_quote = float(fill_notional_quote)
-                initial_fill_count = 1
+                initial_state, reason, effective_fill_amount = resolve_crossing_limit_order_outcome(
+                    amount_base=amount_base,
+                    immediate_fill_amount=cross_fill_amount,
+                    time_in_force=time_in_force,
+                    min_fill_epsilon=_MIN_FILL_EPSILON,
+                )
+                if effective_fill_amount > _MIN_FILL_EPSILON:
+                    fill_notional_quote = effective_fill_amount * fill_price
+                    is_maker = False
+                    initial_filled_base = effective_fill_amount
+                    initial_filled_quote = float(fill_notional_quote)
+                    initial_fill_count = 1
             elif time_in_force in {"ioc", "fok"}:
                 # Deterministic baseline: no book cross means IOC/FOK cannot execute.
                 initial_state = "expired"
                 reason = "time_in_force_expired_no_fill"
+
+        if initial_filled_quote > _MIN_FILL_EPSILON:
+            initial_filled_fee_quote, initial_fill_fee_rate_pct = _calc_fill_fee_quote(
+                fill_notional_quote=initial_filled_quote,
+                is_maker=is_maker,
+                maker_fee_pct=maker_fee_pct,
+                taker_fee_pct=taker_fee_pct,
+            )
+            initial_margin_reserve_quote = _calc_margin_reserve_quote(
+                filled_notional_quote_total=initial_filled_quote,
+                leverage=leverage,
+                margin_mode=margin_mode,
+            )
 
         order_record = OrderRecord(
             order_id=order_id,
@@ -1166,7 +1709,17 @@ def handle_command_payload(
             last_fill_amount_base=initial_filled_base if initial_filled_base > _MIN_FILL_EPSILON else 0.0,
             filled_base=initial_filled_base,
             filled_quote=initial_filled_quote,
+            first_fill_ts_ms=(now if initial_filled_base > _MIN_FILL_EPSILON else 0),
             fill_count=initial_fill_count,
+            filled_fee_quote=initial_filled_fee_quote,
+            margin_reserve_quote=initial_margin_reserve_quote,
+            maker_fee_pct=maker_fee_pct,
+            taker_fee_pct=taker_fee_pct,
+            leverage=leverage,
+            margin_mode=margin_mode,
+            funding_rate=funding_rate,
+            position_action=position_action,
+            position_mode=position_mode,
         )
         state.orders_by_id[order_id] = order_record
         state.processed_commands += 1
@@ -1178,9 +1731,14 @@ def handle_command_payload(
                 "best_ask": str(best_ask) if best_ask is not None else "",
                 "best_bid_size": str(best_bid_size) if best_bid_size is not None else "",
                 "best_ask_size": str(best_ask_size) if best_ask_size is not None else "",
+                "snapshot_funding_rate": str(pair_snapshot.funding_rate) if pair_snapshot and pair_snapshot.funding_rate is not None else "",
+                "accounting_contract_version": str(metadata.get("accounting_contract_version", "paper_exchange_v1")),
             }
         )
-        if order_record.state in {"filled", "partially_filled"}:
+        fee_source = str(metadata.get("fee_source", "")).strip()
+        if fee_source:
+            event_metadata["fee_source"] = fee_source
+        if order_record.filled_base > _MIN_FILL_EPSILON:
             event_metadata.update(
                 {
                     "fill_price": str(fill_price if fill_price is not None else order_record.price),
@@ -1190,8 +1748,12 @@ def handle_command_payload(
                         if fill_notional_quote is not None
                         else order_record.filled_base * order_record.price
                     ),
-                    "fill_fee_quote": "0",
+                    "fill_fee_quote": str(initial_filled_fee_quote),
+                    "fill_fee_rate_pct": str(initial_fill_fee_rate_pct),
                     "is_maker": "1" if is_maker else "0",
+                    "filled_fee_quote_total": str(order_record.filled_fee_quote),
+                    "margin_reserve_quote": str(order_record.margin_reserve_quote),
+                    "funding_rate": str(order_record.funding_rate),
                 }
             )
         return _event_for_command(
@@ -1220,7 +1782,7 @@ def handle_command_payload(
             state.rejected_commands += 1
             return _event_for_command(command=command, status="rejected", reason="order_scope_mismatch")
 
-        if order.state in _TERMINAL_ORDER_STATES:
+        if not can_transition_state(order.state, "cancelled"):
             state.rejected_commands += 1
             return _event_for_command(
                 command=command,
@@ -1251,7 +1813,7 @@ def handle_command_payload(
                 or str(order.trading_pair).upper() != str(command.trading_pair).upper()
             ):
                 continue
-            if order.state in _ACTIVE_ORDER_STATES:
+            if can_transition_state(order.state, "cancelled") and order.state != "cancelled":
                 order.state = "cancelled"
                 order.updated_ts_ms = now
                 order.last_command_event_id = command.event_id
@@ -1305,11 +1867,16 @@ def process_command_rows(
         command_mutates_orders = False
         command_is_sync_state = False
         track_command_result = False
+        command_producer = ""
+        command_producer_authorized = True
         try:
             parsed_command = PaperExchangeCommandEvent(**payload)
             command_event_id = str(parsed_command.event_id or "").strip()
             command_metadata = dict(parsed_command.metadata or {})
             command_name = _normalize(parsed_command.command)
+            command_producer = str(parsed_command.producer or "")
+            if settings.allowed_command_producers:
+                command_producer_authorized = _normalize(command_producer) in settings.allowed_command_producers
             command_mutates_orders = command_name in {"submit_order", "cancel_order", "cancel_all"}
             command_is_sync_state = command_name == "sync_state"
             command_is_privileged = _is_privileged_command(parsed_command.command)
@@ -1367,6 +1934,7 @@ def process_command_rows(
             allowed_connectors=settings.allowed_connectors,
             allowed_command_producers=settings.allowed_command_producers,
             market_stale_after_ms=settings.market_stale_after_ms,
+            market_sweep_depth_levels=settings.market_sweep_depth_levels,
             command_sequence=command_sequence,
         )
         if command_mutates_orders:
@@ -1414,6 +1982,8 @@ def process_command_rows(
                         audit_required=True,
                         audit_published=False,
                         command_metadata=command_metadata,
+                        command_producer=command_producer,
+                        producer_authorized=command_producer_authorized,
                     )
                     try:
                         _persist_command_journal(command_journal_path, state.command_results_by_id)
@@ -1430,6 +2000,8 @@ def process_command_rows(
                 audit_required=audit_required,
                 audit_published=audit_published,
                 command_metadata=command_metadata,
+                command_producer=command_producer,
+                producer_authorized=command_producer_authorized,
             )
             try:
                 _persist_command_journal(command_journal_path, state.command_results_by_id)
@@ -1455,6 +2027,7 @@ def process_market_rows(
     state: PaperExchangeState,
     settings: ServiceSettings,
     state_snapshot_path: Optional[Path] = None,
+    pair_snapshot_path: Optional[Path] = None,
     market_fill_journal_path: Optional[Path] = None,
 ) -> None:
     for entry_id, payload in rows:
@@ -1462,6 +2035,7 @@ def process_market_rows(
             payload=payload,
             state=state,
             allowed_connectors=settings.allowed_connectors,
+            entry_id=str(entry_id),
         )
         if not ok:
             if source == "reclaimed":
@@ -1469,20 +2043,35 @@ def process_market_rows(
             client.ack(settings.market_data_stream, settings.consumer_group, entry_id)
             continue
 
-        snapshot_key = _pair_key(str(payload.get("connector_name", "")), str(payload.get("trading_pair", "")))
-        snapshot = state.pairs.get(snapshot_key)
+        snapshot = _get_pair_snapshot(
+            state,
+            str(payload.get("instance_name", "")),
+            str(payload.get("connector_name", "")),
+            str(payload.get("trading_pair", "")),
+        )
         if snapshot is None:
             if source == "reclaimed":
                 state.reclaimed_pending_market_entries += 1
             client.ack(settings.market_data_stream, settings.consumer_group, entry_id)
             continue
+        if pair_snapshot_path is not None:
+            try:
+                _persist_pair_snapshot(pair_snapshot_path, state.pairs)
+            except Exception as exc:
+                logger.warning("paper_exchange pair snapshot persist failed: %s", exc)
 
         state.market_match_cycles += 1
         applied_count = 0
         publish_failed = False
         persist_failed = False
         cap_hit = False
-        for candidate in _build_fill_candidates_for_snapshot(state=state, snapshot=snapshot):
+        for candidate in _build_fill_candidates_for_snapshot(
+            state=state,
+            snapshot=snapshot,
+            resting_fill_latency_ms=settings.resting_fill_latency_ms,
+            maker_queue_participation=settings.maker_queue_participation,
+            market_sweep_depth_levels=settings.market_sweep_depth_levels,
+        ):
             if applied_count >= max(1, int(settings.max_fill_events_per_market_row)):
                 state.market_row_fill_cap_hits += 1
                 logger.warning(
@@ -1494,6 +2083,15 @@ def process_market_rows(
                 break
             order = state.orders_by_id.get(candidate.order_id)
             if order is None:
+                continue
+            if not can_transition_state(order.state, candidate.new_state):
+                state.market_fill_invalid_transition_drops += 1
+                logger.warning(
+                    "paper_exchange invalid transition dropped | order_id=%s from=%s to=%s source=process_market_rows",
+                    order.order_id,
+                    order.state,
+                    candidate.new_state,
+                )
                 continue
             fill_event = _market_fill_event_from_candidate(order=order, snapshot=snapshot, candidate=candidate)
             event_id = str(fill_event.event_id or "")
@@ -1535,7 +2133,9 @@ def process_market_rows(
                             persist_failed = True
                             break
 
-            _apply_fill_candidate(order, candidate, now_ms=_now_ms())
+            if not _apply_fill_candidate(order, candidate, now_ms=_now_ms()):
+                state.market_fill_invalid_transition_drops += 1
+                continue
             if not event_already_published:
                 state.generated_fill_events += 1
                 if candidate.new_state == "partially_filled":
@@ -1570,6 +2170,7 @@ def run(settings: ServiceSettings) -> None:
     root = Path("/workspace/hbot") if Path("/.dockerenv").exists() else Path(__file__).resolve().parents[2]
     command_journal_path = _resolve_path(settings.command_journal_path, root)
     state_snapshot_path = _resolve_path(settings.state_snapshot_path, root)
+    pair_snapshot_path = _resolve_path(settings.pair_snapshot_path, root)
     market_fill_journal_path = _resolve_path(settings.market_fill_journal_path, root)
     client = RedisStreamClient(
         host=settings.redis_host,
@@ -1653,6 +2254,7 @@ def run(settings: ServiceSettings) -> None:
                 state=state,
                 settings=settings,
                 state_snapshot_path=state_snapshot_path,
+                pair_snapshot_path=pair_snapshot_path,
                 market_fill_journal_path=market_fill_journal_path,
             )
 
@@ -1672,6 +2274,7 @@ def run(settings: ServiceSettings) -> None:
                 state=state,
                 settings=settings,
                 state_snapshot_path=state_snapshot_path,
+                pair_snapshot_path=pair_snapshot_path,
                 market_fill_journal_path=market_fill_journal_path,
             )
 
@@ -1723,6 +2326,10 @@ def run(settings: ServiceSettings) -> None:
 
         now = _now_ms()
         if now - last_heartbeat_ms >= settings.heartbeat_interval_ms:
+            try:
+                _persist_pair_snapshot(pair_snapshot_path, state.pairs)
+            except Exception as exc:
+                logger.warning("paper_exchange pair snapshot persist failed: %s", exc)
             heartbeat = build_heartbeat_event(
                 state=state,
                 service_instance_name=settings.service_instance_name,
@@ -1765,7 +2372,7 @@ def _parse_args() -> ServiceSettings:
     )
     parser.add_argument(
         "--market-stream",
-        default=os.getenv("PAPER_EXCHANGE_MARKET_STREAM", MARKET_DATA_STREAM),
+        default=os.getenv("PAPER_EXCHANGE_MARKET_STREAM", MARKET_QUOTE_STREAM),
         help="Redis stream carrying market snapshots.",
     )
     parser.add_argument(
@@ -1804,6 +2411,24 @@ def _parse_args() -> ServiceSettings:
         default=int(os.getenv("PAPER_EXCHANGE_MARKET_STALE_AFTER_MS", "15000")),
     )
     parser.add_argument(
+        "--resting-fill-latency-ms",
+        type=int,
+        default=int(os.getenv("PAPER_EXCHANGE_RESTING_FILL_LATENCY_MS", "250")),
+        help="Minimum resting age before passive fills can occur.",
+    )
+    parser.add_argument(
+        "--maker-queue-participation",
+        type=float,
+        default=float(os.getenv("PAPER_EXCHANGE_MAKER_QUEUE_PARTICIPATION", "0.35")),
+        help="Deterministic fraction of visible touch liquidity considered fillable for resting maker orders.",
+    )
+    parser.add_argument(
+        "--market-sweep-depth-levels",
+        type=int,
+        default=int(os.getenv("PAPER_EXCHANGE_MARKET_SWEEP_DEPTH_LEVELS", "3")),
+        help="Maximum contra depth levels consumed for crossing-limit sweep pricing.",
+    )
+    parser.add_argument(
         "--max-fill-events-per-market-row",
         type=int,
         default=int(os.getenv("PAPER_EXCHANGE_MAX_FILL_EVENTS_PER_MARKET_ROW", "200")),
@@ -1839,6 +2464,14 @@ def _parse_args() -> ServiceSettings:
             "reports/verification/paper_exchange_state_snapshot_latest.json",
         ),
         help="Persistent order-state snapshot path for restart recovery.",
+    )
+    parser.add_argument(
+        "--pair-snapshot-path",
+        default=os.getenv(
+            "PAPER_EXCHANGE_PAIR_SNAPSHOT_PATH",
+            "reports/verification/paper_exchange_pair_snapshot_latest.json",
+        ),
+        help="Persistent pair snapshot path for per-symbol market freshness metrics.",
     )
     parser.add_argument(
         "--market-fill-journal-path",
@@ -1944,12 +2577,16 @@ def _parse_args() -> ServiceSettings:
         allowed_command_producers=_csv_set(str(args.allowed_command_producers)),
         audit_stream=str(args.audit_stream),
         market_stale_after_ms=max(1_000, int(args.market_stale_after_ms)),
+        resting_fill_latency_ms=max(0, int(args.resting_fill_latency_ms)),
+        maker_queue_participation=min(1.0, max(0.0, float(args.maker_queue_participation))),
+        market_sweep_depth_levels=max(1, int(args.market_sweep_depth_levels)),
         max_fill_events_per_market_row=max(1, int(args.max_fill_events_per_market_row)),
         heartbeat_interval_ms=max(1_000, int(args.heartbeat_interval_ms)),
         read_count=max(1, int(args.read_count)),
         read_block_ms=max(1, int(args.read_block_ms)),
         command_journal_path=str(args.command_journal_path),
         state_snapshot_path=str(args.state_snapshot_path),
+        pair_snapshot_path=str(args.pair_snapshot_path),
         market_fill_journal_path=str(args.market_fill_journal_path),
         market_fill_journal_max_entries=max(1, int(args.market_fill_journal_max_entries)),
         pending_reclaim_enabled=pending_reclaim_enabled,

@@ -245,6 +245,21 @@ class OrderSide(str, Enum):
         return OrderSide.SELL if self == OrderSide.BUY else OrderSide.BUY
 
 
+class PositionAction(str, Enum):
+    """Explicit hedge-leg intent for an order/fill.
+
+    `AUTO` preserves legacy signed-position behavior for existing callers.
+    The explicit open/close variants let hedge-mode flows target one leg
+    without collapsing long/short state into a single net position.
+    """
+
+    AUTO = "auto"
+    OPEN_LONG = "open_long"
+    CLOSE_LONG = "close_long"
+    OPEN_SHORT = "open_short"
+    CLOSE_SHORT = "close_short"
+
+
 class PaperOrderType(str, Enum):
     LIMIT = "limit"
     LIMIT_MAKER = "limit_maker"
@@ -308,6 +323,8 @@ class PaperOrder:
     source_bot: str = ""
     reject_reason: str = ""
     reduce_only: bool = False
+    position_action: PositionAction = PositionAction.AUTO
+    position_mode: str = "ONEWAY"
     contingent_parent_order_id: str = ""
     contingent_trigger_mode: str = "partial"  # "partial"|"full"
     # Internal: set by engine at acceptance time for release on fill/cancel
@@ -355,6 +372,19 @@ class PaperPosition:
     funding_paid: Decimal       # perps only
     opened_at_ns: int
     last_fill_at_ns: int
+    position_mode: str = "ONEWAY"
+    long_quantity: Decimal = field(default_factory=lambda: _ZERO)
+    long_avg_entry_price: Decimal = field(default_factory=lambda: _ZERO)
+    long_realized_pnl: Decimal = field(default_factory=lambda: _ZERO)
+    long_unrealized_pnl: Decimal = field(default_factory=lambda: _ZERO)
+    long_funding_paid: Decimal = field(default_factory=lambda: _ZERO)
+    long_opened_at_ns: int = 0
+    short_quantity: Decimal = field(default_factory=lambda: _ZERO)
+    short_avg_entry_price: Decimal = field(default_factory=lambda: _ZERO)
+    short_realized_pnl: Decimal = field(default_factory=lambda: _ZERO)
+    short_unrealized_pnl: Decimal = field(default_factory=lambda: _ZERO)
+    short_funding_paid: Decimal = field(default_factory=lambda: _ZERO)
+    short_opened_at_ns: int = 0
 
     @property
     def side(self) -> str:
@@ -369,10 +399,65 @@ class PaperPosition:
         return abs(self.quantity)
 
     @property
+    def gross_quantity(self) -> Decimal:
+        return max(_ZERO, self.long_quantity) + max(_ZERO, self.short_quantity)
+
+    @property
+    def has_hedge_legs(self) -> bool:
+        return self.long_quantity > _ZERO and self.short_quantity > _ZERO
+
+    @property
     def net_pnl(self) -> Decimal:
         return self.realized_pnl + self.unrealized_pnl - self.total_fees_paid - self.funding_paid
 
+    def ensure_leg_consistency(self) -> None:
+        """Backfill hedge-leg fields from legacy signed-position state when needed."""
+        if self.long_quantity > _ZERO or self.short_quantity > _ZERO:
+            return
+        if self.quantity > _ZERO:
+            self.long_quantity = self.quantity
+            self.long_avg_entry_price = self.avg_entry_price
+            self.long_realized_pnl = self.realized_pnl
+            self.long_unrealized_pnl = self.unrealized_pnl
+            self.long_funding_paid = self.funding_paid
+            self.long_opened_at_ns = self.opened_at_ns
+        elif self.quantity < _ZERO:
+            self.short_quantity = abs(self.quantity)
+            self.short_avg_entry_price = self.avg_entry_price
+            self.short_realized_pnl = self.realized_pnl
+            self.short_unrealized_pnl = self.unrealized_pnl
+            self.short_funding_paid = self.funding_paid
+            self.short_opened_at_ns = self.opened_at_ns
+
+    def sync_derived_fields(self) -> None:
+        """Refresh legacy netted fields from leg-aware state."""
+        self.long_quantity = max(_ZERO, self.long_quantity)
+        self.short_quantity = max(_ZERO, self.short_quantity)
+        self.quantity = self.long_quantity - self.short_quantity
+        self.realized_pnl = self.long_realized_pnl + self.short_realized_pnl
+        self.unrealized_pnl = self.long_unrealized_pnl + self.short_unrealized_pnl
+        self.funding_paid = self.long_funding_paid + self.short_funding_paid
+        if self.quantity > _ZERO:
+            self.avg_entry_price = self.long_avg_entry_price
+            self.opened_at_ns = self.long_opened_at_ns
+        elif self.quantity < _ZERO:
+            self.avg_entry_price = self.short_avg_entry_price
+            self.opened_at_ns = self.short_opened_at_ns
+        else:
+            self.avg_entry_price = _ZERO
+            self.opened_at_ns = min(
+                value for value in (self.long_opened_at_ns, self.short_opened_at_ns) if value > 0
+            ) if (self.long_opened_at_ns > 0 or self.short_opened_at_ns > 0) else 0
+
+    def leg_quantity(self, leg_side: str) -> Decimal:
+        return self.long_quantity if str(leg_side).lower() == "long" else self.short_quantity
+
+    def leg_avg_entry_price(self, leg_side: str) -> Decimal:
+        return self.long_avg_entry_price if str(leg_side).lower() == "long" else self.short_avg_entry_price
+
     def to_dict(self) -> Dict[str, Any]:
+        self.ensure_leg_consistency()
+        self.sync_derived_fields()
         return {
             "instrument_id": self.instrument_id.key,
             "quantity": str(self.quantity),
@@ -383,21 +468,50 @@ class PaperPosition:
             "funding_paid": str(self.funding_paid),
             "opened_at_ns": self.opened_at_ns,
             "last_fill_at_ns": self.last_fill_at_ns,
+            "position_mode": self.position_mode,
+            "long_quantity": str(self.long_quantity),
+            "long_avg_entry_price": str(self.long_avg_entry_price),
+            "long_realized_pnl": str(self.long_realized_pnl),
+            "long_unrealized_pnl": str(self.long_unrealized_pnl),
+            "long_funding_paid": str(self.long_funding_paid),
+            "long_opened_at_ns": self.long_opened_at_ns,
+            "short_quantity": str(self.short_quantity),
+            "short_avg_entry_price": str(self.short_avg_entry_price),
+            "short_realized_pnl": str(self.short_realized_pnl),
+            "short_unrealized_pnl": str(self.short_unrealized_pnl),
+            "short_funding_paid": str(self.short_funding_paid),
+            "short_opened_at_ns": self.short_opened_at_ns,
         }
 
     @classmethod
     def from_dict(cls, d: Dict[str, Any], instrument_id: InstrumentId) -> "PaperPosition":
-        return cls(
+        pos = cls(
             instrument_id=instrument_id,
-            quantity=Decimal(d["quantity"]),
-            avg_entry_price=Decimal(d["avg_entry_price"]),
-            realized_pnl=Decimal(d["realized_pnl"]),
-            unrealized_pnl=Decimal(d["unrealized_pnl"]),
-            total_fees_paid=Decimal(d["total_fees_paid"]),
-            funding_paid=Decimal(d["funding_paid"]),
-            opened_at_ns=int(d["opened_at_ns"]),
-            last_fill_at_ns=int(d["last_fill_at_ns"]),
+            quantity=Decimal(str(d.get("quantity", "0"))),
+            avg_entry_price=Decimal(str(d.get("avg_entry_price", "0"))),
+            realized_pnl=Decimal(str(d.get("realized_pnl", "0"))),
+            unrealized_pnl=Decimal(str(d.get("unrealized_pnl", "0"))),
+            total_fees_paid=Decimal(str(d.get("total_fees_paid", "0"))),
+            funding_paid=Decimal(str(d.get("funding_paid", "0"))),
+            opened_at_ns=int(d.get("opened_at_ns", 0)),
+            last_fill_at_ns=int(d.get("last_fill_at_ns", 0)),
+            position_mode=str(d.get("position_mode", "ONEWAY") or "ONEWAY"),
+            long_quantity=Decimal(str(d.get("long_quantity", "0"))),
+            long_avg_entry_price=Decimal(str(d.get("long_avg_entry_price", "0"))),
+            long_realized_pnl=Decimal(str(d.get("long_realized_pnl", "0"))),
+            long_unrealized_pnl=Decimal(str(d.get("long_unrealized_pnl", "0"))),
+            long_funding_paid=Decimal(str(d.get("long_funding_paid", "0"))),
+            long_opened_at_ns=int(d.get("long_opened_at_ns", 0)),
+            short_quantity=Decimal(str(d.get("short_quantity", "0"))),
+            short_avg_entry_price=Decimal(str(d.get("short_avg_entry_price", "0"))),
+            short_realized_pnl=Decimal(str(d.get("short_realized_pnl", "0"))),
+            short_unrealized_pnl=Decimal(str(d.get("short_unrealized_pnl", "0"))),
+            short_funding_paid=Decimal(str(d.get("short_funding_paid", "0"))),
+            short_opened_at_ns=int(d.get("short_opened_at_ns", 0)),
         )
+        pos.ensure_leg_consistency()
+        pos.sync_derived_fields()
+        return pos
 
     @classmethod
     def flat(cls, instrument_id: InstrumentId) -> "PaperPosition":
@@ -406,6 +520,7 @@ class PaperPosition:
             avg_entry_price=_ZERO, realized_pnl=_ZERO,
             unrealized_pnl=_ZERO, total_fees_paid=_ZERO,
             funding_paid=_ZERO, opened_at_ns=0, last_fill_at_ns=0,
+            position_mode="ONEWAY",
         )
 
 
@@ -505,6 +620,7 @@ class OrderAccepted(EngineEvent):
     price: Decimal
     quantity: Decimal
     source_bot: str
+    position_action: str = PositionAction.AUTO.value
 
 
 @dataclass(frozen=True)
@@ -523,6 +639,7 @@ class OrderFilled(EngineEvent):
     is_maker: bool
     remaining_quantity: Decimal
     source_bot: str
+    position_action: str = PositionAction.AUTO.value
 
 
 @dataclass(frozen=True)
@@ -539,6 +656,7 @@ class PositionChanged(EngineEvent):
     fill_price: Decimal
     fill_quantity: Decimal
     realized_pnl: Decimal        # pure price PnL for this fill only (no fees)
+    position_action: str = PositionAction.AUTO.value
 
 
 @dataclass(frozen=True)

@@ -1,5 +1,5 @@
 {
-  "ts_utc": "2026-03-02T18:44:13.654871+00:00",
+  "ts_utc": "2026-03-07T16:10:30.701311+00:00",
   "status": "ok",
   "tradenote_url": "http://tradenote:8080",
   "selected_broker": "template",
@@ -8,25 +8,30 @@
   "lookback_days": 14,
   "discovered_sources": [
     "bot1:a",
-    "bot3:a"
+    "bot3:a",
+    "bot5:a"
   ],
   "rows_by_source": {},
   "candidate_days": [],
   "skipped_imported_days": [
     "2026-02-23",
     "2026-02-24",
-    "2026-02-25",
-    "2026-02-26",
-    "2026-02-27",
-    "2026-02-28",
     "2026-03-01",
-    "2026-03-02"
+    "2026-03-02",
+    "2026-03-03",
+    "2026-03-04",
+    "2026-03-05",
+    "2026-03-06",
+    "2026-03-07"
   ],
-  "imported_days_total_before": 8,
-  "imported_days_total_after": 8,
+  "imported_days_total_before": 13,
+  "imported_days_total_after": 13,
   "imported_this_run": [],
   "rows_posted_by_day": {},
   "state_path": "/workspace/hbot/reports/tradenote/sync_state.json",
   "max_rows_per_post": 100,
-  "chunks_posted_by_day": {}
+  "chunks_posted_by_day": {},
+  "scope_symbol_by_account": true,
+  "data_source_mode": "csv",
+  "data_source_requested": "csv"
 }

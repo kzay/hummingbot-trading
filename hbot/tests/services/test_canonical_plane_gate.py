@@ -8,6 +8,7 @@ from scripts.release.check_canonical_plane_gate import (
     _duplicate_suppression_metrics,
     _max_replay_lag_from_day2,
     _parity_delta_ratio,
+    run,
 )
 
 
@@ -90,3 +91,34 @@ def test_max_replay_lag_falls_back_to_source_compare(tmp_path: Path) -> None:
     )
     value = _max_replay_lag_from_day2({"source_compare_file": str(source_compare)}, reports)
     assert value == 2
+
+
+def test_canonical_plane_gate_fails_without_nonzero_evidence(tmp_path: Path, monkeypatch) -> None:
+    root = tmp_path
+    reports = root / "reports"
+    (reports / "ops_db_writer").mkdir(parents=True, exist_ok=True)
+    (reports / "event_store").mkdir(parents=True, exist_ok=True)
+    (reports / "ops_db_writer" / "latest.json").write_text(
+        json.dumps({"ts_utc": "2026-03-05T00:00:00Z", "status": "pass"}),
+        encoding="utf-8",
+    )
+    (reports / "event_store" / "day2_gate_eval_latest.json").write_text(
+        json.dumps({"lag_diagnostics": {"max_delta_observed": 0}}),
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(
+        "scripts.release.check_canonical_plane_gate._fetch_db_counts",
+        lambda: {"minute": 0, "fills": 0, "events": 0},
+    )
+    payload = run(
+        root=root,
+        data_root=root / "data",
+        reports_root=reports,
+        max_db_ingest_age_min=10.0,
+        max_parity_delta_ratio=0.1,
+        min_duplicate_suppression_rate=0.99,
+        max_replay_lag_delta=5,
+    )
+    checks = {item["name"]: item for item in payload["checks"]}
+    assert payload["status"] == "FAIL"
+    assert checks["nonzero_ingestion_evidence"]["pass"] is False

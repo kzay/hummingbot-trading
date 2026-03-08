@@ -5,6 +5,7 @@ import argparse
 import csv
 import json
 from datetime import date, datetime, timedelta, timezone
+from decimal import Decimal
 from pathlib import Path
 from typing import Dict, Iterable, List
 
@@ -61,6 +62,44 @@ def _safe_float(value: str, default: float = 0.0) -> float:
         return default
 
 
+def _safe_decimal(value: object, default: Decimal = Decimal("0")) -> Decimal:
+    try:
+        return Decimal(str(value))
+    except Exception:
+        return default
+
+
+def _is_truthy(value: object) -> bool:
+    return str(value or "").strip().lower() in {"1", "true", "yes", "on", "y"}
+
+
+def _daily_net_pnl(rows: List[Dict[str, str]]) -> tuple[float, float, float]:
+    realized = sum((_safe_decimal(r.get("realized_pnl_quote", "0")) for r in rows), Decimal("0"))
+    fees = sum((_safe_decimal(r.get("fee_quote", "0")) for r in rows), Decimal("0"))
+    net = realized - fees
+    return float(net), float(realized), float(fees)
+
+
+def _hard_stop_incidents(rows: List[Dict[str, str]]) -> tuple[int, int]:
+    """Return (hard_stop_row_count, hard_stop_transition_count)."""
+    hard_stop_row_count = 0
+    hard_stop_transition_count = 0
+    was_hard_stop = False
+    for row in rows:
+        state = str(row.get("state", "")).strip().lower()
+        hard_stop_now = (
+            state == "hard_stop"
+            or _is_truthy(row.get("hard_stop"))
+            or _is_truthy(row.get("is_hard_stop"))
+        )
+        if hard_stop_now:
+            hard_stop_row_count += 1
+        if hard_stop_now and not was_hard_stop:
+            hard_stop_transition_count += 1
+        was_hard_stop = hard_stop_now
+    return hard_stop_row_count, hard_stop_transition_count
+
+
 def _repo_root() -> Path:
     if Path("/.dockerenv").exists():
         return Path("/workspace/hbot")
@@ -113,6 +152,9 @@ def build_scorecard(day: str, testnet_root: Path, paper_root: Path, reports_root
 
     cancel_before_fill, cancel_before_fill_rate = _cancel_before_fill_rate(testnet_minute)
     paper_cancel_before_fill, paper_cancel_before_fill_rate = _cancel_before_fill_rate(paper_minute)
+    testnet_net_pnl_quote, testnet_realized_pnl_quote, testnet_fees_quote = _daily_net_pnl(testnet_fills)
+    paper_net_pnl_quote, paper_realized_pnl_quote, paper_fees_quote = _daily_net_pnl(paper_fills)
+    hard_stop_row_count, hard_stop_incident_count = _hard_stop_incidents(testnet_minute)
 
     drift_alarm_count = sum(
         1 for r in testnet_minute if _safe_float(r.get("position_drift_pct", "0")) > 0.01
@@ -129,6 +171,9 @@ def build_scorecard(day: str, testnet_root: Path, paper_root: Path, reports_root
     if rejection_rate > 0.005:
         status = "fail"
         failures.append("rejection_rate_gt_0_5pct")
+    if hard_stop_incident_count > 0:
+        status = "fail"
+        failures.append("hard_stop_incident_detected")
 
     benchmark_checks: List[Dict[str, object]] = []
     benchmark_status = "insufficient_data"
@@ -196,6 +241,14 @@ def build_scorecard(day: str, testnet_root: Path, paper_root: Path, reports_root
             "paper_rejection_rate": paper_rejection_rate,
             "cancel_before_fill_rate": cancel_before_fill_rate,
             "paper_cancel_before_fill_rate": paper_cancel_before_fill_rate,
+            "testnet_net_pnl_quote": testnet_net_pnl_quote,
+            "testnet_realized_pnl_quote": testnet_realized_pnl_quote,
+            "testnet_fees_quote": testnet_fees_quote,
+            "paper_net_pnl_quote": paper_net_pnl_quote,
+            "paper_realized_pnl_quote": paper_realized_pnl_quote,
+            "paper_fees_quote": paper_fees_quote,
+            "hard_stop_row_count": hard_stop_row_count,
+            "hard_stop_incident_count": hard_stop_incident_count,
             "drift_alarm_count": drift_alarm_count,
         },
         "micro_benchmark": {

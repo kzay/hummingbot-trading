@@ -141,14 +141,25 @@ def read_last_csv_row(path: Path) -> Optional[Dict[str, str]]:
             f.seek(max(0, size - 8192))
             f.readline()
             lines = f.readlines()
-            if not lines:
-                return None
-            for line in reversed(lines):
-                stripped = line.strip()
-                if stripped and stripped != header_line:
-                    values = stripped.split(",")
+            if lines:
+                for line in reversed(lines):
+                    stripped = line.strip()
+                    if not stripped or stripped == header_line:
+                        continue
+                    try:
+                        values = next(csv.reader([stripped]))
+                    except Exception:
+                        continue
                     if len(values) == len(fieldnames):
                         return dict(zip(fieldnames, values))
+        # Fallback for edge cases where tail parsing cannot recover
+        # a complete row (e.g., embedded delimiters/quotes near buffer cut).
+        with path.open("r", encoding="utf-8", newline="") as f:
+            reader = csv.DictReader(f)
+            last = None
+            for row in reader:
+                last = row
+            return last
     except Exception:
         return None
     return None

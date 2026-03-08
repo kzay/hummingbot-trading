@@ -1,0 +1,58 @@
+{
+  "ts_utc": "2026-03-05T21:27:50.245664+00:00",
+  "policy_path": "F:\\Environement\\git-repo\\hummingbot_custo\\hbot\\config\\multi_bot_policy_v1.json",
+  "diversification_report_path": "F:\\Environement\\git-repo\\hummingbot_custo\\hbot\\reports\\policy\\portfolio_diversification_latest.json",
+  "apply_requested": false,
+  "plan": {
+    "ts_utc": "2026-03-05T21:27:50.245664+00:00",
+    "status": "pass",
+    "plan_ready": true,
+    "blocking_reasons": [],
+    "included_modes": [
+      "live",
+      "paper_only"
+    ],
+    "diversification": {
+      "report_status": "pass",
+      "btc_eth_return_correlation": 0.3768121795788915,
+      "bucket_allocations": {
+        "btc": 0.6855967261533865,
+        "eth": 0.31440327384661343
+      },
+      "btc_variance": 1.3190745453454885e-06,
+      "eth_variance": 2.8764114914475624e-06
+    },
+    "strategy_buckets": {
+      "btc_bots": [
+        "bot1"
+      ],
+      "eth_bots": [
+        "bot3"
+      ]
+    },
+    "updates": {
+      "bot1": {
+        "bucket": "btc",
+        "old_target_alloc_pct": 0.6878168348344116,
+        "new_target_alloc_pct": 0.6855967261533865,
+        "old_alloc_variance_proxy": 1.3545584222647123e-06,
+        "new_alloc_variance_proxy": 1.3190745453454885e-06,
+        "old_max_alloc_pct": 1.0,
+        "new_max_alloc_pct": 1.0,
+        "changed": true
+      },
+      "bot3": {
+        "bucket": "eth",
+        "old_target_alloc_pct": 0.31218316516558847,
+        "new_target_alloc_pct": 0.31440327384661343,
+        "old_alloc_variance_proxy": 2.9844277032242333e-06,
+        "new_alloc_variance_proxy": 2.8764114914475624e-06,
+        "old_max_alloc_pct": 0.31218316516558847,
+        "new_max_alloc_pct": 0.31440327384661343,
+        "changed": true
+      }
+    },
+    "update_count": 2
+  },
+  "applied": false
+}

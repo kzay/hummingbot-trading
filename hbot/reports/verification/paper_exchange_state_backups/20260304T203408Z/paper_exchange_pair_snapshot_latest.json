@@ -1,0 +1,63 @@
+{
+  "ts_utc": "2026-03-04T20:34:06Z",
+  "pairs_total": 3,
+  "pairs": {
+    "bot5::bitget_perpetual::BTC-USDT": {
+      "connector_name": "bitget_perpetual",
+      "trading_pair": "BTC-USDT",
+      "instance_name": "bot5",
+      "timestamp_ms": 1772656446016,
+      "mid_price": 68093.45,
+      "best_bid": 68093.4,
+      "best_ask": 68093.5,
+      "best_bid_size": 0.7064,
+      "best_ask_size": 0.4846,
+      "last_trade_price": null,
+      "mark_price": null,
+      "funding_rate": -0.00014,
+      "exchange_ts_ms": null,
+      "ingest_ts_ms": 1772656446016,
+      "market_sequence": null,
+      "event_id": "472ef3f2-9448-4e1d-adc5-bef873098173",
+      "namespace_key": "bot5::bitget_perpetual::BTC-USDT"
+    },
+    "bot1::bitget_perpetual::BTC-USDT": {
+      "connector_name": "bitget_perpetual",
+      "trading_pair": "BTC-USDT",
+      "instance_name": "bot1",
+      "timestamp_ms": 1772656446014,
+      "mid_price": 73270.85,
+      "best_bid": 73270.8,
+      "best_ask": 73270.9,
+      "best_bid_size": 1.2896,
+      "best_ask_size": 0.6707,
+      "last_trade_price": null,
+      "mark_price": null,
+      "funding_rate": -0.000132,
+      "exchange_ts_ms": null,
+      "ingest_ts_ms": 1772656446014,
+      "market_sequence": null,
+      "event_id": "b9cf10d9-5fe9-4163-8be7-11e6d0c6b7f6",
+      "namespace_key": "bot1::bitget_perpetual::BTC-USDT"
+    },
+    "bot3::bitget_perpetual::ETH-USDT": {
+      "connector_name": "bitget_perpetual",
+      "trading_pair": "ETH-USDT",
+      "instance_name": "bot3",
+      "timestamp_ms": 1772656446015,
+      "mid_price": 2166.555,
+      "best_bid": 2166.55,
+      "best_ask": 2166.56,
+      "best_bid_size": 183.61,
+      "best_ask_size": 6.17,
+      "last_trade_price": null,
+      "mark_price": null,
+      "funding_rate": -3.6e-05,
+      "exchange_ts_ms": null,
+      "ingest_ts_ms": 1772656446015,
+      "market_sequence": null,
+      "event_id": "c712353d-ea02-45bc-888d-52f5ee89dfb4",
+      "namespace_key": "bot3::bitget_perpetual::ETH-USDT"
+    }
+  }
+}

@@ -1,11 +1,20 @@
 from decimal import Decimal
 
-from controllers.core import RegimeSpec
-from controllers.epp_v2_4 import EppV24Controller
+from controllers.core import RegimeSpec, RuntimeLevelState
 from controllers.spread_engine import SpreadEngine
 
-NEUTRAL = EppV24Controller.PHASE0_SPECS["neutral_low_vol"]
-SHOCK = EppV24Controller.PHASE0_SPECS["high_vol_shock"]
+NEUTRAL = RegimeSpec(
+    spread_min=Decimal("0.0010"),
+    spread_max=Decimal("0.0040"),
+    levels_min=1,
+    levels_max=3,
+    refresh_s=30,
+    target_base_pct=Decimal("0.50"),
+    quote_size_pct_min=Decimal("0.01"),
+    quote_size_pct_max=Decimal("0.02"),
+    one_sided="off",
+    fill_factor=Decimal("0.40"),
+)
 
 
 def _engine(**overrides) -> SpreadEngine:
@@ -90,3 +99,61 @@ def test_skew_shifts_buy_sell_asymmetrically():
         Decimal("0.004"), Decimal("0.001"), 2, "off", Decimal("0.0001")
     )
     assert buy[0] < sell[0]
+
+
+def test_compute_spread_and_edge_exposes_quote_geometry_components():
+    eng = _engine()
+    state, floor = eng.compute_spread_and_edge(
+        regime_name="neutral_low_vol",
+        regime_spec=NEUTRAL,
+        band_pct=Decimal("0.002"),
+        raw_drift=Decimal("0.0001"),
+        smooth_drift=Decimal("0.00005"),
+        target_base_pct=Decimal("0.50"),
+        base_pct=Decimal("0.35"),
+        equity_quote=Decimal("1000"),
+        traded_notional_today=Decimal("100"),
+        ob_imbalance=Decimal("0.40"),
+        ob_imbalance_skew_weight=Decimal("0.30"),
+        maker_fee_pct=Decimal("0.001"),
+        is_perp=False,
+        funding_rate=Decimal("0"),
+        adverse_fill_count=0,
+        fill_edge_ewma=None,
+    )
+    assert state.quote_geometry.spread_floor_pct == floor
+    assert state.quote_geometry.base_spread_pct > 0
+    assert state.quote_geometry.inventory_urgency > 0
+    assert state.quote_geometry.reservation_price_adjustment_pct == state.skew
+
+
+def test_apply_runtime_spreads_and_sizing_enforces_min_base_per_level():
+    eng = _engine()
+    runtime = RuntimeLevelState(
+        buy_spreads=[],
+        sell_spreads=[],
+        buy_amounts_pct=[],
+        sell_amounts_pct=[],
+        total_amount_quote=Decimal("0"),
+        executor_refresh_time=30,
+        cooldown_time=5,
+    )
+    eng.apply_runtime_spreads_and_sizing(
+        runtime_levels=runtime,
+        buy_spreads=[Decimal("0.0010")],
+        sell_spreads=[Decimal("0.0010")],
+        equity_quote=Decimal("1000"),
+        mid=Decimal("67000"),
+        quote_size_pct=Decimal("0.001"),
+        size_mult=Decimal("1"),
+        kelly_order_quote=Decimal("0"),
+        min_notional_quote=Decimal("5"),
+        min_base_amount=Decimal("0.001"),
+        max_order_notional_quote=Decimal("250"),
+        max_total_notional_quote=Decimal("1000"),
+        cooldown_time=8,
+        no_trade=False,
+        variant="a",
+        enabled=True,
+    )
+    assert runtime.total_amount_quote == Decimal("134")

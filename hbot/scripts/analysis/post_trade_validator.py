@@ -19,8 +19,8 @@ from pathlib import Path
 from typing import Dict, List
 
 _SCRIPT_DIR = Path(__file__).resolve().parent
-_HBOT_ROOT = _SCRIPT_DIR.parents[1]
-sys.path.insert(0, str(_HBOT_ROOT))
+_PROJECT_ROOT = _SCRIPT_DIR.parents[1]
+sys.path.insert(0, str(_PROJECT_ROOT))
 
 from services.common.utils import safe_float, utc_now, write_json
 
@@ -142,7 +142,7 @@ def main() -> None:
     parser = argparse.ArgumentParser(description="Post-trade shadow validator")
     parser.add_argument("--bot", default="bot1")
     parser.add_argument("--variant", default="a")
-    parser.add_argument("--data-root", default=str(_HBOT_ROOT / "data"))
+    parser.add_argument("--data-root", default=str(_PROJECT_ROOT / "data"))
     parser.add_argument("--fill-factor", type=float, default=0.4)
     parser.add_argument("--adverse-selection-bps", type=float, default=1.5)
     parser.add_argument("--queue-participation", type=float, default=0.35)
@@ -162,7 +162,7 @@ def main() -> None:
     result["bot"] = args.bot
     result["variant"] = args.variant
 
-    out_dir = _HBOT_ROOT / "reports" / "analysis"
+    out_dir = _PROJECT_ROOT / "reports" / "analysis"
     out_dir.mkdir(parents=True, exist_ok=True)
     write_json(out_dir / "post_trade_validation.json", result)
 

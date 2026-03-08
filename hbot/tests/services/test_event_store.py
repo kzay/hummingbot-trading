@@ -12,6 +12,7 @@ from services.event_store.main import (
     _coerce_ts_utc,
     _normalize,
     _read_stats,
+    _trim_known_streams,
     _write_stats,
 )
 
@@ -304,3 +305,32 @@ def test_run_once_claims_and_acks_stale_pending_entries(monkeypatch, tmp_path):
     monkeypatch.setenv("EVENT_STORE_BOOTSTRAP_SNAPSHOT_ENABLED", "false")
     event_store_main.run(once=True)
     assert fake_client.acked == [("hb.market_data.v1", "hb_event_store_v1", "9-0")]
+
+
+def test_trim_known_streams_returns_aggregate_counts() -> None:
+    class _TrimClient:
+        def __init__(self) -> None:
+            self.calls = []
+
+        def xtrim(self, stream: str, maxlen: int, approximate: bool = True):  # noqa: ANN001
+            self.calls.append((stream, maxlen, approximate))
+            if stream == "hb.fail.v1":
+                return None
+            return 3
+
+    client = _TrimClient()
+    summary = _trim_known_streams(
+        client,  # type: ignore[arg-type]
+        {
+            "hb.market_data.v1": 1000,
+            "hb.signal.v1": 500,
+            "hb.fail.v1": 200,
+        },
+    )
+    assert summary == {
+        "streams_checked": 3,
+        "trim_calls": 2,
+        "entries_trimmed": 6,
+        "errors": 1,
+    }
+    assert ("hb.market_data.v1", 1000, True) in client.calls

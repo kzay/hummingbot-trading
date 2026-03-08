@@ -37,5 +37,4 @@ turnover_penalty_step: 0.0005
 min_net_edge_bps: 2
 
 sample_interval_s: 10
-spread_floor_recalc_s: 120
 cancel_budget_per_min: 30

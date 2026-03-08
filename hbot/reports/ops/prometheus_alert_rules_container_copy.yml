@@ -1,0 +1,519 @@
+# ============================================
+# Prometheus Alert Rules
+# ============================================
+
+groups:
+  # ---- Infrastructure Alerts ----
+  - name: infrastructure
+    rules:
+      - alert: ContainerDown
+        expr: |
+          time() - container_last_seen{name=~"kzay-capital-.*"} > 60
+        for: 2m
+        labels:
+          severity: critical
+        annotations:
+          summary: "Container {{ $labels.name }} is down"
+          description: "Container {{ $labels.name }} has not been seen for more than 60 seconds."
+
+      - alert: ContainerRestartLoop
+        expr: |
+          increase(container_restart_count{name=~"kzay-capital-.*"}[15m]) > 3
+        for: 5m
+        labels:
+          severity: critical
+        annotations:
+          summary: "Container {{ $labels.name }} is in a restart loop"
+          description: "Container {{ $labels.name }} has restarted more than 3 times in the last 15 minutes."
+
+      - alert: HighCpuUsage
+        expr: |
+          100 - (avg by(instance) (rate(node_cpu_seconds_total{mode="idle"}[5m])) * 100) > 90
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "High CPU usage on {{ $labels.instance }}"
+          description: "CPU usage has been above 90% for more than 5 minutes. Current value: {{ $value }}%"
+
+      - alert: HighMemoryUsage
+        expr: |
+          (1 - (node_memory_MemAvailable_bytes / node_memory_MemTotal_bytes)) * 100 > 85
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "High memory usage on {{ $labels.instance }}"
+          description: "Memory usage has been above 85% for more than 5 minutes. Current value: {{ $value }}%"
+
+      - alert: HighDiskUsage
+        expr: |
+          (1 - (node_filesystem_avail_bytes{fstype!~"tmpfs|fuse.lxcfs"} / node_filesystem_size_bytes{fstype!~"tmpfs|fuse.lxcfs"})) * 100 > 80
+        for: 10m
+        labels:
+          severity: warning
+        annotations:
+          summary: "High disk usage on {{ $labels.instance }}"
+          description: "Disk usage on {{ $labels.mountpoint }} is above 80%. Current value: {{ $value }}%"
+
+      - alert: DiskAlmostFull
+        expr: |
+          (1 - (node_filesystem_avail_bytes{fstype!~"tmpfs|fuse.lxcfs"} / node_filesystem_size_bytes{fstype!~"tmpfs|fuse.lxcfs"})) * 100 > 95
+        for: 5m
+        labels:
+          severity: critical
+        annotations:
+          summary: "Disk almost full on {{ $labels.instance }}"
+          description: "Disk usage on {{ $labels.mountpoint }} is above 95%. Current value: {{ $value }}%"
+
+  # ---- Container Resource Alerts ----
+  - name: container_resources
+    rules:
+      - alert: ContainerHighCpu
+        expr: |
+          rate(container_cpu_usage_seconds_total{name=~"kzay-capital-.*"}[5m]) * 100 > 80
+        for: 10m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Container {{ $labels.name }} high CPU"
+          description: "Container {{ $labels.name }} CPU usage is above 80% for 10 minutes."
+
+      - alert: ContainerHighMemory
+        expr: |
+          container_memory_usage_bytes{name=~"kzay-capital-.*"} / container_spec_memory_reservation_limit_bytes{name=~"kzay-capital-.*"} * 100 > 90
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Container {{ $labels.name }} high memory"
+          description: "Container {{ $labels.name }} memory usage is above 90%."
+
+      - alert: ContainerOomKilled
+        expr: |
+          increase(container_oom_events_total{name=~"kzay-capital-.*"}[5m]) > 0
+        for: 0m
+        labels:
+          severity: critical
+        annotations:
+          summary: "Container {{ $labels.name }} OOM killed"
+          description: "Container {{ $labels.name }} was killed due to out-of-memory."
+
+  # ---- Network Alerts ----
+  - name: network
+    rules:
+      - alert: HighNetworkErrorRate
+        expr: |
+          rate(node_network_receive_errs_total[5m]) + rate(node_network_transmit_errs_total[5m]) > 10
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "High network error rate on {{ $labels.instance }}"
+          description: "Network errors detected. Receive+Transmit error rate: {{ $value }}/s"
+
+  # ---- Trading / Bot KPI Alerts ----
+  - name: trading_kpis
+    rules:
+      - alert: BotHardStopActive
+        expr: |
+          hbot_bot_state{state="hard_stop"} == 1
+        for: 3m
+        labels:
+          severity: critical
+        annotations:
+          summary: "Bot {{ $labels.bot }} entered hard_stop"
+          description: "Bot {{ $labels.bot }} stayed hard_stop for more than 3 minutes."
+
+      - alert: BotSoftPauseTooLong
+        expr: |
+          hbot_bot_state{state="soft_pause"} == 1
+        for: 20m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Bot {{ $labels.bot }} in soft_pause for too long"
+          description: "Bot {{ $labels.bot }} remained soft_pause for more than 20 minutes."
+
+      - alert: BotNoFillsWhileRunning
+        expr: |
+          increase(hbot_bot_fills_total[30m]) == 0 and on(bot,variant,exchange,pair,regime) hbot_bot_state{state="running"} == 1
+        for: 30m
+        labels:
+          severity: warning
+        annotations:
+          summary: "No fills while bot {{ $labels.bot }} reports running"
+          description: "Running bot {{ $labels.bot }} has no fills increase during the last 30 minutes."
+
+      - alert: BotNegativeEdgePersistent
+        expr: |
+          avg_over_time(hbot_bot_net_edge_pct[15m]) < 0
+        for: 10m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Negative net edge persistence on {{ $labels.bot }}"
+          description: "Net edge remains negative on {{ $labels.bot }} for a sustained period."
+
+      - alert: BotFeeSourceFallback
+        expr: |
+          hbot_bot_fee_source_info{source!="api:bitget:user_fee_query"} == 1
+        for: 30m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Fee source fallback active on {{ $labels.bot }}"
+          description: "Bot {{ $labels.bot }} is not using API fee source for at least 30 minutes."
+
+      - alert: BotDailyPnlDrawdown
+        expr: |
+          hbot_bot_daily_pnl_quote < -50
+        for: 5m
+        labels:
+          severity: critical
+        annotations:
+          summary: "Daily PnL drawdown threshold breached on {{ $labels.bot }}"
+          description: "Bot {{ $labels.bot }} daily PnL is below -50 quote units."
+
+      - alert: BotLogErrorSpike
+        expr: |
+          hbot_bot_recent_error_lines > 20
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Bot {{ $labels.bot }} shows high error density"
+          description: "Recent log tail has more than 20 ERROR lines for {{ $labels.bot }}."
+
+  # ---- Control Plane Alerts ----
+  - name: control_plane
+    rules:
+      - alert: ControlPlaneReportMissing
+        expr: |
+          hbot_control_plane_report_present{report=~"reconciliation|parity|portfolio_risk|market_data|ops_db_writer|coordination|coordination_policy|promotion_gate|day2_gate|event_store_integrity|soak"} == 0
+        for: 2m
+        labels:
+          severity: critical
+        annotations:
+          summary: "Control-plane report missing: {{ $labels.report }}"
+          description: "Required control-plane report {{ $labels.report }} is missing."
+
+      - alert: ControlPlaneReportStale
+        expr: |
+          hbot_control_plane_report_fresh{report=~"reconciliation|parity|portfolio_risk|market_data|ops_db_writer|coordination|coordination_policy|promotion_gate|day2_gate|event_store_integrity|soak"} == 0
+        for: 5m
+        labels:
+          severity: critical
+        annotations:
+          summary: "Control-plane report stale: {{ $labels.report }}"
+          description: "Control-plane report {{ $labels.report }} is outside freshness budget."
+
+      - alert: OpsDbWriterNotHealthy
+        expr: |
+          hbot_control_plane_gate_status{gate="ops_db_writer_ok"} == 0
+        for: 5m
+        labels:
+          severity: critical
+        annotations:
+          summary: "Ops DB writer unhealthy"
+          description: "ops_db_writer latest report is failing or missing."
+
+      - alert: MarketDataTrackingNotFresh
+        expr: |
+          hbot_control_plane_gate_status{gate="market_data_fresh"} == 0
+        for: 10m
+        labels:
+          severity: critical
+        annotations:
+          summary: "Market-data tracking not fresh"
+          description: "market_data latest report indicates stale/missing event tracking."
+
+      - alert: CoordinationPolicyGateFailed
+        expr: |
+          hbot_control_plane_gate_status{gate="coordination_policy_scope",source="promotion_latest"} == 0
+        for: 5m
+        labels:
+          severity: critical
+        annotations:
+          summary: "Coordination policy gate is failing"
+          description: "Promotion check coordination_policy_scope is FAIL."
+
+      - alert: CoordinationRuntimeNotHealthy
+        expr: |
+          hbot_control_plane_gate_status{gate="coordination_runtime_ok"} == 0
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Coordination runtime health is not OK"
+          description: "Coordination latest report is unhealthy or missing expected status."
+
+      - alert: PromotionGateFailed
+        expr: |
+          hbot_control_plane_gate_status{gate="promotion_latest"} == 0
+        for: 3m
+        labels:
+          severity: critical
+        annotations:
+          summary: "Promotion gate is failing"
+          description: "Latest promotion gate status is FAIL."
+
+      - alert: StrictCycleFailed
+        expr: |
+          hbot_control_plane_gate_status{gate="strict_cycle"} == 0
+        for: 10m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Strict cycle not passing"
+          description: "Strict cycle remains FAIL; verify day2 gate and soak blockers."
+
+      - alert: Day2GateNotGo
+        expr: |
+          hbot_control_plane_gate_status{gate="day2_go"} == 0
+        for: 30m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Day2 event-store gate not GO"
+          description: "Day2 gate remains not GO, blocking strict readiness progression."
+
+  # ---- Execution & Risk Alerts (Day 78) ----
+  - name: execution_risk
+    rules:
+      - alert: TickDurationHigh
+        expr: |
+          hbot_bot_tick_duration_seconds > 0.1
+        for: 5m
+        labels:
+          severity: critical
+        annotations:
+          summary: "Tick duration high on {{ $labels.bot }}"
+          description: "Bot {{ $labels.bot }} tick duration exceeds 100ms for 5 minutes. Current: {{ $value }}s"
+
+      - alert: PositionDriftHigh
+        expr: |
+          hbot_bot_position_drift_pct > 0.05
+        for: 5m
+        labels:
+          severity: critical
+        annotations:
+          summary: "Position drift high on {{ $labels.bot }}"
+          description: "Local vs exchange position divergence >5% on {{ $labels.bot }}. Drift: {{ $value }}"
+
+      - alert: MarginRatioLow
+        expr: |
+          hbot_bot_margin_ratio < 0.15 and hbot_bot_margin_ratio > 0
+        for: 2m
+        labels:
+          severity: critical
+        annotations:
+          summary: "Margin ratio low on {{ $labels.bot }}"
+          description: "Margin ratio {{ $value }} approaching liquidation on {{ $labels.bot }}."
+
+      - alert: OrderBookStale
+        expr: |
+          hbot_bot_order_book_stale == 1
+        for: 2m
+        labels:
+          severity: critical
+        annotations:
+          summary: "Order book stale on {{ $labels.bot }}"
+          description: "Order book unchanged for >30s — WS feed may be disconnected."
+
+      - alert: WsReconnectSpike
+        expr: |
+          increase(hbot_bot_ws_reconnect_total[30m]) > 5
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "WS reconnect spike on {{ $labels.bot }}"
+          description: "Bot {{ $labels.bot }} reconnected {{ $value }} times in 30 minutes."
+
+      - alert: FundingRateHigh
+        expr: |
+          abs(hbot_bot_funding_rate) > 0.0003
+        for: 1h
+        labels:
+          severity: warning
+        annotations:
+          summary: "Funding rate high on {{ $labels.bot }}"
+          description: "Funding rate {{ $value }} may exceed spread edge on {{ $labels.bot }}."
+
+      - alert: RealizedPnlNegative
+        expr: |
+          hbot_bot_net_realized_pnl_today_quote < -20
+        for: 10m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Realized PnL negative on {{ $labels.bot }}"
+          description: "Bot {{ $labels.bot }} realized PnL is {{ $value }} quote today."
+
+      - alert: IndicatorComputeSlow
+        expr: |
+          hbot_bot_tick_indicator_seconds > 0.05
+        for: 10m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Indicator compute slow on {{ $labels.bot }}"
+          description: "Indicator computation taking {{ $value }}s per tick on {{ $labels.bot }}."
+
+      - alert: ConnectorIOSlow
+        expr: |
+          hbot_bot_tick_connector_io_seconds > 0.05
+        for: 10m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Connector I/O slow on {{ $labels.bot }}"
+          description: "Connector I/O taking {{ $value }}s per tick on {{ $labels.bot }}."
+
+      - alert: BotFrozen
+        expr: |
+          hbot_bot_snapshot_age_seconds > 240
+        for: 2m
+        labels:
+          severity: critical
+        annotations:
+          summary: "⛔ Bot {{ $labels.bot }} is FROZEN"
+          description: "snapshot age >4m ({{ $value | humanizeDuration }}). Event loop may be hung; watchdog restart may be required."
+
+      - alert: DailyStateStale
+        expr: |
+          hbot_bot_snapshot_age_seconds > 180
+        for: 2m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Bot snapshot stale on {{ $labels.bot }}"
+          description: "No fresh snapshot update for >3 minutes on {{ $labels.bot }}."
+
+      - alert: MinutePipelineStale
+        expr: |
+          hbot_bot_minute_last_age_seconds > 180
+        for: 2m
+        labels:
+          severity: warning
+        annotations:
+          summary: "minute.csv freshness lag on {{ $labels.bot }}"
+          description: "minute_last_age_seconds exceeded 180s on {{ $labels.bot }}; Grafana PnL/trend panels may be stale."
+
+      - alert: KillSwitchTriggered
+        expr: |
+          increase(hbot_bot_kill_switch_count[5m]) > 0
+        for: 0m
+        labels:
+          severity: critical
+        annotations:
+          summary: "🚨 Kill switch TRIGGERED on {{ $labels.bot }}"
+          description: "Kill switch fired on {{ $labels.bot }}. All orders should be canceled. Immediate review required."
+
+      - alert: DataPlaneConsistencyFailed
+        expr: |
+          hbot_data_plane_consistency < 1
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "⚠️ Data plane consistency check failed"
+          description: "One or more active bots have a stale or incomplete desk snapshot (hbot_data_plane_consistency=0). Telegram and Grafana may be reading inconsistent data. Check desk_snapshot_service logs."
+
+  # ---- Paper Exchange Simulator Alerts ----
+  - name: paper_exchange_simulator
+    rules:
+      - alert: PaperExchangeServiceDown
+        expr: |
+          max(hbot_paper_exchange_service_up) == 0
+        for: 2m
+        labels:
+          severity: critical
+        annotations:
+          summary: "Paper exchange simulator service is down"
+          description: "No fresh simulator heartbeat was observed via Redis for more than 2 minutes."
+
+      - alert: PaperExchangeHeartbeatStale
+        expr: |
+          max(hbot_paper_exchange_heartbeat_age_seconds) > 30
+        for: 2m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Paper exchange heartbeat is stale"
+          description: "Latest simulator heartbeat age exceeded 30s. Check paper-exchange-service and Redis connectivity."
+
+      - alert: PaperExchangeFeedStalenessHigh
+        expr: |
+          max(hbot_paper_exchange_oldest_snapshot_age_ms) > 60000
+        for: 3m
+        labels:
+          severity: critical
+        annotations:
+          summary: "Paper exchange market snapshot lag is high"
+          description: "Oldest tracked simulator market snapshot age is above 60s."
+
+      - alert: PaperExchangePairStaleCountHigh
+        expr: |
+          sum(hbot_paper_exchange_pair_stale) > 0
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "One or more simulator pairs are stale"
+          description: "At least one connector/pair snapshot in the simulator is flagged stale for over 5 minutes."
+
+      - alert: PaperExchangeRejectRateSpike
+        expr: |
+          (
+            sum(clamp_min(delta(hbot_paper_exchange_command_total{status="rejected"}[15m]), 0))
+            /
+            clamp_min(sum(clamp_min(delta(hbot_paper_exchange_command_total[15m]), 0)), 1)
+          ) > 0.20
+        for: 10m
+        labels:
+          severity: critical
+        annotations:
+          summary: "Simulator command reject-rate spike"
+          description: "Rejected command ratio stayed above 20% over the trailing 15m window."
+
+      - alert: PaperExchangeRunawayOrderLoop
+        expr: |
+          sum(clamp_min(delta(hbot_paper_exchange_command_total{command="submit_order",status="processed"}[10m]), 0)) > 200
+          and
+          (
+            sum(clamp_min(delta(hbot_paper_exchange_command_total{command=~"cancel_order|cancel_all",status="processed"}[10m]), 0))
+            /
+            clamp_min(sum(clamp_min(delta(hbot_paper_exchange_command_total{command="submit_order",status="processed"}[10m]), 0)), 1)
+          ) > 0.90
+        for: 10m
+        labels:
+          severity: critical
+        annotations:
+          summary: "Potential simulator runaway order loop"
+          description: "Submit volume is high and cancel/submit ratio exceeded 90% for a sustained period."
+
+      - alert: PaperExchangeBacklogGrowthTrend
+        expr: |
+          max(hbot_paper_exchange_load_backlog_growth_pct_per_10m) > 20
+        for: 10m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Simulator backlog growth trend elevated"
+          description: "Backlog growth trend from load diagnostics exceeded 20% per 10 minutes."
+
+      - alert: PaperExchangePublishFailures
+        expr: |
+          (
+            sum(clamp_min(delta(hbot_paper_exchange_market_rows_not_acked[10m]), 0))
+            +
+            sum(clamp_min(delta(hbot_paper_exchange_command_publish_failures[10m]), 0))
+          ) > 0
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Simulator publish/ack failures detected"
+          description: "market_rows_not_acked or command_publish_failures increased in the last 10 minutes."

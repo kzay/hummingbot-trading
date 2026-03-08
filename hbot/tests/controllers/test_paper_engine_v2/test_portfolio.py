@@ -14,7 +14,7 @@ import pytest
 from controllers.paper_engine_v2.portfolio import (
     MultiAssetLedger, PaperPortfolio, PortfolioConfig,
 )
-from controllers.paper_engine_v2.types import OrderSide, _ZERO
+from controllers.paper_engine_v2.types import OrderSide, PositionAction, _ZERO
 from tests.controllers.test_paper_engine_v2.conftest import (
     BTC_PERP, BTC_SPOT, make_spec,
 )
@@ -27,7 +27,17 @@ def make_portfolio(usdt=Decimal("10000"), btc=Decimal("0")) -> PaperPortfolio:
     )
 
 
-def settle(portfolio, iid, side_str, qty_str, price_str, fee="0", leverage=1):
+def settle(
+    portfolio,
+    iid,
+    side_str,
+    qty_str,
+    price_str,
+    fee="0",
+    leverage=1,
+    position_action=PositionAction.AUTO,
+    position_mode="ONEWAY",
+):
     fee_str = str(fee)
     spec = make_spec(iid)
     side = OrderSide.BUY if side_str == "buy" else OrderSide.SELL
@@ -41,6 +51,38 @@ def settle(portfolio, iid, side_str, qty_str, price_str, fee="0", leverage=1):
         now_ns=1_000_000_000,
         spec=spec,
         leverage=leverage,
+        position_action=position_action,
+        position_mode=position_mode,
+    )
+
+
+def settle_with_action(
+    portfolio,
+    iid,
+    side_str,
+    qty_str,
+    price_str,
+    *,
+    position_action: PositionAction,
+    fee="0",
+    leverage=1,
+    position_mode="HEDGE",
+):
+    fee_str = str(fee)
+    spec = make_spec(iid)
+    side = OrderSide.BUY if side_str == "buy" else OrderSide.SELL
+    return portfolio.settle_fill(
+        instrument_id=iid,
+        side=side,
+        quantity=Decimal(qty_str),
+        price=Decimal(price_str),
+        fee=Decimal(fee_str),
+        source_bot="test",
+        now_ns=1_000_000_000,
+        spec=spec,
+        leverage=leverage,
+        position_action=position_action,
+        position_mode=position_mode,
     )
 
 
@@ -227,3 +269,138 @@ class TestPortfolioSnapshot:
         assert pos.quantity == Decimal("0.5")
         assert p2.daily_open_equity == p.daily_open_equity
         assert p2._daily_open_day_key == "2026-03-01"
+
+    def test_snapshot_restore_preserves_hedge_legs(self):
+        p = make_portfolio(usdt=Decimal("5000"))
+        settle(
+            p,
+            BTC_PERP,
+            "buy",
+            "1.0",
+            "100",
+            leverage=5,
+            position_action=PositionAction.OPEN_LONG,
+            position_mode="HEDGE",
+        )
+        settle(
+            p,
+            BTC_PERP,
+            "sell",
+            "0.4",
+            "105",
+            leverage=5,
+            position_action=PositionAction.OPEN_SHORT,
+            position_mode="HEDGE",
+        )
+
+        snap = p.snapshot()
+        p2 = make_portfolio(usdt=Decimal("9999"))
+        p2.restore_from_snapshot(snap)
+        pos = p2.get_position(BTC_PERP)
+
+        assert pos.position_mode == "HEDGE"
+        assert pos.long_quantity == Decimal("1.0")
+        assert pos.short_quantity == Decimal("0.4")
+        assert pos.quantity == Decimal("0.6")
+        assert pos.gross_quantity == Decimal("1.4")
+
+    def test_snapshot_restore_preserves_hedge_legs(self):
+        p = make_portfolio(usdt=Decimal("5000"), btc=Decimal("0"))
+        settle_with_action(
+            p,
+            BTC_PERP,
+            "buy",
+            "0.4",
+            "100",
+            position_action=PositionAction.OPEN_LONG,
+            leverage=5,
+        )
+        settle_with_action(
+            p,
+            BTC_PERP,
+            "sell",
+            "0.2",
+            "101",
+            position_action=PositionAction.OPEN_SHORT,
+            leverage=5,
+        )
+
+        snap = p.snapshot()
+        p2 = make_portfolio(usdt=Decimal("1"))
+        p2.restore_from_snapshot(snap)
+
+        net_pos = p2.get_position(BTC_PERP)
+        long_pos = p2.get_position(BTC_PERP, position_action=PositionAction.OPEN_LONG)
+        short_pos = p2.get_position(BTC_PERP, position_action=PositionAction.OPEN_SHORT)
+
+        assert net_pos.position_mode == "HEDGE"
+        assert net_pos.long_quantity == Decimal("0.4")
+        assert net_pos.short_quantity == Decimal("0.2")
+        assert long_pos.quantity == Decimal("0.4")
+        assert short_pos.quantity == Decimal("-0.2")
+
+
+class TestOneWayPositionMode:
+    def test_oneway_nets_even_with_explicit_leg_actions(self):
+        p = make_portfolio(usdt=Decimal("5000"), btc=Decimal("0"))
+        settle_with_action(
+            p,
+            BTC_PERP,
+            "buy",
+            "1.0",
+            "100",
+            position_action=PositionAction.OPEN_LONG,
+            leverage=5,
+            position_mode="ONEWAY",
+        )
+        settle_with_action(
+            p,
+            BTC_PERP,
+            "sell",
+            "0.4",
+            "105",
+            position_action=PositionAction.OPEN_SHORT,
+            leverage=5,
+            position_mode="ONEWAY",
+        )
+
+        pos = p.get_position(BTC_PERP)
+        assert pos.position_mode == "ONEWAY"
+        assert pos.quantity == Decimal("0.6")
+        assert pos.long_quantity == Decimal("0.6")
+        assert pos.short_quantity == _ZERO
+        assert pos.gross_quantity == Decimal("0.6")
+        assert pos.avg_entry_price == Decimal("100")
+        # Realized PnL is pure price PnL on the reduced leg.
+        assert pos.realized_pnl == Decimal("2.0")
+
+    def test_oneway_action_scoped_get_position_returns_netted_view(self):
+        p = make_portfolio(usdt=Decimal("5000"), btc=Decimal("0"))
+        settle_with_action(
+            p,
+            BTC_PERP,
+            "buy",
+            "0.7",
+            "100",
+            position_action=PositionAction.OPEN_LONG,
+            leverage=5,
+            position_mode="ONEWAY",
+        )
+        settle_with_action(
+            p,
+            BTC_PERP,
+            "sell",
+            "0.2",
+            "101",
+            position_action=PositionAction.CLOSE_LONG,
+            leverage=5,
+            position_mode="ONEWAY",
+        )
+
+        net_pos = p.get_position(BTC_PERP)
+        long_view = p.get_position(BTC_PERP, position_action=PositionAction.OPEN_LONG)
+        short_view = p.get_position(BTC_PERP, position_action=PositionAction.OPEN_SHORT)
+
+        assert net_pos.quantity == Decimal("0.5")
+        assert long_view.quantity == net_pos.quantity
+        assert short_view.quantity == net_pos.quantity

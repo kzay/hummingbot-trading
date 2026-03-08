@@ -1,7 +1,10 @@
 from services.contracts.event_schemas import (
     AuditEvent,
     ExecutionIntentEvent,
+    MarketDepthSnapshotEvent,
+    MarketQuoteEvent,
     MarketSnapshotEvent,
+    MarketTradeEvent,
     MlSignalEvent,
     PaperExchangeCommandEvent,
     PaperExchangeEvent,
@@ -44,6 +47,81 @@ def test_market_snapshot_schema_roundtrip():
     assert restored.best_bid_size == 2.5
     assert restored.best_ask_size == 1.7
     assert restored.market_sequence == 42
+
+
+def test_market_depth_snapshot_schema_roundtrip():
+    event = MarketDepthSnapshotEvent(
+        producer="test",
+        instance_name="bot1",
+        controller_id="epp_v2_4",
+        connector_name="bitget",
+        trading_pair="BTC-USDT",
+        depth_levels=3,
+        bids=[
+            {"price": 99.9, "size": 1.1},
+            {"price": 99.8, "size": 2.2},
+        ],
+        asks=[
+            {"price": 100.1, "size": 1.3},
+            {"price": 100.2, "size": 2.4},
+        ],
+        best_bid=99.9,
+        best_ask=100.1,
+        exchange_ts_ms=1_234_567,
+        ingest_ts_ms=1_234_568,
+        market_sequence=77,
+    )
+    restored = MarketDepthSnapshotEvent(**event.model_dump())
+    assert restored.event_type == "market_depth_snapshot"
+    assert restored.depth_levels == 3
+    assert len(restored.bids) == 2
+    assert len(restored.asks) == 2
+    assert restored.bids[0].price == 99.9
+    assert restored.asks[0].size == 1.3
+    assert restored.market_sequence == 77
+
+
+def test_market_quote_schema_roundtrip():
+    event = MarketQuoteEvent(
+        producer="market_data_service",
+        connector_name="bitget_perpetual",
+        trading_pair="BTC-USDT",
+        best_bid=99.9,
+        best_ask=100.1,
+        best_bid_size=1.2,
+        best_ask_size=1.5,
+        mid_price=100.0,
+        last_trade_price=100.05,
+        exchange_ts_ms=1_234_567,
+        ingest_ts_ms=1_234_568,
+        market_sequence=7,
+        venue_symbol="BTCUSDT",
+    )
+    restored = MarketQuoteEvent(**event.model_dump())
+    assert restored.event_type == "market_quote"
+    assert restored.connector_name == "bitget_perpetual"
+    assert restored.mid_price == 100.0
+    assert restored.market_sequence == 7
+
+
+def test_market_trade_schema_roundtrip():
+    event = MarketTradeEvent(
+        producer="market_data_service",
+        connector_name="bitget_perpetual",
+        trading_pair="BTC-USDT",
+        trade_id="t-1",
+        side="buy",
+        price=100.25,
+        size=0.4,
+        exchange_ts_ms=1_234_569,
+        ingest_ts_ms=1_234_570,
+        market_sequence=8,
+        venue_symbol="BTCUSDT",
+    )
+    restored = MarketTradeEvent(**event.model_dump())
+    assert restored.event_type == "market_trade"
+    assert restored.trade_id == "t-1"
+    assert restored.price == 100.25
 
 
 def test_execution_intent_schema_validation():

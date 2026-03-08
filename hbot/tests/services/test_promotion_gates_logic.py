@@ -9,9 +9,14 @@ from scripts.release.run_promotion_gates import (
     _day2_freshness,
     _day2_lag_within_tolerance,
     _live_account_mode_bots,
+    _parity_active_scope,
+    _parity_drift_audit_status,
     _paper_exchange_threshold_inputs_readiness,
     _parity_core_insufficient_active_bots,
+    _performance_dossier_expectancy_diag,
     _portfolio_diversification_gate,
+    _reconciliation_active_bot_coverage,
+    _run_performance_dossier,
     _trading_validation_ladder_status,
     _run_canonical_plane_gate,
     _run_paper_exchange_golden_path_check,
@@ -22,6 +27,10 @@ from scripts.release.run_promotion_gates import (
     _run_paper_exchange_threshold_inputs_builder,
     _run_paper_exchange_preflight_check,
     _run_replay_regression_multi_window,
+    _run_alerting_health_check,
+    _run_road9_allocation_rebalance,
+    _run_realtime_l2_data_quality_check,
+    _run_testnet_multi_day_summary,
 )
 
 
@@ -66,6 +75,18 @@ def test_parity_core_insufficient_flags_only_active_bots() -> None:
     assert insufficient == ["bot1"]
 
 
+def test_parity_active_scope_prefers_explicit_active_bots() -> None:
+    parity = {
+        "active_bots": ["bot4", "bot1"],
+        "bots": [
+            {"bot": "bot1", "summary": {"intents_total": 0}},
+            {"bot": "bot4", "summary": {"intents_total": 0}},
+            {"bot": "bot7", "summary": {"intents_total": 3}},
+        ],
+    }
+    assert _parity_active_scope(parity) == ["bot1", "bot4"]
+
+
 def test_parity_core_insufficient_passes_when_any_core_metric_has_data() -> None:
     parity = {
         "status": "pass",
@@ -90,6 +111,25 @@ def test_parity_core_insufficient_passes_when_any_core_metric_has_data() -> None
     insufficient, active = _parity_core_insufficient_active_bots(parity)
     assert active == ["bot1"]
     assert insufficient == []
+
+
+def test_parity_drift_audit_status_flags_active_bot_findings() -> None:
+    diag = _parity_drift_audit_status(
+        {
+            "ts_utc": "3026-03-01T00:00:00Z",
+            "active_bots": ["bot1", "bot2"],
+            "bots": [
+                {"bot": "bot1", "pass": False, "buckets": ["fill_path_insufficient_evidence"]},
+                {"bot": "bot2", "pass": True, "buckets": []},
+                {"bot": "bot9", "pass": False, "buckets": ["fill_path_insufficient_evidence"]},
+            ],
+        },
+        max_report_age_min=60.0,
+    )
+    assert diag["fresh"] is True
+    assert diag["active_bots"] == ["bot1", "bot2"]
+    assert diag["failing_active_bots"] == ["bot1"]
+    assert diag["insufficient_active_bots"] == ["bot1"]
 
 
 def test_day2_lag_within_tolerance_ignores_negative_deltas_as_non_lag(tmp_path: Path) -> None:
@@ -214,6 +254,39 @@ def test_paper_exchange_threshold_inputs_readiness_not_ready_with_unresolved_or_
     assert diag["missing_source_count"] == 0
 
 
+def test_paper_exchange_threshold_inputs_readiness_not_ready_with_blocking_manual_metrics() -> None:
+    diag = _paper_exchange_threshold_inputs_readiness(
+        {
+            "status": "warning",
+            "diagnostics": {
+                "unresolved_metric_count": 0,
+                "stale_sources": [],
+                "missing_sources": [],
+                "manual_metric_count": 2,
+                "manual_metrics_blocking_count": 2,
+            },
+        }
+    )
+    assert diag["ready"] is False
+    assert diag["manual_metric_count"] == 2
+    assert diag["manual_metrics_blocking_count"] == 2
+    assert diag["manual_metrics_blocking"] is True
+
+
+def test_reconciliation_active_bot_coverage_detects_uncovered_bots() -> None:
+    diag = _reconciliation_active_bot_coverage(
+        {
+            "active_bots": ["bot1", "bot2"],
+            "covered_active_bots": ["bot1"],
+            "active_bots_unchecked": ["bot2"],
+        }
+    )
+    assert diag["coverage_ok"] is False
+    assert diag["active_bot_count"] == 2
+    assert diag["covered_active_bot_count"] == 1
+    assert diag["uncovered_active_bots"] == ["bot2"]
+
+
 def test_live_account_mode_bots_filters_disabled_policy_scope(tmp_path: Path) -> None:
     config = tmp_path / "config"
     config.mkdir(parents=True, exist_ok=True)
@@ -276,6 +349,112 @@ def test_run_replay_regression_multi_window_forwards_portfolio_flag(monkeypatch,
     assert msg == "ok"
     assert str(tmp_path) == captured["cwd"]
     assert "--no-require-portfolio-risk-healthy" in captured["cmd"]
+
+
+def test_run_testnet_multi_day_summary_forwards_window(monkeypatch, tmp_path: Path) -> None:
+    captured = {}
+
+    def _fake_run(cmd, cwd, capture_output, text, check):  # noqa: ARG001
+        captured["cmd"] = cmd
+        captured["cwd"] = cwd
+        return _Proc(stdout="ok")
+
+    monkeypatch.setattr("scripts.release.run_promotion_gates.subprocess.run", _fake_run)
+
+    rc, msg = _run_testnet_multi_day_summary(tmp_path, end_day_utc="2026-03-05", window_days=28)
+    assert rc == 0
+    assert msg == "ok"
+    assert str(tmp_path) == captured["cwd"]
+    cmd = captured["cmd"]
+    assert str(tmp_path / "scripts" / "analysis" / "testnet_multi_day_summary.py") in cmd
+    assert "--start" in cmd
+    assert "--end" in cmd
+
+
+def test_run_performance_dossier_forwards_args_and_pythonpath(monkeypatch, tmp_path: Path) -> None:
+    captured = {}
+
+    def _fake_run(cmd, cwd, capture_output, text, check, env):
+        captured["cmd"] = cmd
+        captured["cwd"] = cwd
+        captured["env"] = env
+        return _Proc(stdout="ok")
+
+    monkeypatch.setattr("scripts.release.run_promotion_gates.subprocess.run", _fake_run)
+
+    rc, msg = _run_performance_dossier(
+        tmp_path,
+        bot_log_root="data/bot1/logs/epp_v24/bot1_a",
+        lookback_days=14,
+    )
+    assert rc == 0
+    assert msg == "ok"
+    assert str(tmp_path) == captured["cwd"]
+    cmd = captured["cmd"]
+    assert str(tmp_path / "scripts" / "analysis" / "performance_dossier.py") in cmd
+    assert "--lookback-days" in cmd
+    assert "--bot-log-root" in cmd
+    assert "--save" in cmd
+    env = captured["env"]
+    py_path = str(env.get("PYTHONPATH", ""))
+    assert str(tmp_path) in py_path.split(os.pathsep)
+
+
+def test_performance_dossier_expectancy_diag_detects_negative_rolling_ci_gate() -> None:
+    diag = _performance_dossier_expectancy_diag(
+        {
+            "status": "warning",
+            "summary": {
+                "rolling_expectancy_sample_count": 300,
+                "rolling_expectancy_gate_min_fills": 300,
+                "rolling_expectancy_window_fills": 300,
+                "rolling_expectancy_ci95_high_quote": -0.01,
+                "rolling_expectancy_gate_fail": True,
+            },
+        }
+    )
+    assert diag["summary_present"] is True
+    assert diag["rolling_gate_armed"] is True
+    assert diag["gate_pass"] is False
+    assert diag["rolling_gate_fail"] is True
+
+
+def test_performance_dossier_expectancy_diag_passes_when_gate_not_armed() -> None:
+    diag = _performance_dossier_expectancy_diag(
+        {
+            "status": "ok",
+            "summary": {
+                "rolling_expectancy_sample_count": 40,
+                "rolling_expectancy_gate_min_fills": 300,
+                "rolling_expectancy_window_fills": 300,
+                "rolling_expectancy_ci95_high_quote": -0.05,
+                "rolling_expectancy_gate_fail": False,
+            },
+        }
+    )
+    assert diag["summary_present"] is True
+    assert diag["rolling_gate_armed"] is False
+    assert diag["gate_pass"] is True
+    assert "not armed" in str(diag["reason"]).lower()
+
+
+def test_run_road9_allocation_rebalance_forwards_script(monkeypatch, tmp_path: Path) -> None:
+    captured = {}
+
+    def _fake_run(cmd, cwd, capture_output, text, check):  # noqa: ARG001
+        captured["cmd"] = cmd
+        captured["cwd"] = cwd
+        return _Proc(stdout="ok")
+
+    monkeypatch.setattr("scripts.release.run_promotion_gates.subprocess.run", _fake_run)
+
+    rc, msg = _run_road9_allocation_rebalance(tmp_path)
+    assert rc == 0
+    assert msg == "ok"
+    assert str(tmp_path) == captured["cwd"]
+    cmd = captured["cmd"]
+    assert str(tmp_path / "scripts" / "analysis" / "rebalance_multi_bot_policy.py") in cmd
+    assert "--update-max-alloc" in cmd
 
 
 def test_run_canonical_plane_gate_forwards_threshold_args(monkeypatch, tmp_path: Path) -> None:
@@ -548,6 +727,60 @@ def test_run_paper_exchange_golden_path_forwards_strict_and_pythonpath(monkeypat
     assert str(tmp_path) in py_path.split(os.pathsep)
 
 
+def test_run_alerting_health_check_forwards_strict(monkeypatch, tmp_path: Path) -> None:
+    captured = {}
+
+    def _fake_run(cmd, cwd, capture_output, text, check):  # noqa: ARG001
+        captured["cmd"] = cmd
+        captured["cwd"] = cwd
+        return _Proc(stdout="ok")
+
+    monkeypatch.setattr("scripts.release.run_promotion_gates.subprocess.run", _fake_run)
+
+    rc, msg = _run_alerting_health_check(tmp_path, strict=True)
+    assert rc == 0
+    assert msg == "ok"
+    assert str(tmp_path) == captured["cwd"]
+    cmd = captured["cmd"]
+    assert str(tmp_path / "scripts" / "release" / "check_alerting_health.py") in cmd
+    assert "--strict" in cmd
+
+
+def test_run_realtime_l2_data_quality_check_forwards_threshold_args(monkeypatch, tmp_path: Path) -> None:
+    captured = {}
+
+    def _fake_run(cmd, cwd, capture_output, text, check, env):
+        captured["cmd"] = cmd
+        captured["cwd"] = cwd
+        captured["env"] = env
+        return _Proc(stdout="ok")
+
+    monkeypatch.setattr("scripts.release.run_promotion_gates.subprocess.run", _fake_run)
+
+    rc, msg = _run_realtime_l2_data_quality_check(
+        tmp_path,
+        max_age_sec=120,
+        max_sequence_gap=25,
+        min_sampled_events=2,
+        max_raw_to_sampled_ratio=40.0,
+        max_depth_stream_share=0.9,
+        max_depth_event_bytes=3500,
+        lookback_depth_events=2000,
+    )
+    assert rc == 0
+    assert msg == "ok"
+    assert str(tmp_path) == captured["cwd"]
+    cmd = captured["cmd"]
+    assert str(tmp_path / "scripts" / "release" / "check_realtime_l2_data_quality.py") in cmd
+    assert "--max-age-sec" in cmd
+    assert "--max-sequence-gap" in cmd
+    assert "--max-raw-to-sampled-ratio" in cmd
+    assert "--max-depth-stream-share" in cmd
+    env = captured["env"]
+    py_path = str(env.get("PYTHONPATH", ""))
+    assert str(tmp_path) in py_path.split(os.pathsep)
+
+
 def test_trading_validation_ladder_status_passes_when_prereqs_met(tmp_path: Path) -> None:
     reports = tmp_path / "reports"
     (reports / "ops").mkdir(parents=True, exist_ok=True)
@@ -558,7 +791,21 @@ def test_trading_validation_ladder_status_passes_when_prereqs_met(tmp_path: Path
         encoding="utf-8",
     )
     (reports / "strategy" / "multi_day_summary_latest.json").write_text(
-        '{"n_days":20,"road1_gate":{"pass":true}}',
+        """{
+  "n_days": 20,
+  "road1_gate": {
+    "pass": true,
+    "criteria": {
+      "min_days_gte_20": true,
+      "consecutive_days_complete": true,
+      "mean_daily_net_pnl_bps_positive": true,
+      "sharpe_gte_1_5": true,
+      "max_drawdown_lt_2pct": true,
+      "no_hard_stop_days": true,
+      "spread_capture_dominant_source": true
+    }
+  }
+}""",
         encoding="utf-8",
     )
     (reports / "ops" / "testnet_readiness_latest.json").write_text(
@@ -567,6 +814,24 @@ def test_trading_validation_ladder_status_passes_when_prereqs_met(tmp_path: Path
     )
     (reports / "strategy" / "testnet_daily_scorecard_latest.json").write_text(
         '{"status":"pass"}',
+        encoding="utf-8",
+    )
+    (reports / "strategy" / "testnet_multi_day_summary_latest.json").write_text(
+        """{
+  "coverage_days": 28,
+  "trading_days_count": 20,
+  "road5_gate": {
+    "pass": true,
+    "criteria": {
+      "calendar_coverage_days_gte_28": true,
+      "trading_days_gte_20": true,
+      "no_hard_stop_incidents": true,
+      "slippage_delta_lt_2bps": true,
+      "rejection_rate_lt_0_5pct": true,
+      "testnet_sharpe_gte_0_8x_paper": true
+    }
+  }
+}""",
         encoding="utf-8",
     )
     for day in range(1, 29):
@@ -592,6 +857,92 @@ def test_trading_validation_ladder_status_blocks_when_prereqs_missing(tmp_path: 
     assert "road1_not_ready" in reasons
     assert "road5_not_ready" in reasons
     assert "no live promotion path allowed" in diag["reason"]
+
+
+def test_trading_validation_ladder_status_blocks_when_road1_required_criteria_missing(tmp_path: Path) -> None:
+    reports = tmp_path / "reports"
+    (reports / "ops").mkdir(parents=True, exist_ok=True)
+    (reports / "strategy").mkdir(parents=True, exist_ok=True)
+
+    (reports / "ops" / "go_live_checklist_evidence_latest.json").write_text(
+        '{"overall_status":"pass","status_counts":{"in_progress":0,"fail":0,"unknown":0}}',
+        encoding="utf-8",
+    )
+    (reports / "strategy" / "multi_day_summary_latest.json").write_text(
+        '{"n_days":20,"road1_gate":{"pass":true,"criteria":{"sharpe_gte_1_5":true}}}',
+        encoding="utf-8",
+    )
+    (reports / "ops" / "testnet_readiness_latest.json").write_text(
+        '{"status":"pass"}',
+        encoding="utf-8",
+    )
+    (reports / "strategy" / "testnet_daily_scorecard_latest.json").write_text(
+        '{"status":"pass"}',
+        encoding="utf-8",
+    )
+    for day in range(1, 29):
+        (reports / "strategy" / f"testnet_daily_scorecard_202601{day:02d}.json").write_text(
+            '{"status":"pass"}',
+            encoding="utf-8",
+        )
+
+    diag = _trading_validation_ladder_status(reports)
+    assert diag["pass"] is False
+    assert "road1_not_ready" in " ".join(diag["blocking_reasons"])
+    assert diag["road1_criteria_ready"] is False
+    assert "min_days_gte_20" in diag["road1_missing_criteria_keys"]
+
+
+def test_trading_validation_ladder_status_blocks_when_road5_required_criteria_missing(tmp_path: Path) -> None:
+    reports = tmp_path / "reports"
+    (reports / "ops").mkdir(parents=True, exist_ok=True)
+    (reports / "strategy").mkdir(parents=True, exist_ok=True)
+
+    (reports / "ops" / "go_live_checklist_evidence_latest.json").write_text(
+        '{"overall_status":"pass","status_counts":{"in_progress":0,"fail":0,"unknown":0}}',
+        encoding="utf-8",
+    )
+    (reports / "strategy" / "multi_day_summary_latest.json").write_text(
+        """{
+  "n_days": 20,
+  "road1_gate": {
+    "pass": true,
+    "criteria": {
+      "min_days_gte_20": true,
+      "consecutive_days_complete": true,
+      "mean_daily_net_pnl_bps_positive": true,
+      "sharpe_gte_1_5": true,
+      "max_drawdown_lt_2pct": true,
+      "no_hard_stop_days": true,
+      "spread_capture_dominant_source": true
+    }
+  }
+}""",
+        encoding="utf-8",
+    )
+    (reports / "ops" / "testnet_readiness_latest.json").write_text(
+        '{"status":"pass"}',
+        encoding="utf-8",
+    )
+    (reports / "strategy" / "testnet_daily_scorecard_latest.json").write_text(
+        '{"status":"pass"}',
+        encoding="utf-8",
+    )
+    (reports / "strategy" / "testnet_multi_day_summary_latest.json").write_text(
+        '{"coverage_days": 28, "trading_days_count": 20, "road5_gate": {"pass": true, "criteria": {"trading_days_gte_20": true}}}',
+        encoding="utf-8",
+    )
+    for day in range(1, 29):
+        (reports / "strategy" / f"testnet_daily_scorecard_202601{day:02d}.json").write_text(
+            '{"status":"pass"}',
+            encoding="utf-8",
+        )
+
+    diag = _trading_validation_ladder_status(reports)
+    assert diag["pass"] is False
+    assert "road5_not_ready" in " ".join(diag["blocking_reasons"])
+    assert diag["road5_criteria_ready"] is False
+    assert "calendar_coverage_days_gte_28" in diag["road5_missing_criteria_keys"]
 
 
 def test_trading_validation_ladder_status_bypasses_when_not_enforced(tmp_path: Path) -> None:
@@ -621,6 +972,6 @@ def test_run_event_store_once_falls_back_to_docker_when_host_client_disabled(mon
     rc, msg = _run_event_store_once(tmp_path)
     assert rc == 0
     assert len(calls) == 2
-    assert calls[1][0:3] == ["docker", "exec", "hbot-event-store-service"]
+    assert calls[1][0:3] == ["docker", "exec", "kzay-capital-event-store-service"]
     assert "docker_rc=0" in msg
 

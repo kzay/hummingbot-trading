@@ -25,7 +25,7 @@ TARGET="${1:-all}"
 HEALTH_WAIT=30  # seconds to wait for health check
 
 echo "============================================"
-echo " Hummingbot Safe Update - $(date)"
+echo " Kzay Capital Safe Update - $(date)"
 echo "============================================"
 
 # Pre-flight checks
@@ -99,7 +99,7 @@ docker compose --env-file "$ENV_FILE" ps
 echo ""
 
 # Check for any unhealthy containers
-UNHEALTHY=$(docker ps --filter "name=hbot-" --filter "health=unhealthy" --format "{{.Names}}" 2>/dev/null || true)
+UNHEALTHY=$(docker ps --filter "label=com.docker.compose.project=kzay-capital" --filter "health=unhealthy" --format "{{.Names}}" 2>/dev/null || true)
 if [ -n "$UNHEALTHY" ]; then
     echo "WARNING: Unhealthy containers detected:"
     echo "$UNHEALTHY"

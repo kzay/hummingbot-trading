@@ -43,7 +43,7 @@ logger = logging.getLogger(__name__)
 
 # ── Config (env) ───────────────────────────────────────────────────────
 STOP_BOT_ON_KILL = os.getenv("KILL_SWITCH_STOP_BOT", "true").lower() == "true"
-BOT_CONTAINER_NAME = os.getenv("KILL_SWITCH_BOT_CONTAINER", "hbot-bot1-1")
+BOT_CONTAINER_NAME = os.getenv("KILL_SWITCH_BOT_CONTAINER", "bot1")
 FLATTEN_POSITION_ON_KILL = os.getenv("KILL_SWITCH_FLATTEN_POSITION", "false").lower() == "true"
 
 _kill_switch_state: Dict[str, object] = {"triggered": False, "last_result": None}

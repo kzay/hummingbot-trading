@@ -24,6 +24,18 @@ from services.common.utils import safe_float, utc_now, write_json
 logger = logging.getLogger(__name__)
 
 
+def _ts_to_ms(value: object) -> Optional[int]:
+    raw = str(value or "").strip()
+    if not raw:
+        return None
+    try:
+        if raw.isdigit():
+            return int(raw)
+        return int(datetime.fromisoformat(raw.replace("Z", "+00:00")).timestamp() * 1000)
+    except Exception:
+        return None
+
+
 def _load_local_fills(fills_path: Path) -> List[Dict[str, str]]:
     """Read all rows from a fills CSV."""
     if not fills_path.exists():
@@ -74,6 +86,8 @@ def reconcile_fills(
     exchange_fills: List[Dict],
     price_tolerance_pct: float = 0.01,
     amount_tolerance_pct: float = 0.01,
+    fee_tolerance_pct: float = 0.05,
+    timestamp_tolerance_ms: int = 30_000,
 ) -> Dict[str, object]:
     """Compare local fills against exchange fills.
 
@@ -102,6 +116,9 @@ def reconcile_fills(
     missing_exchange = sorted(local_order_ids - exchange_order_ids)
 
     price_mismatches: List[Dict[str, object]] = []
+    amount_mismatches: List[Dict[str, object]] = []
+    fee_mismatches: List[Dict[str, object]] = []
+    timestamp_mismatches: List[Dict[str, object]] = []
     for oid in local_order_ids & exchange_order_ids:
         local_price = safe_float(local_by_order[oid].get("price"))
         exchange_price = safe_float(exchange_by_order[oid].get("price"))
@@ -114,15 +131,67 @@ def reconcile_fills(
                     "exchange_price": exchange_price,
                     "drift_pct": drift,
                 })
+        local_amount = safe_float(local_by_order[oid].get("amount_base", local_by_order[oid].get("amount", 0.0)))
+        exchange_amount = safe_float(
+            exchange_by_order[oid].get("amount", exchange_by_order[oid].get("filled", exchange_by_order[oid].get("size", 0.0)))
+        )
+        if local_amount > 0 and exchange_amount > 0:
+            drift = abs(local_amount - exchange_amount) / exchange_amount
+            if drift > amount_tolerance_pct:
+                amount_mismatches.append(
+                    {
+                        "order_id": oid,
+                        "local_amount": local_amount,
+                        "exchange_amount": exchange_amount,
+                        "drift_pct": drift,
+                    }
+                )
+        local_fee = safe_float(local_by_order[oid].get("fee_quote", local_by_order[oid].get("fee", 0.0)))
+        fee_raw = exchange_by_order[oid].get("fee", {})
+        exchange_fee = 0.0
+        if isinstance(fee_raw, dict):
+            exchange_fee = safe_float(fee_raw.get("cost", fee_raw.get("value", 0.0)))
+        else:
+            exchange_fee = safe_float(fee_raw)
+        if local_fee > 0 and exchange_fee > 0:
+            drift = abs(local_fee - exchange_fee) / exchange_fee
+            if drift > fee_tolerance_pct:
+                fee_mismatches.append(
+                    {
+                        "order_id": oid,
+                        "local_fee_quote": local_fee,
+                        "exchange_fee_quote": exchange_fee,
+                        "drift_pct": drift,
+                    }
+                )
+        local_ts = _ts_to_ms(local_by_order[oid].get("ts", local_by_order[oid].get("timestamp", "")))
+        exchange_ts = _ts_to_ms(exchange_by_order[oid].get("timestamp", exchange_by_order[oid].get("datetime", "")))
+        if local_ts is not None and exchange_ts is not None:
+            drift_ms = abs(local_ts - exchange_ts)
+            if drift_ms > int(timestamp_tolerance_ms):
+                timestamp_mismatches.append(
+                    {
+                        "order_id": oid,
+                        "local_timestamp_ms": local_ts,
+                        "exchange_timestamp_ms": exchange_ts,
+                        "drift_ms": drift_ms,
+                    }
+                )
 
     return {
         "matched_count": len(local_order_ids & exchange_order_ids),
         "missing_local_count": len(missing_local),
         "missing_exchange_count": len(missing_exchange),
         "price_mismatch_count": len(price_mismatches),
+        "amount_mismatch_count": len(amount_mismatches),
+        "fee_mismatch_count": len(fee_mismatches),
+        "timestamp_mismatch_count": len(timestamp_mismatches),
         "missing_local": missing_local[:20],
         "missing_exchange": missing_exchange[:20],
         "price_mismatches": price_mismatches[:10],
+        "amount_mismatches": amount_mismatches[:10],
+        "fee_mismatches": fee_mismatches[:10],
+        "timestamp_mismatches": timestamp_mismatches[:10],
     }
 
 
@@ -173,7 +242,12 @@ def run_fill_reconciliation(
         status = "ok"
         if recon["missing_local_count"] > 0 or recon["missing_exchange_count"] > 0:
             status = "warning"
-        if recon["price_mismatch_count"] > 0:
+        if (
+            recon["price_mismatch_count"] > 0
+            or recon["amount_mismatch_count"] > 0
+            or recon["fee_mismatch_count"] > 0
+            or recon["timestamp_mismatch_count"] > 0
+        ):
             status = "critical"
 
         bot_reports.append({

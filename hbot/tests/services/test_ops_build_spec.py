@@ -36,7 +36,7 @@ def test_checklist_evidence_collector_classifies_sections(tmp_path: Path) -> Non
     assert payload["sections_total"] == 2
     statuses = [s["status"] for s in payload["sections"]]
     assert statuses == ["pass", "in_progress"]
-    assert payload["overall_status"] == "pass"
+    assert payload["overall_status"] == "in_progress"
 
 
 def test_recon_exchange_ready_passes_with_complete_env_and_reports(tmp_path: Path) -> None:
@@ -107,9 +107,9 @@ def test_telegram_format_and_diagnosis_classifiers() -> None:
 
 
 def test_password_env_keys_for_container_multi_bot() -> None:
-    assert _password_env_keys_for_container("hbot-bot1") == ["BOT1_PASSWORD"]
-    assert _password_env_keys_for_container("hbot-bot3") == ["BOT3_PASSWORD", "BOT1_PASSWORD"]
-    assert _password_env_keys_for_container("hbot-bot4") == ["BOT4_PASSWORD", "BOT1_PASSWORD"]
+    assert _password_env_keys_for_container("bot1") == ["BOT1_PASSWORD"]
+    assert _password_env_keys_for_container("bot3") == ["BOT3_PASSWORD", "BOT1_PASSWORD"]
+    assert _password_env_keys_for_container("bot4") == ["BOT4_PASSWORD", "BOT1_PASSWORD"]
 
 
 def test_check_bot_container_password_accepts_runtime_export_guard() -> None:
@@ -122,7 +122,7 @@ def test_check_bot_container_password_accepts_runtime_export_guard() -> None:
                 stderr="",
             ),
         ]
-        ok, msg = _check_bot_container_password("hbot-bot3")
+        ok, msg = _check_bot_container_password("bot3")
     assert ok is True
     assert "runtime CONFIG_PASSWORD export guard" in msg
 
@@ -133,6 +133,6 @@ def test_check_bot_container_password_rejects_missing_runtime_guard() -> None:
             SimpleNamespace(returncode=0, stdout="BOT4_PASSWORD=abc\n", stderr=""),
             SimpleNamespace(returncode=0, stdout='["/bin/bash","-lc","python ./bin/headless_start.py"]', stderr=""),
         ]
-        ok, msg = _check_bot_container_password("hbot-bot4")
+        ok, msg = _check_bot_container_password("bot4")
     assert ok is False
     assert "lacks runtime CONFIG_PASSWORD export guard" in msg

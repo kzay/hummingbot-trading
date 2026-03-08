@@ -35,10 +35,13 @@ for a semi-pro BTC-USDT perpetuals market-making desk.
 | bot1 state | hbot/reports/desk_snapshot/bot1/latest.json |
 | reconciliation | hbot/reports/reconciliation/latest.json |
 | event_store integrity | hbot/reports/event_store/integrity_YYYYMMDD.json |
+| day2 event-store gate | hbot/reports/event_store/day2_gate_eval_latest.json |
 | kill_switch / risk | hbot/reports/risk_service/latest.json |
 | portfolio_risk | hbot/reports/portfolio_risk/latest.json |
 | exchange_snapshot | hbot/reports/exchange_snapshots/latest.json |
 | parity check | hbot/reports/parity/latest.json |
+| paper-exchange perf regression | hbot/reports/verification/paper_exchange_perf_regression_latest.json |
+| strict cycle summary | hbot/reports/promotion_gates/strict_cycle_latest.json |
 | soak test | hbot/reports/soak/latest.json |
 
 ## Key Prometheus queries (paste into Prometheus or Grafana Explorer)
@@ -46,20 +49,20 @@ for a semi-pro BTC-USDT perpetuals market-making desk.
 # Bot state — 1=running, 2=soft_pause, 3=hard_stop (should be 1)
 sum without(state) ((hbot_bot_state{bot="bot1",state="running"} * 1) or (hbot_bot_state{bot="bot1",state="soft_pause"} * 2) or (hbot_bot_state{bot="bot1",state="hard_stop"} * 3))
 
-# Snapshot age in seconds (should be < 10)
-hbot_snapshot_age_seconds{bot="bot1"}
+# Snapshot age in seconds (desk snapshot minute age; should be < 180)
+hbot_desk_snapshot_minute_age_s{bot="bot1"}
 
 # Order book stale flag (should be 0)
-hbot_order_book_stale{bot="bot1"}
+hbot_bot_order_book_stale{bot="bot1"}
 
 # PnL governor multiplier (1.0=full size, < 0.7 = dampened → investigate)
-hbot_pnl_governor_mult{bot="bot1"}
+hbot_bot_pnl_governor_size_mult_applied{bot="bot1"}
 
 # Soft-pause active ratio over 24h (target < 0.20)
-avg_over_time(hbot_soft_pause_active{bot="bot1"}[24h])
+avg_over_time((sum by (bot) (hbot_bot_state{bot="bot1",state="soft_pause"}))[24h:1m])
 
 # Fill count in last hour
-increase(hbot_fill_count_total{bot="bot1"}[1h])
+hbot_bot_fills_1h_count{bot="bot1"}
 ```
 
 ## Inputs (paste values before running)
@@ -89,6 +92,13 @@ increase(hbot_fill_count_total{bot="bot1"}[1h])
 - If evidence is missing for a claim, state `DATA_GAP:` and lower confidence accordingly.
 - Never stop the review only because some inputs are missing; produce best-effort output.
 
+## Baseline consistency protocol (avoid false lag/perf regressions)
+- Event-store baseline should use the same source counter semantics as day2 gate (`entries_added`), not just `XLEN`.
+- Prefer `python hbot/scripts/utils/event_store_count_check.py` to seed/update baseline counters before evaluating day2 lag.
+- If baseline was reset manually, verify `reports/event_store/baseline_counts.json` includes `source_counter_kind=entries_added`.
+- Re-anchor performance baseline only after a validated load profile run, then record profile label and timestamp.
+- If strict-cycle fails only on day2/perf gates, treat as ops baseline drift first, then strategy/runtime issue.
+
 ---
 
 ## MODE = DAILY_SCAN
@@ -99,7 +109,7 @@ Quick pass only. Flag and escalate. No deep analysis.
 
 **P0 — Trading at risk (escalate now)**
 - [ ] bot_state = running
-- [ ] snapshot_age_seconds < 10
+- [ ] snapshot_age_seconds < 180
 - [ ] order_book_stale = 0
 - [ ] no "Unexpected error" or "ValidationError" in logs (past 2h)
 - [ ] heartbeat file updated < 2 minutes ago
@@ -117,6 +127,8 @@ Quick pass only. Flag and escalate. No deep analysis.
 **P2 — Monitor, no immediate action**
 - [ ] reconciliation last run: ok (check reports/reconciliation/latest.json)
 - [ ] event_store integrity: ok (check reports/event_store/integrity_YYYYMMDD.json)
+- [ ] day2_event_store gate: go=true with lag in tolerance (check reports/event_store/day2_gate_eval_latest.json)
+- [ ] paper_exchange perf regression: pass (check reports/verification/paper_exchange_perf_regression_latest.json)
 - [ ] disk not growing abnormally fast
 - [ ] fill count > 0 (bot is actively trading)
 
@@ -189,6 +201,14 @@ Flag any service that:
 - Produces error-level logs repeatedly
 - Has not been manually tested in > 7 days
 
+**Gate artifacts (weekly)**
+- Validate `reports/promotion_gates/strict_cycle_latest.json` from at least one run this week.
+- If strict cycle failed, classify cause:
+  - baseline drift (day2/perf evidence mismatch),
+  - infra/runtime degradation,
+  - real strategy/control-plane defect.
+- Record remediation command trail and post-remediation evidence artifact paths.
+
 ### PHASE 4 — Infrastructure health
 
 **Disk** (priority path: logs > JSONL events > CSV fills)
@@ -205,6 +225,16 @@ Flag any service that:
 - Any container with steadily increasing memory? (docker stats)
 - Any container OOM-killed since last review?
 - All restart policies set to on-failure (not always)?
+
+**Common strict-cycle blocker recovery commands**
+- Day2 lag/baseline refresh:
+  - `python hbot/scripts/utils/event_store_count_check.py`
+  - `python hbot/scripts/utils/day2_gate_evaluator.py`
+- Baseline re-anchor (only when justified):
+  - `python hbot/scripts/utils/reset_event_store_baseline.py --reason "<reason>" --force`
+  - immediately re-run `event_store_count_check.py` + `day2_gate_evaluator.py`
+- Perf baseline re-anchor (only after validated load profile):
+  - `python hbot/scripts/release/capture_paper_exchange_perf_baseline.py --strict --profile-label <label>`
 
 ### PHASE 5 — Incident review
 

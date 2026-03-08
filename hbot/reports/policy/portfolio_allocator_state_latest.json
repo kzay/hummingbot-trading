@@ -1,0 +1,6 @@
+{
+  "ts_utc": "2026-03-07T16:24:16.966204+00:00",
+  "last_rebalance_ts_epoch_s": 1772900656.9341254,
+  "last_rebalance_signature": "[[\"bot1\",0.68781683,824.84185592],[\"bot3\",0.31218317,374.37545623]]",
+  "rebalance_cooldown_hours": 168.0
+}

@@ -8,7 +8,7 @@ from __future__ import annotations
 from decimal import Decimal
 from typing import Dict, Optional, Tuple
 
-from controllers.core import RegimeSpec
+from controllers.runtime.market_making_types import RegimeSpec
 
 _ZERO = Decimal("0")
 _ONE = Decimal("1")

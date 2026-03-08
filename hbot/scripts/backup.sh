@@ -8,7 +8,7 @@
 #   bash backup.sh bot1     # backup only bot1
 #
 # Recommended: add to crontab for daily backups
-#   0 4 * * * /path/to/hbot/scripts/backup.sh >> /var/log/hbot-backup.log 2>&1
+#   0 4 * * * /path/to/hbot/scripts/backup.sh >> /var/log/kzay-capital-backup.log 2>&1
 # ============================================
 set -euo pipefail
 
@@ -21,7 +21,7 @@ MAX_BACKUPS=30  # keep last N backups
 TARGET_BOT="${1:-all}"
 
 echo "============================================"
-echo " Hummingbot Backup - $(date)"
+echo " Kzay Capital Backup - $(date)"
 echo "============================================"
 
 mkdir -p "$BACKUP_DIR"

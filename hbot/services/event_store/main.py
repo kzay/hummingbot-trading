@@ -16,11 +16,15 @@ from services.contracts.stream_names import (
     AUDIT_STREAM,
     BOT_TELEMETRY_STREAM,
     EXECUTION_INTENT_STREAM,
+    MARKET_DEPTH_STREAM,
     MARKET_DATA_STREAM,
+    MARKET_QUOTE_STREAM,
+    MARKET_TRADE_STREAM,
     ML_SIGNAL_STREAM,
     RISK_DECISION_STREAM,
     SIGNAL_STREAM,
     DEFAULT_CONSUMER_GROUP,
+    STREAM_RETENTION_MAXLEN,
 )
 from services.hb_bridge.redis_client import RedisStreamClient
 
@@ -34,6 +38,9 @@ except Exception:  # pragma: no cover - optional dependency in some environments
 
 STREAMS: Tuple[str, ...] = (
     MARKET_DATA_STREAM,
+    MARKET_QUOTE_STREAM,
+    MARKET_TRADE_STREAM,
+    MARKET_DEPTH_STREAM,
     SIGNAL_STREAM,
     ML_SIGNAL_STREAM,
     RISK_DECISION_STREAM,
@@ -44,6 +51,9 @@ STREAMS: Tuple[str, ...] = (
 
 STREAM_TO_EVENT_TYPE: Dict[str, str] = {
     MARKET_DATA_STREAM: "market_snapshot",
+    MARKET_QUOTE_STREAM: "market_quote",
+    MARKET_TRADE_STREAM: "market_trade",
+    MARKET_DEPTH_STREAM: "market_depth_snapshot",
     SIGNAL_STREAM: "strategy_signal",
     ML_SIGNAL_STREAM: "ml_signal",
     RISK_DECISION_STREAM: "risk_decision",
@@ -254,9 +264,9 @@ def _connect_db() -> Optional["psycopg.Connection"]:
     return psycopg.connect(
         host=os.getenv("OPS_DB_HOST", "postgres"),
         port=int(os.getenv("OPS_DB_PORT", "5432")),
-        dbname=os.getenv("OPS_DB_NAME", "hbot_ops"),
+        dbname=os.getenv("OPS_DB_NAME", "kzay_capital_ops"),
         user=os.getenv("OPS_DB_USER", "hbot"),
-        password=os.getenv("OPS_DB_PASSWORD", "hbot_dev_password"),
+        password=os.getenv("OPS_DB_PASSWORD", "kzay_capital_dev_password"),
     )
 
 
@@ -387,6 +397,35 @@ def _env_bool(name: str, default: bool) -> bool:
     return default
 
 
+def _trim_known_streams(
+    client: RedisStreamClient,
+    stream_maxlens: Dict[str, int],
+) -> Dict[str, int]:
+    trim_fn = getattr(client, "xtrim", None)
+    summary = {
+        "streams_checked": 0,
+        "trim_calls": 0,
+        "entries_trimmed": 0,
+        "errors": 0,
+    }
+    if not callable(trim_fn):
+        return summary
+
+    for stream, maxlen in stream_maxlens.items():
+        safe_maxlen = max(1, int(maxlen))
+        summary["streams_checked"] += 1
+        try:
+            trimmed = trim_fn(stream=stream, maxlen=safe_maxlen, approximate=True)
+        except Exception:
+            trimmed = None
+        if trimmed is None:
+            summary["errors"] += 1
+            continue
+        summary["trim_calls"] += 1
+        summary["entries_trimmed"] += int(trimmed)
+    return summary
+
+
 def _bootstrap_stream_coverage(
     client: RedisStreamClient,
     root: Path,
@@ -464,6 +503,14 @@ def run(once: bool = False) -> None:
     claim_pending_fn = getattr(client, "claim_pending", None)
     pending_min_idle_ms = max(1, int(os.getenv("EVENT_STORE_PENDING_MIN_IDLE_MS", "30000")))
     pending_claim_count = max(1, int(os.getenv("EVENT_STORE_PENDING_CLAIM_COUNT", "200")))
+    trim_streams_enabled = _env_bool("EVENT_STORE_TRIM_STREAMS_ENABLED", True)
+    trim_interval_sec = max(5, int(os.getenv("EVENT_STORE_TRIM_INTERVAL_SEC", "30")))
+    trim_targets = {
+        str(stream): max(1, int(maxlen))
+        for stream, maxlen in STREAM_RETENTION_MAXLEN.items()
+        if int(maxlen) > 0
+    }
+    last_trim_at = 0.0
     for stream in STREAMS:
         client.create_group(stream, group)
 
@@ -491,6 +538,19 @@ def run(once: bool = False) -> None:
         )
 
     while True:
+        now_monotonic = time.monotonic()
+        if trim_streams_enabled and (now_monotonic - last_trim_at) >= trim_interval_sec:
+            trim_summary = _trim_known_streams(client, trim_targets)
+            if trim_summary["entries_trimmed"] > 0 or trim_summary["errors"] > 0:
+                logger.info(
+                    "event_store stream trim checked=%s calls=%s trimmed=%s errors=%s",
+                    trim_summary["streams_checked"],
+                    trim_summary["trim_calls"],
+                    trim_summary["entries_trimmed"],
+                    trim_summary["errors"],
+                )
+            last_trim_at = now_monotonic
+
         batch: List[Dict[str, object]] = []
         batch_ack_keys: List[Tuple[str, str]] = []
         for stream in STREAMS:
