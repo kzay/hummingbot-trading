@@ -5,6 +5,9 @@ from typing import Any, Dict, List, Tuple
 
 from pydantic import Field
 
+from controllers.runtime.data_context import RuntimeDataContext
+from controllers.runtime.directional_core import DirectionalRuntimeAdapter
+from controllers.runtime.execution_context import RuntimeExecutionPlan
 from controllers.runtime.base import StrategyRuntimeV24Config, StrategyRuntimeV24Controller
 from controllers.runtime.market_making_types import MarketConditions, RegimeSpec, SpreadEdgeState, clip
 from services.common.utils import to_decimal
@@ -20,6 +23,12 @@ class Bot6CvdDivergenceV1Config(StrategyRuntimeV24Config):
     """Directional Bitget lane driven by spot-vs-perp CVD divergence."""
 
     controller_name: str = "bot6_cvd_divergence_v1"
+    shared_edge_gate_enabled: bool = Field(default=False)
+    alpha_policy_enabled: bool = Field(default=False)
+    selective_quoting_enabled: bool = Field(default=False)
+    adverse_fill_soft_pause_enabled: bool = Field(default=False)
+    edge_confidence_soft_pause_enabled: bool = Field(default=False)
+    slippage_soft_pause_enabled: bool = Field(default=False)
     bot6_spot_connector_name: str = Field(
         default="bitget",
         description="Spot connector used as the reference stream for CVD divergence.",
@@ -35,6 +44,12 @@ class Bot6CvdDivergenceV1Config(StrategyRuntimeV24Config):
     bot6_adx_threshold: Decimal = Field(default=Decimal("25"), description="Minimum ADX needed for trend activation.")
     bot6_trade_window_count: int = Field(default=120, ge=20, le=500)
     bot6_spot_trade_window_count: int = Field(default=120, ge=20, le=500)
+    bot6_trade_features_stale_after_ms: int = Field(
+        default=90000,
+        ge=5000,
+        le=300000,
+        description="How long bot6 tolerates trade-flow silence before treating directional features as stale.",
+    )
     bot6_cvd_divergence_threshold_pct: Decimal = Field(default=Decimal("0.15"))
     bot6_stacked_imbalance_min: int = Field(default=3, ge=1, le=20)
     bot6_delta_spike_threshold: Decimal = Field(default=Decimal("3.0"))
@@ -57,6 +72,9 @@ class Bot6CvdDivergenceV1Controller(StrategyRuntimeV24Controller):
     def __init__(self, config: Bot6CvdDivergenceV1Config, *args, **kwargs):
         super().__init__(config, *args, **kwargs)
         self._bot6_signal_state: Dict[str, Any] = self._empty_bot6_signal_state()
+
+    def _make_runtime_family_adapter(self):
+        return DirectionalRuntimeAdapter(self)
 
     def _empty_bot6_signal_state(self) -> Dict[str, Any]:
         return {
@@ -83,6 +101,74 @@ class Bot6CvdDivergenceV1Controller(StrategyRuntimeV24Controller):
             "hedge_state": "inactive",
             "partial_exit_ratio": _ZERO,
         }
+
+    def _bot6_gate_metrics(self) -> Dict[str, Any]:
+        signal_state = getattr(self, "_bot6_signal_state", None) or self._empty_bot6_signal_state()
+        reason = str(signal_state.get("reason", "inactive"))
+        directional_allowed = bool(signal_state.get("directional_allowed", False))
+        fail_closed = False
+        if fail_closed:
+            gate_state = "blocked"
+        elif directional_allowed:
+            gate_state = "active"
+        else:
+            gate_state = "idle"
+        threshold = max(1, int(getattr(self.config, "bot6_signal_score_threshold", 7)))
+        score = to_decimal(signal_state.get("active_score", 0))
+        score_ratio = clip(score / Decimal(threshold), _ZERO, _ONE)
+        return {
+            "state": gate_state,
+            "reason": reason,
+            "fail_closed": fail_closed,
+            "score_ratio": score_ratio,
+        }
+
+    def _compute_alpha_policy(
+        self,
+        *,
+        regime_name: str,
+        spread_state: SpreadEdgeState,
+        market: MarketConditions,
+        target_net_base_pct: Decimal,
+        base_pct_net: Decimal,
+    ) -> Dict[str, Decimal | str | bool]:
+        gate = self._bot6_gate_metrics()
+        score_ratio = to_decimal(gate["score_ratio"])
+        metrics: Dict[str, Decimal | str | bool] = {
+            "state": "bot6_strategy_gate",
+            "reason": str(gate["reason"]),
+            "maker_score": score_ratio,
+            "aggressive_score": _ZERO,
+            "cross_allowed": False,
+        }
+        self._alpha_policy_state = str(metrics["state"])
+        self._alpha_policy_reason = str(metrics["reason"])
+        self._alpha_maker_score = score_ratio
+        self._alpha_aggressive_score = _ZERO
+        self._alpha_cross_allowed = False
+        return metrics
+
+    def _evaluate_all_risk(
+        self,
+        spread_state: SpreadEdgeState,
+        base_pct_gross: Decimal,
+        equity_quote: Decimal,
+        projected_total_quote: Decimal,
+        market: MarketConditions,
+    ) -> Tuple[List[str], bool, Decimal, Decimal]:
+        risk_reasons, risk_hard_stop, daily_loss_pct, drawdown_pct = super()._evaluate_all_risk(
+            spread_state=spread_state,
+            base_pct_gross=base_pct_gross,
+            equity_quote=equity_quote,
+            projected_total_quote=projected_total_quote,
+            market=market,
+        )
+        gate = self._bot6_gate_metrics()
+        if bool(gate["fail_closed"]):
+            gate_reason = f"bot6_{gate['reason']}"
+            if gate_reason not in risk_reasons:
+                risk_reasons.append(gate_reason)
+        return risk_reasons, risk_hard_stop, daily_loss_pct, drawdown_pct
 
     def _decimal_series(self, df: Any, column: str) -> List[Decimal]:
         if df is None:
@@ -157,6 +243,7 @@ class Bot6CvdDivergenceV1Controller(StrategyRuntimeV24Controller):
             spot_trading_pair=str(self.config.bot6_spot_trading_pair),
             futures_count=int(self.config.bot6_trade_window_count),
             spot_count=int(self.config.bot6_spot_trade_window_count),
+            stale_after_ms=int(getattr(self.config, "bot6_trade_features_stale_after_ms", 90000)),
             divergence_threshold_pct=to_decimal(self.config.bot6_cvd_divergence_threshold_pct),
             stacked_imbalance_min=int(self.config.bot6_stacked_imbalance_min),
             delta_spike_threshold=to_decimal(self.config.bot6_delta_spike_threshold),
@@ -180,6 +267,11 @@ class Bot6CvdDivergenceV1Controller(StrategyRuntimeV24Controller):
                 long_score += 1
             elif trend_direction == "short":
                 short_score += 1
+        if trend_direction == "flat" and sma_fast <= _ZERO and sma_slow <= _ZERO:
+            if long_score > short_score:
+                trend_direction = "long"
+            elif short_score > long_score:
+                trend_direction = "short"
 
         direction = "off"
         reason = "score_below_threshold"
@@ -199,7 +291,7 @@ class Bot6CvdDivergenceV1Controller(StrategyRuntimeV24Controller):
             direction = "sell"
             reason = "bearish_cvd_divergence"
         elif trade_features.stale:
-            reason = "trade_features_stale"
+            reason = "trade_features_warmup"
         elif trend_direction == "flat":
             reason = "trend_filter_flat"
 
@@ -277,9 +369,11 @@ class Bot6CvdDivergenceV1Controller(StrategyRuntimeV24Controller):
         regime_name: str,
         regime_spec: RegimeSpec,
     ) -> str:
-        base_mode = super()._resolve_quote_side_mode(mid=mid, regime_name=regime_name, regime_spec=regime_spec)
+        base_mode = regime_spec.one_sided
         signal_state = getattr(self, "_bot6_signal_state", None) or self._empty_bot6_signal_state()
         if not bool(signal_state.get("directional_allowed", False)):
+            self._quote_side_mode = base_mode
+            self._quote_side_reason = "regime"
             return base_mode
         desired_mode = "buy_only" if str(signal_state.get("direction")) == "buy" else "sell_only"
         previous_mode = str(getattr(self, "_quote_side_mode", base_mode) or "off")
@@ -317,83 +411,88 @@ class Bot6CvdDivergenceV1Controller(StrategyRuntimeV24Controller):
         mid: Decimal,
         market: MarketConditions,
     ) -> Tuple[list[Decimal], list[Decimal], Decimal, Decimal]:
-        buy_spreads, sell_spreads, projected_total_quote, size_mult = super()._compute_levels_and_sizing(
-            regime_name, regime_spec, spread_state, equity_quote, mid, market
+        plan = self.build_runtime_execution_plan(
+            RuntimeDataContext(
+                now_ts=float(self.market_data_provider.time()),
+                mid=mid,
+                regime_name=regime_name,
+                regime_spec=regime_spec,
+                spread_state=spread_state,
+                market=market,
+                equity_quote=equity_quote,
+                target_base_pct=regime_spec.target_base_pct,
+                target_net_base_pct=to_decimal(getattr(self, "processed_data", {}).get("target_net_base_pct", regime_spec.target_base_pct)),
+                base_pct_gross=to_decimal(getattr(self, "processed_data", {}).get("base_pct", _ZERO)),
+                base_pct_net=to_decimal(getattr(self, "processed_data", {}).get("net_base_pct", _ZERO)),
+            )
         )
+        return plan.buy_spreads, plan.sell_spreads, plan.projected_total_quote, plan.size_mult
+
+    def build_runtime_execution_plan(self, data_context: RuntimeDataContext) -> RuntimeExecutionPlan:
+        base_plan = super().build_runtime_execution_plan(data_context)
         signal_state = getattr(self, "_bot6_signal_state", None) or self._empty_bot6_signal_state()
         signal_mult = to_decimal(signal_state.get("size_mult", _ONE))
+        buy_spreads = list(base_plan.buy_spreads)
+        sell_spreads = list(base_plan.sell_spreads)
         if bool(signal_state.get("directional_allowed", False)):
             if str(signal_state.get("direction")) == "buy":
-                buy_spreads = buy_spreads[:1]
+                buy_spreads = buy_spreads[:1] or [data_context.market.side_spread_floor]
                 sell_spreads = []
             elif str(signal_state.get("direction")) == "sell":
                 buy_spreads = []
-                sell_spreads = sell_spreads[:1]
-        active_levels = max(1, len(buy_spreads) + len(sell_spreads))
-        applied_size_mult = max(size_mult, signal_mult)
+                sell_spreads = sell_spreads[:1] or [data_context.market.side_spread_floor]
+        active_levels = len(buy_spreads) + len(sell_spreads)
+        applied_size_mult = max(base_plan.size_mult, signal_mult)
         projected_total_quote = self._project_total_amount_quote(
-            equity_quote=equity_quote,
-            mid=mid,
-            quote_size_pct=regime_spec.quote_size_pct,
+            equity_quote=data_context.equity_quote,
+            mid=data_context.mid,
+            quote_size_pct=data_context.regime_spec.quote_size_pct,
             total_levels=active_levels,
             size_mult=applied_size_mult,
         )
-        return buy_spreads, sell_spreads, projected_total_quote, applied_size_mult
-
-    def _emit_tick_output(
-        self,
-        _t0: float,
-        now: float,
-        mid: Decimal,
-        regime_name: str,
-        target_base_pct: Decimal,
-        target_net_base_pct: Decimal,
-        base_pct_gross: Decimal,
-        base_pct_net: Decimal,
-        equity_quote: Decimal,
-        spread_state: SpreadEdgeState,
-        market: MarketConditions,
-        risk_hard_stop: bool,
-        risk_reasons: List[str],
-        daily_loss_pct: Decimal,
-        drawdown_pct: Decimal,
-        projected_total_quote: Decimal,
-        state: Any,
-    ) -> None:
-        super()._emit_tick_output(
-            _t0,
-            now,
-            mid,
-            regime_name,
-            target_base_pct,
-            target_net_base_pct,
-            base_pct_gross,
-            base_pct_net,
-            equity_quote,
-            spread_state,
-            market,
-            risk_hard_stop,
-            risk_reasons,
-            daily_loss_pct,
-            drawdown_pct,
-            projected_total_quote,
-            state,
+        return RuntimeExecutionPlan(
+            family="directional",
+            buy_spreads=buy_spreads,
+            sell_spreads=sell_spreads,
+            projected_total_quote=projected_total_quote,
+            size_mult=applied_size_mult,
+            metadata={
+                **dict(base_plan.metadata),
+                "strategy_lane": "bot6",
+                "quote_side_mode": str(getattr(self, "_quote_side_mode", "off")),
+                "quote_side_reason": str(getattr(self, "_quote_side_reason", "regime")),
+                "directional_allowed": bool(signal_state.get("directional_allowed", False)),
+            },
         )
+
+    def _extend_processed_data_before_log(
+        self,
+        *,
+        processed_data: Dict[str, Any],
+        snapshot: Dict[str, Any],
+        state: Any,
+        regime_name: str,
+        market: MarketConditions,
+        projected_total_quote: Decimal,
+    ) -> None:
         signal_state = getattr(self, "_bot6_signal_state", None) or self._empty_bot6_signal_state()
-        self.processed_data["bot6_signal_side"] = signal_state["direction"]
-        self.processed_data["bot6_signal_reason"] = signal_state["reason"]
-        self.processed_data["bot6_signal_score_long"] = signal_state["long_score"]
-        self.processed_data["bot6_signal_score_short"] = signal_state["short_score"]
-        self.processed_data["bot6_signal_score_active"] = signal_state["active_score"]
-        self.processed_data["bot6_sma_fast"] = signal_state["sma_fast"]
-        self.processed_data["bot6_sma_slow"] = signal_state["sma_slow"]
-        self.processed_data["bot6_adx"] = signal_state["adx"]
-        self.processed_data["bot6_funding_bias"] = signal_state["funding_bias"]
-        self.processed_data["bot6_futures_cvd"] = signal_state["futures_cvd"]
-        self.processed_data["bot6_spot_cvd"] = signal_state["spot_cvd"]
-        self.processed_data["bot6_cvd_divergence_ratio"] = signal_state["cvd_divergence_ratio"]
-        self.processed_data["bot6_stacked_buy_count"] = signal_state["stacked_buy_count"]
-        self.processed_data["bot6_stacked_sell_count"] = signal_state["stacked_sell_count"]
-        self.processed_data["bot6_delta_spike_ratio"] = signal_state["delta_spike_ratio"]
-        self.processed_data["bot6_hedge_state"] = signal_state["hedge_state"]
-        self.processed_data["bot6_partial_exit_ratio"] = signal_state["partial_exit_ratio"]
+        processed_data["bot6_signal_side"] = signal_state["direction"]
+        processed_data["bot6_signal_reason"] = signal_state["reason"]
+        processed_data["bot6_gate_state"] = self._bot6_gate_metrics()["state"]
+        processed_data["bot6_gate_reason"] = self._bot6_gate_metrics()["reason"]
+        processed_data["bot6_signal_score"] = signal_state["active_score"]
+        processed_data["bot6_signal_score_long"] = signal_state["long_score"]
+        processed_data["bot6_signal_score_short"] = signal_state["short_score"]
+        processed_data["bot6_signal_score_active"] = signal_state["active_score"]
+        processed_data["bot6_sma_fast"] = signal_state["sma_fast"]
+        processed_data["bot6_sma_slow"] = signal_state["sma_slow"]
+        processed_data["bot6_adx"] = signal_state["adx"]
+        processed_data["bot6_funding_bias"] = signal_state["funding_bias"]
+        processed_data["bot6_futures_cvd"] = signal_state["futures_cvd"]
+        processed_data["bot6_spot_cvd"] = signal_state["spot_cvd"]
+        processed_data["bot6_cvd_divergence_ratio"] = signal_state["cvd_divergence_ratio"]
+        processed_data["bot6_stacked_buy_count"] = signal_state["stacked_buy_count"]
+        processed_data["bot6_stacked_sell_count"] = signal_state["stacked_sell_count"]
+        processed_data["bot6_delta_spike_ratio"] = signal_state["delta_spike_ratio"]
+        processed_data["bot6_hedge_state"] = signal_state["hedge_state"]
+        processed_data["bot6_partial_exit_ratio"] = signal_state["partial_exit_ratio"]

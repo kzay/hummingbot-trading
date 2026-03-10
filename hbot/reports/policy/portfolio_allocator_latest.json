@@ -1,5 +1,5 @@
 {
-  "ts_utc": "2026-03-08T01:30:00.950775+00:00",
+  "ts_utc": "2026-03-10T23:24:05.970606+00:00",
   "status": "pass",
   "reasons": [],
   "allocator_enabled": true,
@@ -18,16 +18,16 @@
     "eth_variance": 2.8764114914475624e-06,
     "overrides_applied": 2
   },
-  "total_equity_quote": 1198.7077802577714,
+  "total_equity_quote": 1193.1454261246395,
   "daily_goal_intent_republish_s": 1800.0,
   "rebalance_cooldown_hours": 168.0,
   "state_path": "/workspace/hbot/reports/policy/portfolio_allocator_state_latest.json",
-  "rebalance_signature": "[[\"bot1\",0.68781683,824.49139131],[\"bot3\",0.31218317,374.21638895]]",
+  "rebalance_signature": "[[\"bot1\",0.68781683,820.66551049],[\"bot3\",0.31218317,372.47991563]]",
   "rebalance_intents_published": 0,
   "rebalance_intents_suppressed_unchanged": 0,
-  "rebalance_intents_suppressed_cooldown": 1,
+  "rebalance_intents_suppressed_cooldown": 0,
   "rebalance_due": false,
-  "daily_goal_intents_published": 2,
+  "daily_goal_intents_published": 0,
   "daily_goal_intents_suppressed_unchanged": 0,
   "daily_goal": {
     "enabled": true,
@@ -36,8 +36,8 @@
     "distribution": "allocation_weighted",
     "apply_only_portfolio_action_enabled": false,
     "target_pct_total_equity": 0.6,
-    "target_quote_total_equity": 7.192246681546629,
-    "target_quote_distributed": 7.19224668154663,
+    "target_quote_total_equity": 7.158872556747837,
+    "target_quote_distributed": 7.158872556747836,
     "min_bot_target_pct": 0.0,
     "max_bot_target_pct": 3.0,
     "clamp_applied_count": 0,
@@ -45,51 +45,51 @@
       {
         "bot": "bot1",
         "weight": 0.6878168348344115,
-        "equity_quote": 998.9222666017091,
-        "target_pnl_pct_raw": 0.495228559142946,
-        "daily_pnl_target_pct": 0.495228559142946,
-        "daily_pnl_target_quote": 4.946948347849702,
+        "equity_quote": 992.6204168577598,
+        "target_pnl_pct_raw": 0.49606002247592546,
+        "daily_pnl_target_pct": 0.49606002247592546,
+        "daily_pnl_target_quote": 4.923993062965228,
         "portfolio_action_enabled": true
       },
       {
         "bot": "bot3",
         "weight": 0.31218316516558847,
-        "equity_quote": 199.7855136560624,
-        "target_pnl_pct_raw": 1.1238544239810526,
-        "daily_pnl_target_pct": 1.1238544239810526,
-        "daily_pnl_target_quote": 2.2452983336969274,
+        "equity_quote": 200.52500926687958,
+        "target_pnl_pct_raw": 1.1145140957496218,
+        "daily_pnl_target_pct": 1.1145140957496218,
+        "daily_pnl_target_quote": 2.234879493782608,
         "portfolio_action_enabled": false
       }
     ],
-    "goal_scope_equity_quote": 1198.7077802577714,
+    "goal_scope_equity_quote": 1193.1454261246395,
     "distribution_effective": "allocation_weighted"
   },
   "proposals": [
     {
       "bot": "bot1",
-      "equity_quote": 998.9222666017091,
+      "equity_quote": 992.6204168577598,
       "variance_proxy": 1.3190745453454885e-06,
       "variance_source": "diversification_report",
       "symbol_bucket": "btc",
       "max_alloc_pct": 1.0,
       "allocation_pct": 0.6878168348344115,
-      "target_notional_quote": 824.4913913082836,
+      "target_notional_quote": 820.6655104942047,
       "portfolio_action_enabled": true,
-      "daily_pnl_target_pct": 0.495228559142946,
-      "daily_pnl_target_quote": 4.946948347849702
+      "daily_pnl_target_pct": 0.49606002247592546,
+      "daily_pnl_target_quote": 4.923993062965228
     },
     {
       "bot": "bot3",
-      "equity_quote": 199.7855136560624,
+      "equity_quote": 200.52500926687958,
       "variance_proxy": 2.8764114914475624e-06,
       "variance_source": "diversification_report",
       "symbol_bucket": "eth",
       "max_alloc_pct": 0.31218316516558847,
       "allocation_pct": 0.31218316516558847,
-      "target_notional_quote": 374.2163889494878,
+      "target_notional_quote": 372.4799156304348,
       "portfolio_action_enabled": false,
-      "daily_pnl_target_pct": 1.1238544239810526,
-      "daily_pnl_target_quote": 2.2452983336969274
+      "daily_pnl_target_pct": 1.1145140957496218,
+      "daily_pnl_target_quote": 2.234879493782608
     }
   ]
 }

@@ -26,10 +26,12 @@ delegates to them while preserving the original public API.
 """
 from __future__ import annotations
 
+import json
 import logging
 import os
 import time
 from decimal import Decimal
+from pathlib import Path
 from types import MethodType, SimpleNamespace
 from typing import Any, Dict, List, Optional, Protocol, Set, Tuple
 
@@ -67,6 +69,50 @@ logger = logging.getLogger(__name__)
 _PAPER_ORDER_TRACE_ENABLED: bool = os.getenv("HB_PAPER_ORDER_TRACE_ENABLED", "true").lower() in {"1", "true", "yes"}
 _PAPER_ORDER_TRACE_COOLDOWN_S: float = max(0.5, float(os.getenv("HB_PAPER_ORDER_TRACE_COOLDOWN_S", "1.0")))
 _LAST_PAPER_ORDER_TRACE_TS: float = 0.0
+
+
+def _paper_command_constraints_metadata(strategy: Any, connector_name: str, trading_pair: str) -> Dict[str, str]:
+    def _decimal_text(value: Any) -> str:
+        try:
+            text = str(value)
+        except Exception:
+            return ""
+        return text if text not in {"", "None"} else ""
+
+    rule = None
+    try:
+        get_trading_rules = getattr(strategy, "get_trading_rules", None)
+        if callable(get_trading_rules):
+            rules = get_trading_rules(connector_name)
+            if isinstance(rules, dict):
+                rule = rules.get(trading_pair)
+    except Exception:
+        rule = None
+    if rule is None:
+        try:
+            connectors = getattr(strategy, "connectors", {})
+            connector = connectors.get(connector_name) if isinstance(connectors, dict) else None
+            rules = getattr(connector, "trading_rules", {}) if connector is not None else {}
+            if isinstance(rules, dict):
+                rule = rules.get(trading_pair)
+        except Exception:
+            rule = None
+    if rule is None:
+        return {}
+
+    metadata: Dict[str, str] = {}
+    for key, attrs in (
+        ("min_quantity", ("min_order_size", "min_base_amount", "min_amount")),
+        ("size_increment", ("min_base_amount_increment", "min_order_size_increment", "amount_step")),
+        ("price_increment", ("min_price_increment", "min_price_tick_size", "price_step", "min_price_step")),
+        ("min_notional", ("min_notional_size", "min_notional", "min_order_value")),
+    ):
+        for attr in attrs:
+            text = _decimal_text(getattr(rule, attr, None))
+            if text and text not in {"0", "0.0", "0E-8"}:
+                metadata[key] = text
+                break
+    return metadata
 
 
 def _trace_paper_order(message: str, *args: Any, force: bool = False) -> None:
@@ -473,6 +519,8 @@ def _resolve_controller_for_command(
     trading_pair: str,
 ) -> Tuple[Optional[Any], str, str]:
     controllers = getattr(strategy, "controllers", {})
+    matches: List[Tuple[str, Any, str]] = []
+    target_connector = _canonical_name(str(connector_name or ""))
     if isinstance(controllers, dict):
         for controller_id, ctrl in controllers.items():
             cfg = getattr(ctrl, "config", None)
@@ -480,10 +528,24 @@ def _resolve_controller_for_command(
                 continue
             cfg_connector = str(getattr(cfg, "connector_name", "") or "")
             cfg_pair = str(getattr(cfg, "trading_pair", "") or "")
-            if cfg_connector == str(connector_name) and (not trading_pair or cfg_pair == str(trading_pair)):
+            if _canonical_name(cfg_connector) == target_connector and (not trading_pair or cfg_pair == str(trading_pair)):
                 instance_name = str(getattr(cfg, "instance_name", "") or controller_id)
-                return ctrl, str(controller_id), instance_name
-    ctrl = _find_controller_for_connector(strategy, connector_name)
+                matches.append((str(controller_id), ctrl, instance_name))
+    if len(matches) == 1:
+        controller_id, ctrl, instance_name = matches[0]
+        return ctrl, controller_id, instance_name
+    if len(matches) > 1:
+        logger.warning(
+            "Ambiguous controller command route for connector=%s pair=%s; dropping command/event mapping",
+            str(connector_name),
+            str(trading_pair),
+        )
+        return None, "", ""
+    ctrl = _find_controller_for_connector(
+        strategy,
+        connector_name,
+        trading_pair=str(trading_pair or ""),
+    )
     if ctrl is None:
         return None, "", ""
     cfg = getattr(ctrl, "config", None)
@@ -799,11 +861,22 @@ def _runtime_order_trade_type(side: Optional[str]) -> str:
     return "BUY" if side_norm == "buy" else "SELL"
 
 
-def _runtime_order_state_flags(state: str) -> Tuple[bool, bool]:
+def _canonical_runtime_order_state(state: str) -> str:
     normalized = str(state or "").strip().lower()
+    if normalized == "open":
+        return "working"
+    if normalized in {"partial", "partially-filled"}:
+        return "partially_filled"
+    if normalized == "cancelled":
+        return "canceled"
+    return normalized
+
+
+def _runtime_order_state_flags(state: str) -> Tuple[bool, bool]:
+    normalized = _canonical_runtime_order_state(state)
     if normalized in {"filled", "canceled", "cancelled", "failed", "rejected", "expired"}:
         return True, False
-    if normalized in {"open", "pending_create", "pending_cancel", "partial"}:
+    if normalized in {"working", "pending_create", "pending_cancel", "partially_filled"}:
         return False, True
     return False, False
 
@@ -863,7 +936,7 @@ def _upsert_runtime_order(
         order.last_update_timestamp = now
 
     if state is not None:
-        state_text = str(state).strip().lower()
+        state_text = _canonical_runtime_order_state(state)
         is_done, is_open = _runtime_order_state_flags(state_text)
         order.current_state = state_text
         order.is_done = bool(is_done)
@@ -891,6 +964,159 @@ def _prune_runtime_orders(strategy: Any, *, done_ttl_sec: float = 120.0) -> None
                 bucket.pop(order_id, None)
         if not bucket:
             store.pop(connector_name, None)
+
+
+def _paper_exchange_state_snapshot_path() -> str:
+    configured = str(os.getenv("PAPER_EXCHANGE_STATE_SNAPSHOT_PATH", "") or "").strip()
+    candidates = [
+        configured,
+        "/home/hummingbot/reports/verification/paper_exchange_state_snapshot_latest.json",
+        "/workspace/hbot/reports/verification/paper_exchange_state_snapshot_latest.json",
+        "reports/verification/paper_exchange_state_snapshot_latest.json",
+    ]
+    for candidate in candidates:
+        if not candidate:
+            continue
+        try:
+            if Path(candidate).exists():
+                return candidate
+        except Exception:
+            continue
+    return configured or "reports/verification/paper_exchange_state_snapshot_latest.json"
+
+
+def _active_command_ttl_ms(command: str) -> int:
+    command_name = str(command or "").strip().lower()
+    base_ttl_ms = max(1_000, int(float(os.getenv("PAPER_EXCHANGE_COMMAND_TTL_MS", "30000"))))
+    if command_name == "sync_state":
+        sync_timeout_ms = max(1_000, int(float(os.getenv("PAPER_EXCHANGE_SYNC_TIMEOUT_MS", "30000"))))
+        return max(
+            base_ttl_ms,
+            max(300_000, sync_timeout_ms * 4),
+        )
+    if command_name in {"submit_order", "cancel_order", "cancel_all"}:
+        active_ttl_ms = max(
+            1_000,
+            int(float(os.getenv("PAPER_EXCHANGE_ACTIVE_COMMAND_TTL_MS", "120000"))),
+        )
+        return max(base_ttl_ms, active_ttl_ms)
+    return base_ttl_ms
+
+
+def _hydrate_runtime_orders_from_state_snapshot(
+    strategy: Any,
+    *,
+    instance_name: str,
+    connector_name: str,
+    trading_pair: str,
+) -> List[str]:
+    snapshot_path = _paper_exchange_state_snapshot_path()
+    try:
+        with open(snapshot_path, "r", encoding="utf-8") as snapshot_file:
+            payload = json.load(snapshot_file)
+    except Exception as exc:
+        logger.warning(
+            "paper_exchange state snapshot hydration failed (instance=%s connector=%s pair=%s path=%s error=%s)",
+            instance_name,
+            connector_name,
+            trading_pair,
+            snapshot_path,
+            exc,
+        )
+        return []
+
+    orders = payload.get("orders", {})
+    if not isinstance(orders, dict):
+        return []
+
+    hydrated_order_ids: List[str] = []
+    target_instance = str(instance_name or "").strip().lower()
+    target_pair = str(trading_pair or "").strip().upper()
+    target_connector = _canonical_name(str(connector_name or ""))
+    for record in orders.values():
+        if not isinstance(record, dict):
+            continue
+        order_id = str(record.get("order_id", "") or "").strip()
+        if not order_id:
+            continue
+        record_instance = str(record.get("instance_name", "") or "").strip().lower()
+        record_connector = _canonical_name(str(record.get("connector_name", "") or ""))
+        record_pair = str(record.get("trading_pair", "") or "").strip().upper()
+        record_state = str(record.get("state", "working") or "").strip().lower()
+        if record_instance != target_instance or record_connector != target_connector or record_pair != target_pair:
+            continue
+        if record_state in {"filled", "canceled", "cancelled", "failed", "rejected", "expired"}:
+            continue
+        _upsert_runtime_order(
+            strategy,
+            connector_name=connector_name,
+            order_id=order_id,
+            trading_pair=record_pair,
+            side=str(record.get("side", "") or "").lower() or None,
+            order_type=str(record.get("order_type", "") or "").lower() or None,
+            amount=record.get("amount_base"),
+            price=record.get("price"),
+            state="partially_filled" if record_state in {"partially_filled", "partial"} else "working",
+        )
+        hydrated_order_ids.append(order_id)
+    return hydrated_order_ids
+
+
+def _controller_tracked_order_ids(controller: Optional[Any]) -> Optional[Set[str]]:
+    if controller is None:
+        return None
+    executors = getattr(controller, "executors_info", None)
+    if not isinstance(executors, list):
+        return None
+    tracked_ids: Set[str] = set()
+    for executor in executors:
+        order_id = getattr(executor, "order_id", None) or getattr(executor, "id", None)
+        if order_id:
+            tracked_ids.add(str(order_id))
+    return tracked_ids
+
+
+def _cancel_reconciled_ghost_orders(
+    strategy: Any,
+    *,
+    controller: Optional[Any],
+    instance_name: str,
+    connector_name: str,
+    trading_pair: str,
+    order_ids: List[str],
+) -> int:
+    tracked_ids = _controller_tracked_order_ids(controller)
+    if tracked_ids is None:
+        return 0
+
+    canceled = 0
+    for order_id in order_ids:
+        if order_id in tracked_ids:
+            continue
+        publish_entry_id = _publish_paper_exchange_command(
+            strategy,
+            connector_name=connector_name,
+            trading_pair=trading_pair,
+            command="cancel_order",
+            order_id=order_id,
+            metadata={
+                "bridge_method": "startup_reconcile_cancel",
+                "compat_adapter": "active",
+                "reconcile_reason": "ghost_order",
+                "instance_name": instance_name,
+            },
+        )
+        if publish_entry_id is None:
+            continue
+        _upsert_runtime_order(
+            strategy,
+            connector_name=connector_name,
+            order_id=order_id,
+            trading_pair=trading_pair,
+            state="pending_cancel",
+        )
+        canceled += 1
+    return canceled
 
 
 def _get_runtime_order_for_executor(strategy: Any, connector_name: str, order_id: str) -> Optional[Any]:
@@ -952,6 +1178,7 @@ def _force_sync_hard_stop(
 
     try:
         import json as _json
+        from services.contracts.event_identity import validate_event_identity as _validate_event_identity
         from services.contracts.event_schemas import AuditEvent
         from services.contracts.stream_names import AUDIT_STREAM, STREAM_RETENTION_MAXLEN
 
@@ -970,9 +1197,17 @@ def _force_sync_hard_stop(
                     "trading_pair": str(trading_pair),
                 },
             )
+            audit_payload = audit.model_dump()
+            identity_ok, identity_reason = _validate_event_identity(audit_payload)
+            if not identity_ok:
+                logger.warning(
+                    "paper_exchange sync hard-stop audit dropped by identity preflight reason=%s",
+                    identity_reason,
+                )
+                return
             r.xadd(
                 AUDIT_STREAM,
-                {"payload": _json.dumps(audit.model_dump(), default=str)},
+                {"payload": _json.dumps(audit_payload, default=str)},
                 maxlen=STREAM_RETENTION_MAXLEN.get(AUDIT_STREAM, 100_000),
                 approximate=True,
             )
@@ -1178,6 +1413,7 @@ def _publish_paper_exchange_command(
     price: Optional[Any] = None,
     metadata: Optional[Dict[str, str]] = None,
     command_event_id: Optional[str] = None,
+    ttl_ms_override: Optional[int] = None,
 ) -> Optional[str]:
     import json as _json
     import os as _os
@@ -1202,6 +1438,7 @@ def _publish_paper_exchange_command(
 
     try:
         from services.contracts.stream_names import PAPER_EXCHANGE_COMMAND_STREAM, STREAM_RETENTION_MAXLEN
+        from services.contracts.event_identity import validate_event_identity as _validate_event_identity
 
         order_type_raw = getattr(order_type, "name", order_type)
         order_type_value = str(order_type_raw).strip().lower() if order_type_raw is not None else None
@@ -1215,7 +1452,9 @@ def _publish_paper_exchange_command(
             except Exception:
                 price_value = None
 
-        ttl_ms = max(1_000, int(float(_os.getenv("PAPER_EXCHANGE_COMMAND_TTL_MS", "30000"))))
+        ttl_ms = _active_command_ttl_ms(command)
+        if ttl_ms_override is not None:
+            ttl_ms = max(ttl_ms, int(ttl_ms_override))
         command_meta = {
             "source": "hb_bridge_active_adapter" if mode == "active" else "hb_bridge_shadow_adapter",
             "paper_exchange_mode": mode,
@@ -1254,9 +1493,28 @@ def _publish_paper_exchange_command(
             ttl_ms=ttl_ms,
             metadata=command_meta,
         )
+        event_payload = event.model_dump()
+        identity_ok, identity_reason = _validate_event_identity(event_payload)
+        if not identity_ok:
+            if mode == "active":
+                _apply_active_failure_policy(
+                    strategy,
+                    connector_name=connector_name,
+                    trading_pair=trading_pair,
+                    failure_class="service_down",
+                    reason=f"command_identity_invalid:{identity_reason}",
+                )
+            logger.warning(
+                "paper_exchange command dropped due to identity contract: %s (command=%s connector=%s pair=%s)",
+                identity_reason,
+                str(command),
+                str(connector_name),
+                str(trading_pair),
+            )
+            return None
         entry_id = r.xadd(
             PAPER_EXCHANGE_COMMAND_STREAM,
-            {"payload": _json.dumps(event.model_dump(), default=str)},
+            {"payload": _json.dumps(event_payload, default=str)},
             maxlen=STREAM_RETENTION_MAXLEN.get(PAPER_EXCHANGE_COMMAND_STREAM, 100_000),
             approximate=True,
         )
@@ -1299,6 +1557,7 @@ def _ensure_sync_state_command(strategy: Any, connector_name: str, trading_pair:
         trading_pair=trading_pair,
         command="sync_state",
         metadata={"sync_reason": "bridge_startup"},
+        ttl_ms_override=_active_command_ttl_ms("sync_state"),
     )
     if entry_id:
         _bridge_state.sync_state_published_keys.add(sync_key)
@@ -1324,7 +1583,14 @@ def _consume_paper_exchange_events(strategy: Any) -> None:
 
         _bootstrap_paper_exchange_cursor(strategy, r, PAPER_EXCHANGE_EVENT_STREAM)
         cursor_key = _paper_exchange_cursor_key(strategy)
-        result = r.xread({PAPER_EXCHANGE_EVENT_STREAM: _bridge_state.last_paper_exchange_event_id}, count=200, block=0)
+        # NOTE: In Redis, BLOCK 0 means "block forever" (not non-blocking).
+        # This runs inside strategy on_tick(), so it must never stall the tick loop.
+        # Use a short near-non-blocking wait to drain ready rows without gating cadence.
+        result = r.xread(
+            {PAPER_EXCHANGE_EVENT_STREAM: _bridge_state.last_paper_exchange_event_id},
+            count=200,
+            block=1,
+        )
         if not result:
             return
 
@@ -1349,32 +1615,87 @@ def _consume_paper_exchange_events(strategy: Any) -> None:
                     # Keep memory bounded; stream-id cursor still prevents replay in normal flow.
                     _bridge_state.paper_exchange_seen_event_ids.clear()
 
-                mode = _paper_exchange_mode_for_instance(str(event.instance_name))
+                _ctrl_local, _controller_id_local, local_instance_name = _resolve_controller_for_command(
+                    strategy,
+                    str(event.connector_name),
+                    str(event.trading_pair),
+                )
+                if _ctrl_local is None:
+                    continue
+
+                event_instance_name = str(getattr(event, "instance_name", "") or "").strip()
+                resolved_instance_name = str(local_instance_name or event_instance_name).strip()
+                if local_instance_name:
+                    if not event_instance_name:
+                        continue
+                    if event_instance_name.lower() != str(local_instance_name).strip().lower():
+                        continue
+
+                mode = _paper_exchange_mode_for_instance(resolved_instance_name)
                 command = str(event.command or "").strip().lower()
                 status = str(event.status).strip().lower()
                 reason = str(event.reason or "")
                 sync_key = _sync_handshake_key(
-                    str(event.instance_name), str(event.connector_name), str(event.trading_pair)
+                    resolved_instance_name,
+                    str(event.connector_name),
+                    str(event.trading_pair),
                 )
                 if command == "sync_state":
                     if status == "processed":
                         _bridge_state.sync_confirmed_keys.add(sync_key)
+                        _bridge_state.sync_state_published_keys.discard(sync_key)
                         _bridge_state.sync_timeout_hard_stop_keys.discard(sync_key)
                         _mark_active_failure_recovered(
                             strategy,
                             connector_name=str(event.connector_name),
                             trading_pair=str(event.trading_pair),
                         )
+                        resolved_connector_name, _ = _bridge_for_exchange_event(
+                            strategy,
+                            str(event.connector_name),
+                            str(event.trading_pair),
+                        )
+                        route_connector_name = str(resolved_connector_name or event.connector_name)
+                        hydrated_order_ids = _hydrate_runtime_orders_from_state_snapshot(
+                            strategy,
+                            instance_name=resolved_instance_name,
+                            connector_name=route_connector_name,
+                            trading_pair=str(event.trading_pair),
+                        )
+                        canceled_ghosts = _cancel_reconciled_ghost_orders(
+                            strategy,
+                            controller=_ctrl_local,
+                            instance_name=resolved_instance_name,
+                            connector_name=route_connector_name,
+                            trading_pair=str(event.trading_pair),
+                            order_ids=hydrated_order_ids,
+                        )
+                        if hydrated_order_ids or canceled_ghosts:
+                            logger.info(
+                                "paper_exchange startup reconcile | instance=%s connector=%s pair=%s hydrated=%d canceled_ghosts=%d",
+                                resolved_instance_name,
+                                route_connector_name,
+                                str(event.trading_pair),
+                                len(hydrated_order_ids),
+                                canceled_ghosts,
+                            )
                         continue
                     if status == "rejected" and mode == "active":
-                        controller, controller_id, instance_name = _resolve_controller_for_command(
-                            strategy, str(event.connector_name), str(event.trading_pair)
-                        )
+                        if reason.strip().lower() == "expired_command":
+                            _bridge_state.sync_state_published_keys.discard(sync_key)
+                            _bridge_state.sync_requested_at_ms_by_key.pop(sync_key, None)
+                            logger.warning(
+                                "paper_exchange sync expired in queue; allowing republish | instance=%s connector=%s pair=%s",
+                                resolved_instance_name,
+                                str(event.connector_name),
+                                str(event.trading_pair),
+                            )
+                            continue
                         _force_sync_hard_stop(
                             strategy,
-                            controller=controller,
-                            controller_id=controller_id,
-                            instance_name=instance_name,
+                            controller=_ctrl_local,
+                            controller_id=_controller_id_local,
+                            instance_name=resolved_instance_name,
                             connector_name=str(event.connector_name),
                             trading_pair=str(event.trading_pair),
                             sync_key=sync_key,
@@ -1431,6 +1752,7 @@ def _consume_paper_exchange_events(strategy: Any) -> None:
                         order_id=str(event.order_id),
                         reason=f"paper_exchange:{reason or 'rejected'}",
                         source_bot=resolved_connector_name,
+                        instance_name=resolved_instance_name,
                     )
                     _fire_hb_events(strategy, resolved_connector_name, reject_event, _bridge_state)
                     continue
@@ -1458,6 +1780,7 @@ def _consume_paper_exchange_events(strategy: Any) -> None:
                         instrument_id=instrument_id,
                         order_id=str(event.order_id),
                         source_bot=resolved_connector_name,
+                        instance_name=resolved_instance_name,
                     )
                     _fire_hb_events(strategy, resolved_connector_name, cancel_event, _bridge_state)
                     continue
@@ -1465,11 +1788,11 @@ def _consume_paper_exchange_events(strategy: Any) -> None:
                 if command == "submit_order" and event.order_id:
                     metadata = event.metadata if isinstance(event.metadata, dict) else {}
                     order_state = str(metadata.get("order_state", "working")).strip().lower()
-                    runtime_state = "open"
+                    runtime_state = "working"
                     if order_state in {"filled", "expired", "rejected", "cancelled", "canceled"}:
                         runtime_state = "filled" if order_state == "filled" else order_state
                     elif order_state in {"partially_filled", "partial"}:
-                        runtime_state = "partial"
+                        runtime_state = "partially_filled"
                     _upsert_runtime_order(
                         strategy,
                         connector_name=resolved_connector_name,
@@ -1489,6 +1812,7 @@ def _consume_paper_exchange_events(strategy: Any) -> None:
                             order_id=str(event.order_id),
                             reason=f"paper_exchange:{reason or 'expired'}",
                             source_bot=resolved_connector_name,
+                            instance_name=resolved_instance_name,
                         )
                         _fire_hb_events(strategy, resolved_connector_name, reject_event, _bridge_state)
                         continue
@@ -1520,6 +1844,7 @@ def _consume_paper_exchange_events(strategy: Any) -> None:
                                 is_maker=is_maker,
                                 remaining_quantity=remaining,
                                 source_bot=resolved_connector_name,
+                                instance_name=resolved_instance_name,
                             )
                             _fire_hb_events(strategy, resolved_connector_name, fill_event, _bridge_state)
                     continue
@@ -1527,7 +1852,7 @@ def _consume_paper_exchange_events(strategy: Any) -> None:
                 if command in {"order_fill", "fill", "fill_order"} and event.order_id:
                     metadata = event.metadata if isinstance(event.metadata, dict) else {}
                     order_state = str(metadata.get("order_state", "partially_filled")).strip().lower()
-                    runtime_state = "partial" if order_state in {"partial", "partially_filled"} else "filled"
+                    runtime_state = "partially_filled" if order_state in {"partial", "partially_filled"} else "filled"
                     _upsert_runtime_order(
                         strategy,
                         connector_name=resolved_connector_name,
@@ -1564,6 +1889,7 @@ def _consume_paper_exchange_events(strategy: Any) -> None:
                         is_maker=is_maker,
                         remaining_quantity=max(_ZERO, remaining),
                         source_bot=resolved_connector_name,
+                        instance_name=resolved_instance_name,
                     )
                     _fire_hb_events(strategy, resolved_connector_name, fill_event, _bridge_state)
         if latest_seen_entry_id is not None:
@@ -1803,7 +2129,12 @@ def install_paper_desk_bridge(
         if connector is not None:
             _install_paper_stats(connector, desk, instrument_id)
 
-        logger.info("PaperDesk v2 bridge fully installed: %s/%s", connector_name, trading_pair)
+        logger.info(
+            "PaperDesk v2 bridge fully installed: %s/%s engine_registered=%s",
+            connector_name,
+            trading_pair,
+            str(instrument_id.key in getattr(desk, "_engines", {})),
+        )
         return True
 
     except Exception as exc:
@@ -1842,16 +2173,17 @@ def _install_order_delegation(
         return
 
     def _patched_buy(self, conn_name, trading_pair, amount, order_type, price=Decimal("NaN"), position_action=None, **kwargs):
-        bridge = getattr(self, "_paper_desk_v2_bridges", {}).get(conn_name)
+        resolved_conn_name, bridge = _bridge_for_exchange_event(self, conn_name, trading_pair)
         if bridge is not None:
+            route_connector_name = str(resolved_conn_name or conn_name)
             _desk: PaperDesk = bridge["desk"]
             _iid: InstrumentId = bridge["instrument_id"]
-            mode = _paper_exchange_mode_for_route(self, conn_name, trading_pair)
+            mode = _paper_exchange_mode_for_route(self, route_connector_name, trading_pair)
             order_type_text = _order_type_text(order_type)
             force_trace = "MARKET" in order_type_text or str(position_action or "").strip() != ""
             _trace_paper_order(
                 "stage=bridge_buy_enter connector=%s pair=%s mode=%s amount=%s price=%s order_type=%s position_action=%s",
-                conn_name,
+                route_connector_name,
                 trading_pair,
                 mode,
                 str(amount),
@@ -1863,7 +2195,7 @@ def _install_order_delegation(
             if force_trace:
                 logger.warning(
                     "PAPER_ROUTE_PROBE stage=bridge_buy_enter connector=%s pair=%s mode=%s amount=%s order_type=%s",
-                    conn_name,
+                    route_connector_name,
                     trading_pair,
                     mode,
                     str(amount),
@@ -1871,11 +2203,26 @@ def _install_order_delegation(
                 )
             if mode == "active":
                 normalized_position_action = _normalize_position_action(position_action, OrderSide.BUY)
-                position_mode = str(getattr(getattr(_find_controller_for_connector(self, conn_name), "config", None), "position_mode", "ONEWAY") or "ONEWAY").upper()
-                sync_ready, sync_reason = _active_sync_gate(self, conn_name, trading_pair)
+                position_mode = str(
+                    getattr(
+                        getattr(
+                            _find_controller_for_connector(
+                                self,
+                                route_connector_name,
+                                trading_pair=str(trading_pair or ""),
+                            ),
+                            "config",
+                            None,
+                        ),
+                        "position_mode",
+                        "ONEWAY",
+                    )
+                    or "ONEWAY"
+                ).upper()
+                sync_ready, sync_reason = _active_sync_gate(self, route_connector_name, trading_pair)
                 generated_order_id = _active_submit_order_id(
                     self,
-                    connector_name=conn_name,
+                    connector_name=route_connector_name,
                     trading_pair=trading_pair,
                     side="buy",
                     order_type=order_type,
@@ -1884,7 +2231,7 @@ def _install_order_delegation(
                 )
                 _upsert_runtime_order(
                     self,
-                    connector_name=conn_name,
+                    connector_name=route_connector_name,
                     order_id=generated_order_id,
                     trading_pair=trading_pair,
                     side="buy",
@@ -1896,7 +2243,7 @@ def _install_order_delegation(
                 if not sync_ready:
                     _upsert_runtime_order(
                         self,
-                        connector_name=conn_name,
+                        connector_name=route_connector_name,
                         order_id=generated_order_id,
                         state="failed",
                         failure_reason=sync_reason,
@@ -1907,12 +2254,12 @@ def _install_order_delegation(
                         instrument_id=_iid,
                         order_id=generated_order_id,
                         reason=sync_reason,
-                        source_bot=conn_name,
+                        source_bot=route_connector_name,
                     )
-                    _fire_hb_events(self, conn_name, reject_event, _bridge_state)
+                    _fire_hb_events(self, route_connector_name, reject_event, _bridge_state)
                     _trace_paper_order(
                         "stage=bridge_buy_sync_reject connector=%s pair=%s order_id=%s reason=%s",
-                        conn_name,
+                        route_connector_name,
                         trading_pair,
                         generated_order_id,
                         sync_reason,
@@ -1922,7 +2269,7 @@ def _install_order_delegation(
 
                 publish_entry_id = _publish_paper_exchange_command(
                     self,
-                    connector_name=conn_name,
+                    connector_name=route_connector_name,
                     trading_pair=trading_pair,
                     command="submit_order",
                     order_id=generated_order_id,
@@ -1936,12 +2283,13 @@ def _install_order_delegation(
                         "position_action": normalized_position_action.value,
                         "position_mode": position_mode,
                         "reduce_only": "1" if normalized_position_action == PositionAction.CLOSE_SHORT else "0",
+                        **_paper_command_constraints_metadata(self, route_connector_name, trading_pair),
                     },
                 )
                 if publish_entry_id is None:
                     _upsert_runtime_order(
                         self,
-                        connector_name=conn_name,
+                        connector_name=route_connector_name,
                         order_id=generated_order_id,
                         state="failed",
                         failure_reason="paper_exchange_command_publish_failed",
@@ -1952,12 +2300,12 @@ def _install_order_delegation(
                         instrument_id=_iid,
                         order_id=generated_order_id,
                         reason="paper_exchange_command_publish_failed",
-                        source_bot=conn_name,
+                        source_bot=route_connector_name,
                     )
-                    _fire_hb_events(self, conn_name, reject_event, _bridge_state)
+                    _fire_hb_events(self, route_connector_name, reject_event, _bridge_state)
                     _trace_paper_order(
                         "stage=bridge_buy_publish_failed connector=%s pair=%s order_id=%s",
-                        conn_name,
+                        route_connector_name,
                         trading_pair,
                         generated_order_id,
                         force=True,
@@ -1965,7 +2313,7 @@ def _install_order_delegation(
                 else:
                     _trace_paper_order(
                         "stage=bridge_buy_published connector=%s pair=%s order_id=%s stream_entry_id=%s",
-                        conn_name,
+                        route_connector_name,
                         trading_pair,
                         generated_order_id,
                         str(publish_entry_id),
@@ -1977,23 +2325,38 @@ def _install_order_delegation(
                 self,
                 _desk,
                 _iid,
-                conn_name,
+                route_connector_name,
                 trading_pair,
                 OrderSide.BUY,
             )
             normalized_position_action = _normalize_position_action(position_action, OrderSide.BUY)
-            position_mode = str(getattr(getattr(_find_controller_for_connector(self, conn_name), "config", None), "position_mode", "ONEWAY") or "ONEWAY").upper()
+            position_mode = str(
+                getattr(
+                    getattr(
+                        _find_controller_for_connector(
+                            self,
+                            route_connector_name,
+                            trading_pair=str(trading_pair or ""),
+                        ),
+                        "config",
+                        None,
+                    ),
+                    "position_mode",
+                    "ONEWAY",
+                )
+                or "ONEWAY"
+            ).upper()
             event = _desk.submit_order(
                 _iid, OrderSide.BUY, _hb_order_type_to_v2(order_type),
                 Decimal(str(_price)), Decimal(str(amount)),
-                source_bot=conn_name,
+                source_bot=route_connector_name,
                 position_action=normalized_position_action,
                 position_mode=position_mode,
             )
             if force_trace:
                 logger.warning(
                     "PAPER_ROUTE_PROBE stage=bridge_buy_submit connector=%s pair=%s order_id=%s event=%s reason=%s",
-                    conn_name,
+                    route_connector_name,
                     trading_pair,
                     str(getattr(event, "order_id", "") or ""),
                     type(event).__name__,
@@ -2001,7 +2364,7 @@ def _install_order_delegation(
                 )
             _publish_paper_exchange_command(
                 self,
-                connector_name=conn_name,
+                connector_name=route_connector_name,
                 trading_pair=trading_pair,
                 command="submit_order",
                 order_id=str(getattr(event, "order_id", "") or "") or None,
@@ -2015,32 +2378,34 @@ def _install_order_delegation(
                     "position_action": normalized_position_action.value,
                     "position_mode": position_mode,
                     "reduce_only": "1" if normalized_position_action == PositionAction.CLOSE_SHORT else "0",
+                    **_paper_command_constraints_metadata(self, route_connector_name, trading_pair),
                 },
             )
             _trace_paper_order(
                 "stage=bridge_buy_desk_submit connector=%s pair=%s order_id=%s event=%s reason=%s",
-                conn_name,
+                route_connector_name,
                 trading_pair,
                 str(getattr(event, "order_id", "") or ""),
                 type(event).__name__,
                 str(getattr(event, "reason", "") or ""),
                 force=force_trace or type(event).__name__ != "OrderAccepted",
             )
-            _fire_hb_events(self, conn_name, event, _bridge_state)
+            _fire_hb_events(self, route_connector_name, event, _bridge_state)
             return getattr(event, "order_id", None)
         return original_buy(conn_name, trading_pair, amount, order_type, price, position_action=position_action, **kwargs)
 
     def _patched_sell(self, conn_name, trading_pair, amount, order_type, price=Decimal("NaN"), position_action=None, **kwargs):
-        bridge = getattr(self, "_paper_desk_v2_bridges", {}).get(conn_name)
+        resolved_conn_name, bridge = _bridge_for_exchange_event(self, conn_name, trading_pair)
         if bridge is not None:
+            route_connector_name = str(resolved_conn_name or conn_name)
             _desk: PaperDesk = bridge["desk"]
             _iid: InstrumentId = bridge["instrument_id"]
-            mode = _paper_exchange_mode_for_route(self, conn_name, trading_pair)
+            mode = _paper_exchange_mode_for_route(self, route_connector_name, trading_pair)
             order_type_text = _order_type_text(order_type)
             force_trace = "MARKET" in order_type_text or str(position_action or "").strip() != ""
             _trace_paper_order(
                 "stage=bridge_sell_enter connector=%s pair=%s mode=%s amount=%s price=%s order_type=%s position_action=%s",
-                conn_name,
+                route_connector_name,
                 trading_pair,
                 mode,
                 str(amount),
@@ -2052,7 +2417,7 @@ def _install_order_delegation(
             if force_trace:
                 logger.warning(
                     "PAPER_ROUTE_PROBE stage=bridge_sell_enter connector=%s pair=%s mode=%s amount=%s order_type=%s",
-                    conn_name,
+                    route_connector_name,
                     trading_pair,
                     mode,
                     str(amount),
@@ -2060,11 +2425,26 @@ def _install_order_delegation(
                 )
             if mode == "active":
                 normalized_position_action = _normalize_position_action(position_action, OrderSide.SELL)
-                position_mode = str(getattr(getattr(_find_controller_for_connector(self, conn_name), "config", None), "position_mode", "ONEWAY") or "ONEWAY").upper()
-                sync_ready, sync_reason = _active_sync_gate(self, conn_name, trading_pair)
+                position_mode = str(
+                    getattr(
+                        getattr(
+                            _find_controller_for_connector(
+                                self,
+                                route_connector_name,
+                                trading_pair=str(trading_pair or ""),
+                            ),
+                            "config",
+                            None,
+                        ),
+                        "position_mode",
+                        "ONEWAY",
+                    )
+                    or "ONEWAY"
+                ).upper()
+                sync_ready, sync_reason = _active_sync_gate(self, route_connector_name, trading_pair)
                 generated_order_id = _active_submit_order_id(
                     self,
-                    connector_name=conn_name,
+                    connector_name=route_connector_name,
                     trading_pair=trading_pair,
                     side="sell",
                     order_type=order_type,
@@ -2073,7 +2453,7 @@ def _install_order_delegation(
                 )
                 _upsert_runtime_order(
                     self,
-                    connector_name=conn_name,
+                    connector_name=route_connector_name,
                     order_id=generated_order_id,
                     trading_pair=trading_pair,
                     side="sell",
@@ -2085,7 +2465,7 @@ def _install_order_delegation(
                 if not sync_ready:
                     _upsert_runtime_order(
                         self,
-                        connector_name=conn_name,
+                        connector_name=route_connector_name,
                         order_id=generated_order_id,
                         state="failed",
                         failure_reason=sync_reason,
@@ -2096,12 +2476,12 @@ def _install_order_delegation(
                         instrument_id=_iid,
                         order_id=generated_order_id,
                         reason=sync_reason,
-                        source_bot=conn_name,
+                        source_bot=route_connector_name,
                     )
-                    _fire_hb_events(self, conn_name, reject_event, _bridge_state)
+                    _fire_hb_events(self, route_connector_name, reject_event, _bridge_state)
                     _trace_paper_order(
                         "stage=bridge_sell_sync_reject connector=%s pair=%s order_id=%s reason=%s",
-                        conn_name,
+                        route_connector_name,
                         trading_pair,
                         generated_order_id,
                         sync_reason,
@@ -2111,7 +2491,7 @@ def _install_order_delegation(
 
                 publish_entry_id = _publish_paper_exchange_command(
                     self,
-                    connector_name=conn_name,
+                    connector_name=route_connector_name,
                     trading_pair=trading_pair,
                     command="submit_order",
                     order_id=generated_order_id,
@@ -2125,12 +2505,13 @@ def _install_order_delegation(
                         "position_action": normalized_position_action.value,
                         "position_mode": position_mode,
                         "reduce_only": "1" if normalized_position_action == PositionAction.CLOSE_LONG else "0",
+                        **_paper_command_constraints_metadata(self, route_connector_name, trading_pair),
                     },
                 )
                 if publish_entry_id is None:
                     _upsert_runtime_order(
                         self,
-                        connector_name=conn_name,
+                        connector_name=route_connector_name,
                         order_id=generated_order_id,
                         state="failed",
                         failure_reason="paper_exchange_command_publish_failed",
@@ -2141,12 +2522,12 @@ def _install_order_delegation(
                         instrument_id=_iid,
                         order_id=generated_order_id,
                         reason="paper_exchange_command_publish_failed",
-                        source_bot=conn_name,
+                        source_bot=route_connector_name,
                     )
-                    _fire_hb_events(self, conn_name, reject_event, _bridge_state)
+                    _fire_hb_events(self, route_connector_name, reject_event, _bridge_state)
                     _trace_paper_order(
                         "stage=bridge_sell_publish_failed connector=%s pair=%s order_id=%s",
-                        conn_name,
+                        route_connector_name,
                         trading_pair,
                         generated_order_id,
                         force=True,
@@ -2154,7 +2535,7 @@ def _install_order_delegation(
                 else:
                     _trace_paper_order(
                         "stage=bridge_sell_published connector=%s pair=%s order_id=%s stream_entry_id=%s",
-                        conn_name,
+                        route_connector_name,
                         trading_pair,
                         generated_order_id,
                         str(publish_entry_id),
@@ -2166,23 +2547,38 @@ def _install_order_delegation(
                 self,
                 _desk,
                 _iid,
-                conn_name,
+                route_connector_name,
                 trading_pair,
                 OrderSide.SELL,
             )
             normalized_position_action = _normalize_position_action(position_action, OrderSide.SELL)
-            position_mode = str(getattr(getattr(_find_controller_for_connector(self, conn_name), "config", None), "position_mode", "ONEWAY") or "ONEWAY").upper()
+            position_mode = str(
+                getattr(
+                    getattr(
+                        _find_controller_for_connector(
+                            self,
+                            route_connector_name,
+                            trading_pair=str(trading_pair or ""),
+                        ),
+                        "config",
+                        None,
+                    ),
+                    "position_mode",
+                    "ONEWAY",
+                )
+                or "ONEWAY"
+            ).upper()
             event = _desk.submit_order(
                 _iid, OrderSide.SELL, _hb_order_type_to_v2(order_type),
                 Decimal(str(_price)), Decimal(str(amount)),
-                source_bot=conn_name,
+                source_bot=route_connector_name,
                 position_action=normalized_position_action,
                 position_mode=position_mode,
             )
             if force_trace:
                 logger.warning(
                     "PAPER_ROUTE_PROBE stage=bridge_sell_submit connector=%s pair=%s order_id=%s event=%s reason=%s",
-                    conn_name,
+                    route_connector_name,
                     trading_pair,
                     str(getattr(event, "order_id", "") or ""),
                     type(event).__name__,
@@ -2190,7 +2586,7 @@ def _install_order_delegation(
                 )
             _publish_paper_exchange_command(
                 self,
-                connector_name=conn_name,
+                connector_name=route_connector_name,
                 trading_pair=trading_pair,
                 command="submit_order",
                 order_id=str(getattr(event, "order_id", "") or "") or None,
@@ -2204,34 +2600,36 @@ def _install_order_delegation(
                     "position_action": normalized_position_action.value,
                     "position_mode": position_mode,
                     "reduce_only": "1" if normalized_position_action == PositionAction.CLOSE_LONG else "0",
+                    **_paper_command_constraints_metadata(self, route_connector_name, trading_pair),
                 },
             )
             _trace_paper_order(
                 "stage=bridge_sell_desk_submit connector=%s pair=%s order_id=%s event=%s reason=%s",
-                conn_name,
+                route_connector_name,
                 trading_pair,
                 str(getattr(event, "order_id", "") or ""),
                 type(event).__name__,
                 str(getattr(event, "reason", "") or ""),
                 force=force_trace or type(event).__name__ != "OrderAccepted",
             )
-            _fire_hb_events(self, conn_name, event, _bridge_state)
+            _fire_hb_events(self, route_connector_name, event, _bridge_state)
             return getattr(event, "order_id", None)
         return original_sell(conn_name, trading_pair, amount, order_type, price, position_action=position_action, **kwargs)
 
     def _patched_cancel(self, conn_name, trading_pair, order_id, *args, **kwargs):
-        bridge = getattr(self, "_paper_desk_v2_bridges", {}).get(conn_name)
+        resolved_conn_name, bridge = _bridge_for_exchange_event(self, conn_name, trading_pair)
         if bridge is not None:
+            route_connector_name = str(resolved_conn_name or conn_name)
             _desk: PaperDesk = bridge["desk"]
             _iid: InstrumentId = bridge["instrument_id"]
-            mode = _paper_exchange_mode_for_route(self, conn_name, trading_pair)
+            mode = _paper_exchange_mode_for_route(self, route_connector_name, trading_pair)
             if mode == "active":
-                sync_ready, sync_reason = _active_sync_gate(self, conn_name, trading_pair)
+                sync_ready, sync_reason = _active_sync_gate(self, route_connector_name, trading_pair)
                 if not sync_ready:
                     if order_id:
                         _upsert_runtime_order(
                             self,
-                            connector_name=conn_name,
+                            connector_name=route_connector_name,
                             order_id=str(order_id),
                             state="failed",
                             failure_reason=sync_reason,
@@ -2242,20 +2640,20 @@ def _install_order_delegation(
                             instrument_id=_iid,
                             order_id=str(order_id),
                             reason=sync_reason,
-                            source_bot=conn_name,
+                            source_bot=route_connector_name,
                         )
-                        _fire_hb_events(self, conn_name, reject_event, _bridge_state)
+                        _fire_hb_events(self, route_connector_name, reject_event, _bridge_state)
                     return
 
                 cancel_command_event_id = _active_cancel_command_event_id(
                     self,
-                    connector_name=conn_name,
+                    connector_name=route_connector_name,
                     trading_pair=trading_pair,
                     order_id=str(order_id or ""),
                 )
                 publish_entry_id = _publish_paper_exchange_command(
                     self,
-                    connector_name=conn_name,
+                    connector_name=route_connector_name,
                     trading_pair=trading_pair,
                     command="cancel_order",
                     order_id=str(order_id) if order_id else None,
@@ -2265,7 +2663,7 @@ def _install_order_delegation(
                 if publish_entry_id is None and order_id:
                     _upsert_runtime_order(
                         self,
-                        connector_name=conn_name,
+                        connector_name=route_connector_name,
                         order_id=str(order_id),
                         state="failed",
                         failure_reason="paper_exchange_command_publish_failed",
@@ -2276,13 +2674,13 @@ def _install_order_delegation(
                         instrument_id=_iid,
                         order_id=str(order_id),
                         reason="paper_exchange_command_publish_failed",
-                        source_bot=conn_name,
+                        source_bot=route_connector_name,
                     )
-                    _fire_hb_events(self, conn_name, reject_event, _bridge_state)
+                    _fire_hb_events(self, route_connector_name, reject_event, _bridge_state)
                 elif order_id:
                     _upsert_runtime_order(
                         self,
-                        connector_name=conn_name,
+                        connector_name=route_connector_name,
                         order_id=str(order_id),
                         state="pending_cancel",
                     )
@@ -2291,14 +2689,14 @@ def _install_order_delegation(
             event = _desk.cancel_order(_iid, order_id)
             _publish_paper_exchange_command(
                 self,
-                connector_name=conn_name,
+                connector_name=route_connector_name,
                 trading_pair=trading_pair,
                 command="cancel_order",
                 order_id=str(order_id) if order_id else None,
                 metadata={"bridge_method": "cancel", "compat_adapter": "shadow"},
             )
             if event:
-                _fire_hb_events(self, conn_name, event, _bridge_state)
+                _fire_hb_events(self, route_connector_name, event, _bridge_state)
             return
         return original_cancel(conn_name, trading_pair, order_id, *args, **kwargs)
 

@@ -1,22 +1,117 @@
 {
-  "ts_utc": "2026-02-24T00:41:46.436732+00:00",
-  "status": "GO",
-  "blockers": [],
+  "ts_utc": "2026-03-10T23:00:19.210688+00:00",
+  "status": "HOLD",
+  "blockers": [
+    "stale_evidence:strict_cycle",
+    "stale_evidence:promotion_gates_latest",
+    "stale_evidence:parity",
+    "stale_evidence:runtime_performance_budgets",
+    "day2_event_store_gate",
+    "strict_cycle_not_pass",
+    "promotion_gates_latest_not_pass",
+    "soak_not_ready",
+    "parity_not_pass",
+    "runtime_performance_not_pass"
+  ],
   "evidence": {
     "strict_cycle": "F:\\Environement\\git-repo\\hummingbot_custo\\hbot\\reports\\promotion_gates\\strict_cycle_latest.json",
+    "promotion_gates_latest": "F:\\Environement\\git-repo\\hummingbot_custo\\hbot\\reports\\promotion_gates\\latest.json",
     "soak_latest": "F:\\Environement\\git-repo\\hummingbot_custo\\hbot\\reports\\soak\\latest.json",
     "day2_gate": "F:\\Environement\\git-repo\\hummingbot_custo\\hbot\\reports\\event_store\\day2_gate_eval_latest.json",
     "reconciliation": "F:\\Environement\\git-repo\\hummingbot_custo\\hbot\\reports\\reconciliation\\latest.json",
     "parity": "F:\\Environement\\git-repo\\hummingbot_custo\\hbot\\reports\\parity\\latest.json",
-    "portfolio_risk": "F:\\Environement\\git-repo\\hummingbot_custo\\hbot\\reports\\portfolio_risk\\latest.json"
+    "portfolio_risk": "F:\\Environement\\git-repo\\hummingbot_custo\\hbot\\reports\\portfolio_risk\\latest.json",
+    "runtime_performance_budgets": "F:\\Environement\\git-repo\\hummingbot_custo\\hbot\\reports\\verification\\runtime_performance_budgets_latest.json"
   },
   "summary": {
-    "strict_gate_status": "PASS",
-    "strict_critical_failures": [],
-    "day2_go": true,
-    "soak_status": "ready",
-    "reconciliation_status": "warning",
-    "parity_status": "pass",
-    "portfolio_risk_status": "ok"
+    "strict_gate_status": "FAIL",
+    "strict_critical_failures": [
+      "performance_dossier_expectancy_ci"
+    ],
+    "promotion_gates_latest_status": "FAIL",
+    "promotion_gates_latest_critical_failures": [
+      "realtime_l2_data_quality",
+      "replay_regression_first_class",
+      "reconciliation_status",
+      "parity_thresholds",
+      "event_store_integrity_freshness"
+    ],
+    "day2_go": false,
+    "soak_status": "hold",
+    "reconciliation_status": "ok",
+    "parity_status": "fail",
+    "portfolio_risk_status": "ok",
+    "runtime_performance_status": "warning"
+  },
+  "diagnostics": {
+    "max_artifact_age_min": 20.0,
+    "missing_evidence": [],
+    "stale_evidence": [
+      "strict_cycle",
+      "promotion_gates_latest",
+      "parity",
+      "runtime_performance_budgets"
+    ],
+    "artifact_freshness": {
+      "strict_cycle": {
+        "path": "F:\\Environement\\git-repo\\hummingbot_custo\\hbot\\reports\\promotion_gates\\strict_cycle_latest.json",
+        "exists": true,
+        "age_min": 7289.188,
+        "max_age_min": 20.0,
+        "fresh": false
+      },
+      "promotion_gates_latest": {
+        "path": "F:\\Environement\\git-repo\\hummingbot_custo\\hbot\\reports\\promotion_gates\\latest.json",
+        "exists": true,
+        "age_min": 4868.872,
+        "max_age_min": 20.0,
+        "fresh": false
+      },
+      "soak_latest": {
+        "path": "F:\\Environement\\git-repo\\hummingbot_custo\\hbot\\reports\\soak\\latest.json",
+        "exists": true,
+        "age_min": 1.307,
+        "max_age_min": 20.0,
+        "fresh": true
+      },
+      "day2_gate": {
+        "path": "F:\\Environement\\git-repo\\hummingbot_custo\\hbot\\reports\\event_store\\day2_gate_eval_latest.json",
+        "exists": true,
+        "age_min": 0.251,
+        "max_age_min": 20.0,
+        "fresh": true
+      },
+      "reconciliation": {
+        "path": "F:\\Environement\\git-repo\\hummingbot_custo\\hbot\\reports\\reconciliation\\latest.json",
+        "exists": true,
+        "age_min": 8.7,
+        "max_age_min": 20.0,
+        "fresh": true
+      },
+      "parity": {
+        "path": "F:\\Environement\\git-repo\\hummingbot_custo\\hbot\\reports\\parity\\latest.json",
+        "exists": true,
+        "age_min": 44.973,
+        "max_age_min": 20.0,
+        "fresh": false
+      },
+      "portfolio_risk": {
+        "path": "F:\\Environement\\git-repo\\hummingbot_custo\\hbot\\reports\\portfolio_risk\\latest.json",
+        "exists": true,
+        "age_min": 2.49,
+        "max_age_min": 20.0,
+        "fresh": true
+      },
+      "runtime_performance_budgets": {
+        "path": "F:\\Environement\\git-repo\\hummingbot_custo\\hbot\\reports\\verification\\runtime_performance_budgets_latest.json",
+        "exists": true,
+        "age_min": 1346.847,
+        "max_age_min": 20.0,
+        "fresh": false
+      }
+    },
+    "strict_cycle_ts_utc": "2026-03-05T21:31:07.945332+00:00",
+    "promotion_gates_latest_ts_utc": "2026-03-07T13:51:26.901976+00:00",
+    "promotion_gates_latest_newer_than_strict_cycle": true
   }
 }

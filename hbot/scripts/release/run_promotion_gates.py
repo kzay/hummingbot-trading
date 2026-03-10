@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import argparse
+import csv
 import hashlib
 import json
 import os
@@ -8,7 +9,7 @@ import subprocess
 import sys
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
-from typing import Dict, List, Tuple
+from typing import Any, Dict, List, Optional, Set, Tuple
 
 
 def _utc_now() -> str:
@@ -45,6 +46,52 @@ def _read_json(path: Path, default: Dict[str, object]) -> Dict[str, object]:
         return default
 
 
+def _report_ts_utc(report: Dict[str, object]) -> str:
+    return str(report.get("ts_utc") or report.get("last_update_utc") or "").strip()
+
+
+def _report_age_min(report_path: Optional[Path], report: Dict[str, object]) -> float:
+    ts = _report_ts_utc(report)
+    if ts:
+        return _minutes_since(ts)
+    if report_path is not None:
+        return _minutes_since_file_mtime(report_path)
+    return float("inf")
+
+
+def _freshest_report(candidates: List[Path]) -> Tuple[Optional[Path], Dict[str, object], float]:
+    best_path: Optional[Path] = None
+    best_payload: Dict[str, object] = {}
+    best_age = float("inf")
+    seen: Set[str] = set()
+    for candidate in candidates:
+        raw = str(candidate)
+        if raw in seen or not candidate.exists():
+            continue
+        seen.add(raw)
+        payload = _read_json(candidate, {})
+        age = _report_age_min(candidate, payload)
+        if best_path is None or age < best_age:
+            best_path = candidate
+            best_payload = payload
+            best_age = age
+    return best_path, best_payload, best_age
+
+
+def _read_last_csv_row(path: Path) -> Dict[str, str]:
+    if not path.exists():
+        return {}
+    try:
+        with path.open("r", encoding="utf-8", newline="") as fp:
+            last_row: Dict[str, str] = {}
+            for row in csv.DictReader(fp):
+                if isinstance(row, dict):
+                    last_row = row
+            return last_row
+    except Exception:
+        return {}
+
+
 def _csv_values(value: str) -> List[str]:
     return [item.strip() for item in str(value or "").split(",") if item.strip()]
 
@@ -65,6 +112,150 @@ def _safe_bool(value: object, default: bool = False) -> bool:
     if value is None:
         return default
     return str(value).strip().lower() in {"1", "true", "yes", "on"}
+
+
+def _history_read_rollout_enabled() -> bool:
+    if _safe_bool(os.getenv("HB_HISTORY_PROVIDER_ENABLED"), default=False):
+        return True
+    if _safe_bool(os.getenv("HB_HISTORY_SEED_ENABLED"), default=False):
+        return True
+    for env_name in (
+        "HB_HISTORY_UI_READ_MODE",
+        "HB_HISTORY_ANALYTICS_READ_MODE",
+        "HB_HISTORY_OPS_READ_MODE",
+        "HB_HISTORY_ML_READ_MODE",
+    ):
+        mode = str(os.getenv(env_name, "legacy")).strip().lower()
+        if mode not in {"", "legacy", "off", "disabled"}:
+            return True
+    return False
+
+
+def _history_backfill_gate_status(
+    report: Dict[str, object],
+    report_path: Path,
+    *,
+    enforced: bool,
+    max_age_min: float,
+) -> Dict[str, object]:
+    if not enforced:
+        return {
+            "enabled": False,
+            "ready": True,
+            "age_min": _minutes_since_file_mtime(report_path) if report_path.exists() else 1e9,
+            "reason": "shared history read rollout disabled; backfill evidence not enforced",
+        }
+    age_min = _minutes_since(str(report.get("ts_utc", "")))
+    if age_min >= 1e9:
+        age_min = _minutes_since_file_mtime(report_path)
+    status = str(report.get("status", "")).strip().lower()
+    missing_after = int(report.get("missing_count_after", 0) or 0)
+    mismatch_count = int(report.get("sample_mismatch_count", 0) or 0)
+    ready = bool(report_path.exists()) and age_min <= float(max_age_min) and status == "pass" and missing_after == 0 and mismatch_count == 0
+    if ready:
+        reason = (
+            "market_bar_v2 backfill parity PASS "
+            f"(age_min={age_min:.2f}, missing_after={missing_after}, mismatches={mismatch_count})"
+        )
+    else:
+        reason = (
+            "market_bar_v2 backfill parity failed "
+            f"(exists={report_path.exists()}, status={status or 'missing'}, age_min={age_min:.2f}, "
+            f"missing_after={missing_after}, mismatches={mismatch_count})"
+        )
+    return {
+        "enabled": True,
+        "ready": ready,
+        "age_min": age_min,
+        "status": status,
+        "missing_count_after": missing_after,
+        "sample_mismatch_count": mismatch_count,
+        "reason": reason,
+    }
+
+
+def _history_seed_rollout_status(
+    data_root: Path,
+    *,
+    enabled: bool,
+    max_age_min: float,
+    allowed_bots: Optional[Set[str]] = None,
+) -> Dict[str, object]:
+    if not enabled:
+        return {
+            "enabled": False,
+            "ready": True,
+            "active_bots": [],
+            "failing_bots": [],
+            "stale_bots": [],
+            "reason": "startup history seeding disabled; runtime seed gate not enforced",
+            "evidence_paths": [],
+        }
+
+    latest_by_bot: Dict[str, Dict[str, object]] = {}
+    for minute_file in sorted(data_root.glob("*/logs/epp_v24/*/minute.csv")):
+        row = _read_last_csv_row(minute_file)
+        if not row:
+            continue
+        bot_name = minute_file.parts[-5]
+        if allowed_bots is not None and bot_name not in allowed_bots:
+            continue
+        age_min = _minutes_since(str(row.get("ts", "")))
+        if age_min >= 1e9:
+            age_min = _minutes_since_file_mtime(minute_file)
+        current = latest_by_bot.get(bot_name)
+        if current is None or float(age_min) < float(current.get("age_min", 1e9)):
+            latest_by_bot[bot_name] = {
+                "status": str(row.get("history_seed_status", "disabled") or "disabled").strip().lower(),
+                "age_min": float(age_min),
+                "path": str(minute_file),
+            }
+
+    if not latest_by_bot:
+        return {
+            "enabled": True,
+            "ready": False,
+            "active_bots": [],
+            "failing_bots": [],
+            "stale_bots": [],
+            "reason": "startup history seeding enabled but no minute.csv evidence found",
+            "evidence_paths": [str(data_root)],
+        }
+
+    min_status_raw = str(os.getenv("HB_HISTORY_RUNTIME_MIN_STATUS", "degraded")).strip().lower()
+    bad_statuses = {"disabled", "gapped", "empty"}
+    if min_status_raw == "fresh":
+        bad_statuses.add("degraded")
+        bad_statuses.add("stale")
+    stale_bots = sorted(bot for bot, diag in latest_by_bot.items() if float(diag.get("age_min", 1e9)) > float(max_age_min))
+    failing_bots = sorted(
+        f"{bot}:{str(diag.get('status', 'disabled'))}"
+        for bot, diag in latest_by_bot.items()
+        if str(diag.get("status", "disabled")) in bad_statuses
+    )
+    ready = not stale_bots and not failing_bots
+    max_observed_age = max(float(diag.get("age_min", 0.0)) for diag in latest_by_bot.values())
+    if ready:
+        reason = (
+            "startup history seeding PASS "
+            f"(bots={len(latest_by_bot)}, max_age_min={max_observed_age:.2f})"
+        )
+    else:
+        reason = (
+            "startup history seeding failed "
+            f"(stale_bots={','.join(stale_bots) or 'none'}, "
+            f"bad_statuses={','.join(failing_bots) or 'none'})"
+        )
+    return {
+        "enabled": True,
+        "ready": ready,
+        "active_bots": sorted(latest_by_bot.keys()),
+        "failing_bots": failing_bots,
+        "stale_bots": stale_bots,
+        "max_age_min": max_observed_age,
+        "reason": reason,
+        "evidence_paths": [str(diag["path"]) for diag in latest_by_bot.values() if str(diag.get("path", "")).strip()],
+    }
 
 
 def _resolve_threshold_manual_metrics_path(root: Path, raw_path: str) -> Path:
@@ -104,6 +295,21 @@ def _live_account_mode_bots(root: Path) -> List[str]:
         if account_mode == "live":
             live_bots.append(bot_name)
     return sorted(set(live_bots))
+
+
+def _enabled_policy_bots(root: Path) -> List[str]:
+    policy_path = root / "config" / "multi_bot_policy_v1.json"
+    policy = _read_json(policy_path, {})
+    enabled_policy_bots: List[str] = []
+    policy_bots = policy.get("bots", {})
+    if not isinstance(policy_bots, dict):
+        return enabled_policy_bots
+    for bot, cfg in policy_bots.items():
+        if isinstance(cfg, dict) and _safe_bool(cfg.get("enabled", True), default=True):
+            bot_name = str(bot).strip()
+            if bot_name:
+                enabled_policy_bots.append(bot_name)
+    return sorted(set(enabled_policy_bots))
 
 
 def _seed_paper_exchange_threshold_manual_metrics(
@@ -782,6 +988,7 @@ def _refresh_reconciliation_exchange_once(root: Path) -> Tuple[int, str]:
     try:
         env = _build_subprocess_env(root)
         env.setdefault("RECON_EXCHANGE_SOURCE_ENABLED", "true")
+        env.setdefault("RECON_PUBLISH_ACTIONS", "false")
         env.setdefault("RECON_EXCHANGE_SNAPSHOT_PATH", str(root / "reports" / "exchange_snapshots" / "latest.json"))
         proc = subprocess.run(cmd, cwd=str(root), capture_output=True, text=True, check=False, env=env)
         msg = (proc.stdout or "") + ("\n" + proc.stderr if proc.stderr else "")
@@ -815,9 +1022,12 @@ def _run_event_store_once(root: Path) -> Tuple[int, str]:
         # so strict-cycle day2 catch-up reflects real service behavior.
         host_disabled = "Redis stream client is disabled" in msg
         if rc != 0 and host_disabled and not Path("/.dockerenv").exists():
-            container = os.getenv("EVENT_STORE_CONTAINER_NAME", "event-store-service").strip()
+            container = os.getenv(
+                "EVENT_STORE_CONTAINER_NAME",
+                "kzay-capital-event-store-service",
+            ).strip()
             if not container:
-                container = "event-store-service"
+                container = "kzay-capital-event-store-service"
             docker_cmd = [
                 "docker",
                 "exec",
@@ -1783,6 +1993,44 @@ def _run_realtime_l2_data_quality_check(
         return 2, str(e)
 
 
+def _run_runtime_performance_budgets_check(
+    root: Path,
+    *,
+    exporter_render_samples: int,
+    max_controller_tick_p95_ms: float,
+    max_exporter_render_p95_ms: float,
+    max_event_store_ingest_p95_ms: float,
+    max_source_age_min: float,
+) -> Tuple[int, str]:
+    cmd = [
+        sys.executable,
+        str(root / "scripts" / "release" / "check_runtime_performance_budgets.py"),
+        "--exporter-render-samples",
+        str(max(1, int(exporter_render_samples))),
+        "--max-controller-tick-p95-ms",
+        str(max(0.0, float(max_controller_tick_p95_ms))),
+        "--max-exporter-render-p95-ms",
+        str(max(0.0, float(max_exporter_render_p95_ms))),
+        "--max-event-store-ingest-p95-ms",
+        str(max(0.0, float(max_event_store_ingest_p95_ms))),
+        "--max-source-age-min",
+        str(max(0.0, float(max_source_age_min))),
+    ]
+    try:
+        proc = subprocess.run(
+            cmd,
+            cwd=str(root),
+            capture_output=True,
+            text=True,
+            check=False,
+            env=_build_subprocess_env(root),
+        )
+        msg = (proc.stdout or "") + ("\n" + proc.stderr if proc.stderr else "")
+        return int(proc.returncode), msg.strip()
+    except Exception as e:
+        return 2, str(e)
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description="Run promotion gate contract checks.")
     live_promotion_mode_default = str(os.getenv("PROMOTION_LIVE_PROMOTION_GATES_MODE", "auto")).strip().lower()
@@ -2028,6 +2276,37 @@ def main() -> int:
         help="Skip realtime/L2 data quality evidence gate.",
     )
     parser.add_argument(
+        "--check-runtime-performance-budgets",
+        action="store_true",
+        default=str(os.getenv("PROMOTION_CHECK_RUNTIME_PERFORMANCE_BUDGETS", "false")).strip().lower()
+        in {"1", "true", "yes", "on"},
+        help="Run runtime performance budget evidence gate (controller tick, exporter render, event-store ingest).",
+    )
+    parser.add_argument(
+        "--runtime-performance-exporter-render-samples",
+        type=int,
+        default=int(os.getenv("RUNTIME_PERF_EXPORTER_RENDER_SAMPLES", "5")),
+        help="Number of exporter renders to sample when building runtime performance evidence.",
+    )
+    parser.add_argument(
+        "--runtime-performance-max-controller-tick-p95-ms",
+        type=float,
+        default=float(os.getenv("RUNTIME_PERF_MAX_CONTROLLER_TICK_P95_MS", "250")),
+        help="Maximum allowed p95 controller tick duration in runtime performance evidence.",
+    )
+    parser.add_argument(
+        "--runtime-performance-max-exporter-render-p95-ms",
+        type=float,
+        default=float(os.getenv("RUNTIME_PERF_MAX_EXPORTER_RENDER_P95_MS", "500")),
+        help="Maximum allowed p95 exporter render duration in runtime performance evidence.",
+    )
+    parser.add_argument(
+        "--runtime-performance-max-event-store-ingest-p95-ms",
+        type=float,
+        default=float(os.getenv("RUNTIME_PERF_MAX_EVENT_STORE_INGEST_P95_MS", "250")),
+        help="Maximum allowed p95 event-store ingest duration in runtime performance evidence.",
+    )
+    parser.add_argument(
         "--realtime-l2-max-age-sec",
         type=int,
         default=int(os.getenv("REALTIME_L2_MAX_AGE_SEC", "180")),
@@ -2068,6 +2347,31 @@ def main() -> int:
         type=int,
         default=int(os.getenv("REALTIME_L2_LOOKBACK_EVENTS", "5000")),
         help="Depth events scanned from event_store JSONL for sequence/storage diagnostics.",
+    )
+    parser.add_argument(
+        "--check-history-rollout-gates",
+        action="store_true",
+        default=str(os.getenv("PROMOTION_CHECK_HISTORY_ROLLOUT_GATES", "true")).strip().lower()
+        in {"1", "true", "yes", "on"},
+        help="Check shared-history rollout evidence (market_bar_v2 backfill parity and runtime seed health).",
+    )
+    parser.add_argument(
+        "--no-check-history-rollout-gates",
+        action="store_false",
+        dest="check_history_rollout_gates",
+        help="Skip shared-history rollout evidence checks.",
+    )
+    parser.add_argument(
+        "--history-backfill-max-age-min",
+        type=float,
+        default=float(os.getenv("HISTORY_BACKFILL_MAX_AGE_MIN", "1440")),
+        help="Max allowed age (minutes) for market_bar_v2 backfill parity evidence when shared-history reads are enabled.",
+    )
+    parser.add_argument(
+        "--history-seed-max-age-min",
+        type=float,
+        default=float(os.getenv("HISTORY_SEED_MAX_AGE_MIN", "30")),
+        help="Max allowed age (minutes) for latest minute.csv startup history seed evidence when history seeding is enabled.",
     )
     parser.add_argument(
         "--check-paper-exchange-thresholds",
@@ -2503,6 +2807,7 @@ def main() -> int:
     root = Path("/workspace/hbot") if Path("/.dockerenv").exists() else Path(__file__).resolve().parents[2]
     reports = root / "reports"
     live_account_mode_bots = _live_account_mode_bots(root)
+    enabled_policy_bots = _enabled_policy_bots(root)
     live_promotion_required_auto = len(live_account_mode_bots) > 0
     live_gates_mode = str(args.live_promotion_gates_mode).strip().lower()
     if live_gates_mode == "on":
@@ -2582,6 +2887,12 @@ def main() -> int:
     dashboard_readiness_msg = ""
     realtime_l2_data_quality_rc = 0
     realtime_l2_data_quality_msg = ""
+    runtime_performance_budgets_rc = 0
+    runtime_performance_budgets_msg = ""
+    history_read_rollout_enabled = _history_read_rollout_enabled()
+    history_seed_enabled = _safe_bool(os.getenv("HB_HISTORY_SEED_ENABLED"), default=False)
+    history_backfill_diag: Dict[str, object] = {}
+    history_seed_diag: Dict[str, object] = {}
     ops_db_writer_refresh_rc = 0
     ops_db_writer_refresh_msg = ""
 
@@ -2637,6 +2948,15 @@ def main() -> int:
             max_depth_stream_share=float(args.realtime_l2_max_depth_stream_share),
             max_depth_event_bytes=int(args.realtime_l2_max_depth_event_bytes),
             lookback_depth_events=int(args.realtime_l2_lookback_events),
+        )
+    if args.check_runtime_performance_budgets:
+        runtime_performance_budgets_rc, runtime_performance_budgets_msg = _run_runtime_performance_budgets_check(
+            root,
+            exporter_render_samples=int(args.runtime_performance_exporter_render_samples),
+            max_controller_tick_p95_ms=float(args.runtime_performance_max_controller_tick_p95_ms),
+            max_exporter_render_p95_ms=float(args.runtime_performance_max_exporter_render_p95_ms),
+            max_event_store_ingest_p95_ms=float(args.runtime_performance_max_event_store_ingest_p95_ms),
+            max_source_age_min=float(args.max_report_age_min),
         )
     if args.check_canonical_plane_gates:
         canonical_gate_rc, canonical_gate_msg = _run_canonical_plane_gate(
@@ -2980,10 +3300,12 @@ def main() -> int:
 
     # 1m) Realtime + L2 quality gate
     if args.check_realtime_l2_data_quality:
-        realtime_l2_path = reports / "verification" / "realtime_l2_data_quality_latest.json"
-        realtime_l2_report = _read_json(realtime_l2_path, {})
+        realtime_l2_candidates = [reports / "verification" / "realtime_l2_data_quality_latest.json"]
+        realtime_l2_candidates.extend(sorted((reports / "verification").glob("realtime_l2_data_quality_*.json")))
+        realtime_l2_path, realtime_l2_report, realtime_l2_age_min = _freshest_report(realtime_l2_candidates)
         realtime_l2_status = str(realtime_l2_report.get("status", "fail")).strip().lower()
-        realtime_l2_ok = realtime_l2_data_quality_rc == 0 and realtime_l2_status == "pass"
+        realtime_l2_fresh = realtime_l2_age_min <= max_report_age_min
+        realtime_l2_ok = realtime_l2_data_quality_rc == 0 and realtime_l2_status == "pass" and realtime_l2_fresh
         checks.append(
             _check(
                 realtime_l2_ok,
@@ -2992,14 +3314,80 @@ def main() -> int:
                 "realtime/L2 data quality PASS (freshness + sequence + sampling + parity + storage budget)"
                 if realtime_l2_ok
                 else (
-                    "realtime/L2 data quality failed "
-                    f"(status={realtime_l2_status or 'unknown'}, rc={realtime_l2_data_quality_rc})"
+                    f"realtime/L2 data quality stale evidence selected (age_min={realtime_l2_age_min:.2f})"
+                    if realtime_l2_status == "pass" and not realtime_l2_fresh
+                    else (
+                        "realtime/L2 data quality failed "
+                        f"(status={realtime_l2_status or 'unknown'}, rc={realtime_l2_data_quality_rc})"
+                    )
                 ),
                 [str(realtime_l2_path), str(root / "scripts" / "release" / "check_realtime_l2_data_quality.py")],
             )
         )
         if not realtime_l2_ok:
             critical_failures.append("realtime_l2_data_quality")
+
+    # 1n) Runtime performance budgets gate
+    if args.check_runtime_performance_budgets:
+        runtime_perf_path = reports / "verification" / "runtime_performance_budgets_latest.json"
+        runtime_perf_report = _read_json(runtime_perf_path, {})
+        runtime_perf_status = str(runtime_perf_report.get("status", "fail")).strip().lower()
+        runtime_perf_ok = runtime_performance_budgets_rc == 0 and runtime_perf_status == "pass"
+        checks.append(
+            _check(
+                runtime_perf_ok,
+                "runtime_performance_budgets",
+                "warning",
+                "runtime performance budgets PASS (controller tick + exporter render + event-store ingest)"
+                if runtime_perf_ok
+                else f"runtime performance budgets failed (status={runtime_perf_status or 'unknown'}, rc={runtime_performance_budgets_rc})",
+                [str(runtime_perf_path), str(root / "scripts" / "release" / "check_runtime_performance_budgets.py")],
+            )
+        )
+
+    # 1m.1) Shared-history rollout gates
+    if args.check_history_rollout_gates:
+        history_backfill_path = reports / "ops" / "market_bar_v2_backfill_latest.json"
+        history_backfill_report = _read_json(history_backfill_path, {})
+        history_backfill_diag = _history_backfill_gate_status(
+            history_backfill_report,
+            history_backfill_path,
+            enforced=bool(history_read_rollout_enabled),
+            max_age_min=float(args.history_backfill_max_age_min),
+        )
+        checks.append(
+            _check(
+                bool(history_backfill_diag.get("ready", False)),
+                "history_market_bar_v2_backfill",
+                "critical" if history_read_rollout_enabled else "warning",
+                str(history_backfill_diag.get("reason", "")),
+                [str(history_backfill_path), str(root / "scripts" / "ops" / "backfill_market_bar_v2.py")],
+            )
+        )
+
+        history_seed_diag = _history_seed_rollout_status(
+            root / "data",
+            enabled=bool(history_seed_enabled),
+            max_age_min=float(args.history_seed_max_age_min),
+            allowed_bots=set(enabled_policy_bots) if enabled_policy_bots else None,
+        )
+        history_seed_evidence = [str(root / "data")]
+        history_seed_evidence.extend(
+            [
+                str(path)
+                for path in history_seed_diag.get("evidence_paths", [])
+                if isinstance(path, str) and path.strip()
+            ][:10]
+        )
+        checks.append(
+            _check(
+                bool(history_seed_diag.get("ready", False)),
+                "history_seed_rollout",
+                "critical" if history_seed_enabled else "warning",
+                str(history_seed_diag.get("reason", "")),
+                history_seed_evidence,
+            )
+        )
 
     # 1n) Functional paper-exchange golden-path certification gate
     if args.check_paper_exchange_golden_path:
@@ -3549,11 +3937,12 @@ def main() -> int:
     )
 
     # 12) Reconciliation status
-    recon_path = reports / "reconciliation" / "latest.json"
-    recon = _read_json(recon_path, {})
+    recon_candidates = [reports / "reconciliation" / "latest.json"]
+    recon_candidates.extend(sorted((reports / "reconciliation").glob("reconciliation_*.json")))
+    recon_path, recon, recon_age_min = _freshest_report(recon_candidates)
     recon_coverage = _reconciliation_active_bot_coverage(recon)
     recon_ok = str(recon.get("status", "critical")) in {"ok", "warning"} and int(recon.get("critical_count", 1)) == 0
-    recon_fresh = _minutes_since(str(recon.get("ts_utc", ""))) <= max_report_age_min
+    recon_fresh = recon_age_min <= max_report_age_min
     recon_coverage_ok = bool(recon_coverage.get("coverage_ok", True))
     recon_gate_ok = recon_ok and recon_fresh and recon_coverage_ok
     checks.append(
@@ -3574,12 +3963,14 @@ def main() -> int:
     )
 
     # 13) Parity thresholds
-    parity_path = reports / "parity" / "latest.json"
-    drift_audit_path = reports / "parity" / "drift_audit_latest.json"
-    parity = _read_json(parity_path, {})
-    drift_audit = _read_json(drift_audit_path, {})
+    parity_candidates = [reports / "parity" / "latest.json"]
+    parity_candidates.extend(sorted((reports / "parity").glob("**/parity_*.json")))
+    drift_audit_candidates = [reports / "parity" / "drift_audit_latest.json"]
+    drift_audit_candidates.extend(sorted((reports / "parity").glob("**/drift_audit_*.json")))
+    parity_path, parity, parity_age_min = _freshest_report(parity_candidates)
+    drift_audit_path, drift_audit, _drift_age_min = _freshest_report(drift_audit_candidates)
     parity_ok = str(parity.get("status", "fail")) == "pass"
-    parity_fresh = _minutes_since(str(parity.get("ts_utc", ""))) <= max_report_age_min
+    parity_fresh = parity_age_min <= max_report_age_min
     parity_insufficient_bots, parity_active_bots = _parity_core_insufficient_active_bots(parity)
     parity_informative_ok = (not args.require_parity_informative_core) or (len(parity_insufficient_bots) == 0)
     drift_diag = _parity_drift_audit_status(drift_audit, max_report_age_min=max_report_age_min)
@@ -3613,10 +4004,11 @@ def main() -> int:
     )
 
     # 14) Portfolio risk status + freshness
-    risk_path = reports / "portfolio_risk" / "latest.json"
-    risk = _read_json(risk_path, {})
+    risk_candidates = [reports / "portfolio_risk" / "latest.json"]
+    risk_candidates.extend(sorted((reports / "portfolio_risk").glob("portfolio_risk_*.json")))
+    risk_path, risk, risk_age_min = _freshest_report(risk_candidates)
     risk_ok = str(risk.get("status", "critical")) in {"ok", "warning"} and int(risk.get("critical_count", 1)) == 0
-    risk_fresh = _minutes_since(str(risk.get("ts_utc", ""))) <= max_report_age_min
+    risk_fresh = risk_age_min <= max_report_age_min
     risk_gate_enforced = bool(enforce_live_promotion_gates)
     risk_gate_pass = risk_ok and risk_fresh
     checks.append(
@@ -3627,9 +4019,13 @@ def main() -> int:
             "portfolio risk healthy and fresh"
             if risk_gate_pass
             else (
-                "portfolio risk critical or stale"
-                if risk_gate_enforced
-                else "portfolio risk critical/stale (non-live scope; warning only)"
+                f"portfolio risk stale evidence selected (age_min={risk_age_min:.2f})"
+                if risk_ok and not risk_fresh
+                else (
+                    "portfolio risk critical or stale"
+                    if risk_gate_enforced
+                    else "portfolio risk critical/stale (non-live scope; warning only)"
+                )
             ),
             [str(risk_path)],
         )
@@ -3682,14 +4078,7 @@ def main() -> int:
 
     # 17) Event store integrity freshness
     integrity_candidates = sorted((reports / "event_store").glob("integrity_*.json"))
-    integrity_path = integrity_candidates[-1] if integrity_candidates else None
-    integrity = _read_json(integrity_path, {}) if integrity_path else {}
-    integrity_ts = str(integrity.get("ts_utc", "")).strip()
-    integrity_age_min = (
-        _minutes_since(integrity_ts)
-        if integrity_ts
-        else (_minutes_since_file_mtime(integrity_path) if integrity_path else float("inf"))
-    )
+    integrity_path, integrity, integrity_age_min = _freshest_report(integrity_candidates)
     integrity_ok = (
         integrity_path is not None
         and integrity_path.exists()
@@ -3703,7 +4092,13 @@ def main() -> int:
             "critical",
             "event store integrity fresh with zero missing correlations"
             if integrity_ok
-            else "event store integrity missing/stale or missing correlations detected",
+            else (
+                f"event store integrity stale evidence selected (age_min={integrity_age_min:.2f})"
+                if integrity_path is not None
+                and integrity_path.exists()
+                and int(integrity.get("missing_correlation_count", 1)) == 0
+                else "event store integrity missing/stale or missing correlations detected"
+            ),
             [str(integrity_path)],
         )
     )
@@ -4018,6 +4413,13 @@ def main() -> int:
             "realtime_l2_max_depth_stream_share": float(args.realtime_l2_max_depth_stream_share),
             "realtime_l2_max_depth_event_bytes": int(args.realtime_l2_max_depth_event_bytes),
             "realtime_l2_lookback_events": int(args.realtime_l2_lookback_events),
+            "check_history_rollout_gates": bool(args.check_history_rollout_gates),
+            "history_read_rollout_enabled": bool(history_read_rollout_enabled),
+            "history_seed_enabled": bool(history_seed_enabled),
+            "history_backfill_max_age_min": float(args.history_backfill_max_age_min),
+            "history_seed_max_age_min": float(args.history_seed_max_age_min),
+            "history_backfill_diag": history_backfill_diag,
+            "history_seed_diag": history_seed_diag,
             "check_canonical_plane_gates": bool(args.check_canonical_plane_gates),
             "canonical_gate_output": canonical_gate_msg[:2000],
             "canonical_gate_rc": int(canonical_gate_rc),

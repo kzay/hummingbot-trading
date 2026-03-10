@@ -1,36 +1,69 @@
 {
-  "ts_utc": "2026-03-08T01:30:45Z",
-  "pairs_total": 1,
+  "ts_utc": "2026-03-10T23:26:23Z",
+  "pairs_total": 2,
   "pairs": {
-    "::bitget_perpetual::BTC-USDT": {
+    "::bitget_perpetual::ETH-USDT": {
       "connector_name": "bitget_perpetual",
-      "trading_pair": "BTC-USDT",
+      "trading_pair": "ETH-USDT",
       "instance_name": "",
-      "timestamp_ms": 1772933445901,
-      "freshness_ts_ms": 1772933445901,
-      "mid_price": 67144.25,
-      "best_bid": 67144.2,
-      "best_ask": 67144.3,
-      "best_bid_size": 2.7955,
-      "best_ask_size": 1.4842,
-      "last_trade_price": 67144.2,
+      "timestamp_ms": 1773185183087,
+      "freshness_ts_ms": 1773185183087,
+      "mid_price": 2031.5349999999999,
+      "best_bid": 2031.53,
+      "best_ask": 2031.54,
+      "best_bid_size": 52.7,
+      "best_ask_size": 52.74,
+      "last_trade_price": 2031.54,
       "mark_price": null,
-      "funding_rate": 7.2e-05,
-      "exchange_ts_ms": 1772933445791,
-      "ingest_ts_ms": 1772933445901,
-      "market_sequence": 1772933445791,
-      "event_id": "92f85b36-51dd-4b4c-819f-cc0ab22ae824",
+      "funding_rate": -2.1e-05,
+      "exchange_ts_ms": 1773185182841,
+      "ingest_ts_ms": 1773185183087,
+      "market_sequence": null,
+      "event_id": "93e7e7b8-d42d-4b41-baf0-60f8ffd8a3e1",
       "source_event_type": "market_quote",
       "bid_levels": [
         [
-          67144.2,
-          2.7955
+          2031.53,
+          52.7
         ]
       ],
       "ask_levels": [
         [
-          67144.3,
-          1.4842
+          2031.54,
+          52.74
+        ]
+      ],
+      "namespace_key": "::bitget_perpetual::ETH-USDT"
+    },
+    "::bitget_perpetual::BTC-USDT": {
+      "connector_name": "bitget_perpetual",
+      "trading_pair": "BTC-USDT",
+      "instance_name": "",
+      "timestamp_ms": 1773185183088,
+      "freshness_ts_ms": 1773185183088,
+      "mid_price": 69747.55,
+      "best_bid": 69747.5,
+      "best_ask": 69747.6,
+      "best_bid_size": 0.2118,
+      "best_ask_size": 9.2916,
+      "last_trade_price": 69747.5,
+      "mark_price": null,
+      "funding_rate": -7.1e-05,
+      "exchange_ts_ms": 1773185182841,
+      "ingest_ts_ms": 1773185183088,
+      "market_sequence": null,
+      "event_id": "d5d78920-73a6-4339-a890-b90b9af8b7cf",
+      "source_event_type": "market_quote",
+      "bid_levels": [
+        [
+          69747.5,
+          0.2118
+        ]
+      ],
+      "ask_levels": [
+        [
+          69747.6,
+          9.2916
         ]
       ],
       "namespace_key": "::bitget_perpetual::BTC-USDT"

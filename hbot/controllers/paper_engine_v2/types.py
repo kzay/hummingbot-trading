@@ -620,6 +620,7 @@ class OrderAccepted(EngineEvent):
     price: Decimal
     quantity: Decimal
     source_bot: str
+    instance_name: str = ""
     position_action: str = PositionAction.AUTO.value
 
 
@@ -628,6 +629,7 @@ class OrderRejected(EngineEvent):
     order_id: str
     reason: str
     source_bot: str
+    instance_name: str = ""
 
 
 @dataclass(frozen=True)
@@ -639,6 +641,7 @@ class OrderFilled(EngineEvent):
     is_maker: bool
     remaining_quantity: Decimal
     source_bot: str
+    instance_name: str = ""
     position_action: str = PositionAction.AUTO.value
 
 
@@ -646,6 +649,7 @@ class OrderFilled(EngineEvent):
 class OrderCanceled(EngineEvent):
     order_id: str
     source_bot: str
+    instance_name: str = ""
 
 
 @dataclass(frozen=True)

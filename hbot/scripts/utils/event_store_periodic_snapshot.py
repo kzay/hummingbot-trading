@@ -17,6 +17,7 @@ STREAMS = (
     "hb.risk_decision.v1",
     "hb.execution_intent.v1",
     "hb.audit.v1",
+    "hb.bot_telemetry.v1",
 )
 
 

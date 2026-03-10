@@ -48,11 +48,13 @@ def _recompute(jsonl_path: Path) -> dict:
             if not str(event.get("correlation_id", "")).strip():
                 missing_corr += 1
 
+    now_iso = _utc_now()
     return {
         "total_events": total_events,
         "events_by_stream": events_by_stream,
         "missing_correlation_count": missing_corr,
-        "last_update_utc": _utc_now(),
+        "last_update_utc": now_iso,
+        "ts_utc": now_iso,
     }
 
 

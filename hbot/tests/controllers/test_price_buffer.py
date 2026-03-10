@@ -5,7 +5,7 @@ from decimal import Decimal
 
 import pytest
 
-from controllers.price_buffer import MidPriceBuffer
+from controllers.price_buffer import MidPriceBuffer, MinuteBar
 
 _D = Decimal
 
@@ -56,6 +56,36 @@ class TestBarConstruction:
         buf.add_sample(1000.0, _D("-5"))
         assert len(buf.bars) == 0
 
+    def test_seed_bars_empty_is_noop(self):
+        buf = MidPriceBuffer()
+        assert buf.seed_bars([]) == 0
+        assert len(buf.bars) == 0
+
+    def test_seed_bars_non_empty_without_reset_raises(self):
+        buf = MidPriceBuffer()
+        buf.add_sample(1000.0, _D("100"))
+        with pytest.raises(ValueError):
+            buf.seed_bars([MinuteBar(ts_minute=1060, open=_D("101"), high=_D("101"), low=_D("101"), close=_D("101"))])
+
+    def test_seed_bars_gap_fills_missing_minutes(self):
+        buf = MidPriceBuffer()
+        seeded = buf.seed_bars(
+            [
+                MinuteBar(ts_minute=960, open=_D("100"), high=_D("100"), low=_D("100"), close=_D("100")),
+                MinuteBar(ts_minute=1140, open=_D("102"), high=_D("102"), low=_D("102"), close=_D("102")),
+            ]
+        )
+        assert seeded == 4
+        assert len(buf.bars) == 4
+        assert buf.bars[1].close == _D("100")
+        assert buf.bars[2].close == _D("100")
+
+    def test_seed_samples_populates_recent_sample_tail(self):
+        buf = MidPriceBuffer()
+        seeded = buf.seed_samples([(960.0, _D("100")), (995.0, _D("101"))])
+        assert seeded == 2
+        assert buf.adverse_drift_30s(995.0) > _D("0")
+
 
 class TestEma:
     def test_ema_none_when_insufficient_bars(self):
@@ -95,6 +125,16 @@ class TestEma:
         assert ema_first is not None
         assert ema_recomputed is not None
         assert abs(ema_first - ema_recomputed) < _D("0.001")
+
+    def test_seeded_bars_match_live_fed_indicator_values(self):
+        live = MidPriceBuffer()
+        seeded = MidPriceBuffer()
+        prices = [100, 101, 102, 101, 103, 104, 105, 104, 106, 107]
+        start_ts = 960.0
+        _fill_buffer(live, prices, start_ts=start_ts, interval_s=60.0)
+        bars = [MinuteBar(ts_minute=bar.ts_minute, open=bar.open, high=bar.high, low=bar.low, close=bar.close) for bar in live.bars]
+        seeded.seed_bars(bars)
+        assert seeded.ema(5) == live.ema(5)
 
 
 class TestAtrAndBandPct:

@@ -24,6 +24,21 @@ service contracts (`services/contracts/*`).
 - Legacy `epp_v2_4_bot*` files are compatibility wrappers only.
 - See `docs/architecture/strategy_isolation_contract.md` for dependency rules and verification commands.
 
+## Runtime Kernel
+- Neutral kernel modules now live under `controllers/runtime/`:
+  - `contracts.py`
+  - `core.py`
+  - `data_context.py`
+  - `risk_context.py`
+  - `execution_context.py`
+- Explicit family adapters now live under `controllers/runtime/`:
+  - `market_making_core.py`
+  - `directional_core.py`
+- Current migration rule:
+  - keep external v1 streams and artifact namespaces stable
+  - allow additive metadata such as `controller_contract_version` and `runtime_impl`
+  - treat `shared_mm_v24` as the market-making implementation behind the neutral runtime hooks while bot5/bot6/bot7 use the directional family adapter
+
 ## Runtime Diagram
 ```mermaid
 flowchart LR
@@ -106,6 +121,12 @@ flowchart LR
 - **Event history**: `event-store-service` artifacts, mirrored to DB when enabled.
 - **Realtime operator view**: `realtime-ui-api` stream-first read model with desk-snapshot fallback.
 - **Promotion go/no-go**: `scripts/release/run_promotion_gates.py` + `run_strict_promotion_cycle.py`.
+
+## Shared Runtime Ownership
+- `scripts/shared/v2_with_controllers.py` owns controller tick orchestration and operator-facing snapshot assembly only.
+- Connector-owned open orders must be read via connector APIs, desk-owned paper orders via `_paper_desk_v2_bridges`, and service-owned runtime orders via `_paper_exchange_runtime_orders`.
+- `controllers/paper_engine_v2/hb_bridge.py` owns translation between framework callbacks and paper-exchange command/event contracts; it must not become the canonical owner of operator snapshot shaping.
+- `controllers/tick_emitter.py` remains the canonical owner of minute-snapshot field shaping for controller/runtime telemetry.
 
 ## Failure Containment Policies
 - Redis degradation must not crash controller ticks; bot remains in local safe mode.

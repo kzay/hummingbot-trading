@@ -1,10 +1,16 @@
 from __future__ import annotations
 
+import json
 import os
 from pathlib import Path
 
 from tests.services.conftest import _Proc
 from scripts.release.run_promotion_gates import (
+    _enabled_policy_bots,
+    _freshest_report,
+    _history_backfill_gate_status,
+    _history_read_rollout_enabled,
+    _history_seed_rollout_status,
     _run_event_store_once,
     _day2_freshness,
     _day2_lag_within_tolerance,
@@ -30,8 +36,177 @@ from scripts.release.run_promotion_gates import (
     _run_alerting_health_check,
     _run_road9_allocation_rebalance,
     _run_realtime_l2_data_quality_check,
+    _run_runtime_performance_budgets_check,
+    _report_ts_utc,
     _run_testnet_multi_day_summary,
 )
+
+
+def test_history_read_rollout_enabled_detects_non_legacy_modes(monkeypatch) -> None:
+    monkeypatch.setenv("HB_HISTORY_PROVIDER_ENABLED", "false")
+    monkeypatch.setenv("HB_HISTORY_SEED_ENABLED", "false")
+    monkeypatch.setenv("HB_HISTORY_UI_READ_MODE", "legacy")
+    monkeypatch.setenv("HB_HISTORY_ANALYTICS_READ_MODE", "legacy")
+    monkeypatch.setenv("HB_HISTORY_OPS_READ_MODE", "legacy")
+    monkeypatch.setenv("HB_HISTORY_ML_READ_MODE", "legacy")
+    assert _history_read_rollout_enabled() is False
+
+    monkeypatch.setenv("HB_HISTORY_UI_READ_MODE", "shadow")
+    assert _history_read_rollout_enabled() is True
+
+
+def test_history_backfill_gate_status_requires_fresh_clean_report(tmp_path: Path) -> None:
+    report_path = tmp_path / "market_bar_v2_backfill_latest.json"
+    report_path.write_text("{}", encoding="utf-8")
+    diag = _history_backfill_gate_status(
+        {
+            "ts_utc": "3026-03-01T00:00:00Z",
+            "status": "pass",
+            "missing_count_after": 0,
+            "sample_mismatch_count": 0,
+        },
+        report_path,
+        enforced=True,
+        max_age_min=60.0,
+    )
+    assert diag["ready"] is True
+    assert "PASS" in str(diag["reason"])
+
+
+def test_report_ts_utc_falls_back_to_last_update_utc() -> None:
+    assert _report_ts_utc({"ts_utc": "3026-03-01T00:00:00Z"}) == "3026-03-01T00:00:00Z"
+    assert _report_ts_utc({"last_update_utc": "3026-03-01T00:01:00Z"}) == "3026-03-01T00:01:00Z"
+    assert _report_ts_utc({}) == ""
+
+
+def test_freshest_report_prefers_fresher_timestamped_artifact(tmp_path: Path) -> None:
+    stale_latest = tmp_path / "latest.json"
+    fresh_report = tmp_path / "reconciliation_30260301T000500Z.json"
+    stale_latest.write_text(json.dumps({"ts_utc": "3026-03-01T00:00:00Z"}), encoding="utf-8")
+    fresh_report.write_text(json.dumps({"ts_utc": "3026-03-01T00:05:00Z"}), encoding="utf-8")
+
+    path, payload, _age = _freshest_report([stale_latest, fresh_report])
+
+    assert path == fresh_report
+    assert payload["ts_utc"] == "3026-03-01T00:05:00Z"
+
+
+def test_history_seed_rollout_status_detects_bad_seed_states(tmp_path: Path) -> None:
+    minute_file = tmp_path / "bot1" / "logs" / "epp_v24" / "bot1_a" / "minute.csv"
+    minute_file.parent.mkdir(parents=True, exist_ok=True)
+    minute_file.write_text(
+        "\n".join(
+            [
+                "ts,history_seed_status,history_seed_source",
+                "3026-03-01T00:00:00+00:00,gapped,db_v2",
+            ]
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    diag = _history_seed_rollout_status(tmp_path, enabled=True, max_age_min=30.0)
+    assert diag["ready"] is False
+    assert diag["failing_bots"] == ["bot1:gapped"]
+
+
+def test_history_seed_rollout_status_passes_for_fresh_seeded_bot(tmp_path: Path) -> None:
+    minute_file = tmp_path / "bot7" / "logs" / "epp_v24" / "bot7_a" / "minute.csv"
+    minute_file.parent.mkdir(parents=True, exist_ok=True)
+    minute_file.write_text(
+        "\n".join(
+            [
+                "ts,history_seed_status,history_seed_source,history_seed_bars",
+                "3026-03-01T00:00:00+00:00,fresh,db_v2,33",
+            ]
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    diag = _history_seed_rollout_status(tmp_path, enabled=True, max_age_min=30.0)
+    assert diag["ready"] is True
+    assert diag["active_bots"] == ["bot7"]
+
+
+def test_history_seed_rollout_status_ignores_bots_outside_allowed_scope(tmp_path: Path) -> None:
+    stale_bot = tmp_path / "bot2" / "logs" / "epp_v24" / "bot2_a" / "minute.csv"
+    healthy_bot = tmp_path / "bot7" / "logs" / "epp_v24" / "bot7_a" / "minute.csv"
+    stale_bot.parent.mkdir(parents=True, exist_ok=True)
+    healthy_bot.parent.mkdir(parents=True, exist_ok=True)
+    stale_bot.write_text(
+        "ts,history_seed_status\n3026-03-01T00:00:00+00:00,disabled\n",
+        encoding="utf-8",
+    )
+    healthy_bot.write_text(
+        "ts,history_seed_status\n3026-03-01T00:00:00+00:00,fresh\n",
+        encoding="utf-8",
+    )
+
+    diag = _history_seed_rollout_status(tmp_path, enabled=True, max_age_min=30.0, allowed_bots={"bot7"})
+
+    assert diag["ready"] is True
+    assert diag["active_bots"] == ["bot7"]
+
+
+def test_history_seed_rollout_status_accepts_stale_when_runtime_policy_allows(monkeypatch, tmp_path: Path) -> None:
+    minute_file = tmp_path / "bot1" / "logs" / "epp_v24" / "bot1_a" / "minute.csv"
+    minute_file.parent.mkdir(parents=True, exist_ok=True)
+    minute_file.write_text(
+        "ts,history_seed_status\n3026-03-01T00:00:00+00:00,stale\n",
+        encoding="utf-8",
+    )
+    monkeypatch.setenv("HB_HISTORY_RUNTIME_MIN_STATUS", "degraded")
+
+    diag = _history_seed_rollout_status(tmp_path, enabled=True, max_age_min=30.0)
+
+    assert diag["ready"] is True
+    assert diag["failing_bots"] == []
+
+
+def test_history_seed_rollout_status_rejects_stale_when_runtime_policy_requires_fresh(monkeypatch, tmp_path: Path) -> None:
+    minute_file = tmp_path / "bot1" / "logs" / "epp_v24" / "bot1_a" / "minute.csv"
+    minute_file.parent.mkdir(parents=True, exist_ok=True)
+    minute_file.write_text(
+        "ts,history_seed_status\n3026-03-01T00:00:00+00:00,stale\n",
+        encoding="utf-8",
+    )
+    monkeypatch.setenv("HB_HISTORY_RUNTIME_MIN_STATUS", "fresh")
+
+    diag = _history_seed_rollout_status(tmp_path, enabled=True, max_age_min=30.0)
+
+    assert diag["ready"] is False
+    assert diag["failing_bots"] == ["bot1:stale"]
+
+
+def test_history_seed_rollout_status_rejects_degraded_when_runtime_policy_requires_fresh(monkeypatch, tmp_path: Path) -> None:
+    minute_file = tmp_path / "bot1" / "logs" / "epp_v24" / "bot1_a" / "minute.csv"
+    minute_file.parent.mkdir(parents=True, exist_ok=True)
+    minute_file.write_text(
+        "ts,history_seed_status\n3026-03-01T00:00:00+00:00,degraded\n",
+        encoding="utf-8",
+    )
+    monkeypatch.setenv("HB_HISTORY_RUNTIME_MIN_STATUS", "fresh")
+
+    diag = _history_seed_rollout_status(tmp_path, enabled=True, max_age_min=30.0)
+
+    assert diag["ready"] is False
+    assert diag["failing_bots"] == ["bot1:degraded"]
+
+
+def test_enabled_policy_bots_returns_enabled_only(tmp_path: Path) -> None:
+    config = tmp_path / "config"
+    config.mkdir(parents=True, exist_ok=True)
+    (config / "multi_bot_policy_v1.json").write_text(
+        """{
+  "bots": {
+    "bot1": {"enabled": true},
+    "bot2": {"enabled": false},
+    "bot7": {"enabled": true}
+  }
+}""",
+        encoding="utf-8",
+    )
+
+    assert _enabled_policy_bots(tmp_path) == ["bot1", "bot7"]
 
 
 def test_parity_core_insufficient_flags_only_active_bots() -> None:
@@ -285,6 +460,63 @@ def test_reconciliation_active_bot_coverage_detects_uncovered_bots() -> None:
     assert diag["active_bot_count"] == 2
     assert diag["covered_active_bot_count"] == 1
     assert diag["uncovered_active_bots"] == ["bot2"]
+
+
+def test_freshest_report_supports_reconciliation_family_selection(tmp_path: Path) -> None:
+    reports = tmp_path / "reconciliation"
+    reports.mkdir(parents=True, exist_ok=True)
+    latest = reports / "latest.json"
+    stamped = reports / "reconciliation_30260301T000500Z.json"
+    latest.write_text(json.dumps({"ts_utc": "3026-03-01T00:00:00Z", "status": "critical"}), encoding="utf-8")
+    stamped.write_text(json.dumps({"ts_utc": "3026-03-01T00:05:00Z", "status": "ok"}), encoding="utf-8")
+
+    path, payload, _age = _freshest_report([latest, *sorted(reports.glob("reconciliation_*.json"))])
+
+    assert path == stamped
+    assert payload["status"] == "ok"
+
+
+def test_freshest_report_supports_parity_family_selection(tmp_path: Path) -> None:
+    reports = tmp_path / "parity"
+    dated = reports / "30260301"
+    dated.mkdir(parents=True, exist_ok=True)
+    latest = reports / "latest.json"
+    stamped = dated / "parity_30260301T000500Z.json"
+    latest.write_text(json.dumps({"ts_utc": "3026-03-01T00:00:00Z", "status": "fail"}), encoding="utf-8")
+    stamped.write_text(json.dumps({"ts_utc": "3026-03-01T00:05:00Z", "status": "pass"}), encoding="utf-8")
+
+    path, payload, _age = _freshest_report([latest, *sorted(reports.glob("**/parity_*.json"))])
+
+    assert path == stamped
+    assert payload["status"] == "pass"
+
+
+def test_freshest_report_supports_realtime_l2_family_selection(tmp_path: Path) -> None:
+    reports = tmp_path / "verification"
+    reports.mkdir(parents=True, exist_ok=True)
+    latest = reports / "realtime_l2_data_quality_latest.json"
+    stamped = reports / "realtime_l2_data_quality_30260301T000500Z.json"
+    latest.write_text(json.dumps({"ts_utc": "3026-03-01T00:00:00Z", "status": "fail"}), encoding="utf-8")
+    stamped.write_text(json.dumps({"ts_utc": "3026-03-01T00:05:00Z", "status": "pass"}), encoding="utf-8")
+
+    path, payload, _age = _freshest_report([latest, *sorted(reports.glob("realtime_l2_data_quality_*.json"))])
+
+    assert path == stamped
+    assert payload["status"] == "pass"
+
+
+def test_freshest_report_supports_event_store_integrity_family_selection(tmp_path: Path) -> None:
+    reports = tmp_path / "event_store"
+    reports.mkdir(parents=True, exist_ok=True)
+    stale = reports / "integrity_30260301T000000Z.json"
+    fresh = reports / "integrity_30260301T000500Z.json"
+    stale.write_text(json.dumps({"ts_utc": "3026-03-01T00:00:00Z", "missing_correlation_count": 0}), encoding="utf-8")
+    fresh.write_text(json.dumps({"ts_utc": "3026-03-01T00:05:00Z", "missing_correlation_count": 0}), encoding="utf-8")
+
+    path, payload, _age = _freshest_report(sorted(reports.glob("integrity_*.json")))
+
+    assert path == fresh
+    assert payload["ts_utc"] == "3026-03-01T00:05:00Z"
 
 
 def test_live_account_mode_bots_filters_disabled_policy_scope(tmp_path: Path) -> None:
@@ -776,6 +1008,41 @@ def test_run_realtime_l2_data_quality_check_forwards_threshold_args(monkeypatch,
     assert "--max-sequence-gap" in cmd
     assert "--max-raw-to-sampled-ratio" in cmd
     assert "--max-depth-stream-share" in cmd
+    env = captured["env"]
+    py_path = str(env.get("PYTHONPATH", ""))
+    assert str(tmp_path) in py_path.split(os.pathsep)
+
+
+def test_run_runtime_performance_budgets_check_forwards_threshold_args(monkeypatch, tmp_path: Path) -> None:
+    captured = {}
+
+    def _fake_run(cmd, cwd, capture_output, text, check, env):
+        captured["cmd"] = cmd
+        captured["cwd"] = cwd
+        captured["env"] = env
+        return _Proc(stdout="ok")
+
+    monkeypatch.setattr("scripts.release.run_promotion_gates.subprocess.run", _fake_run)
+
+    rc, msg = _run_runtime_performance_budgets_check(
+        tmp_path,
+        exporter_render_samples=7,
+        max_controller_tick_p95_ms=210.0,
+        max_exporter_render_p95_ms=420.0,
+        max_event_store_ingest_p95_ms=180.0,
+        max_source_age_min=15.0,
+    )
+
+    assert rc == 0
+    assert msg == "ok"
+    assert str(tmp_path) == captured["cwd"]
+    cmd = captured["cmd"]
+    assert str(tmp_path / "scripts" / "release" / "check_runtime_performance_budgets.py") in cmd
+    assert "--exporter-render-samples" in cmd
+    assert "--max-controller-tick-p95-ms" in cmd
+    assert "--max-exporter-render-p95-ms" in cmd
+    assert "--max-event-store-ingest-p95-ms" in cmd
+    assert "--max-source-age-min" in cmd
     env = captured["env"]
     py_path = str(env.get("PYTHONPATH", ""))
     assert str(tmp_path) in py_path.split(os.pathsep)

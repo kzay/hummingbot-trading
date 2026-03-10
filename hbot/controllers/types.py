@@ -10,7 +10,7 @@ from decimal import Decimal
 from typing import TypedDict
 
 
-PROCESSED_STATE_SCHEMA_VERSION: int = 10
+PROCESSED_STATE_SCHEMA_VERSION: int = 11
 """Increment whenever a field is added, removed, or changes semantics.
 Consumers should check this on deserialization and drop/log on mismatch."""
 
@@ -231,6 +231,16 @@ class ProcessedState(TypedDict, total=False):
     """Realized PnL today from closed positions (perps)."""
     net_realized_pnl_today_quote: Decimal
     """Realized PnL net of funding cost today (realized - funding_cost_today_quote)."""
+    history_seed_status: str
+    """Last startup history seed status: disabled | fresh | stale | gapped | degraded | empty."""
+    history_seed_reason: str
+    """Reason/message associated with the last startup history seed result."""
+    history_seed_source: str
+    """History source used for startup seeding."""
+    history_seed_bars: int
+    """Number of bars loaded during startup history seeding."""
+    history_seed_latency_ms: float
+    """Latency in milliseconds for the startup history seed attempt."""
 
     # -- Perpetual-specific --
     is_perpetual: bool

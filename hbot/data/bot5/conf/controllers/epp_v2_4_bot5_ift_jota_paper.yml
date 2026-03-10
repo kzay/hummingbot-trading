@@ -7,7 +7,7 @@ connector_name: bitget_perpetual
 connector_type: perp
 trading_pair: BTC-USDT
 
-total_amount_quote: 8
+total_amount_quote: 140
 buy_spreads: "0.00015,0.00040"
 sell_spreads: "0.00015,0.00040"
 buy_amounts_pct: "50,50"
@@ -18,10 +18,11 @@ leverage: 1
 position_mode: ONEWAY
 stop_loss: 0.004
 take_profit: 0.004
-time_limit: 600
+time_limit: 900
 take_profit_order_type: LIMIT
 skip_rebalance: true
 position_rebalance_min_base_mult: 5.0
+max_order_notional_quote: 80
 
 variant: a
 enabled: true
@@ -56,12 +57,22 @@ adaptive_params_enabled: true
 adaptive_edge_relax_max_bps: 2
 adaptive_edge_tighten_max_bps: 4
 adaptive_min_edge_bps_floor: 1.00
+
+# Bot5 owns its own flow-conviction gate logic in `controllers/bots/bot5/ift_jota_v1.py`.
+# Keep the shared bot1-style alpha/selective soft-pause layers disabled here.
+shared_edge_gate_enabled: false
+alpha_policy_enabled: false
+selective_quoting_enabled: false
+adverse_fill_soft_pause_enabled: false
+edge_confidence_soft_pause_enabled: false
+slippage_soft_pause_enabled: false
+
 bot5_flow_imbalance_threshold: 0.18
 bot5_flow_trend_threshold_pct: 0.0008
-bot5_flow_bias_threshold: 0.55
-bot5_flow_directional_threshold: 0.75
-bot5_directional_target_net_base_pct: 0.08
-bot5_low_conviction_extra_edge_bps: 0.60
+bot5_flow_bias_threshold: 0.65
+bot5_flow_directional_threshold: 0.85
+bot5_directional_target_net_base_pct: 0.05
+bot5_low_conviction_extra_edge_bps: 0.90
 bot5_directional_market_floor_bps: 0.25
 startup_position_sync: true
 auto_calibration_enabled: true
@@ -72,17 +83,6 @@ auto_calibration_max_step_bps: 0.20
 auto_calibration_max_total_change_per_hour_bps: 0.60
 auto_calibration_freeze_drawdown_pct: 0.030
 auto_calibration_freeze_daily_loss_pct: 0.015
-adverse_fill_soft_pause_enabled: true
-adverse_fill_soft_pause_min_fills: 30
-adverse_fill_soft_pause_cost_floor_mult: 1.0
-edge_confidence_soft_pause_enabled: true
-edge_confidence_soft_pause_min_fills: 40
-edge_confidence_soft_pause_z_score: 1.96
-edge_confidence_soft_pause_cost_floor_mult: 1.0
-slippage_soft_pause_enabled: true
-slippage_soft_pause_window_fills: 300
-slippage_soft_pause_min_fills: 20
-slippage_soft_pause_p95_bps: 12
 max_quote_to_market_spread_mult: 0.00
 min_side_spread_bps: 0.30
 pnl_governor_enabled: false
@@ -158,7 +158,7 @@ regime_specs_override:
 perp_target_net_base_pct: 0.0
 min_base_pct: 0.0
 max_base_pct: 0.55
-max_total_notional_quote: 12
+max_total_notional_quote: 140
 max_daily_turnover_x_hard: 40.0
 max_daily_loss_pct_hard: 0.020
 max_drawdown_pct_hard: 0.035

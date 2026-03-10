@@ -4,6 +4,7 @@ import json
 from pathlib import Path
 
 import services.realtime_ui_api.main as realtime_ui_main
+from services.common.market_history_types import MarketBarKey
 from services.contracts.stream_names import BOT_TELEMETRY_STREAM, MARKET_DATA_STREAM, MARKET_DEPTH_STREAM, MARKET_QUOTE_STREAM
 from services.realtime_ui_api.main import (
     DeskSnapshotFallback,
@@ -11,12 +12,15 @@ from services.realtime_ui_api.main import (
     RealtimeApiConfig,
     RealtimeState,
     _build_alerts,
+    _build_health_payload,
     _build_gate_timeline,
     _build_instance_status_rows,
     _build_runtime_open_order_placeholders,
+    _sync_account_summary_with_open_orders,
     _candles_from_points,
     _enrich_closed_trades_with_minute_context,
     _reconstruct_closed_trades,
+    _history_quality_from_candles,
     _summarize_daily_review,
     _summarize_fill_activity,
     _summarize_journal_review,
@@ -104,6 +108,70 @@ def test_realtime_state_lists_detected_instances() -> None:
         },
     )
     assert state.instance_names() == ["bot1", "bot2"]
+
+
+def test_realtime_state_subscriber_filters_by_instance_and_emits_named_key() -> None:
+    cfg = RealtimeApiConfig()
+    state = RealtimeState(cfg)
+    q = state.register_subscriber("bot1", "", "BTC-USDT")
+    state.process(
+        MARKET_DATA_STREAM,
+        "1000-0",
+        {
+            "event_type": "market_snapshot",
+            "instance_name": "bot2",
+            "controller_id": "ctrl-b",
+            "connector_name": "bitget_perpetual",
+            "trading_pair": "BTC-USDT",
+            "mid_price": 200.0,
+        },
+    )
+    assert q.empty()
+
+    state.process(
+        MARKET_DATA_STREAM,
+        "2000-0",
+        {
+            "event_type": "market_snapshot",
+            "instance_name": "bot1",
+            "controller_id": "ctrl-a",
+            "connector_name": "bitget_perpetual",
+            "trading_pair": "BTC-USDT",
+            "mid_price": 100.0,
+        },
+    )
+
+    event = json.loads(q.get_nowait())
+    assert event["instance_name"] == "bot1"
+    assert event["controller_id"] == "ctrl-a"
+    assert event["trading_pair"] == "BTC-USDT"
+    assert event["key"] == {
+        "instance_name": "bot1",
+        "controller_id": "ctrl-a",
+        "trading_pair": "BTC-USDT",
+    }
+
+
+def test_realtime_state_metrics_track_subscriber_drops() -> None:
+    cfg = RealtimeApiConfig()
+    state = RealtimeState(cfg)
+    state.register_subscriber()
+    for idx in range(205):
+        state.process(
+            MARKET_DATA_STREAM,
+            f"{1000 + idx}-0",
+            {
+                "event_type": "market_snapshot",
+                "instance_name": "bot1",
+                "controller_id": "ctrl-a",
+                "connector_name": "bitget_perpetual",
+                "trading_pair": "BTC-USDT",
+                "mid_price": 100.0 + idx,
+            },
+        )
+    metrics = state.metrics()
+    assert metrics["subscribers"] == 1
+    assert metrics["subscriber_drops"] >= 1
 
 
 def test_build_instance_status_rows_merges_stream_and_artifacts(tmp_path: Path, monkeypatch) -> None:
@@ -244,6 +312,110 @@ def test_realtime_state_get_state_prefers_freshest_matching_key() -> None:
     assert result["bot_market"]["mid_price"] == 101.0
 
 
+def test_realtime_state_get_state_keeps_instance_pair_when_pair_param_omitted() -> None:
+    cfg = RealtimeApiConfig()
+    state = RealtimeState(cfg)
+    state.process(
+        MARKET_DATA_STREAM,
+        "1000-0",
+        {
+            "event_type": "market_snapshot",
+            "instance_name": "bot1",
+            "controller_id": "ctrl-a",
+            "connector_name": "bitget_perpetual",
+            "trading_pair": "BTC-USDT",
+            "mid_price": 100.0,
+        },
+    )
+    state.process(
+        MARKET_QUOTE_STREAM,
+        "1001-0",
+        {
+            "event_type": "market_quote",
+            "connector_name": "bitget_perpetual",
+            "trading_pair": "BTC-USDT",
+            "best_bid": 99.9,
+            "best_ask": 100.1,
+            "mid_price": 100.0,
+        },
+    )
+    state.process(
+        MARKET_QUOTE_STREAM,
+        "1002-0",
+        {
+            "event_type": "market_quote",
+            "connector_name": "bitget_perpetual",
+            "trading_pair": "ETH-USDT",
+            "best_bid": 199.9,
+            "best_ask": 200.1,
+            "mid_price": 200.0,
+        },
+    )
+    state.process(
+        MARKET_DEPTH_STREAM,
+        "1003-0",
+        {
+            "event_type": "market_depth_snapshot",
+            "connector_name": "bitget_perpetual",
+            "trading_pair": "BTC-USDT",
+            "bids": [{"price": 99.9, "size": 1.0}],
+            "asks": [{"price": 100.1, "size": 1.0}],
+        },
+    )
+    state.process(
+        MARKET_DEPTH_STREAM,
+        "1004-0",
+        {
+            "event_type": "market_depth_snapshot",
+            "connector_name": "bitget_perpetual",
+            "trading_pair": "ETH-USDT",
+            "bids": [{"price": 199.9, "size": 1.0}],
+            "asks": [{"price": 200.1, "size": 1.0}],
+        },
+    )
+
+    result = state.get_state("bot1", "", "")
+    assert result["key"]["trading_pair"] == "BTC-USDT"
+    assert result["market"]["trading_pair"] == "BTC-USDT"
+    assert result["depth"]["trading_pair"] == "BTC-USDT"
+
+
+def test_realtime_state_get_state_merges_fills_when_controller_id_differs() -> None:
+    cfg = RealtimeApiConfig()
+    state = RealtimeState(cfg)
+    state.process(
+        MARKET_DATA_STREAM,
+        "1000-0",
+        {
+            "event_type": "market_snapshot",
+            "instance_name": "bot1",
+            "controller_id": "ctrl-a",
+            "connector_name": "bitget_perpetual",
+            "trading_pair": "BTC-USDT",
+            "mid_price": 100.0,
+        },
+    )
+    state.process(
+        BOT_TELEMETRY_STREAM,
+        "1001-0",
+        {
+            "event_type": "bot_fill",
+            "instance_name": "bot1",
+            "controller_id": "",
+            "connector_name": "bitget_perpetual",
+            "trading_pair": "BTC-USDT",
+            "price": 100.0,
+            "amount_base": 0.1,
+            "order_id": "fill-1",
+        },
+    )
+
+    result = state.get_state("bot1", "ctrl-a", "BTC-USDT")
+    assert result["fills_total"] == 1
+    assert len(result["fills"]) == 1
+    assert result["fills"][0]["order_id"] == "fill-1"
+
+
 def test_realtime_state_candles_from_market_history() -> None:
     cfg = RealtimeApiConfig()
     state = RealtimeState(cfg)
@@ -296,6 +468,104 @@ def test_realtime_state_candles_include_depth_mid_history() -> None:
     candles = state.get_candles("bot1", "ctrl", "BTC-USDT", timeframe_s=2, limit=10)
     assert len(candles) >= 2
     assert set(candles[-1].keys()) == {"bucket_ms", "open", "high", "low", "close"}
+
+
+def test_realtime_state_get_candles_uses_instance_pair_when_pair_omitted() -> None:
+    cfg = RealtimeApiConfig()
+    state = RealtimeState(cfg)
+    state.process(
+        MARKET_DATA_STREAM,
+        "9000-0",
+        {
+            "event_type": "market_snapshot",
+            "instance_name": "bot1",
+            "controller_id": "ctrl",
+            "connector_name": "bitget_perpetual",
+            "trading_pair": "BTC-USDT",
+            "mid_price": 100.0,
+        },
+    )
+    state.process(
+        MARKET_QUOTE_STREAM,
+        "9001-0",
+        {
+            "event_type": "market_quote",
+            "connector_name": "bitget_perpetual",
+            "trading_pair": "BTC-USDT",
+            "mid_price": 100.0,
+            "best_bid": 99.9,
+            "best_ask": 100.1,
+        },
+    )
+    state.process(
+        MARKET_QUOTE_STREAM,
+        "9002-0",
+        {
+            "event_type": "market_quote",
+            "connector_name": "bitget_perpetual",
+            "trading_pair": "ETH-USDT",
+            "mid_price": 200.0,
+            "best_bid": 199.9,
+            "best_ask": 200.1,
+        },
+    )
+
+    candles = state.get_candles("bot1", "", "", timeframe_s=60, limit=10)
+    assert len(candles) == 1
+    assert candles[0]["close"] == 100.0
+
+
+def test_realtime_state_get_connector_candles_scopes_same_pair_to_requested_connector() -> None:
+    cfg = RealtimeApiConfig()
+    state = RealtimeState(cfg)
+    state.process(
+        MARKET_QUOTE_STREAM,
+        "1000-0",
+        {
+            "event_type": "market_quote",
+            "connector_name": "bitget_perpetual",
+            "trading_pair": "BTC-USDT",
+            "mid_price": 100.0,
+            "best_bid": 99.9,
+            "best_ask": 100.1,
+        },
+    )
+    state.process(
+        MARKET_QUOTE_STREAM,
+        "2000-0",
+        {
+            "event_type": "market_quote",
+            "connector_name": "binance_perpetual",
+            "trading_pair": "BTC-USDT",
+            "mid_price": 200.0,
+            "best_bid": 199.9,
+            "best_ask": 200.1,
+        },
+    )
+
+    candles = state.get_connector_candles("bitget_perpetual", "BTC-USDT", timeframe_s=1, limit=10)
+
+    assert len(candles) == 1
+    assert candles[0]["close"] == 100.0
+
+
+def test_history_quality_from_candles_recomputes_metrics_after_fallback() -> None:
+    quality = _history_quality_from_candles(
+        [
+            {"bucket_ms": 540_000, "open": 100.0, "high": 100.0, "low": 100.0, "close": 100.0},
+            {"bucket_ms": 600_000, "open": 101.0, "high": 101.0, "low": 101.0, "close": 101.0},
+        ],
+        bar_interval_s=60,
+        bars_requested=2,
+        source_used="db_v2+minute_log",
+        degraded_reason="minute_log",
+        now_ms=660_000,
+    )
+
+    assert quality["status"] == "degraded"
+    assert quality["freshness_ms"] == 0
+    assert quality["bars_returned"] == 2
+    assert quality["degraded_reason"] == "minute_log"
 
 
 def test_to_epoch_ms_accepts_decimal_like_strings() -> None:
@@ -411,6 +681,69 @@ def test_build_alerts_reports_hard_stop_and_stale_dependencies() -> None:
     assert "Fallback active" in titles
     assert "Redis unavailable" in titles
     assert "DB unavailable" in titles
+
+
+def test_build_health_payload_passes_when_redis_live_and_stream_fresh(tmp_path: Path, monkeypatch) -> None:
+    cfg = RealtimeApiConfig(mode="active", stream_stale_ms=5_000, fallback_enabled=True, degraded_mode_enabled=True, db_enabled=False)
+    state = RealtimeState(cfg)
+    monkeypatch.setattr(realtime_ui_main, "_now_ms", lambda: 10_000)
+    state.process(
+        MARKET_DATA_STREAM,
+        "9500-0",
+        {
+            "event_type": "market_snapshot",
+            "instance_name": "bot1",
+            "controller_id": "ctrl-a",
+            "connector_name": "bitget_perpetual",
+            "trading_pair": "BTC-USDT",
+            "mid_price": 100.0,
+            "timestamp_ms": 9_500,
+        },
+    )
+    fallback = DeskSnapshotFallback(tmp_path / "reports", tmp_path / "data")
+    worker = type("Worker", (), {"redis_available": True})()
+    db_reader = OpsDbReadModel(cfg)
+
+    status_code, payload = _build_health_payload(cfg, state, worker, fallback, db_reader)
+
+    assert status_code == 200
+    assert payload["status"] == "ok"
+    assert payload["fallback_active"] is False
+    assert payload["degraded_reasons"] == []
+
+
+def test_build_health_payload_fails_when_redis_unavailable(tmp_path: Path) -> None:
+    cfg = RealtimeApiConfig(mode="active", stream_stale_ms=5_000, db_enabled=False)
+    state = RealtimeState(cfg)
+    fallback = DeskSnapshotFallback(tmp_path / "reports", tmp_path / "data")
+    worker = type("Worker", (), {"redis_available": False})()
+    db_reader = OpsDbReadModel(cfg)
+
+    status_code, payload = _build_health_payload(cfg, state, worker, fallback, db_reader)
+
+    assert status_code == 503
+    assert payload["status"] == "degraded"
+    assert "redis_unavailable" in payload["degraded_reasons"]
+
+
+def test_build_health_payload_fails_closed_when_only_fallback_artifacts_exist(tmp_path: Path) -> None:
+    reports_root = tmp_path / "reports"
+    snapshot_path = reports_root / "desk_snapshot" / "bot1" / "latest.json"
+    snapshot_path.parent.mkdir(parents=True, exist_ok=True)
+    snapshot_path.write_text(json.dumps({"minute": {"ts": "2026-03-06T12:00:00+00:00"}}), encoding="utf-8")
+    cfg = RealtimeApiConfig(mode="active", stream_stale_ms=5_000, fallback_enabled=True, degraded_mode_enabled=True, db_enabled=False)
+    state = RealtimeState(cfg)
+    fallback = DeskSnapshotFallback(reports_root, tmp_path / "data")
+    worker = type("Worker", (), {"redis_available": True})()
+    db_reader = OpsDbReadModel(cfg)
+
+    status_code, payload = _build_health_payload(cfg, state, worker, fallback, db_reader)
+
+    assert status_code == 503
+    assert payload["status"] == "degraded"
+    assert payload["fallback_active"] is True
+    assert "no_stream_data" in payload["degraded_reasons"]
+    assert "fallback_active" in payload["degraded_reasons"]
 
 
 def test_summarize_weekly_report_maps_multi_day_artifact() -> None:
@@ -926,6 +1259,136 @@ def test_desk_snapshot_fallback_loads_fills_from_csv(tmp_path: Path) -> None:
     assert fills[-1]["is_maker"] is True
 
 
+def test_desk_snapshot_fallback_caches_repeated_candle_queries(tmp_path: Path, monkeypatch) -> None:
+    reports_root = tmp_path / "reports"
+    data_root = tmp_path / "data"
+    minute_path = data_root / "bot1" / "logs" / "epp_v24" / "bot1_a" / "minute.csv"
+    minute_path.parent.mkdir(parents=True, exist_ok=True)
+    minute_path.write_text(
+        "\n".join(
+            [
+                "ts,trading_pair,mid",
+                "2026-03-05T12:00:00+00:00,BTC-USDT,100",
+                "2026-03-05T12:01:00+00:00,BTC-USDT,101",
+                "2026-03-05T12:02:00+00:00,BTC-USDT,102",
+            ]
+        ),
+        encoding="utf-8",
+    )
+    fallback = DeskSnapshotFallback(reports_root, data_root)
+    original_open = Path.open
+    open_calls = 0
+
+    def _counting_open(self: Path, *args, **kwargs):  # type: ignore[override]
+        nonlocal open_calls
+        if self.resolve() == minute_path.resolve():
+            open_calls += 1
+        return original_open(self, *args, **kwargs)
+
+    monkeypatch.setattr(Path, "open", _counting_open)
+    first = fallback.candles_from_minute_log("bot1", "BTC-USDT", timeframe_s=60, limit=10)
+    second = fallback.candles_from_minute_log("bot1", "BTC-USDT", timeframe_s=60, limit=10)
+
+    assert first == second
+    assert open_calls == 1
+
+
+def test_desk_snapshot_fallback_filters_foreign_fill_order_ids(tmp_path: Path) -> None:
+    reports_root = tmp_path / "reports"
+    data_root = tmp_path / "data"
+    fills_path = data_root / "bot1" / "logs" / "epp_v24" / "bot1_a" / "fills.csv"
+    state_snapshot_path = reports_root / "verification" / "paper_exchange_state_snapshot_latest.json"
+    fills_path.parent.mkdir(parents=True, exist_ok=True)
+    state_snapshot_path.parent.mkdir(parents=True, exist_ok=True)
+    fills_path.write_text(
+        "\n".join(
+            [
+                "ts,trading_pair,side,price,amount_base,realized_pnl_quote,order_id,is_maker",
+                "2026-03-05T12:00:00+00:00,BTC-USDT,buy,100,0.1,0,o-good,false",
+                "2026-03-05T12:00:30+00:00,BTC-USDT,sell,101,0.1,0.2,o-foreign,true",
+            ]
+        ),
+        encoding="utf-8",
+    )
+    state_snapshot_path.write_text(
+        json.dumps(
+            {
+                "orders": {
+                    "o-good": {"order_id": "o-good", "instance_name": "bot1", "trading_pair": "BTC-USDT"},
+                    "o-foreign": {"order_id": "o-foreign", "instance_name": "bot2", "trading_pair": "BTC-USDT"},
+                }
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    fallback = DeskSnapshotFallback(reports_root, data_root)
+    fills = fallback.fills_from_csv("bot1", "BTC-USDT", limit=20)
+
+    assert [fill["order_id"] for fill in fills] == ["o-good"]
+
+
+def test_desk_snapshot_fallback_uses_command_journal_for_fill_ownership(tmp_path: Path) -> None:
+    reports_root = tmp_path / "reports"
+    data_root = tmp_path / "data"
+    fills_path = data_root / "bot1" / "logs" / "epp_v24" / "bot1_a" / "fills.csv"
+    command_journal_path = reports_root / "verification" / "paper_exchange_command_journal_latest.json"
+    fills_path.parent.mkdir(parents=True, exist_ok=True)
+    command_journal_path.parent.mkdir(parents=True, exist_ok=True)
+    fills_path.write_text(
+        "\n".join(
+            [
+                "ts,trading_pair,side,price,amount_base,realized_pnl_quote,order_id,is_maker",
+                "2026-03-05T12:00:00+00:00,BTC-USDT,buy,100,0.1,0,o-good,false",
+                "2026-03-05T12:00:30+00:00,BTC-USDT,sell,101,0.1,0.2,o-foreign,true",
+            ]
+        ),
+        encoding="utf-8",
+    )
+    command_journal_path.write_text(
+        json.dumps(
+            {
+                "commands": {
+                    "cmd-1": {"instance_name": "bot1", "order_id": "o-good"},
+                    "cmd-2": {"instance_name": "bot2", "order_id": "o-foreign"},
+                }
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    fallback = DeskSnapshotFallback(reports_root, data_root)
+    fills = fallback.fills_from_csv("bot1", "BTC-USDT", limit=20)
+
+    assert [fill["order_id"] for fill in fills] == ["o-good"]
+
+
+def test_sync_account_summary_with_open_orders_updates_gate_status() -> None:
+    summary = {
+        "controller_state": "running",
+        "risk_reasons": "",
+        "order_book_stale": False,
+        "pnl_governor_active": False,
+        "pnl_governor_reason": "",
+        "soft_pause_edge": False,
+        "net_edge_pct": 0.001,
+        "net_edge_gate_pct": 0.0005,
+        "adaptive_effective_min_edge_pct": 0.0005,
+        "spread_pct": 0.001,
+        "spread_floor_pct": 0.0005,
+        "orders_active": 0,
+        "quoting_status": "ready",
+        "quoting_reason": "All quote gates passing",
+        "quote_gates": [],
+    }
+    synced = _sync_account_summary_with_open_orders(summary, [{"order_id": "o1"}, {"order_id": "o2"}])
+
+    assert synced["orders_active"] == 2
+    assert synced["quoting_status"] == "quoting"
+    assert synced["quoting_reason"] == "2 orders active"
+    assert any(gate["key"] == "orders" and gate["detail"] == "2" for gate in synced["quote_gates"])
+
+
 def test_desk_snapshot_fallback_loads_day_scoped_review_rows(tmp_path: Path) -> None:
     reports_root = tmp_path / "reports"
     data_root = tmp_path / "data"
@@ -973,6 +1436,39 @@ def test_desk_snapshot_fallback_loads_day_scoped_review_rows(tmp_path: Path) -> 
     assert len(review["hourly"]) == 2
     assert len(review["gate_timeline"]) == 1
     assert review["gate_timeline"][0]["quoting_status"] == "waiting"
+
+
+def test_desk_snapshot_fallback_caches_repeated_day_fill_queries(tmp_path: Path, monkeypatch) -> None:
+    reports_root = tmp_path / "reports"
+    data_root = tmp_path / "data"
+    fills_path = data_root / "bot1" / "logs" / "epp_v24" / "bot1_a" / "fills.csv"
+    fills_path.parent.mkdir(parents=True, exist_ok=True)
+    fills_path.write_text(
+        "\n".join(
+            [
+                "ts,trading_pair,side,price,amount_base,notional_quote,fee_quote,realized_pnl_quote,order_id,is_maker",
+                "2026-03-05T09:10:00+00:00,BTC-USDT,buy,100,0.1,10,0.01,0.0,o1,false",
+                "2026-03-05T10:15:00+00:00,BTC-USDT,sell,102,0.1,10.2,0.01,0.5,o2,true",
+            ]
+        ),
+        encoding="utf-8",
+    )
+    fallback = DeskSnapshotFallback(reports_root, data_root)
+    original_open = Path.open
+    open_calls = 0
+
+    def _counting_open(self: Path, *args, **kwargs):  # type: ignore[override]
+        nonlocal open_calls
+        if self.resolve() == fills_path.resolve():
+            open_calls += 1
+        return original_open(self, *args, **kwargs)
+
+    monkeypatch.setattr(Path, "open", _counting_open)
+    first = fallback.fills_from_csv_for_day("bot1", "BTC-USDT", "2026-03-05")
+    second = fallback.fills_from_csv_for_day("bot1", "BTC-USDT", "2026-03-05")
+
+    assert first == second
+    assert open_calls == 1
 
 
 def test_desk_snapshot_fallback_open_orders_from_state_snapshot(tmp_path: Path) -> None:
@@ -1042,3 +1538,44 @@ def test_ops_db_read_model_rest_backfill_candles(monkeypatch) -> None:
     assert len(candles) == 2
     assert candles[0]["open"] == 100.0
     assert candles[-1]["close"] == 101.5
+
+
+def test_realtime_api_config_normalizes_history_ui_mode(monkeypatch) -> None:
+    monkeypatch.setenv("HB_HISTORY_UI_READ_MODE", "shadow")
+    cfg = RealtimeApiConfig()
+    assert cfg.normalized_history_ui_read_mode() == "shadow"
+
+
+def test_ops_db_read_model_get_market_bars_rolls_up_v2(monkeypatch) -> None:
+    reader = OpsDbReadModel(RealtimeApiConfig())
+    monkeypatch.setattr(reader, "available", lambda: True)
+    monkeypatch.setattr(
+        reader,
+        "_query",
+        lambda _sql, _params: [
+            {
+                "bucket_ms": 60_000.0,
+                "open_price": 100.0,
+                "high_price": 101.0,
+                "low_price": 99.0,
+                "close_price": 100.5,
+                "bar_source": "quote_mid",
+            },
+            {
+                "bucket_ms": 90_000.0,
+                "open_price": 100.5,
+                "high_price": 102.0,
+                "low_price": 100.0,
+                "close_price": 101.5,
+                "bar_source": "quote_mid",
+            },
+        ],
+    )
+    bars = reader.get_market_bars(
+        MarketBarKey("bitget_perpetual", "BTC-USDT", "quote_mid"),
+        bar_interval_s=120,
+        limit=5,
+    )
+    assert len(bars) == 1
+    assert bars[0].open == 100.0
+    assert bars[0].close == 101.5

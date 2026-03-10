@@ -21,12 +21,18 @@ if HUMMINGBOT_AVAILABLE:
     from controllers.epp_v2_4 import EppV24Config, EppV24Controller
     from controllers.epp_v2_4_bot5 import EppV24Bot5Config, EppV24Bot5Controller
     from controllers.runtime.base import StrategyRuntimeV24Config, StrategyRuntimeV24Controller
+    from controllers.runtime.data_context import RuntimeDataContext
+    from controllers.runtime.directional_core import DirectionalRuntimeAdapter
+    from controllers.runtime.execution_context import RuntimeExecutionPlan
     from controllers.runtime.market_making_types import RegimeSpec
 else:  # pragma: no cover - exercised only in stripped test environments
     Bot5IftJotaV1Config = object
     Bot5IftJotaV1Controller = object
     EppV24Config = object
     EppV24Controller = object
+    DirectionalRuntimeAdapter = object
+    RuntimeDataContext = object
+    RuntimeExecutionPlan = object
     RegimeSpec = object
     StrategyRuntimeV24Config = object
     StrategyRuntimeV24Controller = object
@@ -48,6 +54,12 @@ def test_bot5_controller_reuses_shared_runtime_stack() -> None:
     assert issubclass(EppV24Bot5Config, EppV24Config)
     assert issubclass(EppV24Bot5Controller, EppV24Controller)
     assert EppV24Bot5Config.controller_name == "epp_v2_4_bot5"
+
+
+def test_bot5_controller_uses_directional_family_adapter() -> None:
+    ctrl = object.__new__(EppV24Bot5Controller)
+    adapter = EppV24Bot5Controller._make_runtime_family_adapter(ctrl)
+    assert isinstance(adapter, DirectionalRuntimeAdapter)
 
 
 def _make_bot5_config(**overrides) -> SimpleNamespace:
@@ -72,10 +84,35 @@ def _make_bot5_config(**overrides) -> SimpleNamespace:
         bot5_directional_target_net_base_pct=Decimal("0.08"),
         bot5_low_conviction_extra_edge_bps=Decimal("0.60"),
         bot5_directional_market_floor_bps=Decimal("0.25"),
+        alpha_policy_enabled=False,
+        selective_quoting_enabled=False,
+        adverse_fill_soft_pause_enabled=False,
+        edge_confidence_soft_pause_enabled=False,
+        slippage_soft_pause_enabled=False,
         min_net_edge_bps=Decimal("1.50"),
     )
     defaults.update(overrides)
     return SimpleNamespace(**defaults)
+
+
+def test_bot5_config_disables_shared_trade_quality_gates() -> None:
+    cfg = EppV24Bot5Config(
+        id="bot5_cfg_test",
+        connector_name="bitget_perpetual",
+        trading_pair="BTC-USDT",
+        total_amount_quote=Decimal("8"),
+        buy_spreads="0.001",
+        sell_spreads="0.001",
+        buy_amounts_pct="100",
+        sell_amounts_pct="100",
+    )
+
+    assert cfg.shared_edge_gate_enabled is False
+    assert cfg.alpha_policy_enabled is False
+    assert cfg.selective_quoting_enabled is False
+    assert cfg.adverse_fill_soft_pause_enabled is False
+    assert cfg.edge_confidence_soft_pause_enabled is False
+    assert cfg.slippage_soft_pause_enabled is False
 
 
 def _make_regime_spec(one_sided: str = "off", target_base_pct: str = "0.0") -> RegimeSpec:
@@ -116,6 +153,8 @@ def _make_bot5_controller(
     ctrl._external_target_base_pct_override = None
     ctrl._bot5_flow_state = EppV24Bot5Controller._empty_bot5_flow_state(ctrl)
     ctrl._cancel_stale_side_executors = MethodType(EppV24Controller._cancel_stale_side_executors, ctrl)
+    ctrl.market_data_provider = SimpleNamespace(time=lambda: 1_000.0)
+    ctrl.processed_data = {}
     return ctrl
 
 
@@ -208,3 +247,166 @@ def test_bot5_quote_side_stays_two_sided_when_conviction_is_weak() -> None:
     assert mode == "off"
     assert ctrl._quote_side_reason == "regime"
     assert ctrl._pending_stale_cancel_actions == []
+
+
+def test_bot5_keeps_two_sided_quotes_when_regime_mode_is_off(monkeypatch) -> None:
+    ctrl = _make_bot5_controller()
+    ctrl._bot5_flow_state = {
+        "direction": "off",
+        "imbalance": Decimal("0.08"),
+        "trend_displacement_pct": Decimal("0.0002"),
+        "signed_signal": Decimal("0.12"),
+        "conviction": Decimal("0.30"),
+        "bias_active": False,
+        "directional_allowed": False,
+        "target_net_base_pct": Decimal("0.0"),
+        "low_conviction": True,
+        "reason": "weak_flow",
+    }
+    ctrl._quote_side_mode = "off"
+    ctrl._project_total_amount_quote = lambda **kwargs: Decimal(kwargs["total_levels"])
+
+    monkeypatch.setattr(
+        StrategyRuntimeV24Controller,
+        "build_runtime_execution_plan",
+        lambda self, data_context: RuntimeExecutionPlan(
+            family="market_making",
+            buy_spreads=[Decimal("0.001"), Decimal("0.002")],
+            sell_spreads=[Decimal("0.001"), Decimal("0.002")],
+            projected_total_quote=Decimal("4"),
+            size_mult=Decimal("1"),
+            metadata={},
+        ),
+    )
+
+    buy_spreads, sell_spreads, projected_total_quote, size_mult = EppV24Bot5Controller._compute_levels_and_sizing(
+        ctrl,
+        "neutral_low_vol",
+        _make_regime_spec(one_sided="off"),
+        None,
+        Decimal("200"),
+        Decimal("67000"),
+        None,
+    )
+
+    assert buy_spreads == [Decimal("0.001")]
+    assert sell_spreads == [Decimal("0.001")]
+    assert projected_total_quote == Decimal("2")
+    assert size_mult == Decimal("1")
+
+
+def test_bot5_build_runtime_execution_plan_marks_directional_family(monkeypatch) -> None:
+    ctrl = _make_bot5_controller(imbalance=Decimal("0.65"))
+    ctrl._bot5_flow_state = {
+        "direction": "buy",
+        "imbalance": Decimal("0.65"),
+        "trend_displacement_pct": Decimal("0.0100"),
+        "signed_signal": Decimal("0.80"),
+        "conviction": Decimal("0.95"),
+        "bias_active": True,
+        "directional_allowed": True,
+        "target_net_base_pct": Decimal("0.08"),
+        "low_conviction": False,
+        "reason": "directional_buy",
+    }
+
+    monkeypatch.setattr(
+        StrategyRuntimeV24Controller,
+        "build_runtime_execution_plan",
+        lambda self, data_context: RuntimeExecutionPlan(
+            family="market_making",
+            buy_spreads=[Decimal("0.001"), Decimal("0.002")],
+            sell_spreads=[Decimal("0.001"), Decimal("0.002")],
+            projected_total_quote=Decimal("4"),
+            size_mult=Decimal("1"),
+            metadata={"base": "ok"},
+        ),
+    )
+
+    plan = EppV24Bot5Controller.build_runtime_execution_plan(
+        ctrl,
+        RuntimeDataContext(
+            now_ts=1_000.0,
+            mid=Decimal("101"),
+            regime_name="up",
+            regime_spec=_make_regime_spec(one_sided="off"),
+            spread_state=None,
+            market=SimpleNamespace(side_spread_floor=Decimal("0.001")),
+            equity_quote=Decimal("200"),
+            target_base_pct=Decimal("0"),
+            target_net_base_pct=Decimal("0.08"),
+            base_pct_gross=Decimal("0"),
+            base_pct_net=Decimal("0"),
+        ),
+    )
+
+    assert plan.family == "directional"
+    assert plan.buy_spreads == [Decimal("0.001")]
+    assert plan.sell_spreads == []
+    assert plan.metadata["strategy_lane"] == "bot5"
+    assert plan.metadata["directional_allowed"] is True
+
+
+def test_bot5_reports_strategy_gate_instead_of_shared_alpha_policy() -> None:
+    ctrl = _make_bot5_controller(imbalance=Decimal("0.65"))
+    ctrl._bot5_flow_state = {
+        "direction": "buy",
+        "imbalance": Decimal("0.65"),
+        "trend_displacement_pct": Decimal("0.0100"),
+        "signed_signal": Decimal("0.80"),
+        "conviction": Decimal("0.95"),
+        "bias_active": True,
+        "directional_allowed": True,
+        "target_net_base_pct": Decimal("0.08"),
+        "low_conviction": False,
+        "reason": "directional_buy",
+    }
+
+    metrics = EppV24Bot5Controller._compute_alpha_policy(
+        ctrl,
+        regime_name="up",
+        spread_state=None,
+        market=None,
+        target_net_base_pct=Decimal("0.08"),
+        base_pct_net=Decimal("0.0"),
+    )
+
+    assert metrics["state"] == "bot5_strategy_gate"
+    assert metrics["reason"] == "directional_buy"
+    assert ctrl._alpha_cross_allowed is False
+
+
+def test_bot5_fail_closed_reason_is_bot_specific(monkeypatch) -> None:
+    ctrl = _make_bot5_controller()
+    ctrl._bot5_flow_state = {
+        "direction": "off",
+        "imbalance": Decimal("0.80"),
+        "trend_displacement_pct": Decimal("0.0100"),
+        "signed_signal": Decimal("0.80"),
+        "conviction": Decimal("0.95"),
+        "bias_active": False,
+        "directional_allowed": False,
+        "target_net_base_pct": Decimal("0.0"),
+        "low_conviction": False,
+        "reason": "selective_blocked",
+    }
+
+    def _fake_super(self, spread_state, base_pct_gross, equity_quote, projected_total_quote, market):
+        return (["shared_reason"], False, Decimal("0"), Decimal("0"))
+
+    monkeypatch.setattr(StrategyRuntimeV24Controller, "_evaluate_all_risk", _fake_super)
+
+    reasons, risk_hard_stop, daily_loss_pct, drawdown_pct = EppV24Bot5Controller._evaluate_all_risk(
+        ctrl,
+        spread_state=None,
+        base_pct_gross=Decimal("0"),
+        equity_quote=Decimal("1000"),
+        projected_total_quote=Decimal("0"),
+        market=None,
+    )
+
+    assert "shared_reason" in reasons
+    assert "bot5_selective_blocked" in reasons
+    assert risk_hard_stop is False
+    assert daily_loss_pct == Decimal("0")
+    assert drawdown_pct == Decimal("0")

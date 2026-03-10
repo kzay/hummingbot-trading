@@ -12,6 +12,7 @@ from pathlib import Path
 from typing import Dict, List, Tuple, Any, Optional
 
 from services.common.models import RedisSettings, ServiceSettings
+from services.contracts.event_identity import validate_event_identity
 from services.contracts.stream_names import (
     AUDIT_STREAM,
     BOT_TELEMETRY_STREAM,
@@ -134,6 +135,11 @@ def _normalize(payload: Dict[str, object], stream: str, entry_id: str, producer:
     return envelope
 
 
+def _accept_envelope(envelope: Dict[str, object]) -> Tuple[bool, str]:
+    """Enforce minimum identity contract to prevent cross-bot contamination."""
+    return validate_event_identity(envelope, allow_nested_payload=True)
+
+
 def _store_path(root: Path) -> Path:
     today = datetime.now(timezone.utc).strftime("%Y%m%d")
     path = root / "reports" / "event_store" / f"events_{today}.jsonl"
@@ -151,6 +157,15 @@ def _stats_path(root: Path) -> Path:
 def _bootstrap_report_path(root: Path) -> Path:
     stamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
     return root / "reports" / "event_store" / f"bootstrap_{stamp}.json"
+
+
+def _resolve_root() -> Path:
+    explicit = str(os.getenv("HB_ROOT", "")).strip()
+    if explicit:
+        return Path(explicit)
+    if Path("/.dockerenv").exists():
+        return Path("/workspace/hbot")
+    return Path(__file__).resolve().parents[2]
 
 
 def _append_events(path: Path, events: List[Dict[str, object]]) -> bool:
@@ -186,18 +201,55 @@ def _append_events(path: Path, events: List[Dict[str, object]]) -> bool:
     return False
 
 
+def _default_stats_payload() -> Dict[str, object]:
+    return {
+        "total_events": 0,
+        "events_by_stream": {},
+        "missing_correlation_count": 0,
+        "last_update_utc": "",
+        "ts_utc": "",
+        "ingest_duration_ms_recent": [],
+        "ingest_duration_ms_last": 0.0,
+        "last_batch_size": 0,
+        "accepted_events_last": 0,
+        "dropped_events_last": 0,
+        "pending_entries_read_last": 0,
+        "claimed_entries_read_last": 0,
+        "new_entries_read_last": 0,
+        "eligible_ack_entries_last": 0,
+        "oldest_event_lag_ms_last": 0.0,
+        "latest_event_lag_ms_last": 0.0,
+        "oldest_event_lag_ms_recent": [],
+        "last_batch_stream_counts": {},
+    }
+
+
 def _read_stats(path: Path) -> Dict[str, object]:
     try:
         if not path.exists():
-            return {"total_events": 0, "events_by_stream": {}, "missing_correlation_count": 0, "last_update_utc": ""}
-        return json.loads(path.read_text(encoding="utf-8"))
+            return _default_stats_payload()
+        payload = json.loads(path.read_text(encoding="utf-8"))
+        if isinstance(payload, dict):
+            defaults = _default_stats_payload()
+            for key, value in defaults.items():
+                payload.setdefault(key, value)
+            if "ts_utc" not in payload and payload.get("last_update_utc"):
+                payload["ts_utc"] = payload.get("last_update_utc", "")
+            if "last_update_utc" not in payload and payload.get("ts_utc"):
+                payload["last_update_utc"] = payload.get("ts_utc", "")
+            return payload
+        return _default_stats_payload()
     except Exception:
-        return {"total_events": 0, "events_by_stream": {}, "missing_correlation_count": 0, "last_update_utc": ""}
+        return _default_stats_payload()
 
 
-def _write_stats(path: Path, batch: List[Dict[str, object]]) -> bool:
-    if not batch:
-        return True
+def _write_stats(
+    path: Path,
+    batch: List[Dict[str, object]],
+    batch_duration_ms: float | None = None,
+    *,
+    cycle_metrics: Optional[Dict[str, object]] = None,
+) -> bool:
     stats = _read_stats(path)
     events_by_stream = dict(stats.get("events_by_stream", {}))
     total_events = int(stats.get("total_events", 0))
@@ -211,7 +263,34 @@ def _write_stats(path: Path, batch: List[Dict[str, object]]) -> bool:
     stats["events_by_stream"] = events_by_stream
     stats["total_events"] = total_events
     stats["missing_correlation_count"] = missing_corr
-    stats["last_update_utc"] = _now_iso()
+    recent_durations = stats.get("ingest_duration_ms_recent", [])
+    if not isinstance(recent_durations, list):
+        recent_durations = []
+    if batch_duration_ms is not None:
+        recent_durations.append(round(max(0.0, float(batch_duration_ms)), 3))
+        recent_durations = recent_durations[-50:]
+        stats["ingest_duration_ms_last"] = round(max(0.0, float(batch_duration_ms)), 3)
+    stats["ingest_duration_ms_recent"] = recent_durations
+    stats["last_batch_size"] = int(len(batch))
+    metrics = cycle_metrics if isinstance(cycle_metrics, dict) else {}
+    stats["accepted_events_last"] = int(metrics.get("accepted_events_last", len(batch)) or 0)
+    stats["dropped_events_last"] = int(metrics.get("dropped_events_last", 0) or 0)
+    stats["pending_entries_read_last"] = int(metrics.get("pending_entries_read_last", 0) or 0)
+    stats["claimed_entries_read_last"] = int(metrics.get("claimed_entries_read_last", 0) or 0)
+    stats["new_entries_read_last"] = int(metrics.get("new_entries_read_last", 0) or 0)
+    stats["eligible_ack_entries_last"] = int(metrics.get("eligible_ack_entries_last", 0) or 0)
+    stats["oldest_event_lag_ms_last"] = round(max(0.0, float(metrics.get("oldest_event_lag_ms_last", 0.0) or 0.0)), 3)
+    stats["latest_event_lag_ms_last"] = round(max(0.0, float(metrics.get("latest_event_lag_ms_last", 0.0) or 0.0)), 3)
+    lag_recent = stats.get("oldest_event_lag_ms_recent", [])
+    if not isinstance(lag_recent, list):
+        lag_recent = []
+    lag_recent.append(stats["oldest_event_lag_ms_last"])
+    stats["oldest_event_lag_ms_recent"] = lag_recent[-50:]
+    stream_counts = metrics.get("last_batch_stream_counts", {})
+    stats["last_batch_stream_counts"] = dict(stream_counts) if isinstance(stream_counts, dict) else {}
+    now_iso = _now_iso()
+    stats["last_update_utc"] = now_iso
+    stats["ts_utc"] = now_iso
     retries = max(1, int(os.getenv("EVENT_STORE_STATS_RETRIES", "3")))
     for attempt in range(1, retries + 1):
         tmp_path: Path | None = None
@@ -256,6 +335,63 @@ def _write_stats(path: Path, batch: List[Dict[str, object]]) -> bool:
             except Exception:
                 pass
     return False
+
+
+def _count_entries_by_stream(entries: List[Tuple[str, str]]) -> Dict[str, int]:
+    counts: Dict[str, int] = {}
+    for stream, _entry_id in entries:
+        counts[stream] = int(counts.get(stream, 0)) + 1
+    return counts
+
+
+def _batch_stream_counts(batch: List[Dict[str, object]]) -> Dict[str, int]:
+    counts: Dict[str, int] = {}
+    for event in batch:
+        stream = str(event.get("stream", "unknown") or "unknown")
+        counts[stream] = int(counts.get(stream, 0)) + 1
+    return counts
+
+
+def _batch_lag_metrics(batch: List[Dict[str, object]], *, now_utc: Optional[datetime] = None) -> Dict[str, float]:
+    reference = now_utc or datetime.now(timezone.utc)
+    lags_ms: List[float] = []
+    for event in batch:
+        raw_ts = str(event.get("ts_utc", "") or "").strip()
+        if not raw_ts:
+            continue
+        try:
+            event_dt = datetime.fromisoformat(raw_ts.replace("Z", "+00:00")).astimezone(timezone.utc)
+        except Exception:
+            continue
+        lag_ms = max(0.0, (reference - event_dt).total_seconds() * 1000.0)
+        lags_ms.append(lag_ms)
+    if not lags_ms:
+        return {"oldest_event_lag_ms_last": 0.0, "latest_event_lag_ms_last": 0.0}
+    return {
+        "oldest_event_lag_ms_last": max(lags_ms),
+        "latest_event_lag_ms_last": min(lags_ms),
+    }
+
+
+def _ack_entries(client: RedisStreamClient, group: str, ack_keys: List[Tuple[str, str]]) -> None:
+    if not ack_keys:
+        return
+    ack_many_fn = getattr(client, "ack_many", None)
+    ack_fn = getattr(client, "ack", None)
+    by_stream: Dict[str, List[str]] = {}
+    for stream, entry_id in ack_keys:
+        stream_name = str(stream or "").strip()
+        entry_name = str(entry_id or "").strip()
+        if not stream_name or not entry_name:
+            continue
+        by_stream.setdefault(stream_name, []).append(entry_name)
+    for stream, entry_ids in by_stream.items():
+        if callable(ack_many_fn):
+            ack_many_fn(stream, group, entry_ids)
+            continue
+        if callable(ack_fn):
+            for entry_id in entry_ids:
+                ack_fn(stream, group, entry_id)
 
 
 def _connect_db() -> Optional["psycopg.Connection"]:
@@ -416,7 +552,8 @@ def _trim_known_streams(
         summary["streams_checked"] += 1
         try:
             trimmed = trim_fn(stream=stream, maxlen=safe_maxlen, approximate=True)
-        except Exception:
+        except Exception as exc:
+            logger.warning("event_store trim failed stream=%s maxlen=%s: %s", stream, safe_maxlen, exc)
             trimmed = None
         if trimmed is None:
             summary["errors"] += 1
@@ -480,7 +617,7 @@ def _bootstrap_stream_coverage(
 def run(once: bool = False) -> None:
     redis_cfg = RedisSettings()
     svc_cfg = ServiceSettings()
-    root = Path("/workspace/hbot")
+    root = _resolve_root()
     event_path = _store_path(root)
     stats_path = _stats_path(root)
     db_mirror_enabled = _env_bool("EVENT_STORE_DB_MIRROR_ENABLED", False)
@@ -503,6 +640,8 @@ def run(once: bool = False) -> None:
     claim_pending_fn = getattr(client, "claim_pending", None)
     pending_min_idle_ms = max(1, int(os.getenv("EVENT_STORE_PENDING_MIN_IDLE_MS", "30000")))
     pending_claim_count = max(1, int(os.getenv("EVENT_STORE_PENDING_CLAIM_COUNT", "200")))
+    read_batch_count = max(1, int(os.getenv("EVENT_STORE_READ_BATCH_COUNT", "500")))
+    idle_sleep_ms = max(0, int(os.getenv("EVENT_STORE_IDLE_SLEEP_MS", "100")))
     trim_streams_enabled = _env_bool("EVENT_STORE_TRIM_STREAMS_ENABLED", True)
     trim_interval_sec = max(5, int(os.getenv("EVENT_STORE_TRIM_INTERVAL_SEC", "30")))
     trim_targets = {
@@ -511,8 +650,9 @@ def run(once: bool = False) -> None:
         if int(maxlen) > 0
     }
     last_trim_at = 0.0
+    group_start_id = os.getenv("EVENT_STORE_GROUP_START_ID", "0").strip() or "0"
     for stream in STREAMS:
-        client.create_group(stream, group)
+        client.create_group(stream, group, start_id=group_start_id)
 
     if db_mirror_enabled:
         try:
@@ -553,6 +693,11 @@ def run(once: bool = False) -> None:
 
         batch: List[Dict[str, object]] = []
         batch_ack_keys: List[Tuple[str, str]] = []
+        dropped_ack_keys: List[Tuple[str, str]] = []
+        dropped_reasons: Dict[str, int] = {}
+        pending_entries_read = 0
+        claimed_entries_read = 0
+        new_entries_read = 0
         for stream in STREAMS:
             if callable(read_pending_fn):
                 pending = read_pending_fn(
@@ -562,10 +707,16 @@ def run(once: bool = False) -> None:
                     count=pending_claim_count,
                     block_ms=1,
                 )
+                pending_entries_read += len(pending)
                 for entry_id, payload in pending:
                     normalized = _normalize(payload=payload, stream=stream, entry_id=entry_id, producer=svc_cfg.producer_name)
-                    batch.append(normalized)
-                    batch_ack_keys.append((stream, entry_id))
+                    accepted, reject_reason = _accept_envelope(normalized)
+                    if accepted:
+                        batch.append(normalized)
+                        batch_ack_keys.append((stream, entry_id))
+                    else:
+                        dropped_ack_keys.append((stream, entry_id))
+                        dropped_reasons[reject_reason] = int(dropped_reasons.get(reject_reason, 0)) + 1
             if callable(claim_pending_fn):
                 claimed = claim_pending_fn(
                     stream=stream,
@@ -575,21 +726,78 @@ def run(once: bool = False) -> None:
                     count=pending_claim_count,
                     start_id="0-0",
                 )
+                claimed_entries_read += len(claimed)
                 for entry_id, payload in claimed:
                     normalized = _normalize(payload=payload, stream=stream, entry_id=entry_id, producer=svc_cfg.producer_name)
-                    batch.append(normalized)
-                    batch_ack_keys.append((stream, entry_id))
-            entries = client.read_group(stream=stream, group=group, consumer=consumer, count=200, block_ms=svc_cfg.poll_ms)
-            for entry_id, payload in entries:
-                normalized = _normalize(payload=payload, stream=stream, entry_id=entry_id, producer=svc_cfg.producer_name)
+                    accepted, reject_reason = _accept_envelope(normalized)
+                    if accepted:
+                        batch.append(normalized)
+                        batch_ack_keys.append((stream, entry_id))
+                    else:
+                        dropped_ack_keys.append((stream, entry_id))
+                        dropped_reasons[reject_reason] = int(dropped_reasons.get(reject_reason, 0)) + 1
+        entries = client.read_group_multi(
+            streams=STREAMS,
+            group=group,
+            consumer=consumer,
+            count=read_batch_count,
+            block_ms=svc_cfg.poll_ms,
+        )
+        new_entries_read += len(entries)
+        for stream, entry_id, payload in entries:
+            normalized = _normalize(payload=payload, stream=stream, entry_id=entry_id, producer=svc_cfg.producer_name)
+            accepted, reject_reason = _accept_envelope(normalized)
+            if accepted:
                 batch.append(normalized)
                 batch_ack_keys.append((stream, entry_id))
+            else:
+                dropped_ack_keys.append((stream, entry_id))
+                dropped_reasons[reject_reason] = int(dropped_reasons.get(reject_reason, 0)) + 1
+
+        if dropped_ack_keys:
+            _ack_entries(client, group, dropped_ack_keys)
+            logger.warning(
+                "event_store dropped %s envelopes violating identity contract: %s",
+                len(dropped_ack_keys),
+                dropped_reasons,
+            )
+
+        ingest_started = time.perf_counter()
         persisted_file = _append_events(event_path, batch)
-        stats_ok = _write_stats(stats_path, batch) if persisted_file else False
         db_ok = _append_events_db(db_conn, batch) if (db_mirror_enabled and db_conn is not None) else True
+        ingest_duration_ms = (time.perf_counter() - ingest_started) * 1000.0
+        cycle_metrics = {
+            "accepted_events_last": len(batch),
+            "dropped_events_last": len(dropped_ack_keys),
+            "pending_entries_read_last": pending_entries_read,
+            "claimed_entries_read_last": claimed_entries_read,
+            "new_entries_read_last": new_entries_read,
+            "eligible_ack_entries_last": len(batch_ack_keys),
+            "last_batch_stream_counts": _batch_stream_counts(batch),
+            **_batch_lag_metrics(batch),
+        }
+        stats_ok = (
+            _write_stats(
+                stats_path,
+                batch,
+                batch_duration_ms=ingest_duration_ms,
+                cycle_metrics=cycle_metrics,
+            )
+            if persisted_file
+            else False
+        )
         if persisted_file and stats_ok and db_ok:
-            for stream, entry_id in batch_ack_keys:
-                client.ack(stream, group, entry_id)
+            _ack_entries(client, group, batch_ack_keys)
+            if batch_ack_keys:
+                logger.info(
+                    "event_store acked accepted=%s streams=%s pending=%s claimed=%s new=%s oldest_lag_ms=%.3f",
+                    len(batch_ack_keys),
+                    _count_entries_by_stream(batch_ack_keys),
+                    pending_entries_read,
+                    claimed_entries_read,
+                    new_entries_read,
+                    float(cycle_metrics["oldest_event_lag_ms_last"]),
+                )
         elif batch:
             logger.error(
                 "event_store persistence failed (file=%s stats=%s db=%s); leaving %s entries unacked for replay",
@@ -600,7 +808,8 @@ def run(once: bool = False) -> None:
             )
         if once:
             break
-        time.sleep(0.1)
+        if pending_entries_read == 0 and claimed_entries_read == 0 and new_entries_read == 0 and not dropped_ack_keys:
+            time.sleep(idle_sleep_ms / 1000.0)
     if db_conn is not None:
         db_conn.close()
 

@@ -1,26 +1,26 @@
 {
-  "ts_utc": "2026-03-07T13:26:46.748312+00:00",
+  "ts_utc": "2026-03-10T02:29:32.314366+00:00",
   "status": "fail",
   "checks": [
     {
       "name": "ingest_freshness",
-      "pass": true,
-      "reason": "integrity_age_sec=3.6 max_age_sec=180"
+      "pass": false,
+      "reason": "integrity_age_sec=5033.3 max_age_sec=180"
     },
     {
       "name": "storage_budget_stream_share",
       "pass": true,
-      "reason": "depth_stream_share=0.5984 max=0.9500"
+      "reason": "depth_stream_share=0.2498 max=0.9500"
     },
     {
       "name": "sequence_integrity",
       "pass": false,
-      "reason": "duplicates=0 out_of_order=0 max_gap_observed=8999 gap_violations=1827"
+      "reason": "duplicates=0 out_of_order=883 max_gap_observed=8304372675440 gap_violations=4024"
     },
     {
       "name": "storage_budget_payload_size",
       "pass": true,
-      "reason": "max_payload_bytes_observed=1677 max=4000"
+      "reason": "max_payload_bytes_observed=2006 max=4000"
     },
     {
       "name": "depth_event_freshness",
@@ -30,39 +30,39 @@
     {
       "name": "sampling_coverage",
       "pass": true,
-      "reason": "raw_inserted=12707 sampled_inserted=2554 depth_events_total=560515 min_sampled=1"
+      "reason": "raw_inserted=6992 sampled_inserted=1259 depth_events_total=1607310 min_sampled=1"
     },
     {
       "name": "raw_sample_parity",
       "pass": true,
-      "reason": "raw_inserted=12707 sampled_inserted=2554 raw_to_sample_ratio=4.98 max_ratio=100.00"
+      "reason": "raw_inserted=6992 sampled_inserted=1259 raw_to_sample_ratio=5.55 max_ratio=100.00"
     }
   ],
   "diagnostics": {
-    "integrity_path": "F:\\Environement\\git-repo\\hummingbot_custo\\hbot\\reports\\event_store\\integrity_20260307.json",
+    "integrity_path": "F:\\Environement\\git-repo\\hummingbot_custo\\hbot\\reports\\event_store\\integrity_20260308.json",
     "event_files_scanned": [
-      "F:\\Environement\\git-repo\\hummingbot_custo\\hbot\\reports\\event_store\\events_20260305.jsonl",
-      "F:\\Environement\\git-repo\\hummingbot_custo\\hbot\\reports\\event_store\\events_20260306.jsonl",
-      "F:\\Environement\\git-repo\\hummingbot_custo\\hbot\\reports\\event_store\\events_20260307.jsonl"
+      "F:\\Environement\\git-repo\\hummingbot_custo\\hbot\\reports\\event_store\\events_20260308.jsonl",
+      "F:\\Environement\\git-repo\\hummingbot_custo\\hbot\\reports\\event_store\\events_20260309.jsonl",
+      "F:\\Environement\\git-repo\\hummingbot_custo\\hbot\\reports\\event_store\\events_20260310.jsonl"
     ],
-    "total_events": 936666,
-    "depth_events_total": 560515,
-    "depth_stream_share": 0.5984150166654922,
+    "total_events": 6433670,
+    "depth_events_total": 1607310,
+    "depth_stream_share": 0.24982785874936078,
     "recent_depth_events_scanned": 5000,
-    "sequence_rows_scanned": 1876,
+    "sequence_rows_scanned": 5000,
     "sequence_duplicates": 0,
-    "sequence_out_of_order": 0,
-    "sequence_large_gap_violations": 1827,
-    "sequence_max_gap_observed": 8999,
-    "max_payload_bytes_observed": 1677,
+    "sequence_out_of_order": 883,
+    "sequence_large_gap_violations": 4024,
+    "sequence_max_gap_observed": 8304372675440,
+    "max_payload_bytes_observed": 2006,
     "latest_depth_age_sec": 0.0,
     "ops_db_market_depth_counts": {
-      "raw_inserted": 12707,
-      "sampled_inserted": 2554,
-      "rollup_upserts": 35,
-      "depth_events_scanned": 12707,
-      "checkpoint_source_path": "/workspace/hbot/reports/event_store/events_20260306.jsonl",
-      "checkpoint_source_line": 932475,
+      "raw_inserted": 6992,
+      "sampled_inserted": 1259,
+      "rollup_upserts": 21,
+      "depth_events_scanned": 6992,
+      "checkpoint_source_path": "/workspace/hbot/reports/event_store/events_20260310.jsonl",
+      "checkpoint_source_line": 34330,
       "sample_every_n": 10,
       "sample_min_interval_ms": 1000,
       "sample_levels": 20

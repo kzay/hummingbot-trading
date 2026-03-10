@@ -9,6 +9,8 @@ import logging
 import time
 from typing import Any, Optional
 
+from services.contracts.event_identity import validate_event_identity
+
 logger = logging.getLogger(__name__)
 
 # ---------------------------------------------------------------------------
@@ -176,6 +178,14 @@ def _check_hard_stop_transitions(strategy: Any, bridge_state: Any) -> None:
                         },
                     }
                 try:
+                    identity_ok, identity_reason = validate_event_identity(payload)
+                    if not identity_ok:
+                        logger.warning(
+                            "HARD_STOP intent dropped by identity preflight instance=%s reason=%s",
+                            instance_name,
+                            identity_reason,
+                        )
+                        continue
                     r.xadd(
                         EXECUTION_INTENT_STREAM,
                         {"payload": _json.dumps(payload, default=str)},

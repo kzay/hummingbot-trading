@@ -123,7 +123,7 @@ def test_realtime_l2_data_quality_fails_on_sequence_regression(tmp_path: Path) -
     assert sequence_checks and sequence_checks[0]["pass"] is False
 
 
-def test_realtime_l2_data_quality_allows_duplicate_sequence_values(tmp_path: Path) -> None:
+def test_realtime_l2_data_quality_fails_on_duplicate_sequence_values(tmp_path: Path) -> None:
     root = tmp_path
     reports = root / "reports"
     _write_json(
@@ -170,8 +170,10 @@ def test_realtime_l2_data_quality_allows_duplicate_sequence_values(tmp_path: Pat
         max_depth_event_bytes=4000,
         lookback_depth_events=1000,
     )
-    assert rc == 0
-    assert report["status"] == "pass"
+    assert rc == 1
+    assert report["status"] == "fail"
+    sequence_checks = [c for c in report["checks"] if c["name"] == "sequence_integrity"]
+    assert sequence_checks and sequence_checks[0]["pass"] is False
 
 
 def test_realtime_l2_data_quality_fails_without_depth_db_evidence(tmp_path: Path) -> None:

@@ -5,7 +5,7 @@ buffer size threshold is reached.  Schema rotation (header mismatch) is
 checked only on first open, not on every write.
 
 Historical note: module filename is retained for backward compatibility.
-Prefer importing from ``controllers.strategy_runtime_logging``.
+Prefer importing from ``controllers.runtime.logging``.
 """
 from __future__ import annotations
 
@@ -343,8 +343,21 @@ class CsvSplitLogger:
             "funding_cost_today_quote",
             "margin_ratio",
             "position_drift_pct",
+            "bot1_gate_state",
+            "bot1_gate_reason",
+            "bot1_signal_side",
+            "bot1_signal_reason",
+            "bot1_signal_score",
+            "bot5_gate_state",
+            "bot5_gate_reason",
+            "bot5_signal_side",
+            "bot5_signal_reason",
+            "bot5_signal_score",
             "bot6_signal_side",
             "bot6_signal_reason",
+            "bot6_gate_state",
+            "bot6_gate_reason",
+            "bot6_signal_score",
             "bot6_signal_score_long",
             "bot6_signal_score_short",
             "bot6_signal_score_active",
@@ -360,6 +373,11 @@ class CsvSplitLogger:
             "bot6_delta_spike_ratio",
             "bot6_hedge_state",
             "bot6_partial_exit_ratio",
+            "bot7_gate_state",
+            "bot7_gate_reason",
+            "bot7_signal_side",
+            "bot7_signal_reason",
+            "bot7_signal_score",
             "ws_reconnect_count",
             "order_book_stale",
             "derisk_runtime_recovered",

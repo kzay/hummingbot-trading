@@ -10,15 +10,37 @@ try:
 except Exception as exc:  # pragma: no cover
     raise RuntimeError("redis package is required. Install with `python -m pip install redis`.") from exc
 
+from services.contracts.stream_names import (
+    AUDIT_STREAM,
+    BOT_TELEMETRY_STREAM,
+    EXECUTION_INTENT_STREAM,
+    MARKET_DATA_STREAM,
+    MARKET_DEPTH_STREAM,
+    MARKET_QUOTE_STREAM,
+    ML_SIGNAL_STREAM,
+    RISK_DECISION_STREAM,
+    SIGNAL_STREAM,
+)
+
 
 STREAMS = (
-    "hb.market_data.v1",
-    "hb.signal.v1",
-    "hb.ml_signal.v1",
-    "hb.risk_decision.v1",
-    "hb.execution_intent.v1",
-    "hb.audit.v1",
+    MARKET_DATA_STREAM,
+    MARKET_QUOTE_STREAM,
+    MARKET_DEPTH_STREAM,
+    SIGNAL_STREAM,
+    ML_SIGNAL_STREAM,
+    RISK_DECISION_STREAM,
+    EXECUTION_INTENT_STREAM,
+    AUDIT_STREAM,
+    BOT_TELEMETRY_STREAM,
 )
+
+
+def _safe_int(value: object, default: int = 0) -> int:
+    try:
+        return int(value)
+    except Exception:
+        return int(default)
 
 
 def _utc_now() -> str:
@@ -47,6 +69,19 @@ def _stream_entries_added(client: redis.Redis, stream: str) -> int:
         info = client.xinfo_stream(stream)
     except Exception:
         return int(client.xlen(stream))
+
+
+def _group_lag_from_xinfo_groups(groups: object, consumer_group: str) -> int:
+    if not isinstance(groups, list):
+        return -1
+    target = str(consumer_group or "").strip()
+    for row in groups:
+        if not isinstance(row, dict):
+            continue
+        if str(row.get("name", "")).strip() != target:
+            continue
+        return _safe_int(row.get("lag"), -1)
+    return -1
     if not isinstance(info, dict):
         return int(client.xlen(stream))
     raw = info.get("entries-added", info.get("length", 0))
@@ -68,6 +103,7 @@ def main() -> None:
     redis_port = int(os.getenv("REDIS_PORT", "6379"))
     redis_db = int(os.getenv("REDIS_DB", "0"))
     redis_password = os.getenv("REDIS_PASSWORD", "")
+    consumer_group = os.getenv("EVENT_STORE_CONSUMER_GROUP", "hb_event_store_v1").strip() or "hb_event_store_v1"
 
     client = redis.Redis(
         host=redis_host,
@@ -82,13 +118,19 @@ def main() -> None:
 
     source_by_stream = {}
     source_length_by_stream = {}
+    consumer_group_lag_by_stream = {}
     deltas_abs = {}
     for stream in STREAMS:
-        source_count = int(client.xlen(stream))
-        source_entries_added = _stream_entries_added(client, stream)
-        stored_count = int(stored_by_stream.get(stream, 0))
+        source_count = _safe_int(client.xlen(stream), 0)
+        source_entries_added = _safe_int(_stream_entries_added(client, stream), 0)
+        try:
+            group_info = client.xinfo_groups(stream)
+        except Exception:
+            group_info = []
+        stored_count = _safe_int(stored_by_stream.get(stream, 0), 0)
         source_by_stream[stream] = source_entries_added
         source_length_by_stream[stream] = source_count
+        consumer_group_lag_by_stream[stream] = _group_lag_from_xinfo_groups(group_info, consumer_group)
         deltas_abs[stream] = source_count - stored_count
 
     baseline_default = {
@@ -140,8 +182,8 @@ def main() -> None:
     deltas_since = {}
     lag_since = {}
     for stream in STREAMS:
-        produced = max(0, int(source_by_stream.get(stream, 0)) - int(source_baseline.get(stream, 0)))
-        ingested = max(0, int(stored_by_stream.get(stream, 0)) - int(stored_baseline.get(stream, 0)))
+        produced = max(0, _safe_int(source_by_stream.get(stream, 0), 0) - _safe_int(source_baseline.get(stream, 0), 0))
+        ingested = max(0, _safe_int(stored_by_stream.get(stream, 0), 0) - _safe_int(stored_baseline.get(stream, 0), 0))
         delta = produced - ingested
         produced_since[stream] = produced
         ingested_since[stream] = ingested
@@ -158,6 +200,8 @@ def main() -> None:
         "stored_events_by_stream": stored_by_stream,
         "source_events_by_stream": source_by_stream,
         "source_length_by_stream": source_length_by_stream,
+        "consumer_group": consumer_group,
+        "consumer_group_lag_by_stream": consumer_group_lag_by_stream,
         "source_counter_kind": "entries_added",
         "delta_source_minus_stored_by_stream_abs": deltas_abs,
         "produced_since_baseline_by_stream": produced_since,

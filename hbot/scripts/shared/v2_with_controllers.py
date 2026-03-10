@@ -20,6 +20,8 @@ from hummingbot.strategy.strategy_v2_base import StrategyV2Base, StrategyV2Confi
 from hummingbot.strategy_v2.models.base import RunnableStatus
 from hummingbot.strategy_v2.models.executor_actions import CreateExecutorAction, StopExecutorAction
 from controllers.paper_engine_v2.hb_bridge import (
+    _canonical_name,
+    _paper_exchange_mode_for_instance,
     enable_framework_paper_compat_fallbacks,
     install_paper_desk_bridge as _install_paper_desk_bridge_v2,
 )
@@ -882,6 +884,7 @@ class V2WithControllers(StrategyV2Base):
         self._open_orders_snapshot_path: Path = Path(
             os.getenv("HB_OPEN_ORDERS_SNAPSHOT_PATH", "/home/hummingbot/logs/recovery/open_orders_latest.json")
         )
+        self._artifact_write_failures: Dict[str, int] = {}
         self._config_reload_retry_interval_s: float = float(os.getenv("HB_CONFIG_RELOAD_RETRY_S", "30"))
         self._config_reload_retry_after_ts: float = 0.0
         self._config_reload_error_count: int = 0
@@ -1532,6 +1535,7 @@ class V2WithControllers(StrategyV2Base):
                 continue
             instrument_id = bridge.get("instrument_id")
             engine_key = getattr(instrument_id, "key", "")
+            trading_pair = str(getattr(instrument_id, "trading_pair", "") or "")
             engine = engines.get(engine_key)
             if engine is None:
                 continue
@@ -1539,6 +1543,35 @@ class V2WithControllers(StrategyV2Base):
             inflight = list(getattr(engine, "_inflight", []) or [])
             open_ids = [str(getattr(o, "order_id", "")) for o in open_orders[:5]]
             inflight_ids = [str(getattr(getattr(t, "__getitem__", lambda *_: None)(2), "order_id", "")) for t in inflight[:5]]
+            active_runtime_ids: List[str] = []
+            try:
+                controller_instance_name = ""
+                target_connector = _canonical_name(str(connector_name))
+                for controller_id, controller in (getattr(self, "controllers", {}) or {}).items():
+                    cfg = getattr(controller, "config", None)
+                    if cfg is None:
+                        continue
+                    cfg_connector = _canonical_name(str(getattr(cfg, "connector_name", "") or ""))
+                    cfg_pair = str(getattr(cfg, "trading_pair", "") or "")
+                    if cfg_connector == target_connector and (not trading_pair or cfg_pair == trading_pair):
+                        controller_instance_name = str(getattr(cfg, "instance_name", "") or controller_id)
+                        break
+                if controller_instance_name and _paper_exchange_mode_for_instance(controller_instance_name) == "active":
+                    runtime_store = getattr(self, "_paper_exchange_runtime_orders", {}) or {}
+                    for bucket_name, bucket in runtime_store.items():
+                        if _canonical_name(str(bucket_name or "")) != target_connector:
+                            continue
+                        if not isinstance(bucket, dict):
+                            continue
+                        for order in bucket.values():
+                            if not bool(getattr(order, "is_open", False)):
+                                continue
+                            order_pair = str(getattr(order, "trading_pair", "") or "")
+                            if trading_pair and order_pair and order_pair != trading_pair:
+                                continue
+                            active_runtime_ids.append(str(getattr(order, "order_id", "") or getattr(order, "client_order_id", "") or ""))
+            except Exception:
+                active_runtime_ids = []
             book = getattr(engine, "_book", None)
             best_bid = str(getattr(getattr(book, "best_bid", None), "price", ""))
             best_ask = str(getattr(getattr(book, "best_ask", None), "price", ""))
@@ -1563,16 +1596,18 @@ class V2WithControllers(StrategyV2Base):
                     f"{str(getattr(order, 'order_id', ''))}:{side}@{price} rem={remaining} fills={fill_count}{touchable}"
                 )
             self.logger().warning(
-                "PAPER_ENGINE_PROBE connector=%s engine_key=%s open=%d inflight=%d best_bid=%s best_ask=%s "
-                "open_ids=%s inflight_ids=%s orders=%s",
+                "PAPER_ENGINE_PROBE connector=%s engine_key=%s open=%d inflight=%d active_runtime_open=%d best_bid=%s best_ask=%s "
+                "open_ids=%s inflight_ids=%s active_runtime_ids=%s orders=%s",
                 str(connector_name),
                 str(engine_key),
                 len(open_orders),
                 len(inflight),
+                len(active_runtime_ids),
                 best_bid,
                 best_ask,
                 ",".join(open_ids),
                 ",".join(inflight_ids),
+                ",".join(active_runtime_ids[:5]),
                 " | ".join(order_samples),
             )
 
@@ -1680,46 +1715,173 @@ class V2WithControllers(StrategyV2Base):
         if now - self._last_heartbeat_write_ts < self._heartbeat_write_interval_s:
             return
         self._last_heartbeat_write_ts = now
-        try:
-            self._heartbeat_path.parent.mkdir(parents=True, exist_ok=True)
-            payload = {
-                "ts_utc": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(now)),
-                "reason": reason,
-                "preflight_checked": bool(self._preflight_checked),
-                "preflight_failed": bool(self._preflight_failed),
-                "controller_count": len(self.controllers) if isinstance(self.controllers, dict) else 0,
-                "is_stop_triggered": bool(getattr(self, "_is_stop_triggered", False)),
-                "config_reload_degraded": bool(self._config_reload_degraded),
-                "config_reload_error_count": int(self._config_reload_error_count),
-                "config_reload_last_error": str(self._config_reload_last_error),
-                "config_reload_last_error_ts_utc": (
-                    time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(self._config_reload_last_error_ts))
-                    if self._config_reload_last_error_ts > 0
-                    else ""
-                ),
-                "config_reload_last_success_ts_utc": (
-                    time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(self._config_reload_last_success_ts))
-                    if self._config_reload_last_success_ts > 0
-                    else ""
-                ),
-            }
-            self._heartbeat_path.write_text(json.dumps(payload, indent=2), encoding="utf-8")
-        except Exception:
-            # Heartbeat should never break trading loop.
-            pass
+        payload = {
+            "ts_utc": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(now)),
+            "reason": reason,
+            "preflight_checked": bool(self._preflight_checked),
+            "preflight_failed": bool(self._preflight_failed),
+            "controller_count": len(self.controllers) if isinstance(self.controllers, dict) else 0,
+            "is_stop_triggered": bool(getattr(self, "_is_stop_triggered", False)),
+            "config_reload_degraded": bool(self._config_reload_degraded),
+            "config_reload_error_count": int(self._config_reload_error_count),
+            "config_reload_last_error": str(self._config_reload_last_error),
+            "config_reload_last_error_ts_utc": (
+                time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(self._config_reload_last_error_ts))
+                if self._config_reload_last_error_ts > 0
+                else ""
+            ),
+            "config_reload_last_success_ts_utc": (
+                time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(self._config_reload_last_success_ts))
+                if self._config_reload_last_success_ts > 0
+                else ""
+            ),
+            "artifact_write_failures": dict(getattr(self, "_artifact_write_failures", {})),
+        }
+        self._write_runtime_json_artifact(
+            path=self._heartbeat_path,
+            payload=payload,
+            artifact_name="watchdog_heartbeat",
+        )
 
     def _write_startup_sync_report(self, status: str, errors: List[str], scan_summary: Dict[str, object]) -> None:
+        payload = {
+            "ts_utc": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(time.time())),
+            "status": status,
+            "errors": errors,
+            "scan_summary": scan_summary,
+        }
+        self._write_runtime_json_artifact(
+            path=self._startup_sync_report_path,
+            payload=payload,
+            artifact_name="startup_sync_report",
+        )
+
+    def _write_runtime_json_artifact(self, *, path: Path, payload: Dict[str, object], artifact_name: str) -> None:
         try:
-            self._startup_sync_report_path.parent.mkdir(parents=True, exist_ok=True)
-            payload = {
-                "ts_utc": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(time.time())),
-                "status": status,
-                "errors": errors,
-                "scan_summary": scan_summary,
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_text(json.dumps(payload, indent=2), encoding="utf-8")
+        except Exception as exc:
+            failures = dict(getattr(self, "_artifact_write_failures", {}))
+            failures[artifact_name] = int(failures.get(artifact_name, 0) or 0) + 1
+            self._artifact_write_failures = failures
+            self.logger().warning(
+                "%s write failed; continuing degraded mode count=%s path=%s error=%s",
+                artifact_name,
+                failures[artifact_name],
+                path,
+                exc,
+            )
+
+    def _append_open_order_snapshot_entry(
+        self,
+        *,
+        orders: List[Dict[str, object]],
+        seen_order_ids: Set[str],
+        controller_id: str,
+        connector_name: str,
+        trading_pair: str,
+        order: Any,
+    ) -> None:
+        order_pair = str(getattr(order, "trading_pair", "") or "")
+        instrument_id = getattr(order, "instrument_id", None)
+        if not order_pair and instrument_id is not None:
+            order_pair = str(getattr(instrument_id, "trading_pair", "") or "")
+        if trading_pair and order_pair and order_pair != trading_pair:
+            return
+        order_id = str(getattr(order, "client_order_id", "") or getattr(order, "order_id", "") or "")
+        if order_id and order_id in seen_order_ids:
+            return
+        side_raw = getattr(order, "trade_type", None)
+        if side_raw is None:
+            side_raw = getattr(order, "side", None)
+        side = str(getattr(side_raw, "value", side_raw) or "").upper()
+        if not side:
+            side = "BUY" if bool(getattr(order, "is_buy", False)) else "SELL"
+        amount = (
+            getattr(order, "remaining_quantity", None)
+            or getattr(order, "amount", None)
+            or getattr(order, "quantity", None)
+            or ""
+        )
+        age_sec = float(getattr(order, "age", 0.0) or 0.0)
+        if age_sec <= 0.0:
+            created_at_ns = getattr(order, "created_at_ns", None)
+            try:
+                if created_at_ns:
+                    age_sec = max(0.0, time.time() - (float(created_at_ns) / 1e9))
+            except Exception:
+                age_sec = 0.0
+        if age_sec <= 0.0:
+            creation_timestamp = getattr(order, "creation_timestamp", None)
+            try:
+                if creation_timestamp:
+                    age_sec = max(0.0, time.time() - float(creation_timestamp))
+            except Exception:
+                age_sec = 0.0
+        orders.append(
+            {
+                "controller_id": controller_id,
+                "connector_name": connector_name,
+                "trading_pair": order_pair or trading_pair,
+                "order_id": order_id,
+                "state": str(getattr(order, "current_state", "") or ""),
+                "side": side,
+                "price": str(getattr(order, "price", "")),
+                "amount": str(amount),
+                "age_sec": age_sec,
             }
-            self._startup_sync_report_path.write_text(json.dumps(payload, indent=2), encoding="utf-8")
+        )
+        if order_id:
+            seen_order_ids.add(order_id)
+
+    def _iter_connector_open_orders(self, connector: Any) -> List[Any]:
+        try:
+            open_orders_fn = getattr(connector, "get_open_orders", None)
+            if not callable(open_orders_fn):
+                return []
+            return list(open_orders_fn() or [])
         except Exception:
-            pass
+            return []
+
+    def _iter_bridge_open_orders(self, connector: Any, connector_name: str) -> List[Any]:
+        try:
+            bridges = getattr(self, "_paper_desk_v2_bridges", {})
+            bridge = bridges.get(connector_name, {}) if isinstance(bridges, dict) else {}
+            if not isinstance(bridge, dict):
+                bridge = {}
+            desk = bridge.get("desk")
+            iid = bridge.get("instrument_id")
+            if desk is None or iid is None:
+                desk = getattr(connector, "_paper_desk_v2", None)
+                iid = getattr(connector, "_paper_desk_v2_instrument_id", None)
+            if desk is None or iid is None:
+                return []
+            engine = getattr(desk, "_engines", {}).get(getattr(iid, "key", ""))
+            open_orders_fn = getattr(engine, "open_orders", None)
+            if not callable(open_orders_fn):
+                return []
+            return list(open_orders_fn() or [])
+        except Exception:
+            return []
+
+    def _iter_runtime_open_orders(self, instance_name: str, connector_name: str) -> List[Any]:
+        try:
+            if _paper_exchange_mode_for_instance(instance_name) != "active":
+                return []
+            runtime_store = getattr(self, "_paper_exchange_runtime_orders", {}) or {}
+            target_connector = _canonical_name(connector_name)
+            out: List[Any] = []
+            for bucket_name, bucket in runtime_store.items():
+                if _canonical_name(str(bucket_name or "")) != target_connector:
+                    continue
+                if not isinstance(bucket, dict):
+                    continue
+                for order in bucket.values():
+                    if bool(getattr(order, "is_open", False)):
+                        out.append(order)
+            return out
+        except Exception:
+            return []
 
     def _collect_open_orders_snapshot(self) -> Dict[str, object]:
         payload: Dict[str, object] = {
@@ -1736,89 +1898,37 @@ class V2WithControllers(StrategyV2Base):
             if connector is None:
                 continue
             seen_order_ids: Set[str] = set()
-
-            def _append_order(order: Any) -> None:
-                order_pair = str(getattr(order, "trading_pair", "") or "")
-                instrument_id = getattr(order, "instrument_id", None)
-                if not order_pair and instrument_id is not None:
-                    order_pair = str(getattr(instrument_id, "trading_pair", "") or "")
-                if trading_pair and order_pair and order_pair != trading_pair:
-                    return
-                order_id = str(
-                    getattr(order, "client_order_id", "")
-                    or getattr(order, "order_id", "")
-                    or ""
+            instance_name = str(getattr(controller.config, "instance_name", "") or controller_id)
+            for order in self._iter_connector_open_orders(connector):
+                self._append_open_order_snapshot_entry(
+                    orders=orders,
+                    seen_order_ids=seen_order_ids,
+                    controller_id=controller_id,
+                    connector_name=connector_name,
+                    trading_pair=trading_pair,
+                    order=order,
                 )
-                if order_id and order_id in seen_order_ids:
-                    return
-                side_raw = getattr(order, "trade_type", None)
-                if side_raw is None:
-                    side_raw = getattr(order, "side", None)
-                side = str(getattr(side_raw, "value", side_raw) or "").upper()
-                if not side:
-                    is_buy = bool(getattr(order, "is_buy", False))
-                    side = "BUY" if is_buy else "SELL"
-                amount = (
-                    getattr(order, "remaining_quantity", None)
-                    or getattr(order, "amount", None)
-                    or getattr(order, "quantity", None)
-                    or ""
-                )
-                age_sec = float(getattr(order, "age", 0.0) or 0.0)
-                if age_sec <= 0.0:
-                    created_at_ns = getattr(order, "created_at_ns", None)
-                    try:
-                        if created_at_ns:
-                            age_sec = max(0.0, time.time() - (float(created_at_ns) / 1e9))
-                    except Exception:
-                        age_sec = 0.0
-                orders.append(
-                    {
-                        "controller_id": controller_id,
-                        "connector_name": connector_name,
-                        "trading_pair": order_pair or trading_pair,
-                        "order_id": order_id,
-                        "side": side,
-                        "price": str(getattr(order, "price", "")),
-                        "amount": str(amount),
-                        "age_sec": age_sec,
-                    }
-                )
-                if order_id:
-                    seen_order_ids.add(order_id)
-            try:
-                open_orders_fn = getattr(connector, "get_open_orders", None)
-                if not callable(open_orders_fn):
-                    open_orders = []
-                else:
-                    open_orders = open_orders_fn() or []
-                for order in open_orders:
-                    _append_order(order)
-            except Exception:
-                pass
-            try:
-                bridges = getattr(self, "_paper_desk_v2_bridges", {})
-                bridge = bridges.get(connector_name, {}) if isinstance(bridges, dict) else {}
-                if not isinstance(bridge, dict):
-                    bridge = {}
-                desk = bridge.get("desk")
-                iid = bridge.get("instrument_id")
-                if desk is None or iid is None:
-                    desk = getattr(connector, "_paper_desk_v2", None)
-                    iid = getattr(connector, "_paper_desk_v2_instrument_id", None)
-                if desk is None or iid is None:
+            for order in self._iter_bridge_open_orders(connector, connector_name):
+                source_bot = str(getattr(order, "source_bot", "") or "")
+                if connector_name and source_bot and source_bot != connector_name:
                     continue
-                engine = getattr(desk, "_engines", {}).get(getattr(iid, "key", ""))
-                open_orders_fn = getattr(engine, "open_orders", None)
-                if not callable(open_orders_fn):
-                    continue
-                for order in open_orders_fn() or []:
-                    source_bot = str(getattr(order, "source_bot", "") or "")
-                    if connector_name and source_bot and source_bot != connector_name:
-                        continue
-                    _append_order(order)
-            except Exception:
-                continue
+                self._append_open_order_snapshot_entry(
+                    orders=orders,
+                    seen_order_ids=seen_order_ids,
+                    controller_id=controller_id,
+                    connector_name=connector_name,
+                    trading_pair=trading_pair,
+                    order=order,
+                )
+            for order in self._iter_runtime_open_orders(instance_name, connector_name):
+                self._append_open_order_snapshot_entry(
+                    orders=orders,
+                    seen_order_ids=seen_order_ids,
+                    controller_id=controller_id,
+                    connector_name=connector_name,
+                    trading_pair=trading_pair,
+                    order=order,
+                )
         payload["orders"] = orders
         payload["orders_count"] = len(orders)
         return payload
@@ -1828,14 +1938,13 @@ class V2WithControllers(StrategyV2Base):
         if now - self._last_open_orders_write_ts < self._open_orders_write_interval_s:
             return
         self._last_open_orders_write_ts = now
-        try:
-            self._open_orders_snapshot_path.parent.mkdir(parents=True, exist_ok=True)
-            payload = self._collect_open_orders_snapshot()
-            payload["reason"] = reason
-            self._open_orders_snapshot_path.write_text(json.dumps(payload, indent=2), encoding="utf-8")
-        except Exception:
-            # Snapshot write should never break trading loop.
-            pass
+        payload = self._collect_open_orders_snapshot()
+        payload["reason"] = reason
+        self._write_runtime_json_artifact(
+            path=self._open_orders_snapshot_path,
+            payload=payload,
+            artifact_name="open_orders_snapshot",
+        )
 
     def control_max_drawdown(self):
         if self.config.max_controller_drawdown_quote:

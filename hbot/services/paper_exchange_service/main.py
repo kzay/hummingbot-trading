@@ -6,6 +6,7 @@ import logging
 import os
 import time
 from dataclasses import dataclass, field
+from decimal import Decimal
 from pathlib import Path
 from typing import Dict, List, Optional, Set, Tuple
 
@@ -20,6 +21,7 @@ from services.contracts.event_schemas import (
     PaperExchangeEvent,
     PaperExchangeHeartbeatEvent,
 )
+from services.contracts.event_identity import validate_event_identity
 from services.contracts.stream_names import (
     AUDIT_STREAM,
     MARKET_DATA_STREAM,
@@ -49,6 +51,27 @@ def _normalize(value: str) -> str:
     return str(value or "").strip().lower()
 
 
+def _canonical_connector_name(value: str) -> str:
+    raw = str(value or "").strip()
+    if not raw.endswith("_paper_trade"):
+        return raw
+    try:
+        from services.common.exchange_profiles import resolve_profile
+
+        profile = resolve_profile(raw)
+        if isinstance(profile, dict):
+            required_exchange = str(profile.get("requires_paper_trade_exchange", "") or "").strip()
+            if required_exchange:
+                return required_exchange
+    except Exception:
+        pass
+    return raw[:-12]
+
+
+def _normalize_connector_name(value: str) -> str:
+    return _normalize(_canonical_connector_name(value))
+
+
 def _csv_set(value: str) -> Set[str]:
     return {_normalize(x) for x in str(value or "").split(",") if _normalize(x)}
 
@@ -56,7 +79,7 @@ def _csv_set(value: str) -> Set[str]:
 def _namespace_base_key(instance_name: str, connector_name: str, trading_pair: str) -> str:
     return (
         f"{_normalize(instance_name)}::"
-        f"{_normalize(connector_name)}::"
+        f"{_normalize_connector_name(connector_name)}::"
         f"{str(trading_pair or '').strip().upper()}"
     )
 
@@ -268,6 +291,47 @@ def _order_record_to_dict(order: OrderRecord) -> Dict[str, object]:
     }
 
 
+def _position_record_to_dict(position: "PositionRecord") -> Dict[str, object]:
+    return {
+        "instance_name": position.instance_name,
+        "connector_name": position.connector_name,
+        "trading_pair": position.trading_pair,
+        "position_mode": position.position_mode,
+        "long_base": position.long_base,
+        "long_avg_entry_price": position.long_avg_entry_price,
+        "short_base": position.short_base,
+        "short_avg_entry_price": position.short_avg_entry_price,
+        "realized_pnl_quote": position.realized_pnl_quote,
+        "funding_paid_quote": position.funding_paid_quote,
+        "last_fill_ts_ms": position.last_fill_ts_ms,
+        "last_funding_ts_ms": position.last_funding_ts_ms,
+        "last_funding_rate": position.last_funding_rate,
+        "funding_event_count": position.funding_event_count,
+    }
+
+
+def _position_record_from_payload(payload: Dict[str, object]) -> Optional["PositionRecord"]:
+    try:
+        return PositionRecord(
+            instance_name=str(payload.get("instance_name", "")),
+            connector_name=str(payload.get("connector_name", "")),
+            trading_pair=str(payload.get("trading_pair", "")),
+            position_mode=str(payload.get("position_mode", "ONEWAY") or "ONEWAY").upper(),
+            long_base=max(0.0, float(payload.get("long_base", 0.0))),
+            long_avg_entry_price=max(0.0, float(payload.get("long_avg_entry_price", 0.0))),
+            short_base=max(0.0, float(payload.get("short_base", 0.0))),
+            short_avg_entry_price=max(0.0, float(payload.get("short_avg_entry_price", 0.0))),
+            realized_pnl_quote=float(payload.get("realized_pnl_quote", 0.0)),
+            funding_paid_quote=float(payload.get("funding_paid_quote", 0.0)),
+            last_fill_ts_ms=max(0, int(payload.get("last_fill_ts_ms", 0))),
+            last_funding_ts_ms=max(0, int(payload.get("last_funding_ts_ms", 0))),
+            last_funding_rate=float(payload.get("last_funding_rate", 0.0)),
+            funding_event_count=max(0, int(payload.get("funding_event_count", 0))),
+        )
+    except Exception:
+        return None
+
+
 def _order_record_from_payload(order_id: str, payload: Dict[str, object]) -> Optional[OrderRecord]:
     try:
         return OrderRecord(
@@ -321,11 +385,39 @@ def _load_state_snapshot(path: Path) -> Dict[str, OrderRecord]:
     return out
 
 
-def _persist_state_snapshot(path: Path, orders_by_id: Dict[str, OrderRecord]) -> None:
+def _load_position_snapshot(path: Path) -> Dict[str, "PositionRecord"]:
+    payload = _read_json(path)
+    raw_positions = payload.get("positions", {})
+    if not isinstance(raw_positions, dict):
+        return {}
+    out: Dict[str, PositionRecord] = {}
+    for position_key, record in raw_positions.items():
+        if not isinstance(record, dict):
+            continue
+        parsed = _position_record_from_payload(record)
+        if parsed is not None and str(position_key or "").strip():
+            out[str(position_key)] = parsed
+    return out
+
+
+def _persist_state_snapshot(
+    path: Path,
+    orders_by_id: Dict[str, OrderRecord],
+    positions_by_key: Optional[Dict[str, "PositionRecord"]] = None,
+    *,
+    funding_summary: Optional[Dict[str, object]] = None,
+) -> None:
+    positions_payload = {
+        position_key: _position_record_to_dict(position)
+        for position_key, position in (positions_by_key or {}).items()
+    }
     payload = {
         "ts_utc": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
         "orders_total": len(orders_by_id),
         "orders": {order_id: _order_record_to_dict(order) for order_id, order in orders_by_id.items()},
+        "positions_total": len(positions_payload),
+        "positions": positions_payload,
+        "funding_summary": dict(funding_summary or {}),
     }
     _write_json_atomic(path, payload)
 
@@ -425,9 +517,28 @@ class OrderRecord:
 
 
 @dataclass
+class PositionRecord:
+    instance_name: str
+    connector_name: str
+    trading_pair: str
+    position_mode: str = "ONEWAY"
+    long_base: float = 0.0
+    long_avg_entry_price: float = 0.0
+    short_base: float = 0.0
+    short_avg_entry_price: float = 0.0
+    realized_pnl_quote: float = 0.0
+    funding_paid_quote: float = 0.0
+    last_fill_ts_ms: int = 0
+    last_funding_ts_ms: int = 0
+    last_funding_rate: float = 0.0
+    funding_event_count: int = 0
+
+
+@dataclass
 class PaperExchangeState:
     pairs: Dict[str, PairSnapshot] = field(default_factory=dict)
     orders_by_id: Dict[str, OrderRecord] = field(default_factory=dict)
+    positions_by_key: Dict[str, PositionRecord] = field(default_factory=dict)
     accepted_snapshots: int = 0
     rejected_snapshots: int = 0
     processed_commands: int = 0
@@ -461,6 +572,10 @@ class PaperExchangeState:
     market_fill_events_by_id: Dict[str, int] = field(default_factory=dict)
     market_row_fill_cap_hits: int = 0
     command_results_by_id: Dict[str, Dict[str, object]] = field(default_factory=dict)
+    funding_events_generated: int = 0
+    funding_debit_events: int = 0
+    funding_credit_events: int = 0
+    funding_paid_quote_total: float = 0.0
 
 
 @dataclass
@@ -484,6 +599,7 @@ class ServiceSettings:
     resting_fill_latency_ms: int = 0
     maker_queue_participation: float = 1.0
     market_sweep_depth_levels: int = 1
+    funding_interval_ms: int = 28_800_000
     max_fill_events_per_market_row: int = 200
     heartbeat_interval_ms: int = 5_000
     read_count: int = 100
@@ -609,6 +725,294 @@ def _remaining_amount_base(order: OrderRecord) -> float:
     return max(0.0, float(order.amount_base) - float(order.filled_base))
 
 
+def _position_key(instance_name: str, connector_name: str, trading_pair: str) -> str:
+    return _namespace_base_key(instance_name, connector_name, trading_pair)
+
+
+def _get_or_create_position(state: PaperExchangeState, order: OrderRecord) -> PositionRecord:
+    key = _position_key(order.instance_name, order.connector_name, order.trading_pair)
+    position = state.positions_by_key.get(key)
+    if position is not None:
+        return position
+    position = PositionRecord(
+        instance_name=order.instance_name,
+        connector_name=order.connector_name,
+        trading_pair=order.trading_pair,
+        position_mode=str(order.position_mode or "ONEWAY").upper() or "ONEWAY",
+    )
+    state.positions_by_key[key] = position
+    return position
+
+
+def _round_positive(value: float) -> float:
+    return max(0.0, float(value))
+
+
+def _open_long(position: PositionRecord, quantity: float, price: float) -> None:
+    qty = _round_positive(quantity)
+    if qty <= _MIN_FILL_EPSILON:
+        return
+    px = max(0.0, float(price))
+    existing_qty = _round_positive(position.long_base)
+    if existing_qty <= _MIN_FILL_EPSILON or position.long_avg_entry_price <= 0:
+        position.long_base = qty
+        position.long_avg_entry_price = px
+        return
+    total_qty = existing_qty + qty
+    position.long_avg_entry_price = ((existing_qty * position.long_avg_entry_price) + (qty * px)) / total_qty
+    position.long_base = total_qty
+
+
+def _open_short(position: PositionRecord, quantity: float, price: float) -> None:
+    qty = _round_positive(quantity)
+    if qty <= _MIN_FILL_EPSILON:
+        return
+    px = max(0.0, float(price))
+    existing_qty = _round_positive(position.short_base)
+    if existing_qty <= _MIN_FILL_EPSILON or position.short_avg_entry_price <= 0:
+        position.short_base = qty
+        position.short_avg_entry_price = px
+        return
+    total_qty = existing_qty + qty
+    position.short_avg_entry_price = ((existing_qty * position.short_avg_entry_price) + (qty * px)) / total_qty
+    position.short_base = total_qty
+
+
+def _close_long(position: PositionRecord, quantity: float, price: float) -> float:
+    qty = min(_round_positive(quantity), _round_positive(position.long_base))
+    if qty <= _MIN_FILL_EPSILON:
+        return 0.0
+    realized = qty * (float(price) - float(position.long_avg_entry_price))
+    position.long_base = max(0.0, float(position.long_base) - qty)
+    if position.long_base <= _MIN_FILL_EPSILON:
+        position.long_base = 0.0
+        position.long_avg_entry_price = 0.0
+    position.realized_pnl_quote += realized
+    return qty
+
+
+def _close_short(position: PositionRecord, quantity: float, price: float) -> float:
+    qty = min(_round_positive(quantity), _round_positive(position.short_base))
+    if qty <= _MIN_FILL_EPSILON:
+        return 0.0
+    realized = qty * (float(position.short_avg_entry_price) - float(price))
+    position.short_base = max(0.0, float(position.short_base) - qty)
+    if position.short_base <= _MIN_FILL_EPSILON:
+        position.short_base = 0.0
+        position.short_avg_entry_price = 0.0
+    position.realized_pnl_quote += realized
+    return qty
+
+
+def _is_flat_position(position: PositionRecord) -> bool:
+    return _round_positive(position.long_base) <= _MIN_FILL_EPSILON and _round_positive(position.short_base) <= _MIN_FILL_EPSILON
+
+
+def _apply_position_fill(
+    *,
+    state: PaperExchangeState,
+    order: OrderRecord,
+    fill_amount_base: float,
+    fill_price: float,
+    now_ms: int,
+) -> None:
+    qty = _round_positive(fill_amount_base)
+    if qty <= _MIN_FILL_EPSILON:
+        return
+    position = _get_or_create_position(state, order)
+    was_flat = _is_flat_position(position)
+    side = _normalize(order.side)
+    action = _normalize(order.position_action or "auto")
+    mode = str(order.position_mode or "ONEWAY").strip().upper() or "ONEWAY"
+    reduce_only = bool(order.reduce_only)
+
+    if mode == "HEDGE":
+        if side == "buy":
+            if action == "close_short" or reduce_only:
+                _close_short(position, qty, fill_price)
+            else:
+                _open_long(position, qty, fill_price)
+        elif side == "sell":
+            if action == "close_long" or reduce_only:
+                _close_long(position, qty, fill_price)
+            else:
+                _open_short(position, qty, fill_price)
+    else:
+        remaining = qty
+        if side == "buy":
+            if action == "open_long":
+                _open_long(position, remaining, fill_price)
+                remaining = 0.0
+            elif action == "close_short":
+                _close_short(position, remaining, fill_price)
+                remaining = 0.0
+            else:
+                closed = _close_short(position, remaining, fill_price)
+                remaining = max(0.0, remaining - closed)
+                if not reduce_only and remaining > _MIN_FILL_EPSILON:
+                    _open_long(position, remaining, fill_price)
+        elif side == "sell":
+            if action == "open_short":
+                _open_short(position, remaining, fill_price)
+                remaining = 0.0
+            elif action == "close_long":
+                _close_long(position, remaining, fill_price)
+                remaining = 0.0
+            else:
+                closed = _close_long(position, remaining, fill_price)
+                remaining = max(0.0, remaining - closed)
+                if not reduce_only and remaining > _MIN_FILL_EPSILON:
+                    _open_short(position, remaining, fill_price)
+
+    position.position_mode = mode
+    position.last_fill_ts_ms = max(0, int(now_ms))
+    if was_flat and not _is_flat_position(position):
+        position.last_funding_ts_ms = max(0, int(now_ms))
+
+
+def _funding_summary(state: PaperExchangeState) -> Dict[str, object]:
+    return {
+        "positions_with_exposure": sum(1 for position in state.positions_by_key.values() if not _is_flat_position(position)),
+        "funding_events_generated": int(state.funding_events_generated),
+        "funding_debit_events": int(state.funding_debit_events),
+        "funding_credit_events": int(state.funding_credit_events),
+        "funding_paid_quote_total": float(state.funding_paid_quote_total),
+    }
+
+
+@dataclass
+class FundingSettlementCandidate:
+    position_key: str
+    leg_side: str
+    funding_rate: float
+    charge_quote: float
+    reference_price: float
+    position_base: float
+    position_notional_quote: float
+    last_funding_ts_ms: int
+    current_funding_ts_ms: int
+    event: PaperExchangeEvent
+
+
+def _funding_events_for_snapshot(
+    *,
+    state: PaperExchangeState,
+    snapshot: PairSnapshot,
+    funding_interval_ms: int,
+    now_ms: int,
+) -> List[FundingSettlementCandidate]:
+    interval_ms = max(1_000, int(funding_interval_ms))
+    price_reference = max(
+        0.0,
+        float(snapshot.mark_price or 0.0) or float(snapshot.mid_price or 0.0),
+    )
+    if price_reference <= 0.0:
+        return []
+    funding_rate = float(snapshot.funding_rate or 0.0)
+    if funding_rate == 0.0:
+        return []
+    candidates: List[FundingSettlementCandidate] = []
+    matching_positions = [
+        (position_key, position)
+        for position_key, position in state.positions_by_key.items()
+        if _normalize_connector_name(position.connector_name) == _normalize_connector_name(snapshot.connector_name)
+        and str(position.trading_pair or "").strip().upper() == str(snapshot.trading_pair or "").strip().upper()
+        and (
+            not str(snapshot.instance_name or "").strip()
+            or _normalize(position.instance_name) == _normalize(snapshot.instance_name)
+        )
+    ]
+    for position_key, position in matching_positions:
+        if _is_flat_position(position):
+            position.last_funding_ts_ms = max(position.last_funding_ts_ms, int(now_ms))
+            continue
+        last_funding_ts_ms = max(0, int(position.last_funding_ts_ms))
+        if last_funding_ts_ms <= 0:
+            position.last_funding_ts_ms = int(now_ms)
+            continue
+        if (int(now_ms) - last_funding_ts_ms) < interval_ms:
+            continue
+        for leg_side, quantity, avg_entry_price, direction in (
+            ("long", float(position.long_base), float(position.long_avg_entry_price), 1.0),
+            ("short", float(position.short_base), float(position.short_avg_entry_price), -1.0),
+        ):
+            qty = _round_positive(quantity)
+            if qty <= _MIN_FILL_EPSILON:
+                continue
+            reference_price = max(0.0, price_reference or avg_entry_price)
+            if reference_price <= 0.0:
+                continue
+            notional_quote = qty * reference_price
+            charge_quote = funding_rate * notional_quote * direction
+            if abs(charge_quote) <= _MIN_FILL_EPSILON:
+                continue
+            cumulative_funding_quote = float(position.funding_paid_quote) + float(charge_quote)
+            event_id = (
+                f"pe-funding-{position.instance_name}-{snapshot.connector_name}-{snapshot.trading_pair}-"
+                f"{leg_side}-{int(now_ms)}"
+            )
+            event = PaperExchangeEvent(
+                producer="paper_exchange_service",
+                event_id=event_id,
+                correlation_id=event_id,
+                instance_name=position.instance_name,
+                command_event_id=event_id,
+                command="funding_settlement",
+                status="processed",
+                reason="periodic_funding_settlement",
+                connector_name=snapshot.connector_name,
+                trading_pair=snapshot.trading_pair,
+                position_mode=position.position_mode,
+                metadata={
+                    "leg_side": leg_side,
+                    "funding_rate": str(funding_rate),
+                    "charge_quote": str(charge_quote),
+                    "reference_price": str(reference_price),
+                    "position_base": str(qty),
+                    "position_notional_quote": str(notional_quote),
+                    "long_base": str(position.long_base),
+                    "short_base": str(position.short_base),
+                    "realized_pnl_quote": str(position.realized_pnl_quote),
+                    "funding_paid_quote_total": str(cumulative_funding_quote),
+                    "settlement_interval_ms": str(interval_ms),
+                    "last_funding_ts_ms": str(last_funding_ts_ms),
+                    "current_funding_ts_ms": str(int(now_ms)),
+                    "snapshot_event_id": str(snapshot.event_id or ""),
+                },
+            )
+            candidates.append(
+                FundingSettlementCandidate(
+                    position_key=position_key,
+                    leg_side=leg_side,
+                    funding_rate=funding_rate,
+                    charge_quote=charge_quote,
+                    reference_price=reference_price,
+                    position_base=qty,
+                    position_notional_quote=notional_quote,
+                    last_funding_ts_ms=last_funding_ts_ms,
+                    current_funding_ts_ms=int(now_ms),
+                    event=event,
+                )
+            )
+    return candidates
+
+
+def _commit_funding_settlement(state: PaperExchangeState, candidate: FundingSettlementCandidate) -> None:
+    position = state.positions_by_key.get(candidate.position_key)
+    if position is None:
+        return
+    position.funding_paid_quote += float(candidate.charge_quote)
+    position.last_funding_rate = float(candidate.funding_rate)
+    position.funding_event_count += 1
+    position.last_funding_ts_ms = int(candidate.current_funding_ts_ms)
+    state.funding_events_generated += 1
+    if float(candidate.charge_quote) > 0.0:
+        state.funding_debit_events += 1
+    else:
+        state.funding_credit_events += 1
+    state.funding_paid_quote_total += float(candidate.charge_quote)
+
+
 @dataclass
 class FillCandidate:
     event_id: str
@@ -656,6 +1060,80 @@ def _try_float(value: object) -> Optional[float]:
         return float(value)
     except Exception:
         return None
+
+
+def _decimal_from_metadata(metadata: Dict[str, str], key: str) -> Optional[Decimal]:
+    raw = metadata.get(key)
+    if raw is None:
+        return None
+    text = str(raw).strip()
+    if not text:
+        return None
+    try:
+        return Decimal(text)
+    except Exception:
+        return None
+
+
+def _is_multiple_of_increment(value: Decimal, increment: Decimal) -> bool:
+    if increment <= Decimal("0"):
+        return True
+    try:
+        remainder = value % increment
+    except Exception:
+        return False
+    return remainder == 0
+
+
+def _validate_order_constraints(
+    *,
+    metadata: Dict[str, str],
+    order_type: str,
+    amount_base: float,
+    price: Optional[float],
+    market_reference_price: Optional[float],
+) -> Optional[Tuple[str, Dict[str, str]]]:
+    min_quantity = _decimal_from_metadata(metadata, "min_quantity") or Decimal("0")
+    size_increment = _decimal_from_metadata(metadata, "size_increment") or Decimal("0")
+    price_increment = _decimal_from_metadata(metadata, "price_increment") or Decimal("0")
+    min_notional = _decimal_from_metadata(metadata, "min_notional") or Decimal("0")
+    amount_dec = Decimal(str(amount_base))
+    reference_price = market_reference_price if order_type == "market" else price
+    price_dec = Decimal(str(reference_price)) if reference_price is not None else None
+
+    if min_quantity > 0 and amount_dec < min_quantity:
+        return (
+            "below_min_quantity",
+            {
+                "amount_base": str(amount_dec),
+                "min_quantity": str(min_quantity),
+            },
+        )
+    if size_increment > 0 and not _is_multiple_of_increment(amount_dec, size_increment):
+        return (
+            "invalid_size_increment",
+            {
+                "amount_base": str(amount_dec),
+                "size_increment": str(size_increment),
+            },
+        )
+    if order_type != "market" and price_dec is not None and price_increment > 0 and not _is_multiple_of_increment(price_dec, price_increment):
+        return (
+            "invalid_price_increment",
+            {
+                "price": str(price_dec),
+                "price_increment": str(price_increment),
+            },
+        )
+    if min_notional > 0 and price_dec is not None and (amount_dec * price_dec) < min_notional:
+        return (
+            "below_min_notional",
+            {
+                "notional_quote": str(amount_dec * price_dec),
+                "min_notional": str(min_notional),
+            },
+        )
+    return None
 
 
 def _coerce_margin_mode(value: object) -> str:
@@ -940,10 +1418,11 @@ def _filter_levels_for_limit(
 
 
 def _order_matches_snapshot(order: OrderRecord, snapshot: PairSnapshot) -> bool:
+    snapshot_instance = _normalize(snapshot.instance_name)
     return (
-        _normalize(order.instance_name) == _normalize(snapshot.instance_name)
+        (not snapshot_instance or _normalize(order.instance_name) == snapshot_instance)
         and
-        _normalize(order.connector_name) == _normalize(snapshot.connector_name)
+        _normalize_connector_name(order.connector_name) == _normalize_connector_name(snapshot.connector_name)
         and str(order.trading_pair).upper() == str(snapshot.trading_pair).upper()
     )
 
@@ -1249,7 +1728,7 @@ def ingest_market_snapshot_payload(
     exchange_ts_ms = int(state_view.exchange_ts_ms) if state_view.exchange_ts_ms > 0 else None
     ingest_ts_ms = int(state_view.ingest_ts_ms) if state_view.ingest_ts_ms > 0 else None
     market_sequence = int(state_view.market_sequence) if state_view.market_sequence > 0 else None
-    connector_name = state_view.connector_name
+    connector_name = _canonical_connector_name(state_view.connector_name)
     trading_pair = state_view.trading_pair
     timestamp_ms = int(state_view.timestamp_ms)
     freshness_ts_ms = int(state_view.freshness_ts_ms)
@@ -1279,7 +1758,7 @@ def ingest_market_snapshot_payload(
         state.rejected_snapshots += 1
         return False, "invalid_top_of_book"
 
-    normalized_connector = _normalize(connector_name)
+    normalized_connector = _normalize_connector_name(connector_name)
     if allowed_connectors and normalized_connector not in allowed_connectors:
         state.rejected_snapshots += 1
         return False, "connector_not_allowed"
@@ -1341,6 +1820,7 @@ def build_heartbeat_event(
     )
     active_orders = sum(1 for order in state.orders_by_id.values() if order.state in _ACTIVE_ORDER_STATES)
     terminal_orders = sum(1 for order in state.orders_by_id.values() if order.state in _TERMINAL_ORDER_STATES)
+    active_positions = sum(1 for position in state.positions_by_key.values() if not _is_flat_position(position))
     latency_avg_ms = (
         int(state.command_latency_ms_sum / state.command_latency_samples)
         if state.command_latency_samples > 0
@@ -1381,6 +1861,7 @@ def build_heartbeat_event(
             "orders_total": str(len(state.orders_by_id)),
             "orders_active": str(active_orders),
             "orders_terminal": str(terminal_orders),
+            "positions_active": str(active_positions),
             "orders_pruned_total": str(state.orders_pruned_total),
             "l1_ready_pairs": str(l1_ready_pairs),
             "command_latency_samples": str(state.command_latency_samples),
@@ -1397,6 +1878,10 @@ def build_heartbeat_event(
             "market_fill_journal_write_failures": str(state.market_fill_journal_write_failures),
             "market_fill_journal_size": str(len(state.market_fill_events_by_id)),
             "market_row_fill_cap_hits": str(state.market_row_fill_cap_hits),
+            "funding_events_generated": str(state.funding_events_generated),
+            "funding_debit_events": str(state.funding_debit_events),
+            "funding_credit_events": str(state.funding_credit_events),
+            "funding_paid_quote_total": str(state.funding_paid_quote_total),
         },
     )
 
@@ -1438,6 +1923,12 @@ def handle_command_payload(
     state.command_latency_ms_sum += int(command_latency_ms)
     state.command_latency_ms_max = max(int(state.command_latency_ms_max), int(command_latency_ms))
     command_metadata = dict(command.metadata or {})
+    resolved_connector_name = _canonical_connector_name(command.connector_name)
+    if resolved_connector_name != str(command.connector_name or ""):
+        try:
+            command.connector_name = resolved_connector_name
+        except Exception:
+            pass
 
     normalized_producer = _normalize(command.producer)
     if allowed_producers and normalized_producer not in allowed_producers:
@@ -1450,7 +1941,19 @@ def handle_command_payload(
             metadata={"producer": str(command.producer), "allowed_producers": ",".join(sorted(allowed_producers))},
         )
 
-    normalized_connector = _normalize(command.connector_name)
+    if not str(command.instance_name or "").strip():
+        state.rejected_commands += 1
+        return _event_for_command(command=command, status="rejected", reason="missing_instance_name")
+
+    if not str(command.connector_name or "").strip():
+        state.rejected_commands += 1
+        return _event_for_command(command=command, status="rejected", reason="missing_connector_name")
+
+    if not str(command.trading_pair or "").strip():
+        state.rejected_commands += 1
+        return _event_for_command(command=command, status="rejected", reason="missing_trading_pair")
+
+    normalized_connector = _normalize_connector_name(command.connector_name)
     if allowed and normalized_connector not in allowed:
         state.rejected_commands += 1
         state.rejected_commands_disallowed_connector += 1
@@ -1590,6 +2093,23 @@ def handle_command_payload(
         best_ask = _snapshot_best_ask(pair_snapshot)
         best_bid_size = _snapshot_best_bid_size(pair_snapshot)
         best_ask_size = _snapshot_best_ask_size(pair_snapshot)
+        market_reference_price = _market_execution_price(side, pair_snapshot) if order_type == "market" else None
+        constraint_error = _validate_order_constraints(
+            metadata=metadata,
+            order_type=order_type,
+            amount_base=amount_base,
+            price=float(command.price) if command.price is not None else None,
+            market_reference_price=market_reference_price,
+        )
+        if constraint_error is not None:
+            state.rejected_commands += 1
+            reason, details = constraint_error
+            return _event_for_command(
+                command=command,
+                status="rejected",
+                reason=reason,
+                metadata=details,
+            )
         initial_state = "working"
         reason = "order_accepted"
         fill_price: Optional[float] = None
@@ -1722,6 +2242,14 @@ def handle_command_payload(
             position_mode=position_mode,
         )
         state.orders_by_id[order_id] = order_record
+        if order_record.filled_base > _MIN_FILL_EPSILON:
+            _apply_position_fill(
+                state=state,
+                order=order_record,
+                fill_amount_base=order_record.filled_base,
+                fill_price=float(fill_price if fill_price is not None else order_record.price),
+                now_ms=now,
+            )
         state.processed_commands += 1
         event_metadata = _order_metadata(order_record)
         event_metadata.update(
@@ -1944,9 +2472,24 @@ def process_command_rows(
                 terminal_order_ttl_ms=settings.terminal_order_ttl_ms,
                 max_orders_tracked=settings.max_orders_tracked,
             )
+        result_payload = result_event.model_dump()
+        identity_ok, identity_reason = validate_event_identity(result_payload)
+        if not identity_ok:
+            state.command_publish_failures += 1
+            logger.warning(
+                "paper_exchange command result dropped due to identity contract entry=%s source=%s reason=%s result_reason=%s",
+                entry_id,
+                source,
+                identity_reason,
+                result_event.reason,
+            )
+            if source == "reclaimed":
+                state.reclaimed_pending_entries += 1
+            ack_entry_ids.append(str(entry_id))
+            continue
         publish_result = client.xadd(
             stream=settings.event_stream,
-            payload=result_event.model_dump(),
+            payload=result_payload,
             maxlen=STREAM_RETENTION_MAXLEN.get(settings.event_stream),
         )
         if publish_result is None:
@@ -2009,7 +2552,12 @@ def process_command_rows(
                 logger.warning("paper_exchange command journal persist failed: %s", exc)
         if state_snapshot_path is not None and command_mutates_orders:
             try:
-                _persist_state_snapshot(state_snapshot_path, state.orders_by_id)
+                _persist_state_snapshot(
+                    state_snapshot_path,
+                    state.orders_by_id,
+                    state.positions_by_key,
+                    funding_summary=_funding_summary(state),
+                )
             except Exception as exc:
                 logger.warning("paper_exchange state snapshot persist failed: %s", exc)
 
@@ -2099,9 +2647,20 @@ def process_market_rows(
             if event_already_published:
                 state.deduplicated_market_fill_events += 1
             else:
+                fill_payload = fill_event.model_dump()
+                fill_identity_ok, fill_identity_reason = validate_event_identity(fill_payload)
+                if not fill_identity_ok:
+                    state.market_fill_publish_failures += 1
+                    logger.warning(
+                        "paper_exchange market fill dropped due to identity contract | entry=%s order_id=%s reason=%s",
+                        entry_id,
+                        order.order_id,
+                        fill_identity_reason,
+                    )
+                    continue
                 publish_result = client.xadd(
                     stream=settings.event_stream,
-                    payload=fill_event.model_dump(),
+                    payload=fill_payload,
                     maxlen=STREAM_RETENTION_MAXLEN.get(settings.event_stream),
                 )
                 if publish_result is None:
@@ -2136,6 +2695,13 @@ def process_market_rows(
             if not _apply_fill_candidate(order, candidate, now_ms=_now_ms()):
                 state.market_fill_invalid_transition_drops += 1
                 continue
+            _apply_position_fill(
+                state=state,
+                order=order,
+                fill_amount_base=float(candidate.fill_amount_base),
+                fill_price=float(candidate.fill_price),
+                now_ms=_now_ms(),
+            )
             if not event_already_published:
                 state.generated_fill_events += 1
                 if candidate.new_state == "partially_filled":
@@ -2143,11 +2709,63 @@ def process_market_rows(
             applied_count += 1
             if state_snapshot_path is not None:
                 try:
-                    _persist_state_snapshot(state_snapshot_path, state.orders_by_id)
+                    _persist_state_snapshot(
+                        state_snapshot_path,
+                        state.orders_by_id,
+                        state.positions_by_key,
+                        funding_summary=_funding_summary(state),
+                    )
                 except Exception as exc:
                     logger.warning("paper_exchange state snapshot persist failed after market fill: %s", exc)
                     persist_failed = True
                     break
+
+        if not publish_failed and not persist_failed and not cap_hit:
+            funding_events = _funding_events_for_snapshot(
+                state=state,
+                snapshot=snapshot,
+                funding_interval_ms=settings.funding_interval_ms,
+                now_ms=int(snapshot.freshness_ts_ms or snapshot.timestamp_ms or _now_ms()),
+            )
+            for funding_event in funding_events:
+                funding_payload = funding_event.event.model_dump()
+                identity_ok, identity_reason = validate_event_identity(funding_payload)
+                if not identity_ok:
+                    state.command_publish_failures += 1
+                    logger.warning(
+                        "paper_exchange funding settlement dropped due to identity contract | entry=%s pair=%s reason=%s",
+                        entry_id,
+                        snapshot.trading_pair,
+                        identity_reason,
+                    )
+                    publish_failed = True
+                    break
+                publish_result = client.xadd(
+                    stream=settings.event_stream,
+                    payload=funding_payload,
+                    maxlen=STREAM_RETENTION_MAXLEN.get(settings.event_stream),
+                )
+                if publish_result is None:
+                    state.command_publish_failures += 1
+                    logger.warning(
+                        "paper_exchange funding settlement publish failed | entry=%s pair=%s",
+                        entry_id,
+                        snapshot.trading_pair,
+                    )
+                    publish_failed = True
+                    break
+                _commit_funding_settlement(state, funding_event)
+            if not publish_failed and state_snapshot_path is not None and funding_events:
+                try:
+                    _persist_state_snapshot(
+                        state_snapshot_path,
+                        state.orders_by_id,
+                        state.positions_by_key,
+                        funding_summary=_funding_summary(state),
+                    )
+                except Exception as exc:
+                    logger.warning("paper_exchange state snapshot persist failed after funding settlement: %s", exc)
+                    persist_failed = True
 
         _prune_orders(
             state=state,
@@ -2184,6 +2802,7 @@ def run(settings: ServiceSettings) -> None:
     state = PaperExchangeState()
     state.command_results_by_id = _load_command_journal(command_journal_path)
     state.orders_by_id = _load_state_snapshot(state_snapshot_path)
+    state.positions_by_key = _load_position_snapshot(state_snapshot_path)
     state.market_fill_events_by_id = _load_market_fill_journal(market_fill_journal_path)
     state.market_fill_journal_next_seq = (
         max(state.market_fill_events_by_id.values()) if state.market_fill_events_by_id else 0
@@ -2440,6 +3059,12 @@ def _parse_args() -> ServiceSettings:
         default=int(os.getenv("PAPER_EXCHANGE_HEARTBEAT_INTERVAL_MS", "5000")),
     )
     parser.add_argument(
+        "--funding-interval-ms",
+        type=int,
+        default=int(os.getenv("PAPER_EXCHANGE_FUNDING_INTERVAL_MS", "28800000")),
+        help="Funding settlement cadence for open perp exposure.",
+    )
+    parser.add_argument(
         "--read-count",
         type=int,
         default=int(os.getenv("PAPER_EXCHANGE_READ_COUNT", "100")),
@@ -2580,6 +3205,7 @@ def _parse_args() -> ServiceSettings:
         resting_fill_latency_ms=max(0, int(args.resting_fill_latency_ms)),
         maker_queue_participation=min(1.0, max(0.0, float(args.maker_queue_participation))),
         market_sweep_depth_levels=max(1, int(args.market_sweep_depth_levels)),
+        funding_interval_ms=max(1_000, int(args.funding_interval_ms)),
         max_fill_events_per_market_row=max(1, int(args.max_fill_events_per_market_row)),
         heartbeat_interval_ms=max(1_000, int(args.heartbeat_interval_ms)),
         read_count=max(1, int(args.read_count)),

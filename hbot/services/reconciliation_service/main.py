@@ -3,6 +3,7 @@ from __future__ import annotations
 import argparse
 import csv
 import json
+import logging
 import os
 import time
 import uuid
@@ -13,9 +14,12 @@ from urllib.request import Request, urlopen
 
 from services.common.activity_scope import active_bots_from_minute_logs
 from services.common.event_store_reader import count_bot_fill_events, load_bot_snapshot_windows
+from services.common.log_namespace import iter_bot_log_files
 from services.common.utils import safe_bool as _safe_bool, safe_float as _safe_float, today_utc as _today, utc_now as _utc_now
 from services.contracts.stream_names import EXECUTION_INTENT_STREAM, STREAM_RETENTION_MAXLEN
 from services.hb_bridge.redis_client import RedisStreamClient
+
+logger = logging.getLogger(__name__)
 
 
 def _count_event_fills(path: Path, bot: str) -> int:
@@ -78,7 +82,7 @@ def _snapshot_windows_with_minute_log_fallback(
 ) -> Tuple[Dict[str, List[Dict[str, object]]], List[str]]:
     snapshot_windows = load_bot_snapshot_windows(event_store_root, max_snapshots_per_bot=max_snapshots_per_bot)
     fallback_bots: List[str] = []
-    for minute_file in data_root.glob("*/logs/epp_v24/*/minute.csv"):
+    for minute_file in iter_bot_log_files(data_root, "minute.csv"):
         try:
             bot = minute_file.parts[-5]
         except Exception:
@@ -109,6 +113,114 @@ def _load_fill_reconciliation_report(path: Path) -> Dict[str, object]:
     except Exception:
         return {}
     return payload if isinstance(payload, dict) else {}
+
+
+def _latest_json_artifact(path: Path, pattern: str) -> Tuple[Optional[Path], Dict[str, object]]:
+    candidates = sorted(path.glob(pattern))
+    if not candidates:
+        return None, {}
+    artifact_path = candidates[-1]
+    try:
+        payload = json.loads(artifact_path.read_text(encoding="utf-8"))
+    except Exception:
+        return artifact_path, {}
+    return artifact_path, payload if isinstance(payload, dict) else {}
+
+
+def _latest_source_compare_with_telemetry(path: Path) -> Tuple[Optional[Path], Dict[str, object]]:
+    fallback_path: Optional[Path] = None
+    fallback_payload: Dict[str, object] = {}
+    for artifact_path in reversed(sorted(path.glob("source_compare_*.json"))):
+        try:
+            payload = json.loads(artifact_path.read_text(encoding="utf-8"))
+        except Exception:
+            continue
+        if not isinstance(payload, dict):
+            continue
+        if fallback_path is None:
+            fallback_path = artifact_path
+            fallback_payload = payload
+        source_streams = payload.get("source_events_by_stream", {})
+        if isinstance(source_streams, dict) and "hb.bot_telemetry.v1" in source_streams:
+            return artifact_path, payload
+    return fallback_path, fallback_payload
+
+
+def _parse_utc_timestamp(value: object) -> Optional[datetime]:
+    raw = str(value or "").strip()
+    if not raw:
+        return None
+    try:
+        return datetime.fromisoformat(raw.replace("Z", "+00:00")).astimezone(timezone.utc)
+    except Exception:
+        return None
+
+
+def _telemetry_gap_diagnostics(event_store_root: Path, *, minute_ts: str = "") -> Dict[str, object]:
+    integrity_path, integrity = _latest_json_artifact(event_store_root, "integrity_*.json")
+    source_compare_path, source_compare = _latest_source_compare_with_telemetry(event_store_root)
+
+    integrity_streams = integrity.get("events_by_stream", {}) if isinstance(integrity.get("events_by_stream"), dict) else {}
+    source_streams = (
+        source_compare.get("source_events_by_stream", {})
+        if isinstance(source_compare.get("source_events_by_stream"), dict)
+        else {}
+    )
+    stored_streams = (
+        source_compare.get("stored_events_by_stream", {})
+        if isinstance(source_compare.get("stored_events_by_stream"), dict)
+        else {}
+    )
+    lag_streams = (
+        source_compare.get("lag_produced_minus_ingested_since_baseline", {})
+        if isinstance(source_compare.get("lag_produced_minus_ingested_since_baseline"), dict)
+        else {}
+    )
+    delta_streams = (
+        source_compare.get("delta_produced_minus_ingested_since_baseline", {})
+        if isinstance(source_compare.get("delta_produced_minus_ingested_since_baseline"), dict)
+        else {}
+    )
+
+    source_has_telemetry = "hb.bot_telemetry.v1" in source_streams
+    source_telemetry = int(source_streams.get("hb.bot_telemetry.v1", 0) or 0) if source_has_telemetry else None
+    stored_telemetry = int(
+        stored_streams.get("hb.bot_telemetry.v1", integrity_streams.get("hb.bot_telemetry.v1", 0)) or 0
+    )
+    telemetry_lag = int(lag_streams.get("hb.bot_telemetry.v1", 0) or 0)
+    telemetry_delta = int(delta_streams.get("hb.bot_telemetry.v1", 0) or 0)
+
+    integrity_ts = _parse_utc_timestamp(integrity.get("last_update_utc") or integrity.get("ts_utc"))
+    source_compare_ts = _parse_utc_timestamp(source_compare.get("ts_utc"))
+    minute_dt = _parse_utc_timestamp(minute_ts)
+
+    suspected_gap_stage = "publisher"
+    diagnostic_basis = "telemetry_stream_activity_healthy_but_bot_scoped_events_missing"
+    if source_compare_path is None or not source_has_telemetry:
+        suspected_gap_stage = "artifact_selection"
+        diagnostic_basis = "telemetry_stream_missing_from_source_compare_artifact"
+    elif source_telemetry is not None and source_telemetry <= 0:
+        suspected_gap_stage = "publisher"
+        diagnostic_basis = "no_bot_telemetry_seen_in_source_stream"
+    elif telemetry_lag > 0 or telemetry_delta > 0 or source_telemetry is not None and source_telemetry > stored_telemetry:
+        suspected_gap_stage = "ingest"
+        diagnostic_basis = "bot_telemetry_present_in_source_but_not_fully_persisted"
+    elif minute_dt is not None and integrity_ts is not None and integrity_ts < minute_dt:
+        suspected_gap_stage = "artifact_selection"
+        diagnostic_basis = "event_store_integrity_artifact_older_than_bot_activity"
+
+    return {
+        "suspected_gap_stage": suspected_gap_stage,
+        "diagnostic_basis": diagnostic_basis,
+        "integrity_file": str(integrity_path) if integrity_path else "",
+        "integrity_ts_utc": integrity.get("last_update_utc", integrity.get("ts_utc", "")),
+        "source_compare_file": str(source_compare_path) if source_compare_path else "",
+        "source_compare_ts_utc": str(source_compare.get("ts_utc", "")),
+        "source_telemetry_events": source_telemetry,
+        "stored_telemetry_events": stored_telemetry,
+        "telemetry_lag_since_baseline": telemetry_lag,
+        "telemetry_delta_since_baseline": telemetry_delta,
+    }
 
 
 def _apply_fill_reconciliation_report(
@@ -273,7 +385,8 @@ def _emit_webhook_alert(report: Dict[str, object], webhook_url: str, min_severit
         req = Request(webhook_url, data=data, headers={"Content-Type": "application/json"}, method="POST")
         with urlopen(req, timeout=5) as resp:
             return int(getattr(resp, "status", 500)) < 300
-    except Exception:
+    except Exception as exc:
+        logger.warning("reconciliation webhook alert failed status=%s webhook=%s: %s", status, webhook_url, exc)
         return False
 
 
@@ -480,6 +593,27 @@ def run(once: bool = False, synthetic_drift: bool = False) -> None:
             if bot in raw_snapshot_windows:
                 continue
             checked_bot_names.add(bot)
+            snapshot_gap_diag = _telemetry_gap_diagnostics(
+                event_store_root,
+                minute_ts=str(activity.get("ts", "")),
+            )
+            if bot in snapshot_windows:
+                findings.append(
+                    _severity(
+                        "warning",
+                        "event_store",
+                        "missing_bot_minute_snapshot_event_store_fallback_used",
+                        bot,
+                        {
+                            "event_store_root": str(event_store_root),
+                            "minute_path": str(activity.get("minute_path", "")),
+                            "active_within_minutes": active_bot_window_min,
+                            "minute_age_seconds": float(activity.get("age_seconds", 0.0)),
+                            **snapshot_gap_diag,
+                        },
+                    )
+                )
+                continue
             findings.append(
                 _severity(
                     "critical",
@@ -491,6 +625,7 @@ def run(once: bool = False, synthetic_drift: bool = False) -> None:
                         "minute_path": str(activity.get("minute_path", "")),
                         "active_within_minutes": active_bot_window_min,
                         "minute_age_seconds": float(activity.get("age_seconds", 0.0)),
+                        **snapshot_gap_diag,
                     },
                 )
             )
@@ -627,6 +762,7 @@ def run(once: bool = False, synthetic_drift: bool = False) -> None:
                 today_day = datetime.now(timezone.utc).strftime("%Y-%m-%d")
                 fills_today = int(_safe_float(minute.get("fills_count_today"), 0.0))
                 if minute_day == today_day and fills_today > 0 and fills_events == 0:
+                    fill_gap_diag = _telemetry_gap_diagnostics(event_store_root, minute_ts=minute_ts)
                     findings.append(
                         _severity(
                             "critical",
@@ -640,6 +776,7 @@ def run(once: bool = False, synthetic_drift: bool = False) -> None:
                                 "minute_day": minute_day,
                                 "today_day": today_day,
                                 "active_day_scope": True,
+                                **fill_gap_diag,
                             },
                         )
                     )

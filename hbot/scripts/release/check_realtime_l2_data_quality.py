@@ -184,7 +184,8 @@ def run(
                 seq_by_key[key] = seq_val
 
     sequence_ok = (
-        sequence_out_of_order == 0
+        sequence_duplicates == 0
+        and sequence_out_of_order == 0
         and sequence_large_gap_violations == 0
     )
     checks.append(

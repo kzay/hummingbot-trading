@@ -9,6 +9,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Dict, List, Optional, Tuple
 
+from services.common.log_namespace import iter_bot_log_files
 from services.common.activity_scope import active_bots_from_minute_logs
 from services.common.utils import (
     safe_bool as _safe_bool,
@@ -59,7 +60,7 @@ def _read_latest_csv_row(path: Path) -> Optional[Dict[str, str]]:
 
 def _load_controller_market_rows(data_root: Path) -> Dict[str, Dict[str, object]]:
     rows: Dict[str, Dict[str, object]] = {}
-    for minute_file in data_root.glob("*/logs/epp_v24/*/minute.csv"):
+    for minute_file in iter_bot_log_files(data_root, "minute.csv"):
         try:
             bot = minute_file.parts[-5]
         except Exception:
@@ -83,7 +84,7 @@ def _load_controller_market_rows(data_root: Path) -> Dict[str, Dict[str, object]
 
 def _load_latest_fill_rows(data_root: Path) -> Dict[str, Dict[str, object]]:
     rows: Dict[str, Dict[str, object]] = {}
-    for fills_file in data_root.glob("*/logs/epp_v24/*/fills.csv"):
+    for fills_file in iter_bot_log_files(data_root, "fills.csv"):
         try:
             bot = fills_file.parts[-5]
         except Exception:
@@ -604,7 +605,7 @@ def run(once: bool = False) -> None:
 
         # Add equity path from minute.csv for realized PnL proxy.
         now_ms = int(time.time() * 1000)
-        for minute_file in data_root.glob("*/logs/epp_v24/*/minute.csv"):
+        for minute_file in iter_bot_log_files(data_root, "minute.csv"):
             bot = minute_file.parts[-5]
             if bot not in per_bot:
                 per_bot[bot] = {

@@ -1,0 +1,63 @@
+{
+  "status": "warning",
+  "ts_utc": "2026-03-10T00:33:28.377925+00:00",
+  "checks": [
+    {
+      "name": "controller_tick_p95_budget",
+      "pass": true,
+      "reason": "samples=18643 p95_ms=117.331 max=250.000"
+    },
+    {
+      "name": "exporter_render_p95_budget",
+      "pass": true,
+      "reason": "samples=5 p95_ms=91.808 max=500.000"
+    },
+    {
+      "name": "event_store_ingest_p95_budget",
+      "pass": false,
+      "reason": "samples=0 p95_ms=0.000 max=250.000"
+    }
+  ],
+  "controller_tick_ms": {
+    "samples": 18643.0,
+    "p50_ms": 29.51626101275906,
+    "p95_ms": 117.331159004243,
+    "p99_ms": 312.3926749743986,
+    "max_ms": 7732.000135001726
+  },
+  "indicator_ms": {
+    "samples": 18643.0,
+    "p50_ms": 0.22914601140655577,
+    "p95_ms": 32.72901670425199,
+    "p99_ms": 79.20188826334197,
+    "max_ms": 508.5343850078061
+  },
+  "connector_io_ms": {
+    "samples": 18643.0,
+    "p50_ms": 26.77766198758036,
+    "p95_ms": 105.43243650463393,
+    "p99_ms": 196.0491140041266,
+    "max_ms": 3711.3518430269323
+  },
+  "exporter_render_ms": {
+    "samples": 5.0,
+    "p50_ms": 88.2189999999996,
+    "p95_ms": 91.8077000000002,
+    "p99_ms": 92.50346000000032,
+    "max_ms": 92.67740000000035
+  },
+  "event_store_ingest_ms": {
+    "samples": 0.0,
+    "p50_ms": 0.0,
+    "p95_ms": 0.0,
+    "p99_ms": 0.0,
+    "max_ms": 0.0
+  },
+  "diagnostics": {
+    "missing_families": [
+      "event_store_ingest"
+    ],
+    "event_store_stats_path": "F:\\Environement\\git-repo\\hummingbot_custo\\hbot\\reports\\event_store\\integrity_20260308.json",
+    "exporter_render_samples_requested": 5
+  }
+}

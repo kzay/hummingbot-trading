@@ -67,6 +67,32 @@ Run this at least once before any near-live promotion window and after any backu
    - `reports/ops/ops_db_restore_drill_latest.json`
 4. Keep promotion blocked if either report is stale, failed, or shows query mismatches after restore.
 
+## Shared Market History Rollout
+Use this when enabling provider-backed history reads or runtime seeding.
+
+1. Follow:
+   - `docs/ops/shared_market_history_runbook.md`
+2. Generate/refresh evidence:
+   - `python scripts/ops/backfill_market_bar_v2.py --dry-run`
+   - `python scripts/ops/backfill_market_bar_v2.py`
+   - `python scripts/ops/report_market_bar_v2_capacity.py`
+3. Run promotion gates:
+   - `python scripts/release/run_promotion_gates.py --ci`
+4. Keep rollout blocked if backfill parity, seed rollout, or capacity evidence is stale/failing.
+
+## Active Paper Market Feed
+Use this when active paper bots depend on shared quote snapshots from `market-data-service`.
+
+1. Keep discovery enabled unless you are doing a deliberate one-off override:
+   - `MARKET_DATA_SERVICE_AUTO_DISCOVER=true`
+   - `MARKET_DATA_SERVICE_CONTROLLER_CONFIG_ROOT=/workspace/hbot/data`
+2. Scope discovered feeds to the execution desk connectors so unrelated venues do not flood the shared quote stream:
+   - `MARKET_DATA_SERVICE_DISCOVERY_CONNECTORS=bitget_perpetual`
+3. After any controller-pair change or feed restart, verify:
+   - `reports/market_data_service/latest.json`
+   - `reports/verification/paper_exchange_pair_snapshot_latest.json`
+4. If active submits fail with `no_market_snapshot`, confirm the missing pair exists in both artifacts before changing command TTLs or bot logic.
+
 ## Near-Live Release Discipline
 Use this sequence when preparing a candidate build so ROAD-1 / ROAD-5 evidence and strict promotion stay aligned.
 

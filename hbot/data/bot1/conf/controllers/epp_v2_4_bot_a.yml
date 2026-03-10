@@ -1,7 +1,7 @@
 # EPP v2.4 — Bot A (Primary Strategy)
 # Mode is controlled by BOT_MODE env var (paper|live), NOT by this file.
 id: epp_v2_4_bot_a
-controller_name: epp_v2_4
+controller_name: epp_v2_4_bot1
 controller_type: market_making
 
 # ── Connector ──────────────────────────────────────────────────────
@@ -23,11 +23,11 @@ leverage: 1
 position_mode: ONEWAY
 stop_loss: 0.0015
 # Profit-taking should happen on realistic intraday swings, not only on wide moves.
-take_profit: 0.0006
-time_limit: 240
+take_profit: 0.000765
+time_limit: 420
 take_profit_order_type: LIMIT
 skip_rebalance: false
-position_rebalance_min_base_mult: 1
+position_rebalance_min_base_mult: 3.75
 
 # ── Identity ───────────────────────────────────────────────────────
 variant: a
@@ -108,9 +108,9 @@ selective_max_levels_per_side: 1
 # Hybrid MM redesign: forward-looking policy decides when to stand down, bias,
 # or quote near touch for inventory relief.
 alpha_policy_enabled: true
-alpha_policy_no_trade_threshold: 0.30
+alpha_policy_no_trade_threshold: 0.35
 alpha_policy_aggressive_threshold: 0.92
-alpha_policy_inventory_relief_threshold: 0.70
+alpha_policy_inventory_relief_threshold: 0.80
 alpha_policy_cross_spread_mult: 1.40
 # Keep quotes competitive to live top-of-book while preserving floor safety.
 max_quote_to_market_spread_mult: 0.00
@@ -134,12 +134,12 @@ derisk_force_taker_after_s: 300
 # Reset derisk force timer on smaller progress increments.
 derisk_progress_reset_ratio: 0.005
 # Require material imbalance before forcing taker-style derisk.
-derisk_force_taker_min_base_mult: 8.0
+derisk_force_taker_min_base_mult: 12.0
 # Block force-taker escalation when recent taker fills are deeply unprofitable.
 derisk_force_taker_expectancy_guard_enabled: true
 derisk_force_taker_expectancy_window_fills: 300
 derisk_force_taker_expectancy_min_taker_fills: 60
-derisk_force_taker_expectancy_min_quote: 0.02
+derisk_force_taker_expectancy_min_quote: 0.05
 # Still allow force-taker for very large inventory imbalances.
 derisk_force_taker_expectancy_override_base_mult: 30.0
 
@@ -230,13 +230,13 @@ regime_specs_override:
     target_base_pct: "0.0"
     fill_factor: "0.45"
   neutral_low_vol:
-    spread_min: "0.00045"
-    spread_max: "0.00110"
+    spread_min: "0.00060"
+    spread_max: "0.00135"
     levels_min: 1
     levels_max: 1
-    refresh_s: 120
+    refresh_s: 150
     target_base_pct: "0.0"
-    fill_factor: "0.42"
+    fill_factor: "0.35"
   neutral_high_vol:
     one_sided: "off"
     spread_min: "0.00025"

@@ -1,7 +1,7 @@
 # EPP v2.4 — Bitget Paper Smoke Profile (quick test)
 # Only used when SCRIPT_CONFIG points to the smoke script config.
 id: epp_v2_4_bitget_paper_smoke
-controller_name: epp_v2_4
+controller_name: epp_v2_4_bot1
 controller_type: market_making
 
 # ── Connector ──────────────────────────────────────────────────────

@@ -4,12 +4,14 @@ import time
 from pathlib import Path
 from typing import Dict
 
+from services.common.log_namespace import iter_bot_log_files
+
 
 def active_bots_from_minute_logs(data_root: Path, *, active_within_minutes: int = 30) -> Dict[str, Dict[str, object]]:
     now_ts = time.time()
     max_age_seconds = max(1, int(active_within_minutes)) * 60
     active: Dict[str, Dict[str, object]] = {}
-    for minute_file in data_root.glob("*/logs/epp_v24/*/minute.csv"):
+    for minute_file in iter_bot_log_files(data_root, "minute.csv"):
         try:
             mtime = float(minute_file.stat().st_mtime)
         except Exception:

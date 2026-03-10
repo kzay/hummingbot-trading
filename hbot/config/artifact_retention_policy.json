@@ -1,6 +1,6 @@
 {
   "version": 1,
-  "default_mode": "dry_run",
+  "default_mode": "apply",
   "rules": [
     {
       "name": "event_store",
@@ -28,6 +28,11 @@
       "keep_days": 60
     },
     {
+      "name": "verification",
+      "glob": "reports/verification/*",
+      "keep_days": 30
+    },
+    {
       "name": "replay_regression",
       "glob": "reports/replay_regression/**/*",
       "keep_days": 60
@@ -46,6 +51,31 @@
       "name": "dev_checks",
       "glob": "reports/dev_checks/*",
       "keep_days": 14
+    },
+    {
+      "name": "analysis",
+      "glob": "reports/analysis/*",
+      "keep_days": 30
+    },
+    {
+      "name": "policy",
+      "glob": "reports/policy/*",
+      "keep_days": 30
+    },
+    {
+      "name": "ops",
+      "glob": "reports/ops/*",
+      "keep_days": 30
+    },
+    {
+      "name": "ops_retention",
+      "glob": "reports/ops_retention/*",
+      "keep_days": 30
+    },
+    {
+      "name": "ops_db_writer",
+      "glob": "reports/ops_db_writer/*",
+      "keep_days": 30
     }
   ],
   "protect_latest": [
@@ -54,10 +84,26 @@
     "reports/replay_regression/latest.md",
     "reports/reconciliation/latest.json",
     "reports/parity/latest.json",
+    "reports/parity/drift_audit_latest.json",
     "reports/portfolio_risk/latest.json",
     "reports/readiness/final_decision_latest.json",
     "reports/soak/latest.json",
     "reports/dev_checks/latest.json",
-    "reports/event_store/day2_gate_eval_latest.json"
+    "reports/event_store/day2_gate_eval_latest.json",
+    "reports/verification/runtime_performance_budgets_latest.json",
+    "reports/verification/realtime_l2_data_quality_latest.json",
+    "reports/verification/paper_exchange_command_journal_latest.json",
+    "reports/verification/paper_exchange_market_fill_journal_latest.json",
+    "reports/verification/paper_exchange_pair_snapshot_latest.json",
+    "reports/verification/paper_exchange_state_snapshot_latest.json",
+    "reports/analysis/performance_dossier_latest.json",
+    "reports/analysis/performance_dossier_latest.md",
+    "reports/policy/portfolio_allocator_latest.json",
+    "reports/ops/dashboard_data_ready_latest.json",
+    "reports/ops/testnet_readiness_latest.json",
+    "reports/ops/go_live_checklist_evidence_latest.json",
+    "reports/ops/market_bar_v2_backfill_latest.json",
+    "reports/ops_retention/latest.json",
+    "reports/ops_db_writer/latest.json"
   ]
 }

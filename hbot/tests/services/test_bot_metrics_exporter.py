@@ -20,6 +20,11 @@ def _write_minute_csv(path, include_net: bool) -> None:
         "fills_count_today",
         "realized_pnl_today_quote",
         "funding_cost_today_quote",
+        "history_seed_status",
+        "history_seed_reason",
+        "history_seed_source",
+        "history_seed_bars",
+        "history_seed_latency_ms",
         "ws_reconnect_count",
         "pnl_governor_target_effective_pct",
         "pnl_governor_size_mult_applied",
@@ -61,6 +66,11 @@ def _write_minute_csv(path, include_net: bool) -> None:
         "fills_count_today": "4",
         "realized_pnl_today_quote": "12.5",
         "funding_cost_today_quote": "1.5",
+        "history_seed_status": "fresh",
+        "history_seed_reason": "",
+        "history_seed_source": "db_v2",
+        "history_seed_bars": "33",
+        "history_seed_latency_ms": "87.5",
         "ws_reconnect_count": "0",
         "pnl_governor_target_effective_pct": "1.0",
         "pnl_governor_size_mult_applied": "1.15",
@@ -130,6 +140,23 @@ def test_governor_and_competitiveness_metrics_are_exported(tmp_path) -> None:
     assert 'target_mode="pct_equity"' in text
 
 
+def test_history_seed_metrics_are_exported(tmp_path) -> None:
+    minute_file = tmp_path / "bot1" / "logs" / "epp_v24" / "bot1_a" / "minute.csv"
+    _write_minute_csv(minute_file, include_net=True)
+
+    exporter = BotMetricsExporter(data_root=tmp_path)
+    text = exporter.render_prometheus()
+
+    assert "hbot_history_seed_status" in text
+    assert 'status="fresh"' in text
+    assert "hbot_history_seed_bars_count" in text
+    assert " 33.0" in text or " 33\n" in text
+    assert "hbot_history_seed_latency_ms" in text
+    assert " 87.5" in text
+    assert "hbot_history_seed_info" in text
+    assert 'source="db_v2"' in text
+
+
 def test_gate_diagnostics_metrics_are_exported(tmp_path) -> None:
     minute_file = tmp_path / "bot1" / "logs" / "epp_v24" / "bot1_a" / "minute.csv"
     _write_minute_csv(minute_file, include_net=True)
@@ -197,6 +224,53 @@ def test_bot6_directional_metrics_are_exported(tmp_path) -> None:
     assert "hbot_bot6_signal_score_active" in text
     assert "hbot_bot6_cvd_divergence_ratio" in text
     assert "hbot_bot6_delta_spike_ratio" in text
+
+
+def test_standardized_dedicated_bot_signal_scores_are_exported(tmp_path) -> None:
+    minute_file = tmp_path / "bot7" / "logs" / "epp_v24" / "bot7_a" / "minute.csv"
+    minute_file.parent.mkdir(parents=True, exist_ok=True)
+    headers = [
+        "ts",
+        "bot_variant",
+        "bot_mode",
+        "accounting_source",
+        "exchange",
+        "trading_pair",
+        "state",
+        "regime",
+        "equity_quote",
+        "bot1_signal_score",
+        "bot5_signal_score",
+        "bot6_signal_score",
+        "bot7_signal_score",
+    ]
+    values = {
+        "ts": "2026-02-27T22:00:00+00:00",
+        "bot_variant": "a",
+        "bot_mode": "paper",
+        "accounting_source": "paper_desk_v2",
+        "exchange": "bitget_perpetual",
+        "trading_pair": "BTC-USDT",
+        "state": "running",
+        "regime": "neutral_low_vol",
+        "equity_quote": "500",
+        "bot1_signal_score": "0.42",
+        "bot5_signal_score": "0.75",
+        "bot6_signal_score": "8",
+        "bot7_signal_score": "0.66",
+    }
+    minute_file.write_text(
+        ",".join(headers) + "\n" + ",".join(values[h] for h in headers) + "\n",
+        encoding="utf-8",
+    )
+
+    exporter = BotMetricsExporter(data_root=tmp_path)
+    text = exporter.render_prometheus()
+
+    assert "hbot_bot1_signal_score" in text
+    assert "hbot_bot5_signal_score" in text
+    assert "hbot_bot6_signal_score" in text
+    assert "hbot_bot7_signal_score" in text
 
 
 def test_open_and_closed_trade_table_metrics_are_exported(tmp_path) -> None:
@@ -312,3 +386,107 @@ def test_render_uses_cache_until_ttl_expires(tmp_path) -> None:
     assert first
     assert second
     assert exporter.render_calls == 1
+    assert "hbot_exporter_render_requests_total 2.0" in second
+    assert "hbot_exporter_render_cache_hits_total 1.0" in second
+    assert "hbot_exporter_render_cache_hit_ratio 0.500000" in second
+
+
+def test_render_falls_back_to_stale_cache_after_refresh_failure(tmp_path) -> None:
+    minute_file = tmp_path / "bot1" / "logs" / "epp_v24" / "bot1_a" / "minute.csv"
+    _write_minute_csv(minute_file, include_net=True)
+
+    class _FlakyExporter(BotMetricsExporter):
+        def __init__(self, *args, **kwargs):
+            super().__init__(*args, **kwargs)
+            self.render_calls = 0
+
+        def _render_prometheus_impl(self) -> str:
+            self.render_calls += 1
+            if self.render_calls == 1:
+                return super()._render_prometheus_impl()
+            raise RuntimeError("forced exporter render failure")
+
+    exporter = _FlakyExporter(data_root=tmp_path, cache_ttl_seconds=1)
+    first = exporter.render_prometheus()
+    exporter._last_render_monotonic -= 10.0
+    second = exporter.render_prometheus()
+
+    assert "hbot_bot_fills_total" in first
+    assert "hbot_bot_fills_total" in second
+    assert exporter.render_calls == 2
+    assert "hbot_exporter_stale_cache_fallback_total 1.0" in second
+    assert "hbot_exporter_render_failures_total 1.0" in second
+
+
+def test_source_read_failures_are_exported(tmp_path) -> None:
+    minute_file = tmp_path / "bot1" / "logs" / "epp_v24" / "bot1_a" / "minute.csv"
+    _write_minute_csv(minute_file, include_net=True)
+    minute_file.parent.joinpath("paper_desk_v2.json").write_text("{invalid", encoding="utf-8")
+
+    exporter = BotMetricsExporter(data_root=tmp_path)
+    text = exporter.render_prometheus()
+
+    assert 'hbot_exporter_source_read_failures_total{source="portfolio"} 1.0' in text
+
+
+def test_fill_stats_and_minute_history_use_file_cache(tmp_path) -> None:
+    minute_file = tmp_path / "bot1" / "logs" / "epp_v24" / "bot1_a" / "minute.csv"
+    fills_file = minute_file.parent / "fills.csv"
+    _write_minute_csv(minute_file, include_net=True)
+    fills_file.write_text(
+        "\n".join(
+            [
+                "ts,side,notional_quote,fee_quote,price,amount_base,realized_pnl_quote,is_maker,mid_ref,expected_spread_pct,adverse_drift_30s",
+                "2026-02-27T22:00:00+00:00,buy,100,0.1,100,1,1.0,true,100,0.001,0.0",
+            ]
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+
+    exporter = BotMetricsExporter(data_root=tmp_path)
+    fill_stats_first = exporter._cached_fill_stats(fills_file)
+    fill_stats_second = exporter._cached_fill_stats(fills_file)
+    history_first = exporter._cached_minute_history(minute_file)
+    history_second = exporter._cached_minute_history(minute_file)
+
+    assert fill_stats_first is fill_stats_second
+    assert history_first is history_second
+
+
+def test_default_fills_summary_is_reused_across_snapshot_reads(tmp_path) -> None:
+    minute_file = tmp_path / "bot1" / "logs" / "epp_v24" / "bot1_a" / "minute.csv"
+    fills_file = minute_file.parent / "fills.csv"
+    _write_minute_csv(minute_file, include_net=True)
+    fills_file.write_text(
+        "\n".join(
+            [
+                "ts,side,notional_quote,fee_quote,price,amount_base,realized_pnl_quote,is_maker,mid_ref,expected_spread_pct,adverse_drift_30s,order_id,state",
+                "2026-02-27T22:00:00+00:00,buy,100,0.1,100,1,1.0,true,100,0.001,0.0,o1,running",
+            ]
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+
+    class _CountingExporter(BotMetricsExporter):
+        def __init__(self, *args, **kwargs):
+            super().__init__(*args, **kwargs)
+            self.fills_scan_calls = 0
+            self.minute_scan_calls = 0
+
+        def _scan_fills_file(self, fills_path, recent_limit: int = 50):
+            self.fills_scan_calls += 1
+            return super()._scan_fills_file(fills_path, recent_limit=recent_limit)
+
+        def _scan_minute_file(self, minute_path):
+            self.minute_scan_calls += 1
+            return super()._scan_minute_file(minute_path)
+
+    exporter = _CountingExporter(data_root=tmp_path)
+    snapshot = exporter.collect()[0]
+
+    assert snapshot.fills_total == 1.0
+    assert snapshot.minute_rows_total == 1.0
+    assert exporter.fills_scan_calls == 1
+    assert exporter.minute_scan_calls == 1

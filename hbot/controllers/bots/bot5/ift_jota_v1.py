@@ -1,10 +1,13 @@
 from __future__ import annotations
 
 from decimal import Decimal
-from typing import Any, Dict, Tuple
+from typing import Any, Dict, List, Tuple
 
 from pydantic import Field
 
+from controllers.runtime.data_context import RuntimeDataContext
+from controllers.runtime.directional_core import DirectionalRuntimeAdapter
+from controllers.runtime.execution_context import RuntimeExecutionPlan
 from controllers.runtime.base import StrategyRuntimeV24Config, StrategyRuntimeV24Controller
 from controllers.runtime.market_making_types import MarketConditions, RegimeSpec, SpreadEdgeState, clip
 from services.common.utils import to_decimal
@@ -20,6 +23,12 @@ class Bot5IftJotaV1Config(StrategyRuntimeV24Config):
     """Bot5 IFT/JOTA strategy lane over shared runtime."""
 
     controller_name: str = "bot5_ift_jota_v1"
+    shared_edge_gate_enabled: bool = Field(default=False)
+    alpha_policy_enabled: bool = Field(default=False)
+    selective_quoting_enabled: bool = Field(default=False)
+    adverse_fill_soft_pause_enabled: bool = Field(default=False)
+    edge_confidence_soft_pause_enabled: bool = Field(default=False)
+    slippage_soft_pause_enabled: bool = Field(default=False)
     bot5_flow_imbalance_threshold: Decimal = Field(
         default=Decimal("0.18"),
         description="Minimum absolute order-book imbalance needed before flow conviction is considered meaningful.",
@@ -57,6 +66,9 @@ class Bot5IftJotaV1Controller(StrategyRuntimeV24Controller):
         super().__init__(config, *args, **kwargs)
         self._bot5_flow_state: Dict[str, Any] = self._empty_bot5_flow_state()
 
+    def _make_runtime_family_adapter(self):
+        return DirectionalRuntimeAdapter(self)
+
     def _empty_bot5_flow_state(self) -> Dict[str, Any]:
         return {
             "direction": "off",
@@ -70,6 +82,72 @@ class Bot5IftJotaV1Controller(StrategyRuntimeV24Controller):
             "low_conviction": True,
             "reason": "inactive",
         }
+
+    def _bot5_gate_metrics(self) -> Dict[str, Any]:
+        flow_state = getattr(self, "_bot5_flow_state", None) or self._empty_bot5_flow_state()
+        reason = str(flow_state.get("reason", "inactive"))
+        directional_allowed = bool(flow_state.get("directional_allowed", False))
+        bias_active = bool(flow_state.get("bias_active", False))
+        fail_closed = reason in {"selective_blocked", "fill_edge_below_cost_floor"}
+        if fail_closed:
+            gate_state = "blocked"
+        elif directional_allowed or bias_active:
+            gate_state = "active"
+        else:
+            gate_state = "idle"
+        return {
+            "state": gate_state,
+            "reason": reason,
+            "fail_closed": fail_closed,
+            "conviction": to_decimal(flow_state.get("conviction", _ZERO)),
+        }
+
+    def _compute_alpha_policy(
+        self,
+        *,
+        regime_name: str,
+        spread_state: SpreadEdgeState,
+        market: MarketConditions,
+        target_net_base_pct: Decimal,
+        base_pct_net: Decimal,
+    ) -> Dict[str, Decimal | str | bool]:
+        gate = self._bot5_gate_metrics()
+        conviction = to_decimal(gate["conviction"])
+        metrics: Dict[str, Decimal | str | bool] = {
+            "state": "bot5_strategy_gate",
+            "reason": str(gate["reason"]),
+            "maker_score": conviction,
+            "aggressive_score": _ZERO,
+            "cross_allowed": False,
+        }
+        self._alpha_policy_state = str(metrics["state"])
+        self._alpha_policy_reason = str(metrics["reason"])
+        self._alpha_maker_score = conviction
+        self._alpha_aggressive_score = _ZERO
+        self._alpha_cross_allowed = False
+        return metrics
+
+    def _evaluate_all_risk(
+        self,
+        spread_state: SpreadEdgeState,
+        base_pct_gross: Decimal,
+        equity_quote: Decimal,
+        projected_total_quote: Decimal,
+        market: MarketConditions,
+    ) -> Tuple[List[str], bool, Decimal, Decimal]:
+        risk_reasons, risk_hard_stop, daily_loss_pct, drawdown_pct = super()._evaluate_all_risk(
+            spread_state=spread_state,
+            base_pct_gross=base_pct_gross,
+            equity_quote=equity_quote,
+            projected_total_quote=projected_total_quote,
+            market=market,
+        )
+        gate = self._bot5_gate_metrics()
+        if bool(gate["fail_closed"]):
+            gate_reason = f"bot5_{gate['reason']}"
+            if gate_reason not in risk_reasons:
+                risk_reasons.append(gate_reason)
+        return risk_reasons, risk_hard_stop, daily_loss_pct, drawdown_pct
 
     def _bot5_update_flow_state(self, mid: Decimal, regime_name: str, band_pct: Decimal) -> Dict[str, Any]:
         ema_val = to_decimal(getattr(self, "_regime_ema_value", _ZERO) or _ZERO)
@@ -205,9 +283,11 @@ class Bot5IftJotaV1Controller(StrategyRuntimeV24Controller):
         regime_name: str,
         regime_spec: RegimeSpec,
     ) -> str:
-        base_mode = super()._resolve_quote_side_mode(mid=mid, regime_name=regime_name, regime_spec=regime_spec)
+        base_mode = regime_spec.one_sided
         flow_state = getattr(self, "_bot5_flow_state", None) or self._empty_bot5_flow_state()
         if not bool(flow_state.get("directional_allowed", False)):
+            self._quote_side_mode = base_mode
+            self._quote_side_reason = "regime"
             return base_mode
 
         desired_mode = "buy_only" if str(flow_state.get("direction")) == "buy" else "sell_only"
@@ -258,28 +338,78 @@ class Bot5IftJotaV1Controller(StrategyRuntimeV24Controller):
         mid: Decimal,
         market: MarketConditions,
     ) -> Tuple[list[Decimal], list[Decimal], Decimal, Decimal]:
-        buy_spreads, sell_spreads, projected_total_quote, size_mult = super()._compute_levels_and_sizing(
-            regime_name, regime_spec, spread_state, equity_quote, mid, market
+        plan = self.build_runtime_execution_plan(
+            RuntimeDataContext(
+                now_ts=float(self.market_data_provider.time()),
+                mid=mid,
+                regime_name=regime_name,
+                regime_spec=regime_spec,
+                spread_state=spread_state,
+                market=market,
+                equity_quote=equity_quote,
+                target_base_pct=regime_spec.target_base_pct,
+                target_net_base_pct=to_decimal(getattr(self, "processed_data", {}).get("target_net_base_pct", regime_spec.target_base_pct)),
+                base_pct_gross=to_decimal(getattr(self, "processed_data", {}).get("base_pct", _ZERO)),
+                base_pct_net=to_decimal(getattr(self, "processed_data", {}).get("net_base_pct", _ZERO)),
+            )
         )
+        return plan.buy_spreads, plan.sell_spreads, plan.projected_total_quote, plan.size_mult
 
+    def build_runtime_execution_plan(self, data_context: RuntimeDataContext) -> RuntimeExecutionPlan:
+        base_plan = super().build_runtime_execution_plan(data_context)
         flow_state = getattr(self, "_bot5_flow_state", None) or self._empty_bot5_flow_state()
+        buy_spreads = list(base_plan.buy_spreads)
+        sell_spreads = list(base_plan.sell_spreads)
         if bool(flow_state.get("directional_allowed", False)):
             if str(flow_state.get("direction")) == "buy":
-                buy_spreads = buy_spreads[:1]
+                buy_spreads = buy_spreads[:1] or [data_context.market.side_spread_floor]
                 sell_spreads = []
             elif str(flow_state.get("direction")) == "sell":
                 buy_spreads = []
-                sell_spreads = sell_spreads[:1]
+                sell_spreads = sell_spreads[:1] or [data_context.market.side_spread_floor]
         elif bool(flow_state.get("low_conviction", True)):
             buy_spreads = buy_spreads[:1]
             sell_spreads = sell_spreads[:1]
-
-        active_levels = max(1, len(buy_spreads) + len(sell_spreads))
+        active_levels = len(buy_spreads) + len(sell_spreads)
         projected_total_quote = self._project_total_amount_quote(
-            equity_quote=equity_quote,
-            mid=mid,
-            quote_size_pct=regime_spec.quote_size_pct,
+            equity_quote=data_context.equity_quote,
+            mid=data_context.mid,
+            quote_size_pct=data_context.regime_spec.quote_size_pct,
             total_levels=active_levels,
-            size_mult=size_mult,
+            size_mult=base_plan.size_mult,
         )
-        return buy_spreads, sell_spreads, projected_total_quote, size_mult
+        return RuntimeExecutionPlan(
+            family="directional",
+            buy_spreads=buy_spreads,
+            sell_spreads=sell_spreads,
+            projected_total_quote=projected_total_quote,
+            size_mult=base_plan.size_mult,
+            metadata={
+                **dict(base_plan.metadata),
+                "strategy_lane": "bot5",
+                "quote_side_mode": str(getattr(self, "_quote_side_mode", "off")),
+                "quote_side_reason": str(getattr(self, "_quote_side_reason", "regime")),
+                "directional_allowed": bool(flow_state.get("directional_allowed", False)),
+            },
+        )
+
+    def _extend_processed_data_before_log(
+        self,
+        *,
+        processed_data: Dict[str, Any],
+        snapshot: Dict[str, Any],
+        state: Any,
+        regime_name: str,
+        market: MarketConditions,
+        projected_total_quote: Decimal,
+    ) -> None:
+        flow_state = getattr(self, "_bot5_flow_state", None) or self._empty_bot5_flow_state()
+        gate = self._bot5_gate_metrics()
+        processed_data["bot5_gate_state"] = gate["state"]
+        processed_data["bot5_gate_reason"] = gate["reason"]
+        processed_data["bot5_signal_side"] = flow_state["direction"]
+        processed_data["bot5_signal_reason"] = flow_state["reason"]
+        processed_data["bot5_signal_score"] = flow_state["conviction"]
+        processed_data["bot5_flow_direction"] = flow_state["direction"]
+        processed_data["bot5_flow_reason"] = flow_state["reason"]
+        processed_data["bot5_flow_conviction"] = flow_state["conviction"]

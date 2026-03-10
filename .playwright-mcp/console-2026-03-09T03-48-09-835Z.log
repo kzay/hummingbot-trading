@@ -1,0 +1,24 @@
+[   30278ms] [WARNING] WebSocket connection to 'ws://localhost:9910/api/v1/ws?instance_name=bot7&timeframe_s=60&limit=300' failed: WebSocket is closed before the connection is established. @ http://127.0.0.1:8088/assets/index-Dem8yTaI.js:76
+[  209857ms] [ERROR] Failed to load resource: net::ERR_EMPTY_RESPONSE @ http://localhost:9910/api/v1/state?instance_name=bot1:0
+[ 1938538ms] [ERROR] Failed to load resource: net::ERR_EMPTY_RESPONSE @ http://localhost:9910/api/v1/state?instance_name=bot1:0
+[ 2012516ms] [ERROR] Failed to load resource: net::ERR_EMPTY_RESPONSE @ http://localhost:9910/api/v1/state?instance_name=bot1:0
+[ 3152732ms] [ERROR] Failed to load resource: net::ERR_EMPTY_RESPONSE @ http://localhost:9910/api/v1/state?instance_name=bot1:0
+[ 4502989ms] [ERROR] Failed to load resource: net::ERR_EMPTY_RESPONSE @ http://localhost:9910/api/v1/state?instance_name=bot1:0
+[ 4681569ms] [ERROR] Failed to load resource: net::ERR_EMPTY_RESPONSE @ http://localhost:9910/api/v1/state?instance_name=bot1:0
+[ 5614289ms] [ERROR] Failed to load resource: net::ERR_EMPTY_RESPONSE @ http://localhost:9910/api/v1/state?instance_name=bot1:0
+[ 6020879ms] [ERROR] Failed to load resource: net::ERR_EMPTY_RESPONSE @ http://localhost:9910/api/v1/state?instance_name=bot1:0
+[ 6419480ms] [ERROR] Failed to load resource: net::ERR_EMPTY_RESPONSE @ http://localhost:9910/api/v1/state?instance_name=bot1:0
+[ 6832039ms] [ERROR] Failed to load resource: net::ERR_EMPTY_RESPONSE @ http://localhost:9910/api/v1/state?instance_name=bot1:0
+[ 7453604ms] [ERROR] Failed to load resource: net::ERR_EMPTY_RESPONSE @ http://localhost:9910/api/v1/state?instance_name=bot1:0
+[ 9601721ms] [ERROR] Failed to load resource: net::ERR_EMPTY_RESPONSE @ http://localhost:9910/api/v1/state?instance_name=bot1:0
+[ 9897592ms] [ERROR] Failed to load resource: net::ERR_EMPTY_RESPONSE @ http://localhost:9910/api/v1/state?instance_name=bot1:0
+[10855740ms] [ERROR] Failed to load resource: net::ERR_EMPTY_RESPONSE @ http://localhost:9910/api/v1/state?instance_name=bot1:0
+[12654326ms] [ERROR] Failed to load resource: net::ERR_EMPTY_RESPONSE @ http://localhost:9910/api/v1/state?instance_name=bot1:0
+[14290644ms] [ERROR] Failed to load resource: net::ERR_EMPTY_RESPONSE @ http://localhost:9910/api/v1/state?instance_name=bot1:0
+[15254234ms] [ERROR] Failed to load resource: net::ERR_EMPTY_RESPONSE @ http://localhost:9910/api/v1/state?instance_name=bot1:0
+[15652962ms] [ERROR] Failed to load resource: net::ERR_EMPTY_RESPONSE @ http://localhost:9910/api/v1/state?instance_name=bot1:0
+[19444834ms] [ERROR] Failed to load resource: net::ERR_EMPTY_RESPONSE @ http://localhost:9910/api/v1/state?instance_name=bot1:0
+[23929660ms] [ERROR] Failed to load resource: net::ERR_EMPTY_RESPONSE @ http://localhost:9910/api/v1/state?instance_name=bot1:0
+[25460922ms] [ERROR] Failed to load resource: net::ERR_EMPTY_RESPONSE @ http://localhost:9910/api/v1/state?instance_name=bot1:0
+[25702705ms] [ERROR] Failed to load resource: net::ERR_EMPTY_RESPONSE @ http://localhost:9910/api/v1/state?instance_name=bot1:0
+[26910009ms] [ERROR] Failed to load resource: net::ERR_EMPTY_RESPONSE @ http://localhost:9910/api/v1/state?instance_name=bot1:0

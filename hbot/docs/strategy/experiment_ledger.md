@@ -61,6 +61,375 @@ Copy this block for every new experiment or tuning cycle.
 
 ## Ledger
 
+## EXP-20260310-06: Bot7 thesis-only rerun after inactive-order cleanup
+- Date: `2026-03-10`
+- Type: `runtime_validation`
+- Area: `bot7_mean_reversion`
+- Hypothesis: after the inactive-order cleanup fix, Bot7 should produce a clean post-restart observation window where thesis-state `probe_*` / `mean_reversion_*` rows can be evaluated without fallback-fill contamination.
+- Changes:
+  - no code/config changes; reran the thesis-only performance breakdown on the fresh post-cleanup window
+- Observation window: `2026-03-10T12:34:33.905104+00:00` through `2026-03-10T23:16:01.196853+00:00` using `hbot/data/bot7/logs/epp_v24/bot7_a/minute.csv`, `hbot/data/bot7/logs/epp_v24/bot7_a/fills.csv`, `hbot/data/bot7/logs/recovery/open_orders_latest.json`, and `hbot/reports/desk_snapshot/bot7/latest.json`.
+- Metrics checked:
+  - fills: `0` total fills in the clean window, with `0` thesis-state fills and `0` fallback-state fills
+  - net pnl: `0` gross realized and `0` net after fees in the clean window because no new fills occurred
+  - pnl/fill: not measurable in the clean window due to zero-fill sample
+  - maker ratio: not measurable in the clean window due to zero-fill sample
+  - soft-pause ratio/state: all `635` minute rows remained `hard_stop`; reasons were `464 regime_inactive`, `138 no_entry`, `13 indicator_warmup`, `1 trade_flow_stale`, `12 probe_short`, and `7 probe_long`
+  - drawdown: unchanged / low, but the runtime stayed pinned behind `daily_turnover_hard_limit`; thesis rows reached `quote_side_mode` of `buy_only` or `sell_only` for `19` minutes while `orders_active` still stayed `0`
+- Result: `inconclusive`
+- Decision / next step: the cleanup fix succeeded, but viability is still unproven because the clean window has no execution sample; reset into a fresh non-hard-stop window before judging Bot7's thesis-state edge.
+
+## EXP-20260310-05: Bot7 reuse paper-order fail-close in inactive off states
+- Date: `2026-03-10`
+- Type: `code`
+- Area: `bot7_mean_reversion`
+- Hypothesis: Bot7's executor-level cancellation is insufficient because the shared paper engine can still retain orphaned working orders after restarts or executor races; reusing the existing PaperDesk fail-close cleanup used by alpha no-trade should flush those lingering paper orders when Bot7 is intentionally `off` in `regime_inactive`, `no_entry`, `trade_flow_stale`, or expired warmup states.
+- Changes:
+  - `hbot/controllers/bots/bot7/adaptive_grid_v1.py`: when Bot7 resolves to `quote_side_mode=off` for fail-closed inactive reasons, it now calls the shared paper-order cleanup path in addition to canceling active quote executors
+  - `hbot/tests/controllers/test_epp_v2_4_bot7.py`: extended inactive-state cancellation coverage to assert the paper-order cleanup hook is invoked
+- Observation window: immediate post-restart failure analysis plus validation restart on `2026-03-10` using `hbot/reports/desk_snapshot/bot7/latest.json`, `hbot/data/bot7/logs/recovery/open_orders_latest.json`, `hbot/data/bot7/logs/epp_v24/bot7_a/minute.csv`, and deterministic controller unit tests after confirming executor-only cancellation did not clear the aged working buys.
+- Metrics checked:
+  - fills: Bot7 added one more `regime_inactive` fill before this patch took effect, increasing total fills to `149`; after the validation restart no newer fills appeared and `fill_age_s` advanced while the order leak stayed shut
+  - net pnl: total fees remained at `1.881451592` with no additional post-restart fee growth in the immediate validation window, so the orphan-order leak stopped adding fresh drag
+  - pnl/fill: unchanged negative expectancy historically; this pass only validates execution cleanup, not thesis profitability
+  - maker ratio: still `100%` maker
+  - soft-pause ratio/state: validation rows still show fail-closed `quote_side_mode=off`, now with `cancel_per_min=23` during startup cleanup and `orders_active=0`; `open_orders_latest.json` dropped to `orders_count=0` and desk snapshot `open_orders` is now empty
+  - drawdown: unchanged / low; turnover hard-stop remains the active runtime clamp
+- Result: `keep`
+- Decision / next step: keep the paper-order fail-close hook and start the next isolated Bot7 observation window; only judge viability on fresh `probe_*` / `mean_reversion_*` activity now that stale inactive-state orders have been cleared.
+
+## EXP-20260310-04: Bot7 flush inactive-state lingering quotes
+- Date: `2026-03-10`
+- Type: `code`
+- Area: `bot7_mean_reversion`
+- Hypothesis: Bot7 still cannot be judged on thesis-state edge while working quote orders survive into `regime_inactive` and `no_entry`; forcing active-quote cancellation whenever the lane is intentionally `off` in those inactive states should stop invalid carry-over fills and create a clean observation window.
+- Changes:
+  - `hbot/controllers/bots/bot7/adaptive_grid_v1.py`: extended Bot7's active-quote cancellation trigger so `quote_side_mode=off` also flushes lingering quote executors for `regime_inactive` and `no_entry`, in addition to stale-flow and expired warmup paths
+  - `hbot/tests/controllers/test_epp_v2_4_bot7.py`: added regression coverage for inactive-state `off` paths that must still enqueue active-quote cancellation even when the prior quote-side mode is already `off`
+- Observation window: post-analysis follow-up on `2026-03-10` using `hbot/reports/desk_snapshot/bot7/latest.json`, `hbot/data/bot7/logs/recovery/open_orders_latest.json`, `hbot/data/bot7/logs/epp_v24/bot7_a/minute.csv`, `hbot/data/bot7/logs/epp_v24/bot7_a/fills.csv`, and deterministic controller unit tests after the patch.
+- Metrics checked:
+  - fills: latest analyzed run had `148` total fills, with `99` under `regime_inactive`, `23` under `no_entry`, `16` under `indicator_warmup`, `9` under `trade_flow_stale`, and only `1` thesis-state `probe_long` fill
+  - net pnl: analyzed total net after fees remained negative at about `-1.9078` quote, with the post-fix subwindow still negative at about `-1.6955`
+  - pnl/fill: net after fees remained about `-0.0129` quote per fill, confirming inactive-state carry-over orders still dominate expectancy
+  - maker ratio: `100%` maker, so the current leak remains passive-order lifecycle rather than taker escalation
+  - soft-pause ratio/state: dominant non-thesis reasons remain `regime_inactive` and `no_entry`; this pass only flushes orders when Bot7 is already intentionally non-quoting
+  - drawdown: runtime stopped on `daily_turnover_hard_limit`, so the immediate issue is execution churn and invalid evaluation rather than large mark-to-market loss
+- Result: `inconclusive`
+- Decision / next step: keep the inactive-state flush patch, restart Bot7, and only evaluate viability once `open_orders_latest.json` and desk snapshots stop showing working orders during `regime_inactive` / `no_entry` windows.
+
+## EXP-20260310-02: Bot7 fail-closed stale flow and bounded warmup quotes
+- Date: `2026-03-10`
+- Type: `code+config`
+- Area: `bot7_mean_reversion`
+- Hypothesis: bot7's current paper evidence is contaminated because fallback quotes during `indicator_warmup` and `trade_flow_stale` generate fills before the intended absorption / probe / mean-reversion states are active; removing stale-flow quotes and limiting warmup quotes to the first bootstrap bars should isolate the true thesis for the next evaluation window.
+- Changes:
+  - `hbot/controllers/bots/bot7/adaptive_grid_v1.py`: added `bot7_warmup_quote_max_bars`, stopped placing fallback quotes when the reason is `trade_flow_stale`, and limited `indicator_warmup` quotes to the first bootstrap bars while tagging those quotes as excluded from viability measurement metadata
+  - `hbot/data/bot7/conf/controllers/epp_v2_4_bot7_adaptive_grid_paper.yml`: pinned `bot7_warmup_quote_max_bars: 3` for the bounded Bot7 audit cycle
+  - `hbot/tests/controllers/test_epp_v2_4_bot7.py`: added regression coverage for bootstrap-window warmup quotes, post-bootstrap fail-closed behavior, and no-quote behavior on stale trade flow
+- Observation window: pre-change initial Bot7 audit on `2026-03-10` using `hbot/data/bot7/logs/epp_v24/bot7_a/minute.csv`, `hbot/data/bot7/logs/epp_v24/bot7_a/fills.csv`, `hbot/reports/desk_snapshot/bot7/latest.json`, `hbot/data/bot7/logs/recovery/open_orders_latest.json`, and deterministic controller unit tests after the code change.
+- Metrics checked:
+  - fills: `20` total fills in the audit window, with `14` under `indicator_warmup`, `4` under `trade_flow_stale`, `2` under `regime_inactive`, and `0` under `mean_reversion_*`
+  - net pnl: gross realized `-0.040377204` quote and net after fees `-0.142282636` quote across the current Bot7 sample
+  - pnl/fill: net after fees about `-0.0071` quote per fill in the current sample, so fallback activity is not yet viable
+  - maker ratio: `100%` maker in the current sample, confirming the issue is not taker leakage but low-quality fallback maker flow
+  - soft-pause ratio/state: dominant idle reasons remain `regime_inactive` and `no_entry`; this pass targets measurement isolation rather than changing shared runtime pause policy
+  - drawdown: current sample remains low drawdown / low inventory, so the next risk is false-positive edge measurement rather than immediate capital damage
+- Result: `inconclusive`
+- Decision / next step: keep the fail-closed stale-flow change and bounded warmup window, then run one isolated Bot7 paper cycle without signal-threshold retuning; only judge Bot7 on `probe_*` / `mean_reversion_*` fills after bootstrap and reopen tuning only if thesis-state activity appears.
+
+## EXP-20260310-03: Bot7 cancel lingering quotes on stale-flow fail-close
+- Date: `2026-03-10`
+- Type: `code`
+- Area: `bot7_mean_reversion`
+- Hypothesis: stopping new stale-flow quotes is not sufficient if previously placed quote executors remain active and keep filling under `trade_flow_stale`; actively canceling quote executors whenever Bot7 is `off` due to stale trade flow or expired warmup should close the remaining fallback-fill leak.
+- Changes:
+  - `hbot/controllers/bots/bot7/adaptive_grid_v1.py`: when Bot7 resolves to `quote_side_mode=off` because of `trade_flow_stale` or post-bootstrap `indicator_warmup`, it now requests `_cancel_active_quote_executors()` in addition to any side-transition cancellation
+  - `hbot/tests/controllers/test_epp_v2_4_bot7.py`: added regression coverage for stale-flow and expired-warmup paths that must enqueue active-quote cancellation
+- Observation window: immediate post-restart Bot7 inspection on `2026-03-10` using `hbot/reports/desk_snapshot/bot7/latest.json`, `hbot/data/bot7/logs/recovery/open_orders_latest.json`, `hbot/data/bot7/logs/epp_v24/bot7_a/minute.csv`, and `hbot/data/bot7/logs/epp_v24/bot7_a/fills.csv`.
+- Metrics checked:
+  - fills: new post-change fills still arrived under `trade_flow_stale`, indicating older working orders survived the earlier fail-closed patch
+  - net pnl: stale-flow fills continued adding fee drag in the immediate restart window, so the isolation goal was not yet met
+  - pnl/fill: no thesis-state improvement claim; this pass targets removal of invalid fallback activity
+  - maker ratio: remaining leak is still maker-only, confirming the problem is lingering quote lifecycle rather than taker escalation
+  - soft-pause ratio/state: latest minute rows show `alpha_policy_reason=trade_flow_stale` with `quote_side_mode=off`, so planning already fail-closes while execution cleanup lagged behind
+  - drawdown: unchanged / low in the immediate window
+- Result: `inconclusive`
+- Decision / next step: keep the active-cancel fail-close patch, restart Bot7 again, and only continue the isolated audit once `trade_flow_stale` rows stop carrying forward old working orders and stale-flow fills stop appearing.
+
+## EXP-20260310-01: Active paper funding settlement parity
+- Date: `2026-03-10`
+- Type: `code`
+- Area: `paper_execution`
+- Hypothesis: the active paper-exchange service already persists funding-rate metadata on orders, but without a position ledger and periodic settlement it understates perp carrying costs; adding deterministic position-aware funding settlement should improve execution realism without changing strategy decision logic.
+- Changes:
+  - `hbot/services/paper_exchange_service/main.py`: added a lightweight position ledger, periodic funding settlement events, funding counters in heartbeat metadata, and persisted position/funding state inside the paper-exchange state snapshot.
+  - `hbot/tests/services/test_paper_exchange_service.py`: added regression coverage for long-funding debits, short-funding credits, funding cadence handling, and persisted funding state.
+- Observation window: deterministic unit validation on `2026-03-10` via `PYTHONPATH=hbot python -m pytest hbot/tests/services/test_paper_exchange_service.py -q`.
+- Metrics checked:
+  - fills: existing fill-path tests stayed green after wiring funding settlement into immediate and resting-fill accounting state
+  - net pnl: funding charge sign is now reflected in service position state as positive debit for long positive funding and negative debit (credit) for short positive funding
+  - pnl/fill: unchanged directly; this pass targets carry-cost realism rather than fill-edge changes
+  - maker ratio: unchanged
+  - soft-pause ratio/state: unchanged
+  - drawdown: not claimed from unit evidence; funding path now contributes signed carry cost into the service snapshot for downstream accounting visibility
+- Result: `keep`
+- Decision / next step: keep the funding settlement path and use the next active paper soak to verify the new funding events and snapshot fields show up correctly in downstream operator artifacts before treating funding drag as a promotion-gate input.
+
+## EXP-20260308-06: Unblock bot5 neutral quoting and de-risk weak-flow bias
+- Date: `2026-03-08`
+- Type: `code+config`
+- Area: `inventory`
+- Hypothesis: bot5 is currently spending long stretches in `running` with `orders_active=0` because its dedicated controller misinterprets neutral quote-side mode `off` as "place nothing", while its weak-flow bias thresholds still push inventory targets hard enough to invite taker cleanup instead of maker-led quoting.
+- Changes:
+  - `hbot/controllers/bots/bot5/ift_jota_v1.py`: stopped zeroing both sides when quote-side mode is `off`; in the shared runtime, `off` means neutral two-sided quoting, not fail-closed no-trade
+  - `hbot/data/bot5/conf/controllers/epp_v2_4_bot5_ift_jota_paper.yml`: aligned `total_amount_quote` / `max_total_notional_quote` with BTC paper minimum-lot reality, capped per-order notional, lengthened `time_limit`, raised weak-flow bias thresholds, reduced directional target size, and widened the low-conviction edge add-on
+  - `hbot/tests/controllers/test_epp_v2_4_bot5.py`: updated regression coverage so neutral `off` mode keeps one buy and one sell quote alive under low conviction instead of collapsing projected notional to zero
+- Observation window: fresh post-shared-blocker desk snapshots showed `bot5` no longer cap-paused but still `orders_active=0` with `quote_side_mode=off`, `alpha_policy_reason=biased_sell`, and residual long inventory.
+- Metrics checked:
+  - fills: target is restoring maker-led quote opportunities instead of only residual cleanup flow
+  - net pnl: preserve bot5's positive multi-day expectancy while reducing intraday drag from idle windows and cleanup exits
+  - pnl/fill: target improvement by cutting weak-conviction directional inventory pressure
+  - maker ratio: keep >= current strong baseline while reducing reliance on taker exits
+  - soft-pause ratio/state: target lower state burden by removing false zero-quote runtime in neutral mode
+  - drawdown: keep within existing paper bounds while making sizing/caps honest
+- Result: `inconclusive`
+- Decision / next step: restart bot5, inspect `orders_active`, maker/taker mix, and slippage tails in the next paper window before deciding whether to narrow spreads further or relax/tighten directional flow thresholds again.
+
+## EXP-20260308-07: Bot1 neutral expectancy clamp without size increase
+- Date: `2026-03-08`
+- Type: `config`
+- Area: `regime`
+- Hypothesis: bot1's dominant loss path is neutral participation and cleanup churn rather than outright inactivity, so widening neutral quotes and making no-trade / inventory-relief / force-taker transitions more selective should improve expectancy before any size increase is considered.
+- Changes:
+  - `hbot/data/bot1/conf/controllers/epp_v2_4_bot_a.yml`: increased `take_profit` and `time_limit`, raised `position_rebalance_min_base_mult`, raised `alpha_policy_no_trade_threshold`, raised `alpha_policy_inventory_relief_threshold`, and tightened force-taker escalation thresholds
+  - `hbot/data/bot1/conf/controllers/epp_v2_4_bot_a.yml`: widened `neutral_low_vol` spread band, slowed neutral refresh cadence, and reduced neutral fill factor so bot1 only participates when edge quality is materially better
+- Observation window: pre-change dossier showed `expectancy_per_fill_quote=-0.0294`, `maker_ratio_weighted=35.1%`, `taker_expectancy_per_fill_quote=-0.0346`, `alpha_no_trade_ratio=53.7%`, and dominant negative regime expectancy in `neutral_low_vol`.
+- Metrics checked:
+  - fills: target lower neutral churn and fewer cleanup-style fills while `alpha_policy_state=no_trade`
+  - net pnl: target reduced negative drift before any size increase
+  - pnl/fill: target move both maker and taker buckets toward breakeven
+  - maker ratio: target restore weighted maker ratio above `45%`
+  - soft-pause ratio/state: no direct reliance on soft-pause reduction for this pass
+  - drawdown: keep current low drawdown profile intact
+- Result: `inconclusive`
+- Decision / next step: restart bot1 and inspect the next paper window for `alpha_no_trade_ratio`, `maker_ratio`, and neutral fill expectancy before deciding whether the remaining issue is still neutral quote quality or residual cleanup timing.
+
+## EXP-20260308-08: Bot6 degrade stale-feature hard block into warmup fallback
+- Date: `2026-03-08`
+- Type: `code+config`
+- Area: `regime`
+- Hypothesis: bot6 is non-operational because it hard-fails on sparse directional trade features and also inherits the same neutral `quote_side_mode=off` zero-quote bug that blocked bot5, so treating stale directional inputs as warmup/idle instead of a hard block and aligning its lot-constrained sizing should let it trade while preserving directional bias when the signal actually appears.
+- Changes:
+  - `hbot/controllers/bots/bot6/cvd_divergence_v1.py`: removed hard fail-close on stale trade features, passed a longer trade-feature freshness window, inferred directional trend from score dominance when candle trend bootstrap is unavailable, and stopped zeroing neutral `off` quote-side mode
+  - `hbot/data/bot6/conf/controllers/epp_v2_4_bot6_bitget_cvd_paper.yml`: aligned total/max notional with BTC minimum-lot behavior, capped per-order notional, shortened signal windows, reduced ADX and score thresholds, added explicit trade-feature staleness tolerance, and reduced base level count to one per side
+  - `hbot/tests/controllers/test_epp_v2_4_bot6.py`: updated regression coverage for neutral `off` quoting, warmup risk handling, and score-based direction fallback without candle data
+- Observation window: fresh desk snapshots showed `bot6_trade_features_stale`, `orders_active=0`, `projected_total_quote=0`, and zeroed SMA/CVD fields despite healthy shared runtime plumbing.
+- Metrics checked:
+  - fills: target first non-zero quote activity and eventual fills before any profitability claim
+  - net pnl: no near-term PnL target until quotes/signals exist
+  - pnl/fill: not meaningful until bot6 resumes trading
+  - maker ratio: target non-zero maker participation once quotes appear
+  - soft-pause ratio/state: target removal of `bot6_trade_features_stale` as the dominant runtime blocker
+  - drawdown: keep current flat/no-position drawdown unchanged during bring-up
+- Result: `inconclusive`
+- Decision / next step: restart bot6 and inspect the next minute window for `orders_active`, non-zero `bot6_*` score telemetry, and whether the runtime now sits in `running` rather than `soft_pause`.
+
+## EXP-20260309-13: Bot7 restart verification after telemetry fix
+- Date: `2026-03-09`
+- Type: `runtime_validation`
+- Area: `bot7_post_restart_verification`
+- Hypothesis: after restarting bot7 on the updated code, the live minute and desk-snapshot artifacts should finally export bot7-native reasons (`indicator_warmup`, `regime_inactive`, `no_entry`, `probe_*`) and `quote_side_reason` should reflect the bot7 lane rather than the shared `regime` fallback. If execution persistence is still broken, that should remain visible separately in `open_orders` and PaperDesk evidence.
+- Changes:
+  - runtime only: restarted the `bot7` container after the `EXP-20260309-12` code/config changes
+- Observation window: immediate post-restart check on `2026-03-09` using `hbot/reports/desk_snapshot/bot7/latest.json`, `hbot/data/bot7/logs/epp_v24/bot7_a/minute.csv`, `hbot/data/bot7/logs/recovery/open_orders_latest.json`, and `hbot/data/bot7/logs/epp_v24/bot7_a/paper_desk_v2.json`.
+- Metrics checked:
+  - telemetry consistency: latest minute/snapshot now agree on `alpha_policy_reason = indicator_warmup`, `bot7_gate_reason = indicator_warmup`, `bot7_signal_reason = indicator_warmup`, and `quote_side_reason = bot7_indicator_warmup`
+  - warmup quoting: latest minute rows show `projected_total_quote` around `132` with `orders_active = 2` during startup warmup
+  - execution persistence: `open_orders_latest.json` still reports `orders_count = 0`, desk snapshot `open_orders` remains empty, and `paper_desk_v2.json` still shows `order_counter = 0`
+  - regime state after warmup restart window: current regime returned to `neutral_low_vol`, so the telemetry fix can now be trusted for the next neutral-vs-trend activation comparison
+- Result: `inconclusive`
+- Decision / next step: keep the telemetry/runtime fixes from `EXP-20260309-12`; do not retune bot7 entry logic further until the paper-execution persistence gap is understood, because the lane now shows startup quote intent correctly but still does not retain tracked open orders.
+
+## EXP-20260309-12: Bot7 tick-consistent telemetry and neutral fallback follow-up
+- Date: `2026-03-09`
+- Type: `code+config`
+- Area: `bot7_telemetry_and_regime_gate`
+- Hypothesis: bot7's exported minute/snapshot state is currently inconsistent with its in-memory strategy state because the lane recomputes `_bot7_state` twice per tick and appends bot7-specific telemetry after the base runtime already logs the minute row. Fixing that inconsistency, while only nudging the neutral-regime ADX fallback gate upward, should make operator evidence trustworthy and slightly increase safe neutral-regime activation without enabling trend-chasing in `up`/`down` regimes.
+- Changes:
+  - `hbot/controllers/epp_v2_4.py`: added a generic pre-log processed-data hook so strategy lanes can inject telemetry before the base runtime writes the minute row.
+  - `hbot/controllers/bots/bot7/adaptive_grid_v1.py`: stopped recomputing `_bot7_state` inside `_compute_levels_and_sizing`, invoked bot7's own `_resolve_quote_side_mode` during sizing so `quote_side_reason` is set from bot7 state, and moved bot7 telemetry injection into the pre-log hook path.
+  - `hbot/data/bot7/conf/controllers/epp_v2_4_bot7_adaptive_grid_paper.yml`: raised `bot7_adx_neutral_fallback_below` from `28` to `30` so only neutral-regime activation is modestly relaxed.
+  - `hbot/tests/controllers/test_epp_v2_4_bot7.py`: added regression coverage for `probe_short`, `mean_reversion_short`, same-tick funding-scale reuse, quote-side reason propagation, and bot7 processed-data emission.
+- Observation window: pre-change audit of `2026-03-09` using `hbot/data/bot7/logs/epp_v24/bot7_a/minute.csv`, `hbot/reports/desk_snapshot/bot7/latest.json`, `hbot/data/bot7/logs/recovery/open_orders_latest.json`, `hbot/data/bot7/logs/epp_v24/bot7_a/paper_desk_v2.json`, and `hbot/data/bot7/logs/logs_v2_epp_v2_4_bot7_adaptive_grid_paper.log`.
+- Metrics checked:
+  - reason mix: `1336` minute rows with `893 regime_inactive`, `323 no_entry`, `107 indicator_warmup`, `7 probe_short`, and `6 probe_long`
+  - regime mix: `514 neutral_low_vol`, `389 down`, `348 up`, `85 high_vol_shock`
+  - regime-inactive breakdown: `225 neutral_low_vol`, `325 down`, `270 up`, `74 high_vol_shock`, showing the dominant idle state is still mostly trend-regime lockout rather than neutral windows
+  - execution persistence: `open_orders_latest.json` had `orders_count = 0`, `paper_desk_v2.json` had `order_counter = 0`, and repeated `PAPER_ENGINE_PROBE` log lines still showed `open=0 inflight=0`
+  - telemetry consistency: latest desk snapshot showed `alpha_policy_reason = regime_inactive` while `bot7_gate_reason = inactive`, `bot7_signal_reason = inactive`, and `quote_side_reason = regime`, confirming the pre-fix export mismatch
+- Result: `inconclusive`
+- Decision / next step: keep the telemetry fix and the neutral-only ADX fallback nudge in code, restart bot7, then verify that minute/snapshot artifacts now show bot7-native reasons and re-check whether `neutral_low_vol` `regime_inactive` rows convert into safe `probe_*` activity with persistent `open_orders` before touching probe/band thresholds again.
+
+## EXP-20260308-10: Bot7 probe path and tighter passive spacing
+- Date: `2026-03-08`
+- Type: `code+config`
+- Area: `bot7_mean_reversion`
+- Hypothesis: bot7 is now operationally healthy, but its alpha stack is still too selective for paper execution because neutral-regime activation is too strict, full entry requires perfect tape confirmation, and passive quote spacing is too wide for the queue-aware fill model. Adding a reduced-risk one-sided probe path plus narrower quote spacing should convert some `regime_inactive` / `no_entry` rows into measurable maker participation without turning the strategy into a generic always-on market maker.
+- Changes:
+  - `hbot/controllers/bots/bot7/adaptive_grid_v1.py`: added softer neutral-regime ADX fallback, separated band-touch tolerance from quote spacing, added depth-imbalance reversal support, and introduced reduced-risk `probe_long` / `probe_short` one-sided entries that cap grid legs and size below full mean-reversion entries.
+  - `hbot/data/bot7/conf/controllers/epp_v2_4_bot7_adaptive_grid_paper.yml`: relaxed full-signal RSI / ADX thresholds slightly, added explicit probe thresholds, lowered the grid-spacing floor, and enabled probe sizing controls in paper config.
+  - `hbot/tests/controllers/test_epp_v2_4_bot7.py`: extended the bot7 unit surface with probe-entry and probe-grid regression coverage.
+- Observation window: pre-change audit of `2026-03-08` paper runtime using `hbot/data/bot7/logs/epp_v24/bot7_a/minute.csv` and `hbot/reports/desk_snapshot/bot7/latest.json`.
+- Metrics checked:
+  - state mix: `559` minute rows with `347 regime_inactive`, `129 no_entry`, `83 indicator_warmup`
+  - activity mix: `bot7_signal_side=off` on all sampled minute rows, with only `35` rows showing `orders_active > 0` and those concentrated in startup warmup
+  - fills / pnl: `7` fills, `0` realized pnl, and flat end-state inventory/equity in the latest desk snapshot
+  - fill mechanics: queue-aware paper fill model remained enabled, so passive spacing had to be tightened rather than assuming guaranteed touch fills
+- Result: `inconclusive`
+- Decision / next step: restart bot7, then evaluate whether probe entries produce non-startup `orders_active`, non-zero maker participation, and better fill frequency; only after that compare `probe_*` versus `mean_reversion_*` reason mix and decide whether to keep, tighten, or revert the new probe path.
+
+## EXP-20260308-11: Bot7 startup warmup diagnostics and ATR fallback
+- Date: `2026-03-08`
+- Type: `code+config`
+- Area: `bot7_startup_warmup`
+- Hypothesis: bot7 restart warmup is overstated because `ATR` is treated as a hard prerequisite even though it only controls spacing, and because the current startup periods still require too many completed minute bars before the first eligible strategy evaluation. Making `ATR` non-blocking, exposing warmup diagnostics, and shortening startup lookbacks should let bot7 leave `indicator_warmup` faster after restart without removing the core Bollinger/RSI/ADX guardrails.
+- Changes:
+  - `hbot/controllers/bots/bot7/adaptive_grid_v1.py`: added bot7-local warmup diagnostics (`indicator_ready`, `indicator_missing`, `price_buffer_bars`), made `ATR` optional for readiness, and used grid-floor spacing when `ATR` is still warming up.
+  - `hbot/data/bot7/conf/controllers/epp_v2_4_bot7_adaptive_grid_paper.yml`: reduced startup lookbacks further (`bot7_bb_period: 10`, `bot7_adx_period: 5`) and pinned `atr_period: 7` for faster spacing readiness.
+  - `hbot/tests/controllers/test_epp_v2_4_bot7.py`: added regression coverage proving bot7 can still produce a valid signal when `ATR` is missing but the core indicators are ready.
+- Observation window: live restart soak on `2026-03-08` using `hbot/data/bot7/logs/epp_v24/bot7_a/minute.csv` plus `docker logs bot7`.
+- Metrics checked:
+  - warmup dwell: post-restart rows stayed in `indicator_warmup` from `13:56:50` through `14:05:00`, then cleared to `regime_inactive` by `14:06:01` instead of remaining indefinitely in bootstrap
+  - startup quoting: warmup rows held `orders_active=2` with `projected_total_quote` around `134`
+  - first directional evidence: live minute telemetry showed at least one `probe_short` row at `13:51:01` with `orders_active=1` and `projected_total_quote=67.11225`
+  - execution evidence: order placements continued to appear in logs, but paper-engine probes still reported `open=0 inflight=0`, so fill persistence remains an execution-quality follow-up rather than a warmup issue
+- Result: `keep`
+- Decision / next step: keep the warmup fix, then focus the next bot7 pass on converting post-warmup `regime_inactive` into more frequent `probe_*` / `mean_reversion_*` opportunities and on understanding why paper-engine probes still show no persistent open orders after `place_order_done`.
+
+## EXP-20260308-09: Bot7 warmup quotes instead of indicator hard-stop
+- Date: `2026-03-08`
+- Type: `code+config`
+- Area: `regime`
+- Hypothesis: bot7 is not trading because indicator bootstrap and trade-tape freshness are treated as a hard block, so giving it a small two-sided warmup quote mode plus faster bootstrap windows should let the passive grid lane come alive before the full mean-reversion signal is ready.
+- Changes:
+  - `hbot/controllers/bots/bot7/adaptive_grid_v1.py`: removed hard fail-close semantics from warmup/stale gate states and added a two-sided warmup quote path that uses the configured grid floor while indicators or trade flow are still bootstrapping
+  - `hbot/data/bot7/conf/controllers/epp_v2_4_bot7_adaptive_grid_paper.yml`: aligned total/max notional with BTC minimum-lot reality, capped per-order notional, shortened bootstrap windows (`BB`, `RSI`, `ADX`, trade window, delta-trap window), relaxed trade-flow staleness tolerance, and enabled one warmup quote level per side
+  - `hbot/tests/controllers/test_epp_v2_4_bot7.py`: added regression coverage for warmup two-sided quotes and updated risk handling expectations so stale trade flow no longer acts as a bot-local hard stop
+- Observation window: fresh desk snapshots showed `bot7_indicator_warmup`, `orders_active=0`, `projected_total_quote=0`, and no open orders despite healthy shared runtime fields.
+- Metrics checked:
+  - fills: target first live quotes and eventual passive fills before any alpha tuning claim
+  - net pnl: not yet a target until the bot exits pure warmup idleness
+  - pnl/fill: not yet meaningful until fills resume
+  - maker ratio: target non-zero maker participation after warmup quotes appear
+  - soft-pause ratio/state: target removal of `bot7_indicator_warmup` as the dominant runtime blocker
+  - drawdown: keep zero-position drawdown flat during bring-up
+- Result: `inconclusive`
+- Decision / next step: restart bot7 and inspect whether the next minute window shows `running` with `orders_active > 0`; only after that should the actual absorption / delta-trap thresholds be tuned.
+
+## EXP-20260308-05: Make shared edge gate strategy-opt-in
+- Date: `2026-03-08`
+- Type: `code+config`
+- Area: `risk`
+- Hypothesis: dedicated non-MM strategy lanes should keep shared runtime safety checks, but they should not inherit the shared net-edge soft-pause gate when edge is not part of the strategy-local validity test.
+- Changes:
+  - `hbot/controllers/epp_v2_4.py`: added `shared_edge_gate_enabled` and bypassed/reset shared edge-gate hysteresis when a strategy opts out
+  - `hbot/controllers/risk_evaluator.py`: added `reset_edge_gate()` so opt-out strategies clear stale edge-block state cleanly
+  - `hbot/controllers/bots/bot1/baseline_v1.py`: made bot1's dedicated baseline lane explicitly keep shared edge gating enabled
+  - `hbot/controllers/bots/bot5/ift_jota_v1.py`, `hbot/controllers/bots/bot6/cvd_divergence_v1.py`, `hbot/controllers/bots/bot7/adaptive_grid_v1.py`: defaulted dedicated non-edge strategies to `shared_edge_gate_enabled=False`
+  - `hbot/data/bot5/conf/controllers/epp_v2_4_bot5_ift_jota_paper.yml`, `hbot/data/bot6/conf/controllers/epp_v2_4_bot6_bitget_cvd_paper.yml`, `hbot/data/bot7/conf/controllers/epp_v2_4_bot7_adaptive_grid_paper.yml`: made the edge-gate opt-out explicit in live config surface
+  - `hbot/tests/controllers/test_epp_v2_4_core.py`, `hbot/tests/controllers/test_epp_v2_4_bot1.py`, `hbot/tests/controllers/test_epp_v2_4_bot5.py`, `hbot/tests/controllers/test_epp_v2_4_bot6.py`, `hbot/tests/controllers/test_epp_v2_4_bot7.py`: added regression coverage for the new gate taxonomy
+- Observation window: code-path audit after dedicated-bot split plus targeted unit validation.
+- Metrics checked:
+  - fills: no direct fill-model change; expected only to remove unintended shared edge pauses on dedicated strategy bots
+  - net pnl: expected indirect improvement only if bot5/bot6/bot7 were previously being idled by foreign edge gating
+  - pnl/fill: unchanged directly
+  - maker ratio: unchanged directly for bot1; dedicated bots may see higher activity only when their own gates remain open
+  - soft-pause ratio/state: expected lower `soft_pause_edge` incidence on bot5/bot6/bot7 while keeping bot1/shared MM behavior intact
+  - drawdown: no direct hard-risk threshold change
+- Result: `keep`
+- Decision / next step: keep shared runtime safety gates universal, but treat edge gating as a strategy capability; validate in the next paper observation window that bot7 is no longer blocked solely by shared `net_edge`.
+
+## EXP-20260308-04: Extend identity preflight to control/audit streams
+- Date: `2026-03-08`
+- Type: `code`
+- Area: `paper_execution`
+- Hypothesis: producer identity preflight should be uniform across bot-control and governance events so malformed `execution_intent`, `strategy_signal`, or `audit` payloads cannot silently enter the event plane.
+- Changes:
+  - `hbot/services/contracts/event_identity.py`: added required identity rules for `execution_intent`, `strategy_signal`, and `audit`
+  - `hbot/services/hb_bridge/redis_client.py`: added centralized producer preflight in `xadd()` using `validate_event_identity`
+  - `hbot/controllers/paper_engine_v2/signal_consumer.py`: added preflight before publishing HARD_STOP-derived `execution_intent`
+  - `hbot/controllers/paper_engine_v2/hb_bridge.py`: added preflight before publishing sync hard-stop `audit` event
+  - `hbot/tests/services/test_event_identity.py`, `hbot/tests/services/test_hb_event_publisher.py`, `hbot/tests/services/test_event_store.py`: added/updated regression coverage
+- Observation window: unit and service contract tests after implementation.
+- Metrics checked:
+  - fills: no direct fill-path logic changes
+  - net pnl: no direct strategy pricing change
+  - pnl/fill: no direct strategy pricing change
+  - maker ratio: no direct quote-policy change
+  - soft-pause ratio/state: no direct threshold change; expected safer control-plane behavior under malformed events
+  - drawdown: no direct risk-limit change
+- Result: `keep`
+- Decision / next step: keep centralized preflight as the default producer path and continue adding identity rules as new bot-scoped event types are introduced.
+
+## EXP-20260308-03: Remove blocking paper-event read from tick path
+- Date: `2026-03-08`
+- Type: `code`
+- Area: `paper_execution`
+- Hypothesis: paper bots are marked stale because `on_tick()` calls `drive_desk_tick()`, which calls `_consume_paper_exchange_events()`, and that function uses `xread(..., block=0)`. In Redis, `BLOCK 0` means wait forever, so tick cadence can be gated by event-stream traffic instead of the 1s clock.
+- Changes:
+  - `hbot/controllers/paper_engine_v2/hb_bridge.py`: changed paper-exchange event read from `block=0` (indefinite block) to `block=1` (near non-blocking) and documented the Redis semantics in code comments
+  - `hbot/tests/controllers/test_hb_bridge_signal_routing.py`: updated assertions to validate `xread(..., block=1)` in consume-path tests
+- Observation window: live container log review (`bot1`, `bot6`, `bot4`) plus code-path audit of `v2_with_controllers.on_tick()` -> `drive_desk_tick()` -> `_consume_paper_exchange_events()` and targeted controller tests.
+- Metrics checked:
+  - fills: no direct strategy logic change; expected unchanged fill model
+  - net pnl: no direct pricing/alpha change
+  - pnl/fill: no direct pricing/alpha change
+  - maker ratio: no direct quoting-logic change
+  - soft-pause ratio/state: expected indirect improvement only if stale-induced cadence pauses disappear
+  - drawdown: no direct risk-threshold change
+  - stream freshness: expected improvement (market snapshots no longer blocked by paper-event stream idle periods)
+- Result: `keep`
+- Decision / next step: restart paper bots/services and validate `stream_age_ms` stays under stale threshold in `realtime_ui_api`; if needed, tune stale threshold only after post-fix cadence data is collected.
+
+## EXP-20260308-02: Isolate paper-exchange event ingestion by instance
+- Date: `2026-03-08`
+- Type: `code`
+- Area: `paper_execution`
+- Hypothesis: multiple bots sharing the same connector/trading pair were consuming the same paper-exchange event stream without instance filtering, causing bot1 to ingest foreign `pe-*` fills and corrupt strategy accounting/performance attribution.
+- Changes:
+  - `hbot/controllers/paper_engine_v2/hb_bridge.py`: in `_consume_paper_exchange_events()`, added local-instance gating for non-sync events so only events matching the local controller `instance_name` are processed
+  - `hbot/tests/controllers/test_hb_bridge_signal_routing.py`: added regression `test_submit_processed_filled_for_other_instance_is_ignored`
+- Observation window: identical `pe-*` order IDs were present simultaneously in `fills.csv` across `bot1`, `bot2`, `bot5`, `bot6`, and `bot7`, confirming cross-instance fill leakage.
+- Metrics checked:
+  - fills: expected drop in foreign-fill contamination for bot1
+  - net pnl: expected to become less noisy/more attributable to bot1 orders
+  - pnl/fill: expected to reflect only local strategy execution
+  - maker ratio: expected to stabilize after contaminated history ages out
+  - soft-pause ratio/state: expected to better align with local fills only
+  - drawdown: expected to reflect local inventory path only
+- Result: `inconclusive`
+- Decision / next step: run fresh post-fix observation window and recompute dossier deltas on uncontaminated fill history.
+
+## EXP-20260308-01: Maker/taker attribution hardening for paper bridge fills
+- Date: `2026-03-08`
+- Type: `code`
+- Area: `paper_execution`
+- Hypothesis: paper-bridge fills can arrive without `trade_fee.is_maker`, causing fallback price-vs-mid heuristics to misclassify fills (especially bridge `pe-*` sells), which corrupts maker ratio, taker expectancy, and governor/risk telemetry.
+- Changes:
+  - `hbot/controllers/epp_v2_4.py`: in `did_fill_order()`, added maker-flag resolution precedence: `trade_fee.is_maker` -> `event.is_maker` -> fee-rate proximity inference (`maker_fee_pct` vs `taker_fee_pct`) -> legacy price-vs-mid heuristic
+  - `hbot/controllers/paper_engine_v2/hb_event_fire.py`: attached `is_maker` directly on emitted HB fill events so controller classification can consume explicit bridge truth
+  - `hbot/tests/controllers/test_epp_v2_4_core.py`: added regressions for (a) event-level maker flag fallback and (b) fee-rate inference when explicit flags are missing
+- Observation window: audit of recent `fills.csv` showed heavy `pe-*` flow with maker-like fee rates but `is_maker=False`, driving distorted maker/taker breakdown in dossier metrics.
+- Metrics checked:
+  - fills: no change in raw fill count expected from this patch
+  - net pnl: unchanged directly (classification fix, not execution-price fix)
+  - pnl/fill: unchanged directly
+  - maker ratio: expected to improve in post-fix window as maker-like fills are no longer bucketed as taker
+  - soft-pause ratio/state: unchanged directly
+  - drawdown: unchanged directly
+- Result: `inconclusive`
+- Decision / next step: collect post-restart sample and verify that new bridge fills carry correct `is_maker` classification before comparing expectancy deltas.
+
 ## EXP-20260307-17: Enforce paper lot-size parity in runtime sizing
 - Date: `2026-03-07`
 - Type: `code+config`
@@ -944,3 +1313,99 @@ Copy this block for every new experiment or tuning cycle.
   - validation: targeted compile and controller tests pending / rerun in the same task
 - Result: `keep`
 - Decision / next step: preserve shared changes only for platform/runtime contracts; implement any future bot7-only strategy behavior in the bot7 controller/config unless there is a clear shared-runtime reason not to.
+
+## EXP-20260306-18: Give bot7 its own strategy gate profile
+- Date: `2026-03-06`
+- Type: `code+config`
+- Area: `bot_specific_gating`
+- Hypothesis: bot7 should use its own mean-reversion / tape-freshness gate semantics rather than inheriting shared alpha-policy naming and behavior from the base runtime. Making bot7 explicitly disable shared alpha/selective soft-pause layers and expose bot7-specific gate reasons should improve separation of concerns and reduce operator confusion.
+- Changes:
+  - `hbot/controllers/bots/bot7/adaptive_grid_v1.py`: disable inherited alpha/selective/adverse/slippage gate defaults in the bot7 config subclass.
+  - `hbot/controllers/bots/bot7/adaptive_grid_v1.py`: add bot7-specific gate metrics, publish `bot7_strategy_gate` instead of shared alpha-policy semantics, and append fail-closed reasons such as `bot7_trade_flow_stale` / `bot7_indicator_warmup`.
+  - `hbot/data/bot7/conf/controllers/epp_v2_4_bot7_adaptive_grid_paper.yml`: explicitly keep shared bot1-style alpha/selective soft-pause layers disabled for bot7.
+  - `hbot/tests/controllers/test_epp_v2_4_bot7.py`: add regression coverage for bot7 gate defaults, bot7 strategy-gate reporting, and bot7-specific stale-trade risk reasons.
+- Observation window: code-path isolation pass only; no new paper runtime window yet
+- Metrics checked:
+  - boundary check: bot7 now reports bot7-specific gate state/reasons from its own strategy module
+  - inheritance check: shared runtime still owns platform/risk plumbing, but bot7 no longer relies on shared alpha-policy gate semantics
+  - validation: targeted compile + bot7/bot1 controller tests in same task
+- Result: `keep`
+- Decision / next step: if additional bots need their own gate families, follow the same pattern: explicit bot-local config defaults plus bot-local gate-state reporting layered over shared runtime safety checks.
+
+## EXP-20260306-19: Standardize bot-local gate profiles across dedicated strategy bots
+- Date: `2026-03-06`
+- Type: `architecture`
+- Area: `all_bot_gate_separation`
+- Hypothesis: every dedicated strategy bot should own its own strategy gate semantics, while shared-controller bots should keep the shared base runtime gate behavior. Standardizing this split across bot5/bot6/bot7 reduces cross-bot leakage and makes operator diagnostics strategy-specific.
+- Changes:
+  - `hbot/controllers/bots/bot5/ift_jota_v1.py`: disable inherited shared trade-quality gate defaults, expose `bot5_strategy_gate`, append bot5-specific fail-closed reasons, and keep directional quote-mode decisions inside the bot5 controller.
+  - `hbot/controllers/bots/bot6/cvd_divergence_v1.py`: disable inherited shared trade-quality gate defaults, expose `bot6_strategy_gate`, append bot6-specific stale-feature fail-closed reasons, and keep directional quote-mode decisions inside the bot6 controller.
+  - `hbot/controllers/bots/bot7/adaptive_grid_v1.py`: keep bot7-local gate profile introduced in the prior step.
+  - `hbot/data/bot5/conf/controllers/epp_v2_4_bot5_ift_jota_paper.yml`, `hbot/data/bot6/conf/controllers/epp_v2_4_bot6_bitget_cvd_paper.yml`, `hbot/data/bot7/conf/controllers/epp_v2_4_bot7_adaptive_grid_paper.yml`: explicitly disable shared bot1-style alpha/selective soft-pause layers.
+  - `hbot/tests/controllers/test_epp_v2_4_bot5.py`, `hbot/tests/controllers/test_epp_v2_4_bot6.py`, `hbot/tests/controllers/test_epp_v2_4_bot7.py`: add regression coverage for bot-local gate defaults and bot-specific fail-closed reasons.
+- Observation window: code-path isolation pass only; no new multi-hour runtime observation yet
+- Metrics checked:
+  - boundary check: dedicated strategy bots now emit bot-local gate names/reasons instead of shared alpha-policy semantics
+  - scope check: shared-controller bots remain on shared runtime gates and were not moved onto bot-local strategy layers
+  - validation: `python -m py_compile` passed for bot5/bot6/bot7 controllers; targeted pytest across bot5/bot6/bot7 plus core controller tests passed
+- Result: `keep`
+- Decision / next step: preserve this split going forward: new strategy bots get explicit bot-local gate profiles in their dedicated controller module; only truly shared safety/runtime gates stay in the shared base controller.
+
+## EXP-20260306-20: Split bot1 into a dedicated lane and normalize dedicated-bot telemetry
+- Date: `2026-03-06`
+- Type: `architecture+telemetry`
+- Area: `bot1_split_and_telemetry`
+- Hypothesis: bot1 should stop pointing directly at the shared `epp_v2_4` controller alias, and dedicated strategy bots should emit a consistent gate/signal telemetry family so operator tooling does not depend on bot-specific ad hoc names.
+- Changes:
+  - `hbot/controllers/bots/bot1/baseline_v1.py`: add dedicated bot1 baseline controller/config wrapper with bot1-local gate telemetry derived from the existing shared alpha policy behavior.
+  - `hbot/controllers/epp_v2_4_bot1.py` and `hbot/controllers/market_making/epp_v2_4_bot1.py`: add bot1 compatibility aliases/shims.
+  - `hbot/data/bot1/conf/controllers/*.yml`: switch bot1-owned controller configs from `epp_v2_4` to `epp_v2_4_bot1`.
+  - `hbot/controllers/bots/bot5/ift_jota_v1.py`, `hbot/controllers/bots/bot6/cvd_divergence_v1.py`, `hbot/controllers/bots/bot7/adaptive_grid_v1.py`: standardize dedicated-bot telemetry on `botX_gate_state`, `botX_gate_reason`, `botX_signal_side`, `botX_signal_reason`, and `botX_signal_score` while keeping existing bot-specific aliases where useful.
+  - `hbot/controllers/tick_emitter.py`, `hbot/controllers/epp_logging.py`, `hbot/services/bot_metrics_exporter.py`: extend minute-log/export surfaces for the standardized dedicated-bot signal-score family.
+  - `hbot/tests/controllers/test_epp_v2_4_bot1.py` plus existing bot5/bot6/bot7/exporter tests: add targeted validation for bot1 split and standardized telemetry.
+- Observation window: code-path isolation and telemetry-schema validation only; no new runtime paper soak claimed
+- Metrics checked:
+  - boundary check: bot1 now resolves through a dedicated bot1 controller/module rather than the shared `epp_v2_4` controller name
+  - telemetry check: dedicated bots now share a consistent gate/signal naming family in processed state and minute/export surfaces
+  - validation: targeted `py_compile` passed; targeted pytest for bot1/bot5/bot6/bot7/core controller coverage and bot metrics exporter passed
+- Result: `keep`
+- Decision / next step: future dedicated strategy bots should start from this pattern immediately: bot-local controller module, bot-local gate telemetry, and compatibility alias only as a thin wrapper.
+
+## EXP-20260308-01: Extract neutral runtime kernel behind shared MM adapter
+- Date: `2026-03-08`
+- Type: `architecture+runtime`
+- Area: `neutral_runtime_kernel`
+- Hypothesis: extracting neutral runtime contracts for compatibility surface, data context, risk decisions, and execution plans behind the existing shared market-making behavior should reduce hidden coupling without breaking external streams, artifacts, or bot7 behavior.
+- Changes:
+  - `hbot/controllers/runtime/contracts.py`, `hbot/controllers/runtime/core.py`, `hbot/controllers/runtime/data_context.py`, `hbot/controllers/runtime/risk_context.py`, `hbot/controllers/runtime/execution_context.py`: add neutral runtime kernel contracts and compatibility-surface helpers.
+  - `hbot/controllers/runtime/market_making_core.py`: add explicit market-making family adapter for quote-ladder execution behavior.
+  - `hbot/controllers/shared_mm_v24.py`: route runtime compatibility state, execution planning, and executor-family behavior through the new kernel/adapter split while preserving v1 telemetry and artifact identity.
+  - `hbot/controllers/bots/bot7/adaptive_grid_v1.py`: move bot7 onto the new runtime execution-plan hook while keeping legacy compatibility wrappers and processed-data fields.
+  - `hbot/tests/controllers/test_runtime_core.py`, `hbot/tests/controllers/test_epp_v2_4_bot7.py`: add coverage for compatibility-surface rules and bot7 execution-plan parity.
+- Observation window: code-path parity and boundary validation only; no new paper run claimed
+- Metrics checked:
+  - compatibility surface: legacy `epp_*` controllers keep `epp_v24` artifact namespace, `epp` daily-state prefix, and `hb.epp_v2_4` telemetry producer prefix
+  - boundary checks: strategy-isolation and market-making shim contract tests passed with `PYTHONPATH=hbot`
+  - code validity: targeted `py_compile` passed for runtime and bot7 modules
+- Result: `keep`
+- Decision / next step: keep external v1 streams and `controller_id` stable while continuing migration; add broader parity and service/regression coverage before moving bot5/bot6 or changing downstream consumers.
+
+## EXP-20260309-01: Restore bot7 active-mode order visibility and service-side shared fill matching
+- Date: `2026-03-09`
+- Type: `code+config`
+- Area: `paper_execution`
+- Hypothesis: bot7’s missing open-order evidence is not a strategy issue but an execution-read-model gap: active-mode service orders are being accepted, yet `_collect_open_orders_snapshot` ignores `_paper_exchange_runtime_orders`, while the paper exchange service also fails to match shared `instance_name=""` market snapshots against bot-scoped resting orders.
+- Changes:
+  - `hbot/controllers/paper_engine_v2/hb_bridge.py`: canonicalize controller-route resolution for `_paper_trade` connector aliases, reuse canonical bridge lookup in patched buy/sell/cancel delegation, and hydrate runtime open orders from the service state snapshot after `sync_state` confirmation.
+  - `hbot/scripts/shared/v2_with_controllers.py`: include active-mode `_paper_exchange_runtime_orders` in `open_orders_latest.json` generation and expose `active_runtime_open` in `PAPER_ENGINE_PROBE` logs.
+  - `hbot/services/paper_exchange_service/main.py`: canonicalize `*_paper_trade` connector names on service ingest/command handling and treat `snapshot.instance_name=""` as a wildcard when matching resting orders for fills.
+  - `hbot/data/bot7/conf/controllers/epp_v2_4_bot7_adaptive_grid_paper.yml`: switch `position_mode` from `HEDGE` to `ONEWAY` so bot7 active-mode orders align with the one-way directional execution path used by the other dedicated bots.
+  - `hbot/tests/controllers/test_hb_bridge_event_isolation.py`, `hbot/tests/controllers/test_hb_event_fire.py`, `hbot/tests/services/test_paper_exchange_service.py`, `hbot/tests/scripts/test_v2_with_controllers_open_orders.py`: add regression coverage for bridge connector canonicalization, sync-time runtime hydration, SELL-side fill dispatch, service connector normalization, shared-snapshot fills, and active-mode open-order visibility.
+- Observation window: artifact/cursor/service regression pass only; no fresh multi-minute bot7 soak claimed in this task.
+- Metrics checked:
+  - fills: shared market snapshots now remain eligible to fill bot-scoped resting active-mode orders
+  - open order visibility: active runtime orders are emitted into `open_orders_latest.json` and visible to downstream desk snapshots
+  - routing correctness: `_paper_trade` connector aliases resolve to the registered bridge/controller path instead of falling through to `original_buy`
+  - validation: `python -m py_compile` passed for `hb_bridge.py`, `main.py`, `v2_with_controllers.py`, and `epp_v2_4.py`; targeted pytest plus full non-integration pytest passed
+- Result: `keep`
+- Decision / next step: restart bot7 and verify that `open_orders_latest.json` and the desk snapshot now surface the same active-mode orders already present in `paper_exchange_state_snapshot_latest.json`; if stale pre-restart service orders remain, confirm the reconciliation path cleans them up on the next sync cycle.

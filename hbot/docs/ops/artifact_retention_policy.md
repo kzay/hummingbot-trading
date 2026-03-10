@@ -8,6 +8,7 @@ Define retention and auditability standards for operational evidence artifacts.
 - Reconciliation/parity/portfolio-risk reports.
 - Promotion gate and replay regression artifacts.
 - Readiness and soak outputs.
+- Verification, analysis, policy, ops, and ops-db-writer artifacts that accumulate during daily desk operation.
 
 ## Retention Rules
 Policy source:
@@ -19,10 +20,16 @@ Current retention windows:
 - Parity: 30 days
 - Portfolio risk: 30 days
 - Promotion gates: 60 days
+- Verification: 30 days
 - Replay regression: 60 days
 - Readiness: 90 days
 - Soak: 30 days
 - Dev checks: 14 days
+- Analysis: 30 days
+- Policy: 30 days
+- Ops: 30 days
+- Ops retention: 30 days
+- Ops DB writer: 30 days
 
 Protected files (`latest`/anchor artifacts) are never deleted by retention:
 - examples: `reports/*/latest.json`, strict/day2/readiness anchors
@@ -34,6 +41,9 @@ Protected files (`latest`/anchor artifacts) are never deleted by retention:
   - `python scripts/release/run_artifact_retention.py`
 - Apply deletions:
   - `python scripts/release/run_artifact_retention.py --apply`
+- Scheduled apply:
+  - `artifact-retention` service in `compose/docker-compose.yml`
+  - controlled by `ARTIFACT_RETENTION_APPLY` and `ARTIFACT_RETENTION_INTERVAL_SEC`
 - Output:
   - `reports/ops_retention/latest.json`
   - `reports/ops_retention/artifact_retention_<timestamp>.json`

@@ -283,6 +283,28 @@ class TestPaperExchangeShadowAdapter:
         assert payload["connector_name"] == "test_conn"
         assert payload["metadata"]["paper_exchange_mode"] == "shadow"
 
+    def test_publish_command_drops_when_identity_scope_missing(self):
+        strategy, _ = _make_strategy_with_controller(instance_name="bot1")
+        mock_redis = MagicMock()
+        hb_bridge._bridge_state.redis_client = mock_redis
+        hb_bridge._bridge_state.redis_init_done = True
+
+        with patch.dict("os.environ", {"PAPER_EXCHANGE_MODE": "shadow"}, clear=False):
+            entry_id = hb_bridge._publish_paper_exchange_command(
+                strategy,
+                connector_name="test_conn",
+                trading_pair="",
+                command="submit_order",
+                order_id="order-missing-scope",
+                side="buy",
+                order_type="limit",
+                amount_base=Decimal("0.01"),
+                price=Decimal("100000"),
+            )
+
+        assert entry_id is None
+        mock_redis.xadd.assert_not_called()
+
     def test_active_cancel_all_retry_reuses_command_event_id_within_ttl(self):
         strategy, _ = _make_strategy_with_controller(instance_name="bot1")
         mock_redis = MagicMock()
@@ -374,6 +396,45 @@ class TestPaperExchangeShadowAdapter:
             hb_bridge._ensure_sync_state_command(strategy, "test_conn", "BTC-USDT")
             hb_bridge._ensure_sync_state_command(strategy, "test_conn", "BTC-USDT")
         assert mock_redis.xadd.call_count == 1
+
+    def test_sync_state_uses_extended_command_ttl(self):
+        strategy, _ = _make_strategy_with_controller(instance_name="bot1")
+        mock_redis = MagicMock()
+        mock_redis.xadd.return_value = "201-0"
+        hb_bridge._bridge_state.redis_client = mock_redis
+        hb_bridge._bridge_state.redis_init_done = True
+
+        with patch.dict("os.environ", {"PAPER_EXCHANGE_MODE": "active"}, clear=False):
+            hb_bridge._ensure_sync_state_command(strategy, "test_conn", "BTC-USDT")
+
+        payload = json.loads(mock_redis.xadd.call_args[0][1]["payload"])
+        assert int(payload["expires_at_ms"]) - int(payload["timestamp_ms"]) >= 300_000
+
+    def test_submit_order_uses_extended_active_command_ttl(self):
+        strategy, _ = _make_strategy_with_controller(instance_name="bot1")
+        mock_redis = MagicMock()
+        mock_redis.xadd.return_value = "202-0"
+        hb_bridge._bridge_state.redis_client = mock_redis
+        hb_bridge._bridge_state.redis_init_done = True
+
+        with patch.dict("os.environ", {"PAPER_EXCHANGE_MODE_BOT1": "active"}, clear=False):
+            entry_id = hb_bridge._publish_paper_exchange_command(
+                strategy,
+                connector_name="test_conn",
+                trading_pair="BTC-USDT",
+                command="submit_order",
+                order_id="ord-ttl-submit",
+                side="buy",
+                order_type="limit",
+                amount_base=0.01,
+                price=10_000.0,
+                metadata={"position_action": "open_long", "position_mode": "ONEWAY"},
+            )
+
+        assert entry_id == "202-0"
+        payload = json.loads(mock_redis.xadd.call_args[0][1]["payload"])
+        assert payload["command"] == "submit_order"
+        assert int(payload["expires_at_ms"]) - int(payload["timestamp_ms"]) >= 120_000
 
 
 class TestPaperExchangeModeResolution:
@@ -494,7 +555,7 @@ class TestPaperExchangeActiveAdapter:
             hb_bridge._consume_paper_exchange_events(strategy)
 
         assert hb_bridge._bridge_state.last_paper_exchange_event_id == "42-0"
-        mock_redis.xread.assert_called_once_with({"hb.paper_exchange.event.v1": "42-0"}, count=200, block=0)
+        mock_redis.xread.assert_called_once_with({"hb.paper_exchange.event.v1": "42-0"}, count=200, block=1)
         mock_redis.set.assert_called_with("paper_exchange:last_event_id:bot1", "42-0")
 
 
@@ -575,7 +636,7 @@ def test_patch_connector_balances_exposes_hedge_leg_position_reads() -> None:
         with patch.dict("os.environ", {"PAPER_EXCHANGE_MODE_BOT1": "active"}, clear=False):
             hb_bridge._consume_paper_exchange_events(strategy)
 
-        mock_redis.xread.assert_called_once_with({"hb.paper_exchange.event.v1": "10-0"}, count=200, block=0)
+        mock_redis.xread.assert_called_once_with({"hb.paper_exchange.event.v1": "10-0"}, count=200, block=1)
         mock_redis.set.assert_called_with("paper_exchange:last_event_id:bot1", "11-0")
         assert hb_bridge._bridge_state.last_paper_exchange_event_id == "11-0"
 
@@ -663,9 +724,38 @@ def test_patch_connector_balances_exposes_hedge_leg_position_reads() -> None:
             hb_bridge._consume_paper_exchange_events(strategy)
             gate_ready, gate_reason = hb_bridge._active_sync_gate(strategy, "test_conn", "BTC-USDT")
 
-        assert "botX|test_conn|BTC-USDT" in hb_bridge._bridge_state.sync_confirmed_keys
+        assert "botX|test_conn|BTC-USDT" not in hb_bridge._bridge_state.sync_confirmed_keys
         assert "bot1|test_conn|BTC-USDT" not in hb_bridge._bridge_state.sync_confirmed_keys
         assert (gate_ready, gate_reason) == (False, "paper_exchange_sync_pending")
+
+    def test_sync_state_rejected_for_other_instance_does_not_force_local_hard_stop(self):
+        strategy, ctrl = _make_strategy_with_controller(instance_name="bot1")
+        mock_redis = MagicMock()
+        payload = {
+            "schema_version": "1.0",
+            "event_type": "paper_exchange_event",
+            "event_id": "evt-sync-reject-foreign",
+            "producer": "paper_exchange_service",
+            "timestamp_ms": 1_000,
+            "instance_name": "botX",
+            "command_event_id": "cmd-sync-reject-foreign",
+            "command": "sync_state",
+            "status": "rejected",
+            "reason": "snapshot_mismatch",
+            "connector_name": "test_conn",
+            "trading_pair": "BTC-USDT",
+            "metadata": {},
+        }
+        mock_redis.xread.return_value = [("hb.paper_exchange.event.v1", [("0-4", {"payload": json.dumps(payload)})])]
+        hb_bridge._bridge_state.redis_client = mock_redis
+        hb_bridge._bridge_state.redis_init_done = True
+
+        with patch.dict("os.environ", {"PAPER_EXCHANGE_MODE_BOT1": "active"}, clear=False):
+            hb_bridge._consume_paper_exchange_events(strategy)
+
+        ctrl._ops_guard.force_hard_stop.assert_not_called()
+        assert "bot1|test_conn|BTC-USDT" not in hb_bridge._bridge_state.sync_timeout_hard_stop_keys
+        assert "botX|test_conn|BTC-USDT" not in hb_bridge._bridge_state.sync_timeout_hard_stop_keys
 
     def test_consume_event_rejected_submit_maps_to_hb_reject(self):
         strategy, _ = _make_strategy_with_controller(instance_name="bot1")
@@ -1270,7 +1360,7 @@ def test_patch_connector_balances_exposes_hedge_leg_position_reads() -> None:
         mock_fire.assert_not_called()
         runtime_order = hb_bridge._get_runtime_order_for_executor(strategy, "test_conn", "ord-open")
         assert runtime_order is not None
-        assert runtime_order.current_state == "open"
+        assert runtime_order.current_state == "working"
 
     def test_submit_processed_filled_maps_to_hb_fill(self):
         strategy, _ = _make_strategy_with_controller(instance_name="bot1")
@@ -1333,6 +1423,65 @@ def test_patch_connector_balances_exposes_hedge_leg_position_reads() -> None:
         runtime_order = hb_bridge._get_runtime_order_for_executor(strategy, "test_conn", "ord-fill")
         assert runtime_order is not None
         assert runtime_order.current_state == "filled"
+
+    def test_submit_processed_filled_for_other_instance_is_ignored(self):
+        strategy, _ = _make_strategy_with_controller(instance_name="bot1")
+        strategy._paper_desk_v2_bridges = {
+            "test_conn": {
+                "desk": MagicMock(),
+                "instrument_id": InstrumentId(venue="bitget", trading_pair="BTC-USDT", instrument_type="perp"),
+            }
+        }
+        hb_bridge._upsert_runtime_order(
+            strategy,
+            connector_name="test_conn",
+            order_id="ord-foreign-fill",
+            trading_pair="BTC-USDT",
+            side="buy",
+            order_type="market",
+            amount=Decimal("0.01"),
+            price=Decimal("10000"),
+            state="pending_create",
+        )
+
+        mock_redis = MagicMock()
+        payload = {
+            "schema_version": "1.0",
+            "event_type": "paper_exchange_event",
+            "event_id": "evt-fill-foreign",
+            "producer": "paper_exchange_service",
+            "timestamp_ms": 1_000,
+            "instance_name": "botX",
+            "command_event_id": "cmd-fill-foreign",
+            "command": "submit_order",
+            "status": "processed",
+            "reason": "order_filled_immediate",
+            "connector_name": "test_conn",
+            "trading_pair": "BTC-USDT",
+            "order_id": "ord-foreign-fill",
+            "metadata": {
+                "order_state": "filled",
+                "side": "buy",
+                "order_type": "market",
+                "amount_base": "0.01",
+                "price": "10000.0",
+                "fill_price": "10000.0",
+                "fill_amount_base": "0.01",
+                "fill_fee_quote": "0",
+                "is_maker": "0",
+            },
+        }
+        mock_redis.xread.return_value = [("hb.paper_exchange.event.v1", [("5-1", {"payload": json.dumps(payload)})])]
+        hb_bridge._bridge_state.redis_client = mock_redis
+        hb_bridge._bridge_state.redis_init_done = True
+
+        with patch.dict("os.environ", {"PAPER_EXCHANGE_MODE_BOT1": "active"}, clear=False):
+            with patch.object(hb_bridge, "_fire_hb_events") as mock_fire:
+                hb_bridge._consume_paper_exchange_events(strategy)
+        mock_fire.assert_not_called()
+        runtime_order = hb_bridge._get_runtime_order_for_executor(strategy, "test_conn", "ord-foreign-fill")
+        assert runtime_order is not None
+        assert runtime_order.current_state == "pending_create"
 
     def test_submit_processed_expired_maps_to_hb_reject(self):
         strategy, _ = _make_strategy_with_controller(instance_name="bot1")
@@ -1438,7 +1587,7 @@ def test_patch_connector_balances_exposes_hedge_leg_position_reads() -> None:
         assert fired_event.fill_quantity == Decimal("0.01")
         runtime_order = hb_bridge._get_runtime_order_for_executor(strategy, "test_conn", "ord-life")
         assert runtime_order is not None
-        assert runtime_order.current_state == "partial"
+        assert runtime_order.current_state == "partially_filled"
 
 
 class TestExecutorInflightCompatibility:

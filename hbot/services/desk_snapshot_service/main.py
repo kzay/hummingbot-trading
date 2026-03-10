@@ -27,6 +27,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
+from services.common.log_namespace import list_bot_log_dirs
 from services.common.logging_config import configure_logging
 
 configure_logging()
@@ -224,7 +225,7 @@ def _completeness(minute: Optional[Dict[str, str]]) -> Tuple[float, List[str]]:
 def build_snapshot(bot_name: str, bot_data_dir: Path) -> Dict[str, Any]:
     """Build a full canonical snapshot for one bot."""
     now_epoch = _epoch_now()
-    log_dirs = sorted(bot_data_dir.glob("logs/epp_v24/*/"))
+    log_dirs = list_bot_log_dirs(bot_data_dir)
 
     minute_row: Optional[Dict[str, str]] = None
     fills_stats: Dict[str, Any] = {}

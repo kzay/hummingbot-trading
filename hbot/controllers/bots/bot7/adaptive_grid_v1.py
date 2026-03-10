@@ -5,8 +5,12 @@ from typing import Any, Dict, List, Tuple
 
 from pydantic import Field
 
+from controllers.runtime.data_context import RuntimeDataContext
+from controllers.runtime.directional_core import DirectionalRuntimeAdapter
+from controllers.runtime.execution_context import RuntimeExecutionPlan
 from controllers.runtime.base import StrategyRuntimeV24Config, StrategyRuntimeV24Controller
 from controllers.runtime.market_making_types import MarketConditions, RegimeSpec, SpreadEdgeState, clip
+from controllers.runtime.risk_context import RuntimeRiskDecision
 from services.common.market_data_plane import CanonicalMarketDataReader, MarketTrade
 from services.common.utils import to_decimal
 
@@ -22,13 +26,22 @@ class Bot7AdaptiveGridV1Config(StrategyRuntimeV24Config):
     """Bot7 adaptive absorption grid strategy lane."""
 
     controller_name: str = "bot7_adaptive_grid_v1"
+    shared_edge_gate_enabled: bool = Field(default=False)
+    alpha_policy_enabled: bool = Field(default=False)
+    selective_quoting_enabled: bool = Field(default=False)
+    adverse_fill_soft_pause_enabled: bool = Field(default=False)
+    edge_confidence_soft_pause_enabled: bool = Field(default=False)
+    slippage_soft_pause_enabled: bool = Field(default=False)
     bot7_bb_period: int = Field(default=20, ge=10, le=100)
     bot7_bb_stddev: Decimal = Field(default=Decimal("2.0"))
     bot7_rsi_period: int = Field(default=14, ge=5, le=50)
     bot7_rsi_buy_threshold: Decimal = Field(default=Decimal("32"))
     bot7_rsi_sell_threshold: Decimal = Field(default=Decimal("68"))
+    bot7_rsi_probe_buy_threshold: Decimal = Field(default=Decimal("38"))
+    bot7_rsi_probe_sell_threshold: Decimal = Field(default=Decimal("62"))
     bot7_adx_period: int = Field(default=14, ge=5, le=50)
     bot7_adx_activate_below: Decimal = Field(default=Decimal("20"))
+    bot7_adx_neutral_fallback_below: Decimal = Field(default=Decimal("28"))
     bot7_trade_window_count: int = Field(default=160, ge=20, le=600)
     bot7_trade_stale_after_ms: int = Field(default=15_000, ge=1000, le=120_000)
     bot7_absorption_min_trade_mult: Decimal = Field(default=Decimal("2.5"))
@@ -38,6 +51,8 @@ class Bot7AdaptiveGridV1Config(StrategyRuntimeV24Config):
     bot7_grid_spacing_atr_mult: Decimal = Field(default=Decimal("0.50"))
     bot7_grid_spacing_floor_pct: Decimal = Field(default=Decimal("0.0015"))
     bot7_grid_spacing_cap_pct: Decimal = Field(default=Decimal("0.0100"))
+    bot7_touch_tolerance_pct: Decimal = Field(default=Decimal("0.0015"))
+    bot7_depth_imbalance_reversal_threshold: Decimal = Field(default=Decimal("0.12"))
     bot7_max_grid_legs: int = Field(default=3, ge=1, le=6)
     bot7_per_leg_risk_pct: Decimal = Field(default=Decimal("0.003"))
     bot7_total_grid_exposure_cap_pct: Decimal = Field(default=Decimal("0.015"))
@@ -46,6 +61,11 @@ class Bot7AdaptiveGridV1Config(StrategyRuntimeV24Config):
     bot7_funding_short_bias_threshold: Decimal = Field(default=Decimal("0.0003"))
     bot7_funding_vol_reduce_threshold: Decimal = Field(default=Decimal("0.0010"))
     bot7_trade_reader_enabled: bool = Field(default=True)
+    bot7_warmup_quote_levels: int = Field(default=1, ge=0, le=2)
+    bot7_warmup_quote_max_bars: int = Field(default=3, ge=0, le=20)
+    bot7_probe_enabled: bool = Field(default=True)
+    bot7_probe_grid_legs: int = Field(default=1, ge=1, le=2)
+    bot7_probe_size_mult: Decimal = Field(default=Decimal("0.50"))
 
 
 class Bot7AdaptiveGridV1Controller(StrategyRuntimeV24Controller):
@@ -62,9 +82,13 @@ class Bot7AdaptiveGridV1Controller(StrategyRuntimeV24Controller):
             stale_after_ms=int(getattr(config, "bot7_trade_stale_after_ms", 15_000)),
         )
 
+    def _make_runtime_family_adapter(self):
+        return DirectionalRuntimeAdapter(self)
+
     def _empty_bot7_state(self) -> Dict[str, Any]:
         return {
             "active": False,
+            "probe_mode": False,
             "side": "off",
             "reason": "inactive",
             "bb_lower": _ZERO,
@@ -90,7 +114,73 @@ class Bot7AdaptiveGridV1Controller(StrategyRuntimeV24Controller):
             "funding_bias": "neutral",
             "funding_risk_scale": _ONE,
             "order_book_imbalance": _ZERO,
+            "indicator_ready": False,
+            "indicator_missing": "",
+            "price_buffer_bars": 0,
         }
+
+    def _bot7_gate_metrics(self) -> Dict[str, Any]:
+        state = getattr(self, "_bot7_state", None) or self._empty_bot7_state()
+        reason = str(state.get("reason", "inactive"))
+        fail_closed = False
+        if bool(state.get("active", False)):
+            gate_state = "active"
+            gate_reason = reason
+        else:
+            gate_state = "idle"
+            gate_reason = reason
+        return {
+            "state": gate_state,
+            "reason": gate_reason,
+            "fail_closed": fail_closed,
+        }
+
+    def _compute_alpha_policy(
+        self,
+        *,
+        regime_name: str,
+        spread_state: SpreadEdgeState,
+        market: MarketConditions,
+        target_net_base_pct: Decimal,
+        base_pct_net: Decimal,
+    ) -> Dict[str, Decimal | str | bool]:
+        gate = self._bot7_gate_metrics()
+        signal_score = to_decimal((getattr(self, "_bot7_state", None) or {}).get("signal_score", _ZERO))
+        metrics: Dict[str, Decimal | str | bool] = {
+            "state": "bot7_strategy_gate",
+            "reason": str(gate["reason"]),
+            "maker_score": signal_score,
+            "aggressive_score": _ZERO,
+            "cross_allowed": False,
+        }
+        self._alpha_policy_state = str(metrics["state"])
+        self._alpha_policy_reason = str(metrics["reason"])
+        self._alpha_maker_score = signal_score
+        self._alpha_aggressive_score = _ZERO
+        self._alpha_cross_allowed = False
+        return metrics
+
+    def _evaluate_all_risk(
+        self,
+        spread_state: SpreadEdgeState,
+        base_pct_gross: Decimal,
+        equity_quote: Decimal,
+        projected_total_quote: Decimal,
+        market: MarketConditions,
+    ) -> Tuple[List[str], bool, Decimal, Decimal]:
+        risk_reasons, risk_hard_stop, daily_loss_pct, drawdown_pct = super()._evaluate_all_risk(
+            spread_state=spread_state,
+            base_pct_gross=base_pct_gross,
+            equity_quote=equity_quote,
+            projected_total_quote=projected_total_quote,
+            market=market,
+        )
+        gate = self._bot7_gate_metrics()
+        if bool(gate["fail_closed"]):
+            gate_reason = f"bot7_{gate['reason']}"
+            if gate_reason not in risk_reasons:
+                risk_reasons.append(gate_reason)
+        return risk_reasons, risk_hard_stop, daily_loss_pct, drawdown_pct
 
     def _trade_age_ms(self, trades: List[MarketTrade]) -> int:
         if not trades:
@@ -189,6 +279,8 @@ class Bot7AdaptiveGridV1Controller(StrategyRuntimeV24Controller):
         rsi_period = int(getattr(self.config, "bot7_rsi_period", 14))
         adx_period = int(getattr(self.config, "bot7_adx_period", 14))
         atr_period = int(getattr(self.config, "atr_period", 14))
+        price_buffer = getattr(self, "_price_buffer", None)
+        bar_count = len(getattr(price_buffer, "bars", []) or [])
 
         bands = self._price_buffer.bollinger_bands(
             period=bb_period,
@@ -211,7 +303,7 @@ class Bot7AdaptiveGridV1Controller(StrategyRuntimeV24Controller):
             except Exception:
                 depth_imbalance = _ZERO
 
-        if bands is None or rsi is None or adx is None or atr is None or mid <= _ZERO:
+        if mid <= _ZERO:
             self._bot7_state = self._empty_bot7_state()
             self._bot7_state.update(
                 {
@@ -221,6 +313,36 @@ class Bot7AdaptiveGridV1Controller(StrategyRuntimeV24Controller):
                     "funding_bias": funding_bias,
                     "funding_risk_scale": funding_risk_scale,
                     "order_book_imbalance": depth_imbalance,
+                    "indicator_ready": False,
+                    "indicator_missing": "mid",
+                    "price_buffer_bars": bar_count,
+                }
+            )
+            return self._bot7_state
+
+        indicator_missing: List[str] = []
+        if bands is None:
+            indicator_missing.append("bands")
+        if rsi is None:
+            indicator_missing.append("rsi")
+        if adx is None:
+            indicator_missing.append("adx")
+        indicator_ready = len(indicator_missing) == 0
+        atr_ready = atr is not None
+
+        if not indicator_ready:
+            self._bot7_state = self._empty_bot7_state()
+            self._bot7_state.update(
+                {
+                    "reason": "indicator_warmup",
+                    "trade_age_ms": trade_age_ms,
+                    "trade_flow_stale": trade_stale,
+                    "funding_bias": funding_bias,
+                    "funding_risk_scale": funding_risk_scale,
+                    "order_book_imbalance": depth_imbalance,
+                    "indicator_ready": False,
+                    "indicator_missing": ",".join(indicator_missing),
+                    "price_buffer_bars": bar_count,
                 }
             )
             return self._bot7_state
@@ -240,18 +362,54 @@ class Bot7AdaptiveGridV1Controller(StrategyRuntimeV24Controller):
         recent_delta = sum((trade.delta for trade in trades[-12:]), _ZERO) if trades else _ZERO
         delta_volume = sum((trade.delta for trade in trades), _ZERO) if trades else _ZERO
         adx_active = adx < to_decimal(getattr(self.config, "bot7_adx_activate_below", Decimal("20")))
-        regime_active = adx_active or funding_bias != "neutral"
-        touch_eps = to_decimal(getattr(self.config, "bot7_grid_spacing_floor_pct", Decimal("0.0015")))
+        neutral_regime = str(regime_name).startswith("neutral")
+        regime_active = (
+            adx_active
+            or (neutral_regime and adx <= to_decimal(getattr(self.config, "bot7_adx_neutral_fallback_below", Decimal("28"))))
+            or funding_bias != "neutral"
+        )
+        touch_eps = to_decimal(getattr(self.config, "bot7_touch_tolerance_pct", Decimal("0.0015")))
         touch_lower = mid <= bb_lower * (_ONE + touch_eps)
         touch_upper = mid >= bb_upper * (_ONE - touch_eps)
-        long_signal = regime_active and not trade_stale and touch_lower and rsi <= to_decimal(
-            getattr(self.config, "bot7_rsi_buy_threshold", Decimal("32"))
-        ) and (absorption_long or delta_trap_long)
-        short_signal = regime_active and not trade_stale and touch_upper and rsi >= to_decimal(
-            getattr(self.config, "bot7_rsi_sell_threshold", Decimal("68"))
-        ) and (absorption_short or delta_trap_short)
+        rsi_buy_threshold = to_decimal(getattr(self.config, "bot7_rsi_buy_threshold", Decimal("32")))
+        rsi_sell_threshold = to_decimal(getattr(self.config, "bot7_rsi_sell_threshold", Decimal("68")))
+        rsi_probe_buy_threshold = max(
+            rsi_buy_threshold,
+            to_decimal(getattr(self.config, "bot7_rsi_probe_buy_threshold", Decimal("38"))),
+        )
+        rsi_probe_sell_threshold = min(
+            rsi_sell_threshold,
+            to_decimal(getattr(self.config, "bot7_rsi_probe_sell_threshold", Decimal("62"))),
+        )
+        imbalance_threshold = to_decimal(
+            getattr(self.config, "bot7_depth_imbalance_reversal_threshold", Decimal("0.12"))
+        )
+        primary_long = absorption_long or delta_trap_long
+        primary_short = absorption_short or delta_trap_short
+        secondary_long = depth_imbalance >= imbalance_threshold and recent_delta >= _ZERO
+        secondary_short = depth_imbalance <= -imbalance_threshold and recent_delta <= _ZERO
+        long_signal = regime_active and not trade_stale and touch_lower and rsi <= rsi_buy_threshold and primary_long
+        short_signal = regime_active and not trade_stale and touch_upper and rsi >= rsi_sell_threshold and primary_short
+        probe_enabled = bool(getattr(self.config, "bot7_probe_enabled", True))
+        long_probe = (
+            probe_enabled
+            and regime_active
+            and not trade_stale
+            and touch_lower
+            and rsi <= rsi_probe_buy_threshold
+            and (primary_long or secondary_long)
+        )
+        short_probe = (
+            probe_enabled
+            and regime_active
+            and not trade_stale
+            and touch_upper
+            and rsi >= rsi_probe_sell_threshold
+            and (primary_short or secondary_short)
+        )
 
         side = "off"
+        probe_mode = False
         reason = "no_entry"
         if long_signal and not short_signal:
             side = "buy"
@@ -259,24 +417,29 @@ class Bot7AdaptiveGridV1Controller(StrategyRuntimeV24Controller):
         elif short_signal and not long_signal:
             side = "sell"
             reason = "mean_reversion_short"
+        elif long_probe and not short_probe:
+            side = "buy"
+            reason = "probe_long"
+            probe_mode = True
+        elif short_probe and not long_probe:
+            side = "sell"
+            reason = "probe_short"
+            probe_mode = True
         elif trade_stale:
             reason = "trade_flow_stale"
         elif not regime_active:
             reason = "regime_inactive"
 
-        signal_components = sum(
-            1
-            for flag in (
-                absorption_long if side == "buy" else absorption_short,
-                delta_trap_long if side == "buy" else delta_trap_short,
-                regime_active,
-            )
-            if flag
-        )
+        if side == "buy":
+            signal_components = sum(1 for flag in (primary_long, secondary_long, regime_active) if flag)
+        elif side == "sell":
+            signal_components = sum(1 for flag in (primary_short, secondary_short, regime_active) if flag)
+        else:
+            signal_components = int(regime_active)
         signal_score = clip(Decimal(signal_components) / _THREE, _ZERO, _ONE)
         spacing_pct = clip(
             (atr * to_decimal(getattr(self.config, "bot7_grid_spacing_atr_mult", Decimal("0.50"))) / mid)
-            if mid > _ZERO
+            if atr is not None and mid > _ZERO
             else _ZERO,
             to_decimal(getattr(self.config, "bot7_grid_spacing_floor_pct", Decimal("0.0015"))),
             to_decimal(getattr(self.config, "bot7_grid_spacing_cap_pct", Decimal("0.0100"))),
@@ -287,18 +450,26 @@ class Bot7AdaptiveGridV1Controller(StrategyRuntimeV24Controller):
                 int(getattr(self.config, "bot7_max_grid_legs", 3)),
                 max(1, int((signal_score * Decimal(getattr(self.config, "bot7_max_grid_legs", 3))).to_integral_value(rounding="ROUND_CEILING"))),
             )
+            if probe_mode:
+                grid_levels = min(
+                    grid_levels,
+                    max(1, int(getattr(self.config, "bot7_probe_grid_legs", 1))),
+                )
         per_leg_risk = to_decimal(getattr(self.config, "bot7_per_leg_risk_pct", Decimal("0.003")))
         target_abs = clip(
             per_leg_risk * Decimal(grid_levels) * funding_risk_scale,
             _ZERO,
             to_decimal(getattr(self.config, "bot7_total_grid_exposure_cap_pct", Decimal("0.015"))),
         )
+        if probe_mode:
+            target_abs *= clip(to_decimal(getattr(self.config, "bot7_probe_size_mult", Decimal("0.50"))), _ZERO, _ONE)
         target_net_base_pct = target_abs if side == "buy" else (-target_abs if side == "sell" else _ZERO)
         hedge_target_base_pct = abs(target_net_base_pct) * to_decimal(
             getattr(self.config, "bot7_hedge_ratio", Decimal("0.30"))
         )
         self._bot7_state = {
             "active": side != "off",
+            "probe_mode": probe_mode,
             "side": side,
             "reason": reason,
             "bb_lower": bb_lower,
@@ -324,6 +495,9 @@ class Bot7AdaptiveGridV1Controller(StrategyRuntimeV24Controller):
             "funding_bias": funding_bias,
             "funding_risk_scale": funding_risk_scale,
             "order_book_imbalance": depth_imbalance,
+            "indicator_ready": True,
+            "indicator_missing": "" if atr_ready else "atr",
+            "price_buffer_bars": bar_count,
         }
         return self._bot7_state
 
@@ -343,14 +517,25 @@ class Bot7AdaptiveGridV1Controller(StrategyRuntimeV24Controller):
     ) -> str:
         state = getattr(self, "_bot7_state", None) or self._empty_bot7_state()
         side = str(state.get("side", "off"))
+        reason = str(state.get("reason", "inactive"))
+        warmup_quote_max_bars = max(0, int(getattr(self.config, "bot7_warmup_quote_max_bars", 3)))
+        warmup_price_buffer_bars = int(state.get("price_buffer_bars", 0) or 0)
         previous_mode = str(getattr(self, "_quote_side_mode", "off") or "off")
         desired_mode = "buy_only" if side == "buy" else ("sell_only" if side == "sell" else "off")
         if previous_mode != desired_mode:
             self._pending_stale_cancel_actions.extend(
                 self._cancel_stale_side_executors(previous_mode, desired_mode)
             )
+        cancel_active_when_off = reason in {"trade_flow_stale", "regime_inactive", "no_entry"} or (
+            reason == "indicator_warmup" and warmup_price_buffer_bars > warmup_quote_max_bars
+        )
+        if desired_mode == "off" and cancel_active_when_off:
+            self._pending_stale_cancel_actions.extend(self._cancel_active_quote_executors())
+            cancel_paper_orders = getattr(self, "_cancel_alpha_no_trade_paper_orders", None)
+            if callable(cancel_paper_orders):
+                cancel_paper_orders()
         self._quote_side_mode = desired_mode
-        self._quote_side_reason = f"bot7_{state.get('reason', 'inactive')}"
+        self._quote_side_reason = f"bot7_{reason}"
         return desired_mode
 
     def _compute_levels_and_sizing(
@@ -362,15 +547,94 @@ class Bot7AdaptiveGridV1Controller(StrategyRuntimeV24Controller):
         mid: Decimal,
         market: MarketConditions,
     ) -> Tuple[List[Decimal], List[Decimal], Decimal, Decimal]:
-        state = self._update_bot7_state(mid=mid, regime_name=regime_name)
+        plan = self.build_runtime_execution_plan(
+            RuntimeDataContext(
+                now_ts=float(self.market_data_provider.time()),
+                mid=mid,
+                regime_name=regime_name,
+                regime_spec=regime_spec,
+                spread_state=spread_state,
+                market=market,
+                equity_quote=equity_quote,
+                target_base_pct=regime_spec.target_base_pct,
+                target_net_base_pct=to_decimal(getattr(self, "processed_data", {}).get("target_net_base_pct", regime_spec.target_base_pct)),
+                base_pct_gross=to_decimal(getattr(self, "processed_data", {}).get("base_pct", _ZERO)),
+                base_pct_net=to_decimal(getattr(self, "processed_data", {}).get("net_base_pct", _ZERO)),
+            )
+        )
+        return plan.buy_spreads, plan.sell_spreads, plan.projected_total_quote, plan.size_mult
+
+    def build_runtime_execution_plan(self, data_context: RuntimeDataContext) -> RuntimeExecutionPlan:
+        state = getattr(self, "_bot7_state", None) or self._update_bot7_state(
+            mid=data_context.mid,
+            regime_name=data_context.regime_name,
+        )
         levels = int(state.get("grid_levels", 0) or 0)
-        self._runtime_levels.executor_refresh_time = int(regime_spec.refresh_s)
+        self._runtime_levels.executor_refresh_time = int(data_context.regime_spec.refresh_s)
+        self._resolve_quote_side_mode(
+            mid=data_context.mid,
+            regime_name=data_context.regime_name,
+            regime_spec=data_context.regime_spec,
+        )
         if not bool(state.get("active")) or levels <= 0:
-            return [], [], _ZERO, _ZERO
+            warmup_levels = max(0, int(getattr(self.config, "bot7_warmup_quote_levels", 1)))
+            warmup_quote_max_bars = max(0, int(getattr(self.config, "bot7_warmup_quote_max_bars", 3)))
+            warmup_price_buffer_bars = int(state.get("price_buffer_bars", 0) or 0)
+            if warmup_levels <= 0:
+                return RuntimeExecutionPlan(
+                    family="directional",
+                    buy_spreads=[],
+                    sell_spreads=[],
+                    projected_total_quote=_ZERO,
+                    size_mult=_ZERO,
+                    metadata={"strategy_lane": "bot7", "quote_side_mode": self._quote_side_mode},
+                )
+            warmup_reason = str(state.get("reason", "inactive"))
+            if warmup_reason != "indicator_warmup" or warmup_price_buffer_bars > warmup_quote_max_bars:
+                return RuntimeExecutionPlan(
+                    family="directional",
+                    buy_spreads=[],
+                    sell_spreads=[],
+                    projected_total_quote=_ZERO,
+                    size_mult=_ZERO,
+                    metadata={"strategy_lane": "bot7", "quote_side_mode": self._quote_side_mode},
+                )
+            spacing_pct = max(
+                data_context.market.side_spread_floor,
+                to_decimal(getattr(self.config, "bot7_grid_spacing_floor_pct", Decimal("0.0015"))),
+                Decimal("0.000001"),
+            )
+            buy_spreads = [spacing_pct * Decimal(level + 1) for level in range(warmup_levels)]
+            sell_spreads = [spacing_pct * Decimal(level + 1) for level in range(warmup_levels)]
+            size_mult = self._compute_pnl_governor_size_mult(
+                equity_quote=data_context.equity_quote,
+                turnover_x=data_context.spread_state.turnover_x,
+            ) * to_decimal(state.get("funding_risk_scale", _ONE))
+            projected_total_quote = self._project_total_amount_quote(
+                equity_quote=data_context.equity_quote,
+                mid=data_context.mid,
+                quote_size_pct=data_context.regime_spec.quote_size_pct,
+                total_levels=len(buy_spreads) + len(sell_spreads),
+                size_mult=size_mult,
+            )
+            return RuntimeExecutionPlan(
+                family="directional",
+                buy_spreads=buy_spreads,
+                sell_spreads=sell_spreads,
+                projected_total_quote=projected_total_quote,
+                size_mult=size_mult,
+                metadata={
+                    "strategy_lane": "bot7",
+                    "quote_side_mode": self._quote_side_mode,
+                    "quote_side_reason": self._quote_side_reason,
+                    "grid_levels": warmup_levels,
+                    "warmup_quote_excluded_from_viability": True,
+                },
+            )
 
         spacing_pct = max(
-            market.side_spread_floor,
-            to_decimal(state.get("grid_spacing_pct", spread_state.spread_pct)),
+            data_context.market.side_spread_floor,
+            to_decimal(state.get("grid_spacing_pct", data_context.spread_state.spread_pct)),
             Decimal("0.000001"),
         )
         buy_spreads: List[Decimal] = []
@@ -381,61 +645,51 @@ class Bot7AdaptiveGridV1Controller(StrategyRuntimeV24Controller):
         elif side == "sell":
             sell_spreads = [spacing_pct * Decimal(level + 1) for level in range(levels)]
         size_mult = self._compute_pnl_governor_size_mult(
-            equity_quote=equity_quote,
-            turnover_x=spread_state.turnover_x,
+            equity_quote=data_context.equity_quote,
+            turnover_x=data_context.spread_state.turnover_x,
         ) * to_decimal(state.get("funding_risk_scale", _ONE))
         projected_total_quote = self._project_total_amount_quote(
-            equity_quote=equity_quote,
-            mid=mid,
-            quote_size_pct=regime_spec.quote_size_pct,
-            total_levels=max(1, len(buy_spreads) + len(sell_spreads)),
+            equity_quote=data_context.equity_quote,
+            mid=data_context.mid,
+            quote_size_pct=data_context.regime_spec.quote_size_pct,
+            total_levels=len(buy_spreads) + len(sell_spreads),
             size_mult=size_mult,
         )
-        return buy_spreads, sell_spreads, projected_total_quote, size_mult
-
-    def _emit_tick_output(
-        self,
-        _t0: float,
-        now: float,
-        mid: Decimal,
-        regime_name: str,
-        target_base_pct: Decimal,
-        target_net_base_pct: Decimal,
-        base_pct_gross: Decimal,
-        base_pct_net: Decimal,
-        equity_quote: Decimal,
-        spread_state: SpreadEdgeState,
-        market: MarketConditions,
-        risk_hard_stop: bool,
-        risk_reasons: List[str],
-        daily_loss_pct: Decimal,
-        drawdown_pct: Decimal,
-        projected_total_quote: Decimal,
-        state: Any,
-    ) -> None:
-        super()._emit_tick_output(
-            _t0=_t0,
-            now=now,
-            mid=mid,
-            regime_name=regime_name,
-            target_base_pct=target_base_pct,
-            target_net_base_pct=target_net_base_pct,
-            base_pct_gross=base_pct_gross,
-            base_pct_net=base_pct_net,
-            equity_quote=equity_quote,
-            spread_state=spread_state,
-            market=market,
-            risk_hard_stop=risk_hard_stop,
-            risk_reasons=risk_reasons,
-            daily_loss_pct=daily_loss_pct,
-            drawdown_pct=drawdown_pct,
+        return RuntimeExecutionPlan(
+            family="directional",
+            buy_spreads=buy_spreads,
+            sell_spreads=sell_spreads,
             projected_total_quote=projected_total_quote,
-            state=state,
+            size_mult=size_mult,
+            metadata={
+                "strategy_lane": "bot7",
+                "quote_side_mode": self._quote_side_mode,
+                "quote_side_reason": self._quote_side_reason,
+                "grid_levels": levels,
+            },
         )
+
+    def _extend_processed_data_before_log(
+        self,
+        *,
+        processed_data: Dict[str, Any],
+        snapshot: Dict[str, Any],
+        state: Any,
+        regime_name: str,
+        market: MarketConditions,
+        projected_total_quote: Decimal,
+    ) -> None:
         bot7 = getattr(self, "_bot7_state", None) or self._empty_bot7_state()
-        self.processed_data.update(
+        gate = self._bot7_gate_metrics()
+        processed_data.update(
             {
+                "bot7_gate_state": str(gate["state"]),
+                "bot7_gate_reason": str(gate["reason"]),
                 "bot7_active": bool(bot7.get("active", False)),
+                "bot7_probe_mode": bool(bot7.get("probe_mode", False)),
+                "bot7_signal_side": str(bot7.get("side", "off")),
+                "bot7_signal_reason": str(bot7.get("reason", "inactive")),
+                "bot7_signal_score": to_decimal(bot7.get("signal_score", _ZERO)),
                 "bot7_side": str(bot7.get("side", "off")),
                 "bot7_reason": str(bot7.get("reason", "inactive")),
                 "bot7_cvd": to_decimal(bot7.get("cvd", _ZERO)),
@@ -454,7 +708,28 @@ class Bot7AdaptiveGridV1Controller(StrategyRuntimeV24Controller):
                 "bot7_absorption_short": bool(bot7.get("absorption_short", False)),
                 "bot7_delta_trap_long": bool(bot7.get("delta_trap_long", False)),
                 "bot7_delta_trap_short": bool(bot7.get("delta_trap_short", False)),
+                "bot7_indicator_ready": bool(bot7.get("indicator_ready", False)),
+                "bot7_indicator_missing": str(bot7.get("indicator_missing", "")),
+                "bot7_price_buffer_bars": int(bot7.get("price_buffer_bars", 0) or 0),
             }
+        )
+
+    def extend_runtime_processed_data(
+        self,
+        *,
+        processed_data: Dict[str, Any],
+        data_context: RuntimeDataContext,
+        risk_decision: RuntimeRiskDecision,
+        execution_plan: RuntimeExecutionPlan,
+        snapshot: Dict[str, Any],
+    ) -> None:
+        self._extend_processed_data_before_log(
+            processed_data=processed_data,
+            snapshot=snapshot,
+            state=risk_decision.guard_state,
+            regime_name=data_context.regime_name,
+            market=data_context.market,
+            projected_total_quote=execution_plan.projected_total_quote,
         )
 
     def to_format_status(self) -> List[str]:
@@ -466,4 +741,10 @@ class Bot7AdaptiveGridV1Controller(StrategyRuntimeV24Controller):
             f"levels={bot7.get('grid_levels', 0)} spacing={to_decimal(bot7.get('grid_spacing_pct', _ZERO)) * Decimal('100'):.3f}% "
             f"cvd={to_decimal(bot7.get('cvd', _ZERO)):.4f} hedge_target={to_decimal(bot7.get('hedge_target_base_pct', _ZERO)) * Decimal('100'):.3f}%"
         )
+        if not bool(bot7.get("indicator_ready", False)):
+            lines.append(
+                "bot7 "
+                f"warmup_missing={bot7.get('indicator_missing', '') or 'unknown'} "
+                f"price_buffer_bars={int(bot7.get('price_buffer_bars', 0) or 0)}"
+            )
         return lines

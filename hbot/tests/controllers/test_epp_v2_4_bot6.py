@@ -21,6 +21,9 @@ if HUMMINGBOT_AVAILABLE:
     from controllers.epp_v2_4 import EppV24Config, EppV24Controller
     from controllers.epp_v2_4_bot6 import EppV24Bot6Config, EppV24Bot6Controller
     from controllers.runtime.base import StrategyRuntimeV24Config, StrategyRuntimeV24Controller
+    from controllers.runtime.data_context import RuntimeDataContext
+    from controllers.runtime.directional_core import DirectionalRuntimeAdapter
+    from controllers.runtime.execution_context import RuntimeExecutionPlan
     from controllers.runtime.market_making_types import RegimeSpec
     from services.common.market_data_plane import DirectionalTradeFeatures, TradeFlowFeatures
 else:  # pragma: no cover - stripped environments
@@ -28,6 +31,9 @@ else:  # pragma: no cover - stripped environments
     Bot6CvdDivergenceV1Controller = object
     EppV24Config = object
     EppV24Controller = object
+    DirectionalRuntimeAdapter = object
+    RuntimeDataContext = object
+    RuntimeExecutionPlan = object
     RegimeSpec = object
     StrategyRuntimeV24Config = object
     StrategyRuntimeV24Controller = object
@@ -53,6 +59,12 @@ def test_bot6_controller_reuses_shared_runtime_stack() -> None:
     assert EppV24Bot6Config.controller_name == "epp_v2_4_bot6"
 
 
+def test_bot6_controller_uses_directional_family_adapter() -> None:
+    ctrl = object.__new__(EppV24Bot6Controller)
+    adapter = EppV24Bot6Controller._make_runtime_family_adapter(ctrl)
+    assert isinstance(adapter, DirectionalRuntimeAdapter)
+
+
 def _make_bot6_config(**overrides) -> SimpleNamespace:
     defaults = dict(
         id="epp_v2_4_bot6_test",
@@ -73,6 +85,7 @@ def _make_bot6_config(**overrides) -> SimpleNamespace:
         bot6_adx_threshold=Decimal("25"),
         bot6_trade_window_count=120,
         bot6_spot_trade_window_count=120,
+        bot6_trade_features_stale_after_ms=90000,
         bot6_cvd_divergence_threshold_pct=Decimal("0.15"),
         bot6_stacked_imbalance_min=3,
         bot6_delta_spike_threshold=Decimal("3.0"),
@@ -84,9 +97,34 @@ def _make_bot6_config(**overrides) -> SimpleNamespace:
         bot6_short_funding_min=Decimal("-0.0003"),
         bot6_partial_exit_on_flip_ratio=Decimal("0.50"),
         bot6_enable_hedge_bias=True,
+        alpha_policy_enabled=False,
+        selective_quoting_enabled=False,
+        adverse_fill_soft_pause_enabled=False,
+        edge_confidence_soft_pause_enabled=False,
+        slippage_soft_pause_enabled=False,
     )
     defaults.update(overrides)
     return SimpleNamespace(**defaults)
+
+
+def test_bot6_config_disables_shared_trade_quality_gates() -> None:
+    cfg = EppV24Bot6Config(
+        id="bot6_cfg_test",
+        connector_name="bitget_perpetual",
+        trading_pair="BTC-USDT",
+        total_amount_quote=Decimal("10"),
+        buy_spreads="0.001",
+        sell_spreads="0.001",
+        buy_amounts_pct="100",
+        sell_amounts_pct="100",
+    )
+
+    assert cfg.shared_edge_gate_enabled is False
+    assert cfg.alpha_policy_enabled is False
+    assert cfg.selective_quoting_enabled is False
+    assert cfg.adverse_fill_soft_pause_enabled is False
+    assert cfg.edge_confidence_soft_pause_enabled is False
+    assert cfg.slippage_soft_pause_enabled is False
 
 
 def _make_regime_spec(one_sided: str = "off", target_base_pct: str = "0.0") -> RegimeSpec:
@@ -171,6 +209,7 @@ def _make_bot6_controller(*, config: SimpleNamespace | None = None) -> EppV24Bot
     ctrl.processed_data = {}
     ctrl._bot6_signal_state = EppV24Bot6Controller._empty_bot6_signal_state(ctrl)
     ctrl._cancel_stale_side_executors = MethodType(EppV24Controller._cancel_stale_side_executors, ctrl)
+    ctrl.market_data_provider = SimpleNamespace(time=lambda: 1_000.0)
     return ctrl
 
 
@@ -198,6 +237,28 @@ def test_bot6_targets_directional_net_bias_on_strong_bullish_cvd() -> None:
     assert target_net_base_pct > Decimal("0")
     assert ctrl._bot6_signal_state["direction"] == "buy"
     assert ctrl._bot6_signal_state["active_score"] >= 8
+
+
+def test_bot6_can_infer_direction_from_trade_scores_when_candles_unavailable() -> None:
+    ctrl = _make_bot6_controller()
+    ctrl._get_bot6_candle_signal = lambda: {
+        "sma_fast": Decimal("0"),
+        "sma_slow": Decimal("0"),
+        "adx": Decimal("0"),
+    }
+    ctrl._runtime_adapter = SimpleNamespace(
+        get_directional_trade_features=lambda **_kwargs: _trade_features(
+            long_score=8,
+            short_score=1,
+            divergence_ratio="0.22",
+            stale=False,
+        )
+    )
+
+    signal_state = EppV24Bot6Controller._bot6_update_signal_state(ctrl, Decimal("101.0"))
+
+    assert signal_state["trend_direction"] == "long"
+    assert signal_state["direction"] == "buy"
 
 
 def test_bot6_flags_partial_exit_hedge_candidate_on_divergence_flip() -> None:
@@ -259,3 +320,143 @@ def test_bot6_quote_side_switches_to_directional_mode_when_signal_active() -> No
     assert mode == "buy_only"
     assert ctrl._quote_side_reason == "bot6_bullish_cvd_divergence"
     assert len(ctrl._pending_stale_cancel_actions) == 1
+
+
+def test_bot6_keeps_two_sided_quotes_when_regime_mode_is_off(monkeypatch) -> None:
+    ctrl = _make_bot6_controller()
+    ctrl._bot6_signal_state = {
+        **EppV24Bot6Controller._empty_bot6_signal_state(ctrl),
+        "direction": "off",
+        "directional_allowed": False,
+        "reason": "trade_features_warmup",
+    }
+    ctrl._quote_side_mode = "off"
+    ctrl._project_total_amount_quote = lambda **kwargs: Decimal(kwargs["total_levels"])
+
+    monkeypatch.setattr(
+        StrategyRuntimeV24Controller,
+        "build_runtime_execution_plan",
+        lambda self, data_context: RuntimeExecutionPlan(
+            family="market_making",
+            buy_spreads=[Decimal("0.001"), Decimal("0.002")],
+            sell_spreads=[Decimal("0.001"), Decimal("0.002")],
+            projected_total_quote=Decimal("4"),
+            size_mult=Decimal("1"),
+            metadata={},
+        ),
+    )
+
+    buy_spreads, sell_spreads, projected_total_quote, size_mult = EppV24Bot6Controller._compute_levels_and_sizing(
+        ctrl,
+        "neutral_low_vol",
+        _make_regime_spec(one_sided="off"),
+        None,
+        Decimal("250"),
+        Decimal("67000"),
+        None,
+    )
+
+    assert buy_spreads == [Decimal("0.001"), Decimal("0.002")]
+    assert sell_spreads == [Decimal("0.001"), Decimal("0.002")]
+    assert projected_total_quote == Decimal("4")
+    assert size_mult == Decimal("1")
+
+
+def test_bot6_build_runtime_execution_plan_marks_directional_family(monkeypatch) -> None:
+    ctrl = _make_bot6_controller()
+    ctrl._bot6_signal_state = {
+        **EppV24Bot6Controller._empty_bot6_signal_state(ctrl),
+        "direction": "buy",
+        "directional_allowed": True,
+        "active_score": 9,
+        "size_mult": Decimal("1.3"),
+        "reason": "bullish_cvd_divergence",
+    }
+
+    monkeypatch.setattr(
+        StrategyRuntimeV24Controller,
+        "build_runtime_execution_plan",
+        lambda self, data_context: RuntimeExecutionPlan(
+            family="market_making",
+            buy_spreads=[Decimal("0.001"), Decimal("0.002")],
+            sell_spreads=[Decimal("0.001"), Decimal("0.002")],
+            projected_total_quote=Decimal("4"),
+            size_mult=Decimal("1"),
+            metadata={"base": "ok"},
+        ),
+    )
+
+    plan = EppV24Bot6Controller.build_runtime_execution_plan(
+        ctrl,
+        RuntimeDataContext(
+            now_ts=1_000.0,
+            mid=Decimal("101"),
+            regime_name="up",
+            regime_spec=_make_regime_spec(one_sided="off"),
+            spread_state=None,
+            market=SimpleNamespace(side_spread_floor=Decimal("0.001")),
+            equity_quote=Decimal("250"),
+            target_base_pct=Decimal("0"),
+            target_net_base_pct=Decimal("0.12"),
+            base_pct_gross=Decimal("0"),
+            base_pct_net=Decimal("0"),
+        ),
+    )
+
+    assert plan.family == "directional"
+    assert plan.buy_spreads == [Decimal("0.001")]
+    assert plan.sell_spreads == []
+    assert plan.size_mult == Decimal("1.3")
+    assert plan.metadata["strategy_lane"] == "bot6"
+
+
+def test_bot6_reports_strategy_gate_instead_of_shared_alpha_policy() -> None:
+    ctrl = _make_bot6_controller()
+    ctrl._bot6_signal_state = {
+        **EppV24Bot6Controller._empty_bot6_signal_state(ctrl),
+        "direction": "buy",
+        "directional_allowed": True,
+        "active_score": 9,
+        "reason": "bullish_cvd_divergence",
+    }
+
+    metrics = EppV24Bot6Controller._compute_alpha_policy(
+        ctrl,
+        regime_name="up",
+        spread_state=None,
+        market=None,
+        target_net_base_pct=Decimal("0.12"),
+        base_pct_net=Decimal("0.0"),
+    )
+
+    assert metrics["state"] == "bot6_strategy_gate"
+    assert metrics["reason"] == "bullish_cvd_divergence"
+    assert ctrl._alpha_cross_allowed is False
+
+
+def test_bot6_trade_feature_warmup_does_not_hard_block_risk(monkeypatch) -> None:
+    ctrl = _make_bot6_controller()
+    ctrl._bot6_signal_state = {
+        **EppV24Bot6Controller._empty_bot6_signal_state(ctrl),
+        "reason": "trade_features_warmup",
+    }
+
+    def _fake_super(self, spread_state, base_pct_gross, equity_quote, projected_total_quote, market):
+        return (["shared_reason"], False, Decimal("0"), Decimal("0"))
+
+    monkeypatch.setattr(StrategyRuntimeV24Controller, "_evaluate_all_risk", _fake_super)
+
+    reasons, risk_hard_stop, daily_loss_pct, drawdown_pct = EppV24Bot6Controller._evaluate_all_risk(
+        ctrl,
+        spread_state=None,
+        base_pct_gross=Decimal("0"),
+        equity_quote=Decimal("1000"),
+        projected_total_quote=Decimal("0"),
+        market=None,
+    )
+
+    assert "shared_reason" in reasons
+    assert "bot6_trade_features_stale" not in reasons
+    assert risk_hard_stop is False
+    assert daily_loss_pct == Decimal("0")
+    assert drawdown_pct == Decimal("0")

@@ -1,6 +1,6 @@
 # EPP v2.4 - Bot1 Bitget Live Micro-Cap (Day 15)
 id: epp_v2_4_bot1_bitget_live_microcap
-controller_name: epp_v2_4
+controller_name: epp_v2_4_bot1
 controller_type: market_making
 
 connector_name: bitget_perpetual

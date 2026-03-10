@@ -8,7 +8,7 @@ import threading
 import time
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any, Dict, Iterable, List, Optional
+from typing import Any, Dict, Iterable, List, Optional, Set, Tuple
 
 try:
     import ccxt  # type: ignore
@@ -108,6 +108,17 @@ def _normalize_depth_levels(levels: Any, max_levels: int) -> List[Dict[str, floa
     return out
 
 
+def _extract_market_sequence(*sources: Any, keys: Tuple[str, ...] = ("u", "seq", "sequence", "version")) -> Optional[int]:
+    for source in sources:
+        if not isinstance(source, dict):
+            continue
+        for key in keys:
+            value = _safe_int(source.get(key))
+            if value is not None and value >= 0:
+                return value
+    return None
+
+
 @dataclass(frozen=True)
 class MarketSubscription:
     connector_name: str
@@ -129,6 +140,109 @@ def _parse_subscriptions(raw: str) -> List[MarketSubscription]:
             continue
         subscriptions.append(MarketSubscription(connector_name=parts[0], trading_pair=_normalize_pair(parts[1])))
     return subscriptions
+
+
+def _canonical_connector_name(value: str) -> str:
+    raw = str(value or "").strip()
+    if not raw.endswith("_paper_trade"):
+        return raw
+    try:
+        from services.common.exchange_profiles import resolve_profile
+
+        profile = resolve_profile(raw)
+        if isinstance(profile, dict):
+            required_exchange = str(profile.get("requires_paper_trade_exchange", "") or "").strip()
+            if required_exchange:
+                return required_exchange
+    except Exception:
+        pass
+    return raw[:-12]
+
+
+def _subscription_key(subscription: MarketSubscription) -> Tuple[str, str]:
+    return (
+        _canonical_connector_name(subscription.connector_name).strip().lower(),
+        subscription.normalized_pair,
+    )
+
+
+def _read_controller_subscription(path: Path) -> Optional[MarketSubscription]:
+    connector_name = ""
+    trading_pair = ""
+    try:
+        for line in path.read_text(encoding="utf-8").splitlines():
+            stripped = line.strip()
+            if not stripped or stripped.startswith("#"):
+                continue
+            if stripped.startswith("connector_name:"):
+                connector_name = stripped.split(":", 1)[1].strip().strip("'\"")
+            elif stripped.startswith("trading_pair:"):
+                trading_pair = stripped.split(":", 1)[1].strip().strip("'\"")
+            if connector_name and trading_pair:
+                break
+    except Exception:
+        return None
+    if not connector_name or not trading_pair:
+        return None
+    if connector_name.endswith("_paper_trade"):
+        return None
+    return MarketSubscription(
+        connector_name=_canonical_connector_name(connector_name),
+        trading_pair=_normalize_pair(trading_pair),
+    )
+
+
+def _discover_subscriptions_from_controller_configs(root: Path) -> List[MarketSubscription]:
+    subscriptions: List[MarketSubscription] = []
+    seen: Set[Tuple[str, str]] = set()
+    try:
+        candidates = sorted(root.glob("bot*/conf/controllers/*.yml"))
+    except Exception:
+        return subscriptions
+    for path in candidates:
+        subscription = _read_controller_subscription(path)
+        if subscription is None:
+            continue
+        key = _subscription_key(subscription)
+        if key in seen:
+            continue
+        seen.add(key)
+        subscriptions.append(subscription)
+    return subscriptions
+
+
+def _resolve_subscriptions() -> List[MarketSubscription]:
+    configured = _parse_subscriptions(os.getenv("MARKET_DATA_SERVICE_SUBSCRIPTIONS", ""))
+    auto_discover = os.getenv("MARKET_DATA_SERVICE_AUTO_DISCOVER", "true").strip().lower() in {"1", "true", "yes", "on"}
+    if not auto_discover:
+        return configured
+    root = Path(os.getenv("MARKET_DATA_SERVICE_CONTROLLER_CONFIG_ROOT", "/workspace/hbot/data")).resolve()
+    discovered = _discover_subscriptions_from_controller_configs(root)
+    allowed_connectors = {
+        connector.strip().lower()
+        for connector in str(os.getenv("MARKET_DATA_SERVICE_DISCOVERY_CONNECTORS", "") or "").split(",")
+        if connector.strip()
+    }
+    if allowed_connectors:
+        discovered = [
+            subscription
+            for subscription in discovered
+            if subscription.connector_name.strip().lower() in allowed_connectors
+        ]
+    merged: List[MarketSubscription] = []
+    seen: Set[Tuple[str, str]] = set()
+    for subscription in configured + discovered:
+        key = _subscription_key(subscription)
+        if key in seen:
+            continue
+        seen.add(key)
+        merged.append(
+            MarketSubscription(
+                connector_name=_canonical_connector_name(subscription.connector_name),
+                trading_pair=subscription.normalized_pair,
+            )
+        )
+    return merged
 
 
 def _ccxt_exchange_id(connector_name: str) -> Optional[str]:
@@ -196,6 +310,7 @@ def _build_bitget_quote_event(payload: Dict[str, Any], subscription: MarketSubsc
     last_trade_price = _safe_float(row.get("lastPr"))
     now_ms = _now_ms()
     exchange_ts_ms = _safe_int(row.get("ts"))
+    market_sequence = _extract_market_sequence(row, payload)
     return MarketQuoteEvent(
         producer="market_data_service",
         connector_name=subscription.connector_name,
@@ -209,7 +324,7 @@ def _build_bitget_quote_event(payload: Dict[str, Any], subscription: MarketSubsc
         funding_rate=_safe_float(row.get("fundingRate")),
         exchange_ts_ms=exchange_ts_ms,
         ingest_ts_ms=now_ms,
-        market_sequence=exchange_ts_ms,
+        market_sequence=market_sequence,
         venue_symbol=str(row.get("instId") or _bitget_inst_id(subscription.normalized_pair)),
         extra={"channel": str(((payload.get("arg") or {}) if isinstance(payload.get("arg"), dict) else {}).get("channel", ""))},
     )
@@ -329,6 +444,7 @@ def _build_bitget_depth_event(
     best_bid = bids[0]["price"] if bids else None
     best_ask = asks[0]["price"] if asks else None
     exchange_ts_ms = _safe_int(row.get("ts"))
+    market_sequence = _extract_market_sequence(row, payload)
     return MarketDepthSnapshotEvent(
         producer="market_data_service",
         instance_name="",
@@ -342,7 +458,7 @@ def _build_bitget_depth_event(
         best_ask=best_ask,
         exchange_ts_ms=exchange_ts_ms,
         ingest_ts_ms=_now_ms(),
-        market_sequence=exchange_ts_ms,
+        market_sequence=market_sequence,
         extra={"channel": str(((payload.get("arg") or {}) if isinstance(payload.get("arg"), dict) else {}).get("channel", ""))},
     )
 
@@ -385,7 +501,7 @@ class MarketDataServiceConfig:
         default_factory=lambda: os.getenv("MARKET_DATA_SERVICE_ENABLED", "false").strip().lower() in {"1", "true", "yes"}
     )
     subscriptions: List[MarketSubscription] = field(
-        default_factory=lambda: _parse_subscriptions(os.getenv("MARKET_DATA_SERVICE_SUBSCRIPTIONS", ""))
+        default_factory=_resolve_subscriptions
     )
     reconnect_delay_sec: float = field(
         default_factory=lambda: max(1.0, float(os.getenv("MARKET_DATA_SERVICE_RECONNECT_SEC", "5")))
@@ -394,6 +510,12 @@ class MarketDataServiceConfig:
         default_factory=lambda: os.getenv("MARKET_DATA_SERVICE_DEPTH_ENABLED", "true").strip().lower() in {"1", "true", "yes"}
     )
     depth_levels: int = field(default_factory=lambda: max(1, int(os.getenv("MARKET_DATA_SERVICE_DEPTH_LEVELS", "20"))))
+    depth_publish_min_interval_ms: int = field(
+        default_factory=lambda: max(0, int(os.getenv("MARKET_DATA_SERVICE_DEPTH_PUBLISH_MIN_INTERVAL_MS", "250")))
+    )
+    depth_publish_force_interval_ms: int = field(
+        default_factory=lambda: max(1, int(os.getenv("MARKET_DATA_SERVICE_DEPTH_PUBLISH_FORCE_INTERVAL_MS", "1000")))
+    )
     status_dir: Path = field(
         default_factory=lambda: Path(os.getenv("HB_REPORTS_ROOT", "/workspace/hbot/reports")).resolve() / "market_data_service"
     )
@@ -412,6 +534,7 @@ class _AdapterThread(threading.Thread):
         self._last_trade_ms: Optional[int] = None
         self._last_error: str = ""
         self._connected = False
+        self._last_depth_publish_key: Optional[Tuple[Optional[float], Optional[float], Optional[float], Optional[float]]] = None
 
     @property
     def subscription(self) -> MarketSubscription:
@@ -444,10 +567,37 @@ class _AdapterThread(threading.Thread):
             self._last_error = ""
 
     def _publish_depth(self, event: MarketDepthSnapshotEvent) -> None:
+        publish_now_ms = _now_ms()
+        depth_key = (
+            event.best_bid,
+            event.best_ask,
+            float(event.bids[0].size) if event.bids else None,
+            float(event.asks[0].size) if event.asks else None,
+        )
+        if not self._should_publish_depth(depth_key, now_ms=publish_now_ms):
+            return
         result = self._publisher.publish_market_depth(event)
         if result:
-            self._last_depth_ms = _now_ms()
+            self._last_depth_ms = publish_now_ms
+            self._last_depth_publish_key = depth_key
             self._last_error = ""
+
+    def _should_publish_depth(
+        self,
+        depth_key: Tuple[Optional[float], Optional[float], Optional[float], Optional[float]],
+        *,
+        now_ms: int,
+    ) -> bool:
+        if self._last_depth_ms is None:
+            return True
+        elapsed_ms = max(0, int(now_ms) - int(self._last_depth_ms))
+        force_interval_ms = max(1, int(self._cfg.depth_publish_force_interval_ms))
+        min_interval_ms = max(0, int(self._cfg.depth_publish_min_interval_ms))
+        if elapsed_ms >= force_interval_ms:
+            return True
+        if depth_key == self._last_depth_publish_key:
+            return False
+        return elapsed_ms >= min_interval_ms
 
     def _publish_trade(self, event: MarketTradeEvent) -> None:
         result = self._publisher.publish_market_trade(event)
@@ -640,7 +790,14 @@ def run() -> None:
         logger.info("market_data_service disabled")
         return
     if not cfg.subscriptions:
-        raise RuntimeError("MARKET_DATA_SERVICE_ENABLED=true but MARKET_DATA_SERVICE_SUBSCRIPTIONS is empty")
+        raise RuntimeError(
+            "MARKET_DATA_SERVICE_ENABLED=true but no subscriptions were resolved from "
+            "MARKET_DATA_SERVICE_SUBSCRIPTIONS or controller auto-discovery"
+        )
+    logger.info(
+        "market_data_service starting subscriptions=%s",
+        ", ".join(f"{sub.connector_name}|{sub.normalized_pair}" for sub in cfg.subscriptions),
+    )
 
     redis_cfg = RedisSettings()
     redis_client = RedisStreamClient(

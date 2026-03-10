@@ -9,6 +9,9 @@ import logging
 from decimal import Decimal
 from typing import List, Tuple
 
+from controllers.ops_guard import GuardState
+from controllers.runtime.risk_context import RuntimeRiskDecision
+
 logger = logging.getLogger(__name__)
 
 _ZERO = Decimal("0")
@@ -148,6 +151,43 @@ class RiskEvaluator:
             reasons.append("eod_close_pending")
         return reasons, hard
 
+    def build_runtime_risk_decision(
+        self,
+        *,
+        daily_loss_pct: Decimal,
+        drawdown_pct: Decimal,
+        base_pct_gross: Decimal,
+        turnover_x: Decimal,
+        projected_total_quote: Decimal,
+        is_perp: bool,
+        margin_ratio: Decimal,
+        startup_position_sync_done: bool,
+        position_drift_pct: Decimal,
+        order_book_stale: bool,
+        pending_eod_close: bool,
+        guard_state: GuardState,
+    ) -> RuntimeRiskDecision:
+        reasons, hard = self.evaluate_all_risk(
+            daily_loss_pct=daily_loss_pct,
+            drawdown_pct=drawdown_pct,
+            base_pct_gross=base_pct_gross,
+            turnover_x=turnover_x,
+            projected_total_quote=projected_total_quote,
+            is_perp=is_perp,
+            margin_ratio=margin_ratio,
+            startup_position_sync_done=startup_position_sync_done,
+            position_drift_pct=position_drift_pct,
+            order_book_stale=order_book_stale,
+            pending_eod_close=pending_eod_close,
+        )
+        return RuntimeRiskDecision(
+            risk_reasons=reasons,
+            risk_hard_stop=hard,
+            daily_loss_pct=daily_loss_pct,
+            drawdown_pct=drawdown_pct,
+            guard_state=guard_state,
+        )
+
     # ------------------------------------------------------------------
     # Edge gate hysteresis (stateful)
     # ------------------------------------------------------------------
@@ -172,3 +212,8 @@ class RiskEvaluator:
         if net_edge < pause_threshold and elapsed >= hold_sec:
             self._edge_gate_blocked = True
             self._edge_gate_changed_ts = now_ts
+
+    def reset_edge_gate(self, now_ts: float = 0.0) -> None:
+        """Clear edge-gate state when a strategy does not opt into shared edge gating."""
+        self._edge_gate_blocked = False
+        self._edge_gate_changed_ts = now_ts

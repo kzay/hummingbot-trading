@@ -5,7 +5,16 @@ import json
 import os
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Dict, List
+from typing import Any, Dict, List
+
+from services.contracts.stream_names import MARKET_DATA_STREAM, MARKET_DEPTH_STREAM, MARKET_QUOTE_STREAM
+
+
+_TRIM_SENSITIVE_STREAMS = {
+    MARKET_DATA_STREAM,
+    MARKET_QUOTE_STREAM,
+    MARKET_DEPTH_STREAM,
+}
 
 
 def _utc_now() -> datetime:
@@ -51,6 +60,91 @@ def _refresh_integrity(root: Path) -> None:
         pass  # Non-fatal — gate evaluation proceeds with whatever integrity file exists
 
 
+def _safe_int(value: Any, default: int = 0) -> int:
+    try:
+        return int(value)
+    except Exception:
+        return int(default)
+
+
+def _should_exclude_trimmed_stream(stream: str, latest_compare: Dict[str, object]) -> bool:
+    if stream not in _TRIM_SENSITIVE_STREAMS:
+        return False
+    source_length_map = latest_compare.get("source_length_by_stream", {})
+    source_events_map = latest_compare.get("source_events_by_stream", {})
+    stored_events_map = latest_compare.get("stored_events_by_stream", {})
+    if not isinstance(source_length_map, dict) or not isinstance(source_events_map, dict) or not isinstance(stored_events_map, dict):
+        return False
+    source_length = _safe_int(source_length_map.get(stream), -1)
+    source_events = _safe_int(source_events_map.get(stream), -1)
+    stored_events = _safe_int(stored_events_map.get(stream), -1)
+    if source_length <= 0 or source_events <= 0 or stored_events < 0:
+        return False
+    # entries-added is lifetime monotonic while XLEN is retention-capped; once stored history
+    # exceeds live retention and entries-added also exceeds XLEN, the absolute delta is no
+    # longer a meaningful backlog signal for these high-volume market streams.
+    return source_events > source_length and stored_events >= source_length
+
+
+def _lag_diagnostics(latest_compare: Dict[str, object], max_allowed_delta: int) -> Dict[str, object]:
+    delta_since = latest_compare.get("lag_produced_minus_ingested_since_baseline")
+    if not isinstance(delta_since, dict) or not delta_since:
+        delta_since = latest_compare.get("delta_produced_minus_ingested_since_baseline", {})
+    if not isinstance(delta_since, dict):
+        delta_since = {}
+    lag_by_stream_abs: Dict[str, int] = {}
+    lag_by_stream_signed: Dict[str, int] = {}
+    raw_lag_by_stream_abs: Dict[str, int] = {}
+    excluded_streams: Dict[str, Dict[str, object]] = {}
+    consumer_group_lag_map = latest_compare.get("consumer_group_lag_by_stream", {})
+    source_length_map = latest_compare.get("source_length_by_stream", {})
+    source_events_map = latest_compare.get("source_events_by_stream", {})
+    stored_events_map = latest_compare.get("stored_events_by_stream", {})
+    if not isinstance(consumer_group_lag_map, dict):
+        consumer_group_lag_map = {}
+    stream_names = sorted({str(stream) for stream in delta_since.keys()} | {str(stream) for stream in consumer_group_lag_map.keys()})
+    for stream_name in stream_names:
+        value = delta_since.get(stream_name, 0)
+        try:
+            signed = int(value)
+        except Exception:
+            signed = 0
+        positive_lag = max(0, signed)
+        raw_lag_by_stream_abs[stream_name] = positive_lag
+        consumer_group_lag = _safe_int(consumer_group_lag_map.get(stream_name), -1)
+        if consumer_group_lag >= 0:
+            lag_by_stream_signed[stream_name] = consumer_group_lag
+            lag_by_stream_abs[stream_name] = max(0, consumer_group_lag)
+            continue
+        if _should_exclude_trimmed_stream(stream_name, latest_compare):
+            excluded_streams[stream_name] = {
+                "reason": "trimmed_retention_entries_added_not_comparable",
+                "lag_value": positive_lag,
+                "source_length": _safe_int(source_length_map.get(stream_name)) if isinstance(source_length_map, dict) else 0,
+                "source_events": _safe_int(source_events_map.get(stream_name)) if isinstance(source_events_map, dict) else 0,
+                "stored_events": _safe_int(stored_events_map.get(stream_name)) if isinstance(stored_events_map, dict) else 0,
+            }
+            continue
+        lag_by_stream_signed[stream_name] = signed
+        lag_by_stream_abs[stream_name] = positive_lag
+    max_delta_observed = max(list(lag_by_stream_abs.values()) or [0])
+    worst_stream = ""
+    if lag_by_stream_abs:
+        worst_stream = max(sorted(lag_by_stream_abs.keys()), key=lambda k: lag_by_stream_abs.get(k, 0))
+    offending_streams = {k: v for k, v in lag_by_stream_abs.items() if v > max_allowed_delta}
+    return {
+        "max_delta_observed": max_delta_observed,
+        "max_allowed_delta": max_allowed_delta,
+        "worst_stream": worst_stream,
+        "lag_by_stream_abs": lag_by_stream_abs,
+        "lag_by_stream_signed": lag_by_stream_signed,
+        "raw_lag_by_stream_abs": raw_lag_by_stream_abs,
+        "offending_streams": offending_streams,
+        "excluded_streams": excluded_streams,
+        "consumer_group_lag_by_stream": consumer_group_lag_map,
+    }
+
+
 def main() -> None:
     root = Path(__file__).resolve().parents[2]
     reports = root / "reports" / "event_store"
@@ -80,28 +174,10 @@ def main() -> None:
             elapsed_hours = 0.0
 
     missing_corr = int(integrity.get("missing_correlation_count", 0))
-    delta_since = latest_compare.get("lag_produced_minus_ingested_since_baseline")
-    if not isinstance(delta_since, dict) or not delta_since:
-        delta_since = latest_compare.get("delta_produced_minus_ingested_since_baseline", {})
-    if not isinstance(delta_since, dict):
-        delta_since = {}
-    lag_by_stream_abs: Dict[str, int] = {}
-    lag_by_stream_signed: Dict[str, int] = {}
-    for stream, value in delta_since.items():
-        try:
-            signed = int(value)
-            lag_by_stream_signed[str(stream)] = signed
-            # Treat only positive produced-minus-ingested deltas as lag.
-            # Negative deltas indicate ingest is already ahead/caught up.
-            lag_by_stream_abs[str(stream)] = max(0, signed)
-        except Exception:
-            lag_by_stream_signed[str(stream)] = 0
-            lag_by_stream_abs[str(stream)] = 0
-    max_delta_observed = max(list(lag_by_stream_abs.values()) or [0])
-    worst_stream = ""
-    if lag_by_stream_abs:
-        worst_stream = max(sorted(lag_by_stream_abs.keys()), key=lambda k: lag_by_stream_abs.get(k, 0))
-    offending_streams = {k: v for k, v in lag_by_stream_abs.items() if v > max_allowed_delta}
+    lag_diagnostics = _lag_diagnostics(latest_compare, max_allowed_delta=max_allowed_delta)
+    max_delta_observed = int(lag_diagnostics.get("max_delta_observed", 0) or 0)
+    worst_stream = str(lag_diagnostics.get("worst_stream", "") or "")
+    offending_streams = lag_diagnostics.get("offending_streams", {})
 
     checks: List[Dict[str, object]] = []
     checks.append({"name": "elapsed_window", "pass": elapsed_hours >= gate_hours, "value_hours": round(elapsed_hours, 2), "required_hours": gate_hours})
@@ -125,14 +201,7 @@ def main() -> None:
         "baseline_file": str(reports / "baseline_counts.json"),
         "integrity_file": str(latest_integrity_path) if latest_integrity_path else "",
         "source_compare_file": str(latest_compare_path) if latest_compare_path else "",
-        "lag_diagnostics": {
-            "max_delta_observed": max_delta_observed,
-            "max_allowed_delta": max_allowed_delta,
-            "worst_stream": worst_stream,
-            "lag_by_stream_abs": lag_by_stream_abs,
-            "lag_by_stream_signed": lag_by_stream_signed,
-            "offending_streams": offending_streams,
-        },
+        "lag_diagnostics": lag_diagnostics,
         "checks": checks,
     }
     if max_delta_observed > max_allowed_delta:

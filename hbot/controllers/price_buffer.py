@@ -50,6 +50,72 @@ class MidPriceBuffer:
     def bars(self) -> List[MinuteBar]:
         return list(self._bars)
 
+    def _reset_state(self) -> None:
+        self._bars.clear()
+        self._samples.clear()
+        self._ema_values.clear()
+        self._atr_values.clear()
+        self._prev_close = None
+        self._bar_count = 0
+        self._drift_ewma = None
+
+    def seed_bars(self, bars: List[MinuteBar], reset: bool = False) -> int:
+        """Bulk-load closed bars into the buffer before live samples begin."""
+        if reset:
+            self._reset_state()
+        elif len(self._bars) > 0:
+            raise ValueError("cannot seed a non-empty MidPriceBuffer without reset=True")
+        if not bars:
+            return 0
+        sorted_bars = sorted(bars, key=lambda item: int(item.ts_minute))
+        seeded = 0
+        last_bar: Optional[MinuteBar] = None
+        for bar in sorted_bars:
+            if last_bar is not None:
+                cursor = int(last_bar.ts_minute) + 60
+                while cursor < int(bar.ts_minute):
+                    gap_bar = MinuteBar(
+                        ts_minute=cursor,
+                        open=last_bar.close,
+                        high=last_bar.close,
+                        low=last_bar.close,
+                        close=last_bar.close,
+                    )
+                    self._bars.append(gap_bar)
+                    self._bar_count += 1
+                    self._on_bar_complete(gap_bar)
+                    seeded += 1
+                    last_bar = gap_bar
+                    cursor += 60
+            seeded_bar = MinuteBar(
+                ts_minute=int(bar.ts_minute),
+                open=Decimal(bar.open),
+                high=Decimal(bar.high),
+                low=Decimal(bar.low),
+                close=Decimal(bar.close),
+            )
+            self._bars.append(seeded_bar)
+            self._bar_count += 1
+            self._on_bar_complete(seeded_bar)
+            seeded += 1
+            last_bar = seeded_bar
+        return seeded
+
+    def seed_samples(self, samples: List[Tuple[float, Decimal]], reset: bool = False) -> int:
+        """Bulk-load recent sub-minute samples used by adverse drift calculations."""
+        if reset:
+            self._samples.clear()
+            self._drift_ewma = None
+        if not samples:
+            return 0
+        seeded = 0
+        for sample_ts, mid_price in sorted(samples, key=lambda item: float(item[0])):
+            if mid_price <= 0:
+                continue
+            self._samples.append((float(sample_ts), Decimal(mid_price)))
+            seeded += 1
+        return seeded
+
     def add_sample(self, timestamp_s: float, mid_price: Decimal) -> None:
         if mid_price <= 0:
             return

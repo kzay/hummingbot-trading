@@ -1,0 +1,1 @@
+[   85510ms] [ERROR] Failed to load resource: net::ERR_EMPTY_RESPONSE @ http://localhost:9910/api/v1/state?instance_name=bot1:0

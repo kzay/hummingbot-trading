@@ -40,6 +40,7 @@ def main() -> int:
         help="Retention policy JSON path.",
     )
     parser.add_argument("--apply", action="store_true", help="Delete expired artifacts.")
+    parser.add_argument("--dry-run", action="store_true", help="Force dry-run mode even if policy default is apply.")
     args = parser.parse_args()
 
     root = _root()
@@ -51,11 +52,19 @@ def main() -> int:
         for p in (policy.get("protect_latest", []) if isinstance(policy.get("protect_latest"), list) else [])
     }
 
+    default_mode = str(policy.get("default_mode", "dry_run")).strip().lower()
+    apply_mode = bool(args.apply)
+    if not args.apply and not args.dry_run:
+        apply_mode = default_mode == "apply"
+    if args.dry_run:
+        apply_mode = False
+
     candidates = 0
     expired = 0
     deleted = 0
     by_rule: List[Dict[str, object]] = []
     deletions: List[str] = []
+    delete_errors: List[Dict[str, str]] = []
 
     for rule in rules:
         if not isinstance(rule, dict):
@@ -78,15 +87,15 @@ def main() -> int:
                 rule_expired.append(p)
 
         deleted_count = 0
-        if args.apply:
+        if apply_mode:
             for p in rule_expired:
                 try:
                     os.remove(p)
                     deleted_count += 1
                     deleted += 1
                     deletions.append(str(p))
-                except Exception:
-                    pass
+                except Exception as exc:
+                    delete_errors.append({"path": str(p), "error": str(exc)})
 
         by_rule.append(
             {
@@ -104,13 +113,16 @@ def main() -> int:
     stamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
     payload = {
         "ts_utc": _utc_now(),
-        "mode": "apply" if args.apply else "dry_run",
+        "mode": "apply" if apply_mode else "dry_run",
         "policy_path": str(policy_path),
+        "policy_default_mode": default_mode,
         "candidates": candidates,
         "expired": expired,
         "deleted": deleted,
         "rules": by_rule,
         "deleted_paths_sample": deletions[:200],
+        "delete_error_count": len(delete_errors),
+        "delete_errors_sample": delete_errors[:50],
     }
     out = out_dir / f"artifact_retention_{stamp}.json"
     out.write_text(json.dumps(payload, indent=2), encoding="utf-8")

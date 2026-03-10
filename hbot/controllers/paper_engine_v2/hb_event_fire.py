@@ -9,7 +9,7 @@ import logging
 import time
 from decimal import Decimal
 from types import SimpleNamespace
-from typing import Any, Dict, List, Optional, Protocol
+from typing import Any, Dict, List, Optional, Protocol, Tuple
 
 from controllers.paper_engine_v2.desk import PaperDesk
 from controllers.paper_engine_v2.types import (
@@ -76,14 +76,90 @@ def _dispatch_to_subscribers(event: EngineEvent, connector_name: str) -> None:
             logger.warning("EventSubscriber %s error: %s", type(sub).__name__, exc)
 
 
-def _find_controller_for_connector(strategy: Any, connector_name: str) -> Any:
-    """Find the controller that owns this connector_name."""
+def _find_controller_for_connector(
+    strategy: Any,
+    connector_name: str,
+    *,
+    trading_pair: str = "",
+    instance_name: str = "",
+) -> Any:
+    """Find the controller that owns this connector route.
+
+    Route resolution is fail-closed when there are multiple equally-good
+    candidates. This prevents cross-bot contamination when several controllers
+    share the same connector and no disambiguating scope is provided.
+    """
     controllers = getattr(strategy, "controllers", {})
-    for _, ctrl in controllers.items():
+    if not isinstance(controllers, dict):
+        return None
+
+    wanted_connector = str(connector_name or "").strip()
+    wanted_pair = str(trading_pair or "").strip()
+    wanted_instance = str(instance_name or "").strip().lower()
+
+    scored: List[Tuple[int, str, Any]] = []
+    for controller_id, ctrl in controllers.items():
         cfg = getattr(ctrl, "config", None)
-        if cfg and str(getattr(cfg, "connector_name", "")) == connector_name:
-            return ctrl
-    return None
+        if cfg is None:
+            continue
+        cfg_connector = str(getattr(cfg, "connector_name", "") or "").strip()
+        if cfg_connector != wanted_connector:
+            continue
+
+        cfg_pair = str(getattr(cfg, "trading_pair", "") or "").strip()
+        cfg_instance = str(getattr(cfg, "instance_name", "") or "").strip().lower()
+
+        # Strictly reject conflicting hints.
+        if wanted_pair and cfg_pair and cfg_pair != wanted_pair:
+            continue
+        if wanted_instance and cfg_instance and cfg_instance != wanted_instance:
+            continue
+
+        score = 0
+        if wanted_pair and cfg_pair == wanted_pair:
+            score += 4
+        if wanted_instance and cfg_instance == wanted_instance:
+            score += 8
+        if cfg_pair:
+            score += 1
+        scored.append((score, str(controller_id), ctrl))
+
+    if not scored:
+        return None
+
+    scored.sort(key=lambda item: (item[0], item[1]), reverse=True)
+    top_score = scored[0][0]
+    best = [item for item in scored if item[0] == top_score]
+
+    # Ambiguous route: fail closed rather than dispatching to the wrong bot.
+    if len(best) > 1:
+        logger.warning(
+            "Ambiguous controller route for connector=%s pair=%s instance=%s; dropping bridge event",
+            wanted_connector,
+            wanted_pair,
+            wanted_instance,
+        )
+        return None
+
+    return best[0][2]
+
+
+def _event_trading_pair(event: Any) -> str:
+    instrument = getattr(event, "instrument_id", None)
+    return str(getattr(instrument, "trading_pair", "") or "").strip()
+
+
+def _event_instance_name(event: Any) -> str:
+    return str(getattr(event, "instance_name", "") or "").strip()
+
+
+def _resolve_controller_for_event(strategy: Any, connector_name: str, event: Any) -> Any:
+    return _find_controller_for_connector(
+        strategy,
+        connector_name,
+        trading_pair=_event_trading_pair(event),
+        instance_name=_event_instance_name(event),
+    )
 
 
 def _safe_float(value: Any, default: float = 0.0) -> float:
@@ -139,6 +215,8 @@ def _fire_fill_event(strategy: Any, connector_name: str, fill_event: OrderFilled
 
         trade_type = TradeType.BUY  # default
         side_hint = ""
+        fill_instance_name = str(getattr(fill_event, "instance_name", "") or "").strip()
+        runtime_order = None
         bridges = getattr(strategy, "_paper_desk_v2_bridges", {})
         bridge = bridges.get(connector_name)
         if bridge:
@@ -192,11 +270,35 @@ def _fire_fill_event(strategy: Any, connector_name: str, fill_event: OrderFilled
             trade_fee=fee,
         )
         try:
+            setattr(hb_fill, "is_maker", bool(getattr(fill_event, "is_maker", False)))
+        except Exception:
+            pass
+        try:
             setattr(hb_fill, "position_action", str(getattr(fill_event, "position_action", "auto") or "auto"))
         except Exception:
             pass
 
-        controller = _find_controller_for_connector(strategy, connector_name)
+        controller = _resolve_controller_for_event(strategy, connector_name, fill_event)
+        controller_instance_name = str(getattr(getattr(controller, "config", None), "instance_name", "") or "").strip()
+        if fill_instance_name and controller_instance_name and fill_instance_name.lower() != controller_instance_name.lower():
+            logger.warning(
+                "Dropping foreign paper fill order_id=%s fill_instance=%s controller_instance=%s",
+                str(fill_event.order_id),
+                fill_instance_name,
+                controller_instance_name,
+            )
+            return
+        if not fill_instance_name and str(getattr(fill_event, "order_id", "") or "").startswith("pe-") and runtime_order is None:
+            logger.warning(
+                "Dropping unscoped paper fill without local runtime order order_id=%s connector=%s",
+                str(fill_event.order_id),
+                str(connector_name),
+            )
+            return
+        try:
+            setattr(hb_fill, "instance_name", fill_instance_name or controller_instance_name)
+        except Exception as exc:
+            logger.debug("Failed to attach instance_name to HB fill event: %s", exc, exc_info=True)
         realized_before = _safe_float(getattr(controller, "_realized_pnl_today", 0.0), 0.0)
         if controller and hasattr(controller, "did_fill_order"):
             try:
@@ -219,77 +321,86 @@ def _fire_fill_event(strategy: Any, connector_name: str, fill_event: OrderFilled
             import json as _json
             import os as _os
             import uuid as _uuid_mod
+            from services.contracts.event_identity import validate_event_identity as _validate_event_identity
 
-            _redis_published = False
-            try:
-                _r = bridge_state.get_redis()
-                if _r is not None:
-                    _payload = {
+            _payload = {
+                "event_id": str(_uuid_mod.uuid4()),
+                "event_type": "bot_fill",
+                "event_version": "v1",
+                "schema_version": "1.0",
+                "ts_utc": datetime.now(_tz.utc).isoformat(),
+                "producer": "hb.paper_engine_v2",
+                "instance_name": instance_name,
+                "controller_id": controller_id,
+                "connector_name": str(connector_name),
+                "trading_pair": str(fill_event.instrument_id.trading_pair),
+                "side": side_str,
+                "price": float(fill_event.fill_price),
+                "amount_base": float(fill_event.fill_quantity),
+                "notional_quote": float(fill_event.fill_price * fill_event.fill_quantity),
+                "fee_quote": float(fill_event.fee),
+                "order_id": str(fill_event.order_id),
+                "accounting_source": "paper_desk_v2",
+                "is_maker": is_maker_val,
+                "realized_pnl_quote": float(realized_pnl_quote),
+                "bot_state": "",
+                "correlation_id": str(getattr(fill_event, "event_id", "") or ""),
+            }
+            _identity_ok, _identity_reason = _validate_event_identity(_payload)
+            if not _identity_ok:
+                logger.warning(
+                    "Paper fill telemetry dropped for order %s: %s",
+                    fill_event.order_id,
+                    _identity_reason,
+                )
+            else:
+                _redis_published = False
+                try:
+                    _r = bridge_state.get_redis()
+                    if _r is not None:
+                        _r.xadd(
+                            "hb.bot_telemetry.v1",
+                            {"payload": _json.dumps(_payload)},
+                            maxlen=100_000,
+                            approximate=True,
+                        )
+                        _redis_published = True
+                except Exception:
+                    logger.debug("Paper fill telemetry publish failed for order %s", fill_event.order_id, exc_info=True)
+
+                if not _redis_published:
+                    root = Path("/workspace/hbot") if Path("/.dockerenv").exists() else Path(__file__).resolve().parents[2]
+                    out_dir = root / "reports" / "event_store"
+                    out_dir.mkdir(parents=True, exist_ok=True)
+                    out_path = out_dir / f"events_{datetime.now(_tz.utc).strftime('%Y%m%d')}.jsonl"
+                    envelope = {
                         "event_id": str(_uuid_mod.uuid4()),
                         "event_type": "bot_fill",
                         "event_version": "v1",
-                        "schema_version": "1.0",
                         "ts_utc": datetime.now(_tz.utc).isoformat(),
                         "producer": "hb.paper_engine_v2",
                         "instance_name": instance_name,
                         "controller_id": controller_id,
                         "connector_name": str(connector_name),
                         "trading_pair": str(fill_event.instrument_id.trading_pair),
-                        "side": side_str,
-                        "price": float(fill_event.fill_price),
-                        "amount_base": float(fill_event.fill_quantity),
-                        "notional_quote": float(fill_event.fill_price * fill_event.fill_quantity),
-                        "fee_quote": float(fill_event.fee),
-                        "order_id": str(fill_event.order_id),
-                        "accounting_source": "paper_desk_v2",
-                        "is_maker": is_maker_val,
-                        "realized_pnl_quote": float(realized_pnl_quote),
-                        "bot_state": "",
                         "correlation_id": str(getattr(fill_event, "event_id", "") or ""),
+                        "stream": "local.paper_engine_v2.fallback",
+                        "stream_entry_id": "",
+                        "accounting_source": "paper_desk_v2",
+                        "payload": {
+                            "order_id": str(fill_event.order_id),
+                            "side": side_str,
+                            "price": float(fill_event.fill_price),
+                            "amount_base": float(fill_event.fill_quantity),
+                            "fee_quote": float(fill_event.fee),
+                            "is_maker": is_maker_val,
+                            "realized_pnl_quote": float(realized_pnl_quote),
+                        },
+                        "ingest_ts_utc": datetime.now(_tz.utc).isoformat(),
+                        "schema_validation_status": "ok",
                     }
-                    _r.xadd(
-                        "hb.bot_telemetry.v1",
-                        {"payload": _json.dumps(_payload)},
-                        maxlen=100_000,
-                        approximate=True,
-                    )
-                    _redis_published = True
-            except Exception:
-                logger.debug("Paper fill telemetry publish failed for order %s", fill_event.order_id, exc_info=True)
-
-            if not _redis_published:
-                root = Path("/workspace/hbot") if Path("/.dockerenv").exists() else Path(__file__).resolve().parents[2]
-                out_dir = root / "reports" / "event_store"
-                out_dir.mkdir(parents=True, exist_ok=True)
-                out_path = out_dir / f"events_{datetime.now(_tz.utc).strftime('%Y%m%d')}.jsonl"
-                envelope = {
-                    "event_id": str(_uuid_mod.uuid4()),
-                    "event_type": "bot_fill",
-                    "event_version": "v1",
-                    "ts_utc": datetime.now(_tz.utc).isoformat(),
-                    "producer": "hb.paper_engine_v2",
-                    "instance_name": instance_name,
-                    "controller_id": controller_id,
-                    "connector_name": str(connector_name),
-                    "trading_pair": str(fill_event.instrument_id.trading_pair),
-                    "correlation_id": str(getattr(fill_event, "event_id", "") or ""),
-                    "stream": "local.paper_engine_v2.fallback",
-                    "stream_entry_id": "",
-                    "accounting_source": "paper_desk_v2",
-                    "payload": {
-                        "order_id": str(fill_event.order_id),
-                        "side": side_str,
-                        "price": float(fill_event.fill_price),
-                        "amount_base": float(fill_event.fill_quantity),
-                        "fee_quote": float(fill_event.fee),
-                        "is_maker": is_maker_val,
-                        "realized_pnl_quote": float(realized_pnl_quote),
-                    },
-                    "ingest_ts_utc": datetime.now(_tz.utc).isoformat(),
-                    "schema_validation_status": "ok",
-                }
-                with out_path.open("a", encoding="utf-8") as f:
-                    f.write(_json.dumps(envelope, ensure_ascii=True) + "\n")
+                    with out_path.open("a", encoding="utf-8") as f:
+                        f.write(_json.dumps(envelope, ensure_ascii=True) + "\n")
         except Exception:
             pass
 
@@ -311,7 +422,7 @@ def _fire_cancel_event(strategy: Any, connector_name: str, cancel_event: OrderCa
             timestamp=time.time(),
             order_id=cancel_event.order_id,
         )
-        controller = _find_controller_for_connector(strategy, connector_name)
+        controller = _resolve_controller_for_event(strategy, connector_name, cancel_event)
         if controller and hasattr(controller, "did_cancel_order"):
             controller.did_cancel_order(hb_cancel)
     except Exception as exc:
@@ -328,7 +439,7 @@ def _fire_reject_event(strategy: Any, connector_name: str, reject_event: OrderRe
             order_type=None,
             error_message=reject_event.reason,
         )
-        controller = _find_controller_for_connector(strategy, connector_name)
+        controller = _resolve_controller_for_event(strategy, connector_name, reject_event)
         if controller and hasattr(controller, "did_fail_order"):
             controller.did_fail_order(hb_fail)
     except Exception as exc:

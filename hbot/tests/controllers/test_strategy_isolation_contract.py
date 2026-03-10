@@ -29,27 +29,24 @@ def _bot_lane_files() -> list[Path]:
     return sorted(p for p in BOTS_DIR.rglob("*.py") if p.name != "__init__.py")
 
 
-def _compat_strategy_wrapper_files() -> list[Path]:
-    strategy_dir = CONTROLLERS_DIR / "strategies"
-    return sorted(p for p in strategy_dir.glob("*.py") if p.name != "__init__.py")
-
-
 def test_shared_runtime_modules_do_not_import_strategy_lanes() -> None:
     shared_files = [
         CONTROLLERS_DIR / "runtime" / "__init__.py",
         CONTROLLERS_DIR / "runtime" / "base.py",
+        CONTROLLERS_DIR / "runtime" / "contracts.py",
+        CONTROLLERS_DIR / "runtime" / "core.py",
+        CONTROLLERS_DIR / "runtime" / "data_context.py",
+        CONTROLLERS_DIR / "runtime" / "directional_core.py",
+        CONTROLLERS_DIR / "runtime" / "execution_context.py",
         CONTROLLERS_DIR / "runtime" / "logging.py",
+        CONTROLLERS_DIR / "runtime" / "market_making_core.py",
         CONTROLLERS_DIR / "runtime" / "market_making_types.py",
+        CONTROLLERS_DIR / "runtime" / "risk_context.py",
         CONTROLLERS_DIR / "epp_v2_4.py",
+        CONTROLLERS_DIR / "price_buffer.py",
         CONTROLLERS_DIR / "regime_detector.py",
         CONTROLLERS_DIR / "spread_engine.py",
         CONTROLLERS_DIR / "tick_emitter.py",
-        CONTROLLERS_DIR / "strategy_runtime_base.py",
-        CONTROLLERS_DIR / "strategy_runtime_logging.py",
-        CONTROLLERS_DIR / "market_making_types.py",
-        CONTROLLERS_DIR / "shared_mm_controller.py",
-        CONTROLLERS_DIR / "shared_mm_logging.py",
-        CONTROLLERS_DIR / "shared_mm_types.py",
         CONTROLLERS_DIR / "shared_mm_v24.py",
     ]
     violations: list[str] = []
@@ -58,7 +55,7 @@ def test_shared_runtime_modules_do_not_import_strategy_lanes() -> None:
         bad = sorted(
             m
             for m in modules
-            if m.startswith("controllers.bots.") or m.startswith("controllers.strategies.")
+            if m.startswith("controllers.bots.")
         )
         if bad:
             violations.append(f"{path.name}: {', '.join(bad)}")
@@ -94,9 +91,6 @@ def test_legacy_wrappers_map_to_one_strategy_lane() -> None:
         "bot5_ift_jota_v1.py": "controllers.bots.bot5.ift_jota_v1",
         "bot6_cvd_divergence_v1.py": "controllers.bots.bot6.cvd_divergence_v1",
         "bot7_adaptive_grid_v1.py": "controllers.bots.bot7.adaptive_grid_v1",
-        "strategies/bot5_ift_jota_v1.py": "controllers.bots.bot5.ift_jota_v1",
-        "strategies/bot6_cvd_divergence_v1.py": "controllers.bots.bot6.cvd_divergence_v1",
-        "strategies/bot7_adaptive_grid_v1.py": "controllers.bots.bot7.adaptive_grid_v1",
     }
     for wrapper_rel_path, lane_module in expected.items():
         modules = _imported_modules(CONTROLLERS_DIR / wrapper_rel_path)
@@ -104,15 +98,3 @@ def test_legacy_wrappers_map_to_one_strategy_lane() -> None:
         assert lane_imports == [lane_module], (
             f"{wrapper_rel_path} must point only to {lane_module}; got {lane_imports}"
         )
-
-
-def test_legacy_strategy_namespace_files_are_wrapper_only() -> None:
-    for path in _compat_strategy_wrapper_files():
-        tree = ast.parse(path.read_text(encoding="utf-8"))
-        for node in ast.walk(tree):
-            assert not isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)), (
-                f"{path.name} must remain wrapper-only; place strategy logic in controllers/bots/"
-            )
-        modules = _imported_modules(path)
-        lane_imports = sorted(m for m in modules if m.startswith("controllers.bots."))
-        assert lane_imports, f"{path.name} must import a canonical controllers.bots.* module"

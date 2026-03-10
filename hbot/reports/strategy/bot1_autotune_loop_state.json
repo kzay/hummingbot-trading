@@ -1,7 +1,7 @@
 {
-  "last_fill_ts": "2026-03-08T00:58:18.080627+00:00",
-  "last_minute_ts": "2026-03-08T01:22:04.084992+00:00",
-  "last_cycle_ts": "2026-03-08T01:21:59.823104+00:00",
-  "expectancy_sample_count": 89,
+  "last_fill_ts": "2026-03-10T00:27:42.022671+00:00",
+  "last_minute_ts": "2026-03-10T00:41:01.869105+00:00",
+  "last_cycle_ts": "2026-03-10T00:40:48.837165+00:00",
+  "expectancy_sample_count": 284,
   "applied_changes": {}
 }

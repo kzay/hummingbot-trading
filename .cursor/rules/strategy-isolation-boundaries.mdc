@@ -13,7 +13,6 @@ alwaysApply: true
   - `hbot/controllers/tick_emitter.py`
 - Shared/runtime modules must never import `hbot/controllers/bots/*`.
 - Each strategy lane must remain isolated in `hbot/controllers/bots/*` and must not import other strategy lanes.
-- `hbot/controllers/strategies/*` is a compatibility namespace only; do not place strategy logic there.
 - Use `hbot/controllers/market_making/*` only for market-making loader shims; never place non-MM strategy logic there.
 - Legacy `hbot/controllers/epp_v2_4_bot*` files are compatibility wrappers only; do not add strategy logic there.
 - Strategy changes for one bot should stay in that bot lane file unless a deliberate shared-runtime interface change is required.

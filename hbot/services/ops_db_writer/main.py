@@ -7,7 +7,7 @@ import json
 import os
 import time
 from collections import defaultdict
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any, Dict, Iterator, List, Optional, Tuple
 
@@ -26,6 +26,7 @@ from services.common.utils import (
     safe_float as _safe_float,
     utc_now as _utc_now,
 )
+from services.common.log_namespace import iter_bot_log_files
 from services.contracts.stream_names import MARKET_DEPTH_STREAM, MARKET_QUOTE_STREAM
 
 
@@ -73,6 +74,14 @@ def _floor_minute_utc(ts_utc: str) -> str:
         parsed = datetime.fromtimestamp(0, tz=timezone.utc)
     floored = parsed.astimezone(timezone.utc).replace(second=0, microsecond=0)
     return floored.isoformat()
+
+
+def _next_minute_utc(ts_utc: str) -> str:
+    parsed = _parse_ts(ts_utc)
+    if parsed is None:
+        parsed = datetime.fromtimestamp(0, tz=timezone.utc)
+    next_minute = parsed.astimezone(timezone.utc) + timedelta(minutes=1)
+    return next_minute.isoformat()
 
 
 def _epoch_ms_to_ts_utc(value: Any, default: str = _EPOCH_TS_UTC) -> str:
@@ -248,7 +257,10 @@ def _connect() -> psycopg.Connection:
 
 def _apply_schema(conn: psycopg.Connection, root: Path) -> None:
     schema_path = root / "services" / "ops_db_writer" / "schema_v1.sql"
+    schema_v2_path = root / "services" / "ops_db_writer" / "schema_v2_market_bar.sql"
     sql = schema_path.read_text(encoding="utf-8")
+    if schema_v2_path.exists():
+        sql += "\n\n" + schema_v2_path.read_text(encoding="utf-8")
     with conn.cursor() as cur:
         cur.execute(sql)
     conn.commit()
@@ -360,6 +372,15 @@ def _apply_timescale(conn: psycopg.Connection) -> Dict[str, object]:
             "compression_env": "OPS_DB_TS_COMPRESS_AFTER_QUOTE_BAR_DAYS",
             "compression_default": 7,
             "segment_by": "connector_name,trading_pair",
+        },
+        {
+            "name": "market_bar_v2",
+            "time_col": "bucket_minute_utc",
+            "retention_env": "OPS_DB_TS_RETENTION_QUOTE_BAR_DAYS",
+            "retention_default": 365,
+            "compression_env": "OPS_DB_TS_COMPRESS_AFTER_QUOTE_BAR_DAYS",
+            "compression_default": 7,
+            "segment_by": "connector_name,trading_pair,bar_source",
         },
     ]
 
@@ -582,7 +603,7 @@ def _ingest_minutes(conn: psycopg.Connection, data_root: Path, ingest_ts_utc: st
       schema_version = EXCLUDED.schema_version
     """
     with conn.cursor() as cur:
-        for minute_file in data_root.glob("*/logs/epp_v24/*/minute.csv"):
+        for minute_file in iter_bot_log_files(data_root, "minute.csv"):
             try:
                 bot = minute_file.parts[-5]
                 variant = minute_file.parts[-2]
@@ -656,7 +677,7 @@ def _ingest_daily(conn: psycopg.Connection, data_root: Path, ingest_ts_utc: str)
       schema_version = EXCLUDED.schema_version
     """
     with conn.cursor() as cur:
-        for daily_file in data_root.glob("*/logs/epp_v24/*/daily.csv"):
+        for daily_file in iter_bot_log_files(data_root, "daily.csv"):
             try:
                 bot = daily_file.parts[-5]
                 variant = daily_file.parts[-2]
@@ -732,7 +753,7 @@ def _ingest_fills(conn: psycopg.Connection, data_root: Path, ingest_ts_utc: str)
       schema_version = EXCLUDED.schema_version
     """
     with conn.cursor() as cur:
-        for fills_file in data_root.glob("*/logs/epp_v24/*/fills.csv"):
+        for fills_file in iter_bot_log_files(data_root, "fills.csv"):
             try:
                 bot = fills_file.parts[-5]
                 variant = fills_file.parts[-2]
@@ -912,19 +933,7 @@ def _ingest_market_depth_layers(conn: psycopg.Connection, reports_root: Path, in
     checkpoint_source_line = 0
 
     event_store_root = reports_root / "event_store"
-    rollup_accumulator: Dict[
-        Tuple[str, str, str, str, str],
-        Dict[str, float],
-    ] = defaultdict(
-        lambda: {
-            "event_count": 0.0,
-            "sum_spread_bps": 0.0,
-            "sum_mid_price": 0.0,
-            "sum_bid_depth_total": 0.0,
-            "sum_ask_depth_total": 0.0,
-            "sum_depth_imbalance": 0.0,
-        }
-    )
+    touched_rollup_keys: set[Tuple[str, str, str, str, str]] = set()
     pair_state: Dict[Tuple[str, str, str, str], Dict[str, int]] = defaultdict(
         lambda: {"counter": 0, "last_sample_ts_ms": -1}
     )
@@ -1007,45 +1016,26 @@ def _ingest_market_depth_layers(conn: psycopg.Connection, reports_root: Path, in
       %(source_path)s, %(ingest_ts_utc)s, %(schema_version)s
     )
     ON CONFLICT (bucket_minute_utc, instance_name, controller_id, connector_name, trading_pair) DO UPDATE SET
-      event_count = market_depth_rollup_minute.event_count + EXCLUDED.event_count,
-      avg_spread_bps = CASE
-        WHEN (market_depth_rollup_minute.event_count + EXCLUDED.event_count) = 0 THEN NULL
-        ELSE (
-          (COALESCE(market_depth_rollup_minute.avg_spread_bps, 0.0) * market_depth_rollup_minute.event_count)
-          + (COALESCE(EXCLUDED.avg_spread_bps, 0.0) * EXCLUDED.event_count)
-        ) / (market_depth_rollup_minute.event_count + EXCLUDED.event_count)
-      END,
-      avg_mid_price = CASE
-        WHEN (market_depth_rollup_minute.event_count + EXCLUDED.event_count) = 0 THEN NULL
-        ELSE (
-          (COALESCE(market_depth_rollup_minute.avg_mid_price, 0.0) * market_depth_rollup_minute.event_count)
-          + (COALESCE(EXCLUDED.avg_mid_price, 0.0) * EXCLUDED.event_count)
-        ) / (market_depth_rollup_minute.event_count + EXCLUDED.event_count)
-      END,
-      avg_bid_depth_total = CASE
-        WHEN (market_depth_rollup_minute.event_count + EXCLUDED.event_count) = 0 THEN NULL
-        ELSE (
-          (COALESCE(market_depth_rollup_minute.avg_bid_depth_total, 0.0) * market_depth_rollup_minute.event_count)
-          + (COALESCE(EXCLUDED.avg_bid_depth_total, 0.0) * EXCLUDED.event_count)
-        ) / (market_depth_rollup_minute.event_count + EXCLUDED.event_count)
-      END,
-      avg_ask_depth_total = CASE
-        WHEN (market_depth_rollup_minute.event_count + EXCLUDED.event_count) = 0 THEN NULL
-        ELSE (
-          (COALESCE(market_depth_rollup_minute.avg_ask_depth_total, 0.0) * market_depth_rollup_minute.event_count)
-          + (COALESCE(EXCLUDED.avg_ask_depth_total, 0.0) * EXCLUDED.event_count)
-        ) / (market_depth_rollup_minute.event_count + EXCLUDED.event_count)
-      END,
-      avg_depth_imbalance = CASE
-        WHEN (market_depth_rollup_minute.event_count + EXCLUDED.event_count) = 0 THEN NULL
-        ELSE (
-          (COALESCE(market_depth_rollup_minute.avg_depth_imbalance, 0.0) * market_depth_rollup_minute.event_count)
-          + (COALESCE(EXCLUDED.avg_depth_imbalance, 0.0) * EXCLUDED.event_count)
-        ) / (market_depth_rollup_minute.event_count + EXCLUDED.event_count)
-      END,
+      event_count = EXCLUDED.event_count,
+      avg_spread_bps = EXCLUDED.avg_spread_bps,
+      avg_mid_price = EXCLUDED.avg_mid_price,
+      avg_bid_depth_total = EXCLUDED.avg_bid_depth_total,
+      avg_ask_depth_total = EXCLUDED.avg_ask_depth_total,
+      avg_depth_imbalance = EXCLUDED.avg_depth_imbalance,
       source_path = EXCLUDED.source_path,
       ingest_ts_utc = EXCLUDED.ingest_ts_utc,
       schema_version = EXCLUDED.schema_version
+    """
+    select_rollup_rows_sql = """
+    SELECT spread_bps, mid_price, bid_depth_total, ask_depth_total, depth_imbalance, source_path
+    FROM market_depth_sampled
+    WHERE ts_utc >= %(bucket_start_utc)s
+      AND ts_utc < %(bucket_end_utc)s
+      AND COALESCE(instance_name, '') = %(instance_name)s
+      AND COALESCE(controller_id, '') = %(controller_id)s
+      AND COALESCE(connector_name, '') = %(connector_name)s
+      AND COALESCE(trading_pair, '') = %(trading_pair)s
+    ORDER BY ts_utc ASC, stream_entry_id ASC
     """
 
     with conn.cursor() as cur:
@@ -1171,26 +1161,35 @@ def _ingest_market_depth_layers(conn: psycopg.Connection, reports_root: Path, in
                 cur.execute(insert_sampled_sql, sampled_row)
                 sampled_inserted += 1
 
-                rollup_key = (
+                touched_rollup_keys.add(
+                    (
                     _floor_minute_utc(ts_utc),
                     str(sampled_row.get("instance_name") or ""),
                     str(sampled_row.get("controller_id") or ""),
                     str(sampled_row.get("connector_name") or ""),
                     str(sampled_row.get("trading_pair") or ""),
+                    )
                 )
-                acc = rollup_accumulator[rollup_key]
-                acc["event_count"] += 1.0
-                acc["sum_spread_bps"] += float(spread_bps or 0.0)
-                acc["sum_mid_price"] += float(mid_price or 0.0)
-                acc["sum_bid_depth_total"] += float(bid_depth_total or 0.0)
-                acc["sum_ask_depth_total"] += float(ask_depth_total or 0.0)
-                acc["sum_depth_imbalance"] += float(depth_imbalance or 0.0)
 
-        for rollup_key, acc in rollup_accumulator.items():
+        for rollup_key in sorted(touched_rollup_keys):
             bucket_minute_utc, instance_name, controller_id, connector_name, trading_pair = rollup_key
-            event_count = int(acc["event_count"])
+            cur.execute(
+                select_rollup_rows_sql,
+                {
+                    "bucket_start_utc": bucket_minute_utc,
+                    "bucket_end_utc": _next_minute_utc(bucket_minute_utc),
+                    "instance_name": instance_name,
+                    "controller_id": controller_id,
+                    "connector_name": connector_name,
+                    "trading_pair": trading_pair,
+                },
+            )
+            fetchall = getattr(cur, "fetchall", None)
+            rollup_rows = list(fetchall() or []) if callable(fetchall) else []
+            event_count = len(rollup_rows)
             if event_count <= 0:
                 continue
+            last_source_path = str(rollup_rows[-1][5] or latest_seen_path or checkpoint_source_path)
             cur.execute(
                 upsert_rollup_sql,
                 {
@@ -1200,12 +1199,12 @@ def _ingest_market_depth_layers(conn: psycopg.Connection, reports_root: Path, in
                     "connector_name": connector_name,
                     "trading_pair": trading_pair,
                     "event_count": event_count,
-                    "avg_spread_bps": acc["sum_spread_bps"] / event_count,
-                    "avg_mid_price": acc["sum_mid_price"] / event_count,
-                    "avg_bid_depth_total": acc["sum_bid_depth_total"] / event_count,
-                    "avg_ask_depth_total": acc["sum_ask_depth_total"] / event_count,
-                    "avg_depth_imbalance": acc["sum_depth_imbalance"] / event_count,
-                    "source_path": latest_seen_path or checkpoint_source_path,
+                    "avg_spread_bps": sum(float(row[0] or 0.0) for row in rollup_rows) / event_count,
+                    "avg_mid_price": sum(float(row[1] or 0.0) for row in rollup_rows) / event_count,
+                    "avg_bid_depth_total": sum(float(row[2] or 0.0) for row in rollup_rows) / event_count,
+                    "avg_ask_depth_total": sum(float(row[3] or 0.0) for row in rollup_rows) / event_count,
+                    "avg_depth_imbalance": sum(float(row[4] or 0.0) for row in rollup_rows) / event_count,
+                    "source_path": last_source_path,
                     "ingest_ts_utc": ingest_ts_utc,
                     "schema_version": SCHEMA_VERSION,
                 },
@@ -1227,7 +1226,7 @@ def _ingest_market_depth_layers(conn: psycopg.Connection, reports_root: Path, in
     return {
         "raw_inserted": raw_inserted,
         "sampled_inserted": sampled_inserted,
-        "rollup_upserts": len(rollup_accumulator),
+        "rollup_upserts": len(touched_rollup_keys),
         "depth_events_scanned": scanned_depth_events,
         "checkpoint_source_path": checkpoint_source_path,
         "checkpoint_source_line": checkpoint_source_line,
@@ -1244,7 +1243,47 @@ def _ingest_market_quote_layers(conn: psycopg.Connection, reports_root: Path, in
     checkpoint_source_path = ""
     checkpoint_source_line = 0
     event_store_root = reports_root / "event_store"
-    rollup_accumulator: Dict[Tuple[str, str, str], Dict[str, Any]] = {}
+    touched_rollup_keys: set[Tuple[str, str, str]] = set()
+
+    def _prune_market_bar_v2(cur, touched_keys: List[Tuple[str, str, str, int]]) -> int:
+        max_bars = max(1000, _env_int("OPS_DB_MARKET_BAR_V2_RETENTION_MAX_BARS", 100_000))
+        pruned = 0
+        seen_keys = set()
+        delete_sql = """
+        WITH ranked AS (
+            SELECT bucket_minute_utc
+            FROM market_bar_v2
+            WHERE connector_name = %(connector_name)s
+              AND trading_pair = %(trading_pair)s
+              AND bar_source = %(bar_source)s
+              AND bar_interval_s = %(bar_interval_s)s
+            ORDER BY bucket_minute_utc DESC
+            OFFSET %(max_bars)s
+        )
+        DELETE FROM market_bar_v2
+        WHERE connector_name = %(connector_name)s
+          AND trading_pair = %(trading_pair)s
+          AND bar_source = %(bar_source)s
+          AND bar_interval_s = %(bar_interval_s)s
+          AND bucket_minute_utc IN (SELECT bucket_minute_utc FROM ranked)
+        """
+        for key in touched_keys:
+            if key in seen_keys:
+                continue
+            seen_keys.add(key)
+            connector_name, trading_pair, bar_source, bar_interval_s = key
+            cur.execute(
+                delete_sql,
+                {
+                    "connector_name": connector_name,
+                    "trading_pair": trading_pair,
+                    "bar_source": bar_source,
+                    "bar_interval_s": int(bar_interval_s),
+                    "max_bars": int(max_bars),
+                },
+            )
+            pruned += int(getattr(cur, "rowcount", 0) or 0)
+        return pruned
 
     select_checkpoint_sql = """
     SELECT source_path, source_line
@@ -1296,22 +1335,47 @@ def _ingest_market_quote_layers(conn: psycopg.Connection, reports_root: Path, in
       %(open_price)s, %(high_price)s, %(low_price)s, %(close_price)s, %(source_path)s, %(ingest_ts_utc)s, %(schema_version)s
     )
     ON CONFLICT (bucket_minute_utc, connector_name, trading_pair) DO UPDATE SET
-      event_count = market_quote_bar_minute.event_count + EXCLUDED.event_count,
-      first_ts_utc = LEAST(market_quote_bar_minute.first_ts_utc, EXCLUDED.first_ts_utc),
-      last_ts_utc = GREATEST(market_quote_bar_minute.last_ts_utc, EXCLUDED.last_ts_utc),
-      open_price = CASE
-        WHEN EXCLUDED.first_ts_utc < market_quote_bar_minute.first_ts_utc THEN EXCLUDED.open_price
-        ELSE market_quote_bar_minute.open_price
-      END,
-      high_price = GREATEST(market_quote_bar_minute.high_price, EXCLUDED.high_price),
-      low_price = LEAST(market_quote_bar_minute.low_price, EXCLUDED.low_price),
-      close_price = CASE
-        WHEN EXCLUDED.last_ts_utc >= market_quote_bar_minute.last_ts_utc THEN EXCLUDED.close_price
-        ELSE market_quote_bar_minute.close_price
-      END,
+      event_count = EXCLUDED.event_count,
+      first_ts_utc = EXCLUDED.first_ts_utc,
+      last_ts_utc = EXCLUDED.last_ts_utc,
+      open_price = EXCLUDED.open_price,
+      high_price = EXCLUDED.high_price,
+      low_price = EXCLUDED.low_price,
+      close_price = EXCLUDED.close_price,
       source_path = EXCLUDED.source_path,
       ingest_ts_utc = EXCLUDED.ingest_ts_utc,
       schema_version = EXCLUDED.schema_version
+    """
+    upsert_market_bar_v2_sql = """
+    INSERT INTO market_bar_v2 (
+      bucket_minute_utc, connector_name, trading_pair, bar_source, bar_interval_s, open_price, high_price, low_price,
+      close_price, volume_base, volume_quote, event_count, first_ts_utc, last_ts_utc, ingest_ts_utc, schema_version, quality_flags
+    )
+    VALUES (
+      %(bucket_minute_utc)s, %(connector_name)s, %(trading_pair)s, %(bar_source)s, %(bar_interval_s)s, %(open_price)s,
+      %(high_price)s, %(low_price)s, %(close_price)s, %(volume_base)s, %(volume_quote)s, %(event_count)s, %(first_ts_utc)s,
+      %(last_ts_utc)s, %(ingest_ts_utc)s, %(schema_version)s, %(quality_flags)s::jsonb
+    )
+    ON CONFLICT (bucket_minute_utc, connector_name, trading_pair, bar_source, bar_interval_s) DO UPDATE SET
+      event_count = EXCLUDED.event_count,
+      first_ts_utc = EXCLUDED.first_ts_utc,
+      last_ts_utc = EXCLUDED.last_ts_utc,
+      open_price = EXCLUDED.open_price,
+      high_price = EXCLUDED.high_price,
+      low_price = EXCLUDED.low_price,
+      close_price = EXCLUDED.close_price,
+      ingest_ts_utc = EXCLUDED.ingest_ts_utc,
+      schema_version = EXCLUDED.schema_version,
+      quality_flags = EXCLUDED.quality_flags
+    """
+    select_rollup_rows_sql = """
+    SELECT ts_utc, mid_price, source_path
+    FROM market_quote_raw
+    WHERE ts_utc >= %(bucket_start_utc)s
+      AND ts_utc < %(bucket_end_utc)s
+      AND connector_name = %(connector_name)s
+      AND trading_pair = %(trading_pair)s
+    ORDER BY ts_utc ASC, stream_entry_id ASC
     """
 
     with conn.cursor() as cur:
@@ -1392,50 +1456,74 @@ def _ingest_market_quote_layers(conn: psycopg.Connection, reports_root: Path, in
                 cur.execute(insert_raw_sql, raw_row)
                 raw_inserted += 1
 
-                rollup_key = (_floor_minute_utc(ts_utc), connector_name, trading_pair)
-                acc = rollup_accumulator.get(rollup_key)
-                if acc is None:
-                    rollup_accumulator[rollup_key] = {
-                        "event_count": 1,
-                        "first_ts_utc": ts_utc,
-                        "last_ts_utc": ts_utc,
-                        "open_price": mid_price,
-                        "high_price": mid_price,
-                        "low_price": mid_price,
-                        "close_price": mid_price,
-                        "source_path": source_path,
-                    }
-                else:
-                    acc["event_count"] = int(acc["event_count"]) + 1
-                    if ts_utc < str(acc["first_ts_utc"]):
-                        acc["first_ts_utc"] = ts_utc
-                        acc["open_price"] = mid_price
-                    if ts_utc >= str(acc["last_ts_utc"]):
-                        acc["last_ts_utc"] = ts_utc
-                        acc["close_price"] = mid_price
-                    acc["high_price"] = max(float(acc["high_price"]), mid_price)
-                    acc["low_price"] = min(float(acc["low_price"]), mid_price)
-                    acc["source_path"] = source_path
+                touched_rollup_keys.add((_floor_minute_utc(ts_utc), connector_name, trading_pair))
 
-        for (bucket_minute_utc, connector_name, trading_pair), acc in rollup_accumulator.items():
+        touched_market_bar_keys: List[Tuple[str, str, str, int]] = []
+        for bucket_minute_utc, connector_name, trading_pair in sorted(touched_rollup_keys):
+            cur.execute(
+                select_rollup_rows_sql,
+                {
+                    "bucket_start_utc": bucket_minute_utc,
+                    "bucket_end_utc": _next_minute_utc(bucket_minute_utc),
+                    "connector_name": connector_name,
+                    "trading_pair": trading_pair,
+                },
+            )
+            fetchall = getattr(cur, "fetchall", None)
+            rollup_rows = list(fetchall() or []) if callable(fetchall) else []
+            if not rollup_rows:
+                continue
+            event_count = len(rollup_rows)
+            first_ts_utc = str(rollup_rows[0][0] or bucket_minute_utc)
+            last_ts_utc = str(rollup_rows[-1][0] or first_ts_utc)
+            open_price = float(rollup_rows[0][1] or 0.0)
+            close_price = float(rollup_rows[-1][1] or open_price)
+            high_price = max(float(row[1] or 0.0) for row in rollup_rows)
+            low_price = min(float(row[1] or 0.0) for row in rollup_rows)
+            source_path = str(rollup_rows[-1][2] or latest_seen_path or checkpoint_source_path)
             cur.execute(
                 upsert_bar_sql,
                 {
                     "bucket_minute_utc": bucket_minute_utc,
                     "connector_name": connector_name,
                     "trading_pair": trading_pair,
-                    "event_count": int(acc["event_count"]),
-                    "first_ts_utc": acc["first_ts_utc"],
-                    "last_ts_utc": acc["last_ts_utc"],
-                    "open_price": acc["open_price"],
-                    "high_price": acc["high_price"],
-                    "low_price": acc["low_price"],
-                    "close_price": acc["close_price"],
-                    "source_path": acc["source_path"],
+                    "event_count": event_count,
+                    "first_ts_utc": first_ts_utc,
+                    "last_ts_utc": last_ts_utc,
+                    "open_price": open_price,
+                    "high_price": high_price,
+                    "low_price": low_price,
+                    "close_price": close_price,
+                    "source_path": source_path,
                     "ingest_ts_utc": ingest_ts_utc,
                     "schema_version": SCHEMA_VERSION,
                 },
             )
+            cur.execute(
+                upsert_market_bar_v2_sql,
+                {
+                    "bucket_minute_utc": bucket_minute_utc,
+                    "connector_name": connector_name,
+                    "trading_pair": trading_pair,
+                    "bar_source": "quote_mid",
+                    "bar_interval_s": 60,
+                    "open_price": open_price,
+                    "high_price": high_price,
+                    "low_price": low_price,
+                    "close_price": close_price,
+                    "volume_base": None,
+                    "volume_quote": None,
+                    "event_count": event_count,
+                    "first_ts_utc": first_ts_utc,
+                    "last_ts_utc": last_ts_utc,
+                    "ingest_ts_utc": ingest_ts_utc,
+                    "schema_version": max(2, SCHEMA_VERSION),
+                    "quality_flags": json.dumps({}, ensure_ascii=True),
+                },
+            )
+            touched_market_bar_keys.append((connector_name, trading_pair, "quote_mid", 60))
+
+        pruned_market_bar_v2 = _prune_market_bar_v2(cur, touched_market_bar_keys)
 
         if latest_seen_path:
             cur.execute(
@@ -1452,7 +1540,9 @@ def _ingest_market_quote_layers(conn: psycopg.Connection, reports_root: Path, in
 
     return {
         "raw_inserted": raw_inserted,
-        "bar_upserts": len(rollup_accumulator),
+        "bar_upserts": len(touched_rollup_keys),
+        "market_bar_v2_upserts": len(touched_rollup_keys),
+        "market_bar_v2_pruned": pruned_market_bar_v2,
         "quote_events_scanned": scanned_quote_events,
         "checkpoint_source_path": checkpoint_source_path,
         "checkpoint_source_line": checkpoint_source_line,

@@ -20,6 +20,7 @@ except Exception:
     ccxt = None
 
 from services.common.utils import safe_float, utc_now, write_json
+from services.common.log_namespace import iter_bot_log_files
 
 logger = logging.getLogger(__name__)
 
@@ -208,7 +209,7 @@ def run_fill_reconciliation(
     since_ms = int((time.time() - lookback_hours * 3600) * 1000)
     bot_reports: List[Dict[str, object]] = []
 
-    for fills_file in data_root.glob("*/logs/epp_v24/*/fills.csv"):
+    for fills_file in iter_bot_log_files(data_root, "fills.csv"):
         bot = fills_file.parts[-5]
         local_fills = _load_local_fills(fills_file)
         if not local_fills:

@@ -7,7 +7,7 @@ connector_name: bitget_perpetual
 connector_type: perp
 trading_pair: BTC-USDT
 
-total_amount_quote: 6
+total_amount_quote: 140
 buy_spreads: "0.0015,0.0030,0.0045"
 sell_spreads: "0.0015,0.0030,0.0045"
 buy_amounts_pct: "34,33,33"
@@ -15,7 +15,8 @@ sell_amounts_pct: "34,33,33"
 executor_refresh_time: 30
 cooldown_time: 10
 leverage: 1
-position_mode: HEDGE
+position_mode: ONEWAY
+max_order_notional_quote: 80
 stop_loss: 0.004
 take_profit: 0.003
 time_limit: 900
@@ -48,22 +49,37 @@ adaptive_edge_relax_max_bps: 2
 adaptive_edge_tighten_max_bps: 4
 adaptive_min_edge_bps_floor: 1.00
 
-bot7_bb_period: 20
+# Bot7 owns its own signal gate logic in `controllers/bots/bot7/adaptive_grid_v1.py`.
+# Keep the shared bot1-style alpha/selective soft-pause layers disabled here.
+shared_edge_gate_enabled: false
+alpha_policy_enabled: false
+selective_quoting_enabled: false
+adverse_fill_soft_pause_enabled: false
+edge_confidence_soft_pause_enabled: false
+slippage_soft_pause_enabled: false
+
+bot7_bb_period: 10
 bot7_bb_stddev: 2.0
-bot7_rsi_period: 14
-bot7_rsi_buy_threshold: 32
-bot7_rsi_sell_threshold: 68
-bot7_adx_period: 14
-bot7_adx_activate_below: 20
-bot7_trade_window_count: 160
-bot7_trade_stale_after_ms: 15000
+bot7_rsi_period: 7
+bot7_rsi_buy_threshold: 34
+bot7_rsi_sell_threshold: 66
+bot7_rsi_probe_buy_threshold: 38
+bot7_rsi_probe_sell_threshold: 62
+bot7_adx_period: 5
+bot7_adx_activate_below: 22
+bot7_adx_neutral_fallback_below: 30
+atr_period: 7
+bot7_trade_window_count: 40
+bot7_trade_stale_after_ms: 90000
 bot7_absorption_min_trade_mult: 2.5
 bot7_absorption_max_price_drift_pct: 0.0015
-bot7_delta_trap_window: 24
+bot7_delta_trap_window: 12
 bot7_delta_trap_reversal_share: 0.30
 bot7_grid_spacing_atr_mult: 0.50
-bot7_grid_spacing_floor_pct: 0.0015
+bot7_grid_spacing_floor_pct: 0.0009
 bot7_grid_spacing_cap_pct: 0.0100
+bot7_touch_tolerance_pct: 0.0015
+bot7_depth_imbalance_reversal_threshold: 0.12
 bot7_max_grid_legs: 3
 bot7_per_leg_risk_pct: 0.003
 bot7_total_grid_exposure_cap_pct: 0.015
@@ -72,6 +88,11 @@ bot7_funding_long_bias_threshold: -0.0003
 bot7_funding_short_bias_threshold: 0.0003
 bot7_funding_vol_reduce_threshold: 0.0010
 bot7_trade_reader_enabled: true
+bot7_warmup_quote_levels: 1
+bot7_warmup_quote_max_bars: 3
+bot7_probe_enabled: true
+bot7_probe_grid_legs: 1
+bot7_probe_size_mult: 0.50
 
 regime_specs_override:
   up:
@@ -98,7 +119,7 @@ regime_specs_override:
     quote_size_pct_max: "0.0035"
   neutral_low_vol:
     one_sided: "off"
-    spread_min: "0.0010"
+    spread_min: "0.0008"
     spread_max: "0.0035"
     levels_min: 1
     levels_max: 3
@@ -133,7 +154,7 @@ regime_specs_override:
 perp_target_net_base_pct: 0.0
 min_base_pct: 0.0
 max_base_pct: 0.55
-max_total_notional_quote: 12
+max_total_notional_quote: 140
 max_daily_turnover_x_hard: 40.0
 max_daily_loss_pct_hard: 0.020
 max_drawdown_pct_hard: 0.035

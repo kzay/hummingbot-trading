@@ -10,6 +10,7 @@ lightweight stubs.
 """
 from __future__ import annotations
 
+import json
 import sys
 import types as _types_mod
 from datetime import datetime, timezone
@@ -104,6 +105,7 @@ from controllers.epp_v2_4 import (  # noqa: E402
     _paper_reset_state_on_startup_enabled,
 )
 from controllers.ops_guard import GuardState  # noqa: E402
+from controllers.price_buffer import MidPriceBuffer, MinuteBar  # noqa: E402
 from controllers.regime_detector import RegimeDetector  # noqa: E402
 from controllers.spread_engine import SpreadEngine  # noqa: E402
 from controllers.risk_evaluator import RiskEvaluator  # noqa: E402
@@ -139,6 +141,7 @@ def _make_config(**overrides) -> SimpleNamespace:
         vol_penalty_multiplier=Decimal("0.5"),
         min_net_edge_bps=1,
         edge_resume_bps=4,
+        shared_edge_gate_enabled=True,
         adaptive_params_enabled=True,
         adaptive_fill_target_age_s=900,
         adaptive_edge_relax_max_bps=Decimal("8"),
@@ -1098,6 +1101,28 @@ class TestComputeSpreadAndEdge:
 
 
 class TestEdgeGateEwma:
+    def test_shared_edge_gate_can_be_disabled_per_strategy(self):
+        ctrl = _make_edge_gate_ctrl(config_overrides={"shared_edge_gate_enabled": False}, hold_s=30)
+        ctrl._net_edge_ewma = Decimal("0.00057")
+        ctrl._risk_evaluator._edge_gate_blocked = True
+        ctrl._risk_evaluator._edge_gate_changed_ts = 10.0
+        ctrl._edge_gate_blocked = True
+        ctrl._soft_pause_edge = True
+
+        spread_state = _make_spread_state(
+            net_edge=Decimal("0.00005"),
+            min_edge_threshold=Decimal("0.000775"),
+            edge_resume_threshold=Decimal("0.000825"),
+        )
+
+        ctrl._update_edge_gate_ewma(100.0, spread_state)
+
+        assert ctrl._net_edge_gate == spread_state.net_edge
+        assert ctrl._risk_evaluator.edge_gate_blocked is False
+        assert ctrl._risk_evaluator._edge_gate_changed_ts == 100.0
+        assert ctrl._edge_gate_blocked is False
+        assert ctrl._soft_pause_edge is False
+
     def test_raw_edge_above_pause_threshold_does_not_false_pause_from_lagging_ewma(self):
         ctrl = _make_edge_gate_ctrl(config_overrides={"edge_gate_ewma_period": 8}, hold_s=30)
         ctrl._net_edge_ewma = Decimal("0.00046")
@@ -1456,6 +1481,47 @@ class TestDidFillOrder:
         assert ctrl._fills_count_today == 1
         assert ctrl._traded_notional_today == Decimal("500")
         assert ctrl._fees_paid_today_quote == Decimal("0.5")
+
+    def test_is_maker_respects_event_flag_when_trade_fee_has_no_marker(self):
+        ctrl = _make_fill_ctrl(mid=Decimal("50000"))
+        ctrl._maker_fee_pct = Decimal("0.001")
+        ctrl._taker_fee_pct = Decimal("0.003")
+        ev = SimpleNamespace(
+            price=Decimal("49990"),
+            amount=Decimal("0.01"),
+            order_id="event-maker-flag",
+            timestamp=1_700_000_000.0,
+            trade_type=SimpleNamespace(name="sell"),
+            trade_fee=SimpleNamespace(
+                fee_amount_in_token=lambda *_a, **_k: Decimal("0.4999")
+            ),
+            is_maker=True,
+        )
+
+        EppV24Controller.did_fill_order(ctrl, ev)
+
+        fill_row = ctrl._csv.log_fill.call_args[0][0]
+        assert fill_row["is_maker"] == "True"
+
+    def test_is_maker_can_be_inferred_from_fee_rate_when_flags_missing(self):
+        ctrl = _make_fill_ctrl(mid=Decimal("50000"))
+        ctrl._maker_fee_pct = Decimal("0.001")
+        ctrl._taker_fee_pct = Decimal("0.003")
+        ev = SimpleNamespace(
+            price=Decimal("49990"),
+            amount=Decimal("0.01"),
+            order_id="event-maker-infer",
+            timestamp=1_700_000_000.0,
+            trade_type=SimpleNamespace(name="sell"),
+            trade_fee=SimpleNamespace(
+                fee_amount_in_token=lambda *_a, **_k: Decimal("0.4999")
+            ),
+        )
+
+        EppV24Controller.did_fill_order(ctrl, ev)
+
+        fill_row = ctrl._csv.log_fill.call_args[0][0]
+        assert fill_row["is_maker"] == "True"
 
     def test_duplicate_fill_event_is_ignored(self):
         """Replayed identical fill events should not double-count accounting."""
@@ -2127,6 +2193,27 @@ class TestSizingQuantizationAlignment:
             size_mult=Decimal("1"),
         )
         assert projected == Decimal("134")
+
+    def test_project_total_amount_quote_respects_total_cap_after_min_base_floor(self):
+        ctrl = SimpleNamespace(
+            config=SimpleNamespace(
+                max_order_notional_quote=Decimal("250"),
+                max_total_notional_quote=Decimal("12"),
+            ),
+            _min_notional_quote=lambda: Decimal("5"),
+            _min_base_amount=lambda _mid: Decimal("0.001"),
+        )
+
+        projected = EppV24Controller._project_total_amount_quote(
+            ctrl,
+            equity_quote=Decimal("200"),
+            mid=Decimal("67000"),
+            quote_size_pct=Decimal("0.001"),
+            total_levels=2,
+            size_mult=Decimal("1"),
+        )
+
+        assert projected == Decimal("12")
 
 
 class TestExecutorRefreshResilience:
@@ -3126,6 +3213,139 @@ class TestPortfolioRiskGuard:
         assert ctrl._portfolio_risk_hard_stop_latched is False
 
 
+class TestMinuteSnapshotTelemetry:
+    def test_zero_quote_levels_project_zero_notional(self):
+        ctrl = SimpleNamespace(
+            config=SimpleNamespace(
+                max_order_notional_quote=Decimal("250"),
+                max_total_notional_quote=Decimal("1000"),
+            ),
+            _min_notional_quote=lambda: Decimal("5"),
+            _min_base_amount=lambda _mid: Decimal("0.001"),
+        )
+
+        projected = EppV24Controller._project_total_amount_quote(
+            ctrl,
+            equity_quote=Decimal("1000"),
+            mid=Decimal("67000"),
+            quote_size_pct=Decimal("0.001"),
+            total_levels=0,
+            size_mult=Decimal("1"),
+        )
+
+        assert projected == Decimal("0")
+
+    def test_publish_bot_minute_snapshot_telemetry_emits_bot_snapshot_event(self):
+        mock_redis = MagicMock()
+        ctrl = SimpleNamespace(
+            config=SimpleNamespace(
+                controller_name="epp_v2_4_bot1",
+                instance_name="bot1",
+                connector_name="bitget_perpetual",
+                trading_pair="BTC-USDT",
+            ),
+            id="ctrl_bot1",
+            _get_telemetry_redis=lambda: mock_redis,
+        )
+        minute_row = {
+            "state": "running",
+            "regime": "neutral_low_vol",
+            "mid": "67000",
+            "equity_quote": "1000",
+            "base_pct": "0.01",
+            "target_base_pct": "0.0",
+            "spread_pct": "0.0005",
+            "net_edge_pct": "0.0002",
+            "turnover_today_x": "0.5",
+            "daily_loss_pct": "0.0",
+            "drawdown_pct": "0.0",
+            "fills_count_today": "3",
+            "fees_paid_today_quote": "0.05",
+            "fee_source": "manual",
+            "maker_fee_pct": "0.0002",
+            "taker_fee_pct": "0.0006",
+            "risk_reasons": "",
+            "bot_mode": "paper",
+            "accounting_source": "paper_desk_v2",
+            "bot_variant": "a",
+            "quote_side_mode": "off",
+            "quote_side_reason": "regime",
+            "alpha_policy_state": "bot5_strategy_gate",
+            "alpha_policy_reason": "no_flow_direction",
+            "projected_total_quote": "0",
+            "soft_pause_edge": "False",
+            "orders_active": "0",
+        }
+
+        EppV24Controller._publish_bot_minute_snapshot_telemetry(
+            ctrl, "2026-03-08T04:02:00+00:00", minute_row
+        )
+
+        mock_redis.xadd.assert_called_once()
+        payload = json.loads(mock_redis.xadd.call_args.args[1]["payload"])
+        assert payload["event_type"] == "bot_minute_snapshot"
+        assert payload["instance_name"] == "bot1"
+        assert payload["controller_id"] == "ctrl_bot1"
+
+    def test_publish_bot_minute_snapshot_telemetry_falls_back_to_event_store_file(self, tmp_path, monkeypatch):
+        import controllers.epp_v2_4 as epp_module
+
+        fake_module_path = tmp_path / "hbot" / "controllers" / "epp_v2_4.py"
+        fake_module_path.parent.mkdir(parents=True, exist_ok=True)
+        monkeypatch.setattr(epp_module, "__file__", str(fake_module_path))
+
+        ctrl = SimpleNamespace(
+            config=SimpleNamespace(
+                controller_name="epp_v2_4_bot1",
+                instance_name="bot1",
+                connector_name="bitget_perpetual",
+                trading_pair="BTC-USDT",
+            ),
+            id="ctrl_bot1",
+            _get_telemetry_redis=lambda: None,
+        )
+        minute_row = {
+            "state": "running",
+            "regime": "neutral_low_vol",
+            "mid": "67000",
+            "equity_quote": "1000",
+            "base_pct": "0.01",
+            "target_base_pct": "0.0",
+            "spread_pct": "0.0005",
+            "net_edge_pct": "0.0002",
+            "turnover_today_x": "0.5",
+            "daily_loss_pct": "0.0",
+            "drawdown_pct": "0.0",
+            "fills_count_today": "3",
+            "fees_paid_today_quote": "0.05",
+            "fee_source": "manual",
+            "maker_fee_pct": "0.0002",
+            "taker_fee_pct": "0.0006",
+            "risk_reasons": "",
+            "bot_mode": "paper",
+            "accounting_source": "paper_desk_v2",
+            "bot_variant": "a",
+            "quote_side_mode": "off",
+            "quote_side_reason": "regime",
+            "alpha_policy_state": "bot5_strategy_gate",
+            "alpha_policy_reason": "no_flow_direction",
+            "projected_total_quote": "0",
+            "soft_pause_edge": "False",
+            "orders_active": "0",
+        }
+
+        EppV24Controller._publish_bot_minute_snapshot_telemetry(
+            ctrl, "2026-03-08T04:02:00+00:00", minute_row
+        )
+
+        event_files = sorted((tmp_path / "hbot" / "reports" / "event_store").glob("events_*.jsonl"))
+        assert event_files
+        payload = json.loads(event_files[-1].read_text(encoding="utf-8").strip())
+        assert payload["event_type"] == "bot_minute_snapshot"
+        assert payload["instance_name"] == "bot1"
+        assert payload["payload"]["metadata"]["quote_side_reason"] == "regime"
+
+
 # ===================================================================
 # 16. Paper equity/state reconciliation (2 tests)
 # ===================================================================
@@ -3299,3 +3519,182 @@ class TestPaperEquityStateReconciliation:
         assert ctrl._fees_paid_today_quote == Decimal("0")
         assert ctrl._funding_cost_today_quote == Decimal("0")
         assert ctrl._save_daily_state.call_count >= 1
+
+
+def test_maybe_seed_price_buffer_updates_status_and_buffer() -> None:
+    class _FakeProvider:
+        def seed_midprice_buffer(self, buffer, key, bars_needed, now_ms):
+            buffer.seed_bars(
+                [
+                    MinuteBar(ts_minute=60, open=Decimal("100"), high=Decimal("100"), low=Decimal("100"), close=Decimal("100")),
+                    MinuteBar(ts_minute=120, open=Decimal("101"), high=Decimal("101"), low=Decimal("101"), close=Decimal("101")),
+                ]
+            )
+            return SimpleNamespace(
+                status="fresh",
+                degraded_reason="",
+                source_used="db_v2",
+                bars_returned=2,
+                max_gap_s=0,
+            )
+
+    ctrl = SimpleNamespace(
+        config=SimpleNamespace(connector_name="bitget_perpetual", trading_pair="BTC-USDT", ema_period=20, atr_period=14),
+        _price_buffer=MidPriceBuffer(),
+        _history_provider=_FakeProvider(),
+        _history_seed_attempted=False,
+        _history_seed_status="disabled",
+        _history_seed_reason="",
+        _history_seed_source="",
+        _history_seed_bars=0,
+        _history_seed_latency_ms=0.0,
+        _history_seed_enabled=lambda: True,
+        _get_history_provider=lambda: ctrl._history_provider,
+        _required_seed_bars=lambda: 2,
+        _history_seed_policy=lambda: EppV24Controller._history_seed_policy(ctrl),
+    )
+
+    EppV24Controller._maybe_seed_price_buffer(ctrl, 180.0)
+
+    assert ctrl._history_seed_attempted is True
+    assert ctrl._history_seed_status == "fresh"
+    assert ctrl._history_seed_source == "db_v2"
+    assert ctrl._history_seed_bars == 2
+    assert len(ctrl._price_buffer.bars) == 2
+
+
+def test_maybe_seed_price_buffer_respects_policy_source_fallback(monkeypatch) -> None:
+    monkeypatch.setenv("HB_HISTORY_SOURCE_PRIORITY", "quote_mid,exchange_ohlcv")
+    monkeypatch.setenv("HB_HISTORY_ALLOW_FALLBACK", "true")
+    monkeypatch.setenv("HB_HISTORY_RUNTIME_MIN_STATUS", "degraded")
+    monkeypatch.setenv("HB_HISTORY_RUNTIME_MIN_BARS", "2")
+    monkeypatch.setenv("HB_HISTORY_MAX_ACCEPTABLE_GAP_S", "300")
+
+    class _FakeProvider:
+        def seed_midprice_buffer(self, buffer, key, bars_needed, now_ms):
+            if key.bar_source == "quote_mid":
+                buffer.seed_bars(
+                    [
+                        MinuteBar(ts_minute=60, open=Decimal("100"), high=Decimal("100"), low=Decimal("100"), close=Decimal("100")),
+                    ]
+                )
+                return SimpleNamespace(
+                    status="gapped",
+                    degraded_reason="gap",
+                    source_used="db_v2",
+                    bars_returned=1,
+                    max_gap_s=600,
+                )
+            buffer.seed_bars(
+                [
+                    MinuteBar(ts_minute=60, open=Decimal("100"), high=Decimal("100"), low=Decimal("100"), close=Decimal("100")),
+                    MinuteBar(ts_minute=120, open=Decimal("101"), high=Decimal("101"), low=Decimal("101"), close=Decimal("101")),
+                ]
+            )
+            return SimpleNamespace(
+                status="fresh",
+                degraded_reason="",
+                source_used="rest_backfill",
+                bars_returned=2,
+                max_gap_s=0,
+            )
+
+    ctrl = SimpleNamespace(
+        config=SimpleNamespace(connector_name="bitget_perpetual", trading_pair="BTC-USDT", ema_period=20, atr_period=14),
+        _price_buffer=MidPriceBuffer(),
+        _history_provider=_FakeProvider(),
+        _history_seed_attempted=False,
+        _history_seed_status="disabled",
+        _history_seed_reason="",
+        _history_seed_source="",
+        _history_seed_bars=0,
+        _history_seed_latency_ms=0.0,
+        _history_seed_enabled=lambda: True,
+        _get_history_provider=lambda: ctrl._history_provider,
+        _required_seed_bars=lambda: 2,
+        _history_seed_policy=lambda: EppV24Controller._history_seed_policy(ctrl),
+    )
+
+    EppV24Controller._maybe_seed_price_buffer(ctrl, 180.0)
+
+    assert ctrl._history_seed_attempted is True
+    assert ctrl._history_seed_status == "fresh"
+    assert ctrl._history_seed_source == "rest_backfill"
+    assert ctrl._history_seed_bars == 2
+    assert len(ctrl._price_buffer.bars) == 2
+
+
+def test_maybe_seed_price_buffer_clears_buffer_when_policy_rejects_all_sources(monkeypatch) -> None:
+    monkeypatch.setenv("HB_HISTORY_SOURCE_PRIORITY", "quote_mid,exchange_ohlcv")
+    monkeypatch.setenv("HB_HISTORY_ALLOW_FALLBACK", "true")
+    monkeypatch.setenv("HB_HISTORY_RUNTIME_MIN_STATUS", "fresh")
+    monkeypatch.setenv("HB_HISTORY_RUNTIME_MIN_BARS", "3")
+    monkeypatch.setenv("HB_HISTORY_MAX_ACCEPTABLE_GAP_S", "60")
+
+    class _FakeProvider:
+        def seed_midprice_buffer(self, buffer, key, bars_needed, now_ms):
+            buffer.seed_bars(
+                [
+                    MinuteBar(ts_minute=60, open=Decimal("100"), high=Decimal("100"), low=Decimal("100"), close=Decimal("100")),
+                    MinuteBar(ts_minute=120, open=Decimal("101"), high=Decimal("101"), low=Decimal("101"), close=Decimal("101")),
+                ]
+            )
+            return SimpleNamespace(
+                status="gapped",
+                degraded_reason=f"{key.bar_source}_gap",
+                source_used=str(key.bar_source),
+                bars_returned=2,
+                max_gap_s=600,
+            )
+
+    ctrl = SimpleNamespace(
+        config=SimpleNamespace(connector_name="bitget_perpetual", trading_pair="BTC-USDT", ema_period=20, atr_period=14),
+        _price_buffer=MidPriceBuffer(),
+        _history_provider=_FakeProvider(),
+        _history_seed_attempted=False,
+        _history_seed_status="disabled",
+        _history_seed_reason="",
+        _history_seed_source="",
+        _history_seed_bars=0,
+        _history_seed_latency_ms=0.0,
+        _history_seed_enabled=lambda: True,
+        _get_history_provider=lambda: ctrl._history_provider,
+        _required_seed_bars=lambda: 3,
+        _history_seed_policy=lambda: EppV24Controller._history_seed_policy(ctrl),
+    )
+
+    EppV24Controller._maybe_seed_price_buffer(ctrl, 180.0)
+
+    assert ctrl._history_seed_status == "gapped"
+    assert ctrl._history_seed_source == "exchange_ohlcv"
+    assert ctrl._history_seed_reason == "exchange_ohlcv_gap"
+    assert len(ctrl._price_buffer.bars) == 0
+
+
+def test_maybe_seed_price_buffer_handles_provider_exception_without_crash() -> None:
+    class _BoomProvider:
+        def seed_midprice_buffer(self, buffer, key, bars_needed, now_ms):
+            raise RuntimeError("provider_boom")
+
+    ctrl = SimpleNamespace(
+        config=SimpleNamespace(connector_name="bitget_perpetual", trading_pair="BTC-USDT", ema_period=20, atr_period=14),
+        _price_buffer=MidPriceBuffer(),
+        _history_provider=_BoomProvider(),
+        _history_seed_attempted=False,
+        _history_seed_status="disabled",
+        _history_seed_reason="",
+        _history_seed_source="",
+        _history_seed_bars=0,
+        _history_seed_latency_ms=0.0,
+        _history_seed_enabled=lambda: True,
+        _get_history_provider=lambda: ctrl._history_provider,
+        _required_seed_bars=lambda: 2,
+        _history_seed_policy=lambda: EppV24Controller._history_seed_policy(ctrl),
+    )
+
+    EppV24Controller._maybe_seed_price_buffer(ctrl, 180.0)
+
+    assert ctrl._history_seed_attempted is True
+    assert ctrl._history_seed_status == "degraded"
+    assert "provider_boom" in ctrl._history_seed_reason
+    assert len(ctrl._price_buffer.bars) == 0

@@ -9,15 +9,29 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Dict, List
 
+CRITICAL_PATH_PREFIXES = [
+    "scripts/shared/v2_with_controllers.py",
+    "controllers/paper_engine_v2/",
+    "controllers/tick_emitter.py",
+    "services/event_store/main.py",
+    "services/reconciliation_service/main.py",
+    "services/bot_metrics_exporter.py",
+    "services/hb_bridge/redis_client.py",
+]
+
 
 TEST_GROUPS: Dict[str, List[str]] = {
     "unit": [
+        "tests/scripts/test_v2_with_controllers_hot_reload.py",
+        "tests/controllers/test_hb_bridge_event_isolation.py::test_sync_state_processed_hydrates_runtime_orders_from_service_snapshot",
+        "tests/controllers/test_hb_bridge_event_isolation.py::test_hydrate_runtime_orders_logs_snapshot_read_failure",
         "tests/controllers/test_paper_engine_v2/",
         "tests/controllers/test_epp_v2_4_state.py",
         "tests/services/test_event_schemas.py",
         "tests/services/test_intent_idempotency.py",
     ],
     "service": [
+        "tests/services/test_bot_metrics_exporter.py",
         "tests/services/test_ml_risk_gates.py",
         "tests/services/test_ml_feature_builder.py",
         "tests/services/test_ml_model_loader.py",
@@ -109,6 +123,7 @@ def _should_fallback_to_host(proc: subprocess.CompletedProcess[str]) -> bool:
 
 def _write_md(path: Path, payload: Dict[str, object]) -> None:
     groups = payload.get("groups", {}) if isinstance(payload.get("groups"), dict) else {}
+    critical = payload.get("critical_path_coverage", {}) if isinstance(payload.get("critical_path_coverage"), dict) else {}
     lines = [
         "# Test Runner Summary",
         "",
@@ -116,12 +131,24 @@ def _write_md(path: Path, payload: Dict[str, object]) -> None:
         f"- status: {payload.get('status', 'fail')}",
         f"- rc: {payload.get('rc', 1)}",
         f"- cov_fail_under: {payload.get('cov_fail_under', 0)}",
+        f"- critical_path_cov_fail_under: {payload.get('critical_path_cov_fail_under', 0)}",
         "",
         "## Group Coverage",
     ]
     for name in ("unit", "service", "integration"):
         info = groups.get(name, {})
         lines.append(f"- {name}: selected={info.get('selected', 0)}")
+    lines.extend(
+        [
+            "",
+            "## Critical Path Coverage",
+            f"- selected_files: {critical.get('selected_files', 0)}",
+            f"- covered_lines: {critical.get('covered_lines', 0)}",
+            f"- num_statements: {critical.get('num_statements', 0)}",
+            f"- percent_covered: {critical.get('percent_covered', 0)}",
+            f"- threshold_pass: {critical.get('pass', False)}",
+        ]
+    )
     lines.extend(
         [
             "",
@@ -139,6 +166,60 @@ def _write_md(path: Path, payload: Dict[str, object]) -> None:
         ]
     )
     path.write_text("\n".join(lines), encoding="utf-8")
+
+
+def _compute_critical_path_coverage(coverage_path: Path) -> Dict[str, object]:
+    if not coverage_path.exists():
+        return {
+            "selected_files": 0,
+            "covered_lines": 0,
+            "num_statements": 0,
+            "percent_covered": 0.0,
+            "files": [],
+        }
+    try:
+        payload = json.loads(coverage_path.read_text(encoding="utf-8"))
+    except Exception:
+        return {
+            "selected_files": 0,
+            "covered_lines": 0,
+            "num_statements": 0,
+            "percent_covered": 0.0,
+            "files": [],
+        }
+    files = payload.get("files", {}) if isinstance(payload, dict) else {}
+    selected: List[Dict[str, object]] = []
+    total_covered = 0
+    total_statements = 0
+    for raw_path, info in files.items() if isinstance(files, dict) else []:
+        path_text = str(raw_path).replace("\\", "/")
+        if not any(
+            path_text == prefix or path_text.startswith(prefix) or path_text.endswith(prefix) or f"/{prefix}" in path_text
+            for prefix in CRITICAL_PATH_PREFIXES
+        ):
+            continue
+        summary = info.get("summary", {}) if isinstance(info, dict) else {}
+        covered_lines = int(summary.get("covered_lines", 0) or 0)
+        num_statements = int(summary.get("num_statements", 0) or 0)
+        percent_covered = float(summary.get("percent_covered", 0.0) or 0.0)
+        total_covered += covered_lines
+        total_statements += num_statements
+        selected.append(
+            {
+                "path": path_text,
+                "covered_lines": covered_lines,
+                "num_statements": num_statements,
+                "percent_covered": percent_covered,
+            }
+        )
+    percent = (100.0 * total_covered / total_statements) if total_statements > 0 else 0.0
+    return {
+        "selected_files": len(selected),
+        "covered_lines": total_covered,
+        "num_statements": total_statements,
+        "percent_covered": round(percent, 2),
+        "files": selected,
+    }
 
 
 def main() -> int:
@@ -159,6 +240,12 @@ def main() -> int:
         choices=["auto", "host", "docker"],
         default="auto",
         help="Test execution runtime. auto prefers docker when not already in container.",
+    )
+    parser.add_argument(
+        "--critical-path-cov-fail-under",
+        type=float,
+        default=float(os.getenv("CRITICAL_PATH_COV_FAIL_UNDER", "15.0")),
+        help="Minimum critical-path coverage percentage required for PASS.",
     )
     args = parser.parse_args()
 
@@ -202,7 +289,9 @@ def main() -> int:
         proc = _run_pytest(root=root, targets=selected_targets, cov_fail_under=args.cov_fail_under)
 
     out = (proc.stdout or "") + ("\n" + proc.stderr if proc.stderr else "")
-    status = "pass" if proc.returncode == 0 else "fail"
+    critical_path_coverage = _compute_critical_path_coverage(reports_root / "coverage.json")
+    critical_path_pass = float(critical_path_coverage.get("percent_covered", 0.0) or 0.0) >= float(args.critical_path_cov_fail_under)
+    status = "pass" if proc.returncode == 0 and critical_path_pass else "fail"
     payload = {
         "ts_utc": _utc_now(),
         "status": status,
@@ -210,6 +299,11 @@ def main() -> int:
         "groups": groups_payload,
         "selected_tests": selected_targets,
         "cov_fail_under": args.cov_fail_under,
+        "critical_path_cov_fail_under": float(args.critical_path_cov_fail_under),
+        "critical_path_coverage": {
+            **critical_path_coverage,
+            "pass": bool(critical_path_pass),
+        },
         "runtime_used": runtime_used,
         "fallback_reason": fallback_reason,
         "output_tail": out[-4000:],

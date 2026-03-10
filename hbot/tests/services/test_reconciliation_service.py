@@ -12,10 +12,12 @@ from services.reconciliation_service.main import (
     _apply_fill_reconciliation_report,
     _critical_action_name,
     _derive_reconciliation_actions,
+    _emit_webhook_alert,
     _apply_exchange_snapshot_check,
     _bot_thresholds,
     _count_event_fills,
     _inventory_drift_from_minute,
+    _latest_source_compare_with_telemetry,
     _load_thresholds,
     run,
     _severity,
@@ -68,6 +70,23 @@ class TestExchangeSnapshotDrift:
         assert findings[0]["severity"] == "warning"
         assert findings[0]["check"] == "exchange_snapshot"
         assert "drift" in findings[0]["details"]
+
+
+def test_emit_webhook_alert_logs_nonfatal_delivery_failures() -> None:
+    report = {
+        "status": "critical",
+        "critical_count": 1,
+        "warning_count": 0,
+        "ts_utc": "2026-03-09T00:00:00Z",
+        "findings": [{"check": "fill_reconciliation"}],
+    }
+
+    with patch("services.reconciliation_service.main.urlopen", side_effect=RuntimeError("webhook down")):
+        with patch("services.reconciliation_service.main.logger.warning") as warning_mock:
+            sent = _emit_webhook_alert(report, "https://example.invalid/webhook", "warning")
+
+    assert sent is False
+    warning_mock.assert_called_once()
 
     def test_critical_drift(self, tmp_path):
         snap = _make_exchange_snapshot(tmp_path, "bot1", 0.75)
@@ -316,6 +335,35 @@ class TestEventFillCounting:
         assert _count_event_fills(event_file, "bot1") == 2
 
 
+class TestTelemetryDiagnostics:
+    def test_latest_source_compare_with_telemetry_prefers_richer_artifact(self, tmp_path):
+        older = tmp_path / "source_compare_20260309T225319Z.json"
+        newer = tmp_path / "source_compare_20260309T225355Z.json"
+        older.write_text(
+            json.dumps(
+                {
+                    "ts_utc": "2026-03-09T22:53:19.949602+00:00",
+                    "source_events_by_stream": {"hb.bot_telemetry.v1": 2478},
+                }
+            ),
+            encoding="utf-8",
+        )
+        newer.write_text(
+            json.dumps(
+                {
+                    "ts_utc": "2026-03-09T22:53:55.520911+00:00",
+                    "source_events_by_stream": {"hb.audit.v1": 1362},
+                }
+            ),
+            encoding="utf-8",
+        )
+
+        picked_path, payload = _latest_source_compare_with_telemetry(tmp_path)
+
+        assert picked_path == older
+        assert payload["source_events_by_stream"]["hb.bot_telemetry.v1"] == 2478
+
+
 class TestRunLoopRegression:
     def test_run_once_single_row_fill_parity_does_not_crash(self, tmp_path):
         event_store_root = tmp_path / "reports" / "event_store"
@@ -323,9 +371,31 @@ class TestRunLoopRegression:
         data_root = tmp_path / "data"
         minute_dir = data_root / "bot1" / "logs" / "epp_v24" / "bot1_a"
         minute_dir.mkdir(parents=True, exist_ok=True)
+        day_stamp = datetime.now(timezone.utc).strftime("%Y%m%d")
         minute_dir.joinpath("minute.csv").write_text(
             "ts,state,connector_name,trading_pair,fills_count_today,fees_paid_today_quote,turnover_today_x,maker_fee_pct,taker_fee_pct,fee_source\n"
             f"{datetime.now(timezone.utc).strftime('%Y-%m-%dT%H:%M:%SZ')},running,bitget_perpetual,BTC-USDT,2,0,0,0.0002,0.0006,vip0\n",
+            encoding="utf-8",
+        )
+        (event_store_root / f"integrity_{day_stamp}.json").write_text(
+            json.dumps(
+                {
+                    "ts_utc": datetime.now(timezone.utc).isoformat(),
+                    "events_by_stream": {"hb.bot_telemetry.v1": 0},
+                }
+            ),
+            encoding="utf-8",
+        )
+        (event_store_root / f"source_compare_{day_stamp}T000000Z.json").write_text(
+            json.dumps(
+                {
+                    "ts_utc": datetime.now(timezone.utc).isoformat(),
+                    "source_events_by_stream": {"hb.bot_telemetry.v1": 12},
+                    "stored_events_by_stream": {"hb.bot_telemetry.v1": 0},
+                    "lag_produced_minus_ingested_since_baseline": {"hb.bot_telemetry.v1": 12},
+                    "delta_produced_minus_ingested_since_baseline": {"hb.bot_telemetry.v1": 12},
+                }
+            ),
             encoding="utf-8",
         )
         ts_utc = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
@@ -376,12 +446,54 @@ class TestRunLoopRegression:
         ]
         assert parity_findings, "expected fill parity finding for active day with missing event fills"
         assert all(f.get("severity") == "critical" for f in parity_findings)
+        assert parity_findings[0]["details"]["suspected_gap_stage"] == "ingest"
+        assert parity_findings[0]["details"]["telemetry_lag_since_baseline"] == 12
         report_payloads = [payload for payload in payloads if isinstance(payload, dict) and "checked_bots" in payload]
         assert report_payloads
         latest_report = report_payloads[-1]
         assert latest_report["active_bots"] == ["bot1"]
         assert latest_report["covered_active_bots"] == ["bot1"]
         assert latest_report["active_bots_unchecked"] == []
+
+    def test_run_once_uses_minute_log_fallback_without_critical_snapshot_finding(self, tmp_path):
+        event_store_root = tmp_path / "reports" / "event_store"
+        event_store_root.mkdir(parents=True, exist_ok=True)
+        data_root = tmp_path / "data"
+        minute_dir = data_root / "bot1" / "logs" / "epp_v24" / "bot1_a"
+        minute_dir.mkdir(parents=True, exist_ok=True)
+        minute_dir.joinpath("minute.csv").write_text(
+            "ts,state,connector_name,trading_pair,equity_quote,base_pct,target_base_pct,fills_count_today,fees_paid_today_quote,turnover_today_x,maker_fee_pct,taker_fee_pct,fee_source\n"
+            f"{datetime.now(timezone.utc).strftime('%Y-%m-%dT%H:%M:%SZ')},running,bitget_perpetual,BTC-USDT,1000,0.5,0.5,2,0,0,0.0002,0.0006,vip0\n",
+            encoding="utf-8",
+        )
+
+        with patch.dict(
+            os.environ,
+            {
+                "RECON_EVENT_STORE_ROOT": str(event_store_root),
+                "HB_DATA_ROOT": str(data_root),
+            },
+            clear=False,
+        ):
+            with patch("services.reconciliation_service.main._write_json") as write_json_mock:
+                run(once=True)
+
+        payloads = [call.args[1] for call in write_json_mock.call_args_list if len(call.args) >= 2]
+        report_payloads = [payload for payload in payloads if isinstance(payload, dict) and "checked_bots" in payload]
+        assert report_payloads
+        latest_report = report_payloads[-1]
+        findings = latest_report["findings"]
+
+        critical_missing = [
+            f for f in findings if f.get("message") == "missing_bot_minute_snapshot_for_active_bot"
+        ]
+        fallback_warning = [
+            f for f in findings if f.get("message") == "missing_bot_minute_snapshot_event_store_fallback_used"
+        ]
+
+        assert critical_missing == []
+        assert fallback_warning
+        assert latest_report["fallback_snapshot_bots"] == ["bot1"]
 
     def test_fill_parity_missing_events_not_flagged_for_non_active_day(self, tmp_path):
         event_store_root = tmp_path / "reports" / "event_store"

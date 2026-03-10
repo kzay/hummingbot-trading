@@ -10,6 +10,7 @@ from typing import Any, Dict, List, Optional, Tuple
 
 
 from services.hb_bridge.redis_client import RedisStreamClient
+from services.common.log_namespace import iter_bot_log_files
 from services.common.utils import (
     env_int as _env_int,
     parse_iso_ts as _safe_parse_iso_ts,
@@ -140,7 +141,7 @@ class ControlPlaneMetricsExporter:
     def _bot_blotter_metrics(self, expected_bots: Optional[List[str]] = None) -> List[Dict[str, object]]:
         out: List[Dict[str, object]] = []
         seen_bots = set()
-        for fills_file in self._data_root.glob("*/logs/epp_v24/*/fills.csv"):
+        for fills_file in iter_bot_log_files(self._data_root, "fills.csv"):
             try:
                 bot = fills_file.parts[-5]
                 variant = fills_file.parts[-2]

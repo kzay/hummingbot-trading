@@ -35,6 +35,7 @@ import time
 from pathlib import Path
 from typing import Dict, List, Optional
 
+from services.common.log_namespace import list_bot_log_files
 from services.common.logging_config import configure_logging
 
 configure_logging()
@@ -119,11 +120,11 @@ def _read_json(path: Path) -> Optional[dict]:
 
 
 def _find_minute_files() -> List[Path]:
-    return sorted(_DATA_ROOT.glob("*/logs/epp_v24/*/minute.csv"))
+    return list_bot_log_files(_DATA_ROOT, "minute.csv")
 
 
 def _find_fills_files() -> List[Path]:
-    return sorted(_DATA_ROOT.glob("*/logs/epp_v24/*/fills.csv"))
+    return list_bot_log_files(_DATA_ROOT, "fills.csv")
 
 
 def _find_open_orders_files() -> List[Path]:

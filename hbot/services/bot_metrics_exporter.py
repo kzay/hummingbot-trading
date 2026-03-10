@@ -10,9 +10,10 @@ from dataclasses import dataclass, field
 from datetime import datetime, timezone, timedelta
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
-from typing import Dict, List, Optional
+from typing import Any, Callable, Dict, List, Optional, Tuple
 
 
+from services.common.log_namespace import iter_bot_log_files
 from services.common.utils import env_int as _env_int, safe_float as _safe_float, parse_iso_ts
 
 _LOGGER = logging.getLogger(__name__)
@@ -69,6 +70,22 @@ def _median(lst: list) -> float:
     if n % 2 == 1:
         return s[n // 2]
     return (s[n // 2 - 1] + s[n // 2]) / 2
+
+
+def _percentile(values: List[float], q: float) -> float:
+    if not values:
+        return 0.0
+    ordered = sorted(values)
+    if len(ordered) == 1:
+        return float(ordered[0])
+    q = max(0.0, min(1.0, float(q)))
+    idx = q * (len(ordered) - 1)
+    low = int(idx)
+    high = min(low + 1, len(ordered) - 1)
+    if low == high:
+        return float(ordered[low])
+    weight = idx - low
+    return float(ordered[low] * (1.0 - weight) + ordered[high] * weight)
 
 
 def _split_reasons(raw: str) -> List[str]:
@@ -167,6 +184,21 @@ class MinuteHistoryStats:
 
 
 @dataclass
+class MinuteFileScan:
+    """Cheap single-pass minute.csv summary used on the scrape path."""
+    last_row: Optional[Dict[str, str]] = None
+    row_count: int = 0
+
+
+@dataclass
+class FillsFileSummary:
+    """Single-pass fills.csv summary for the default scrape path."""
+    row_count: int = 0
+    fill_stats: FillStats = field(default_factory=FillStats)
+    recent_fills: List[Dict[str, object]] = field(default_factory=list)
+
+
+@dataclass
 class OpenOrderSnapshot:
     order_id: str = ""
     side: str = ""
@@ -231,6 +263,11 @@ class BotSnapshot:
     net_realized_pnl_today_quote: float
     ws_reconnect_count: float
     order_book_stale: float
+    history_seed_status: str = "disabled"
+    history_seed_reason: str = ""
+    history_seed_source: str = ""
+    history_seed_bars: float = 0.0
+    history_seed_latency_ms: float = 0.0
     derisk_runtime_recovered: float = 0.0
     derisk_runtime_recovery_count: float = 0.0
     pnl_governor_target_effective_pct: float = 0.0
@@ -245,9 +282,13 @@ class BotSnapshot:
     avg_entry_price: float = 0.0
     avg_entry_price_long: float = 0.0
     avg_entry_price_short: float = 0.0
+    bot1_signal_score: float = 0.0
+    bot5_signal_score: float = 0.0
+    bot6_signal_score: float = 0.0
     bot6_signal_score_active: float = 0.0
     bot6_cvd_divergence_ratio: float = 0.0
     bot6_delta_spike_ratio: float = 0.0
+    bot7_signal_score: float = 0.0
     bot7_cvd: float = 0.0
     bot7_grid_levels: float = 0.0
     bot7_hedge_target_base_pct: float = 0.0
@@ -288,189 +329,295 @@ class BotMetricsExporter:
         self._render_lock = threading.Lock()
         self._last_render_cache = ""
         self._last_render_monotonic = 0.0
+        self._file_result_cache: Dict[Tuple[str, str], Tuple[int, int, Any]] = {}
+        self._render_requests_total = 0
+        self._render_cache_hits_total = 0
+        self._stale_cache_fallback_total = 0
+        self._render_failures_total = 0
+        self._render_duration_last_ms = 0.0
+        self._render_duration_samples_ms: List[float] = []
+        self._source_read_failures_total: Dict[str, int] = {}
+
+    def _record_source_read_failure(self, source: str) -> None:
+        key = str(source or "unknown").strip() or "unknown"
+        self._source_read_failures_total[key] = self._source_read_failures_total.get(key, 0) + 1
+
+    def _record_render_duration(self, duration_ms: float) -> None:
+        self._render_duration_last_ms = max(0.0, float(duration_ms))
+        self._render_duration_samples_ms.append(self._render_duration_last_ms)
+        if len(self._render_duration_samples_ms) > 50:
+            self._render_duration_samples_ms = self._render_duration_samples_ms[-50:]
+
+    def _cached_file_result(self, namespace: str, path: Path, loader: Callable[[], Any]) -> Any:
+        key = (namespace, str(path))
+        try:
+            stat = path.stat()
+            signature = (int(stat.st_mtime_ns), int(stat.st_size))
+        except OSError:
+            return loader()
+        cached = self._file_result_cache.get(key)
+        if cached is not None and cached[0] == signature[0] and cached[1] == signature[1]:
+            return cached[2]
+        value = loader()
+        self._file_result_cache[key] = (signature[0], signature[1], value)
+        return value
+
+    def _cached_fill_stats(self, fills_path: Path) -> FillStats:
+        return self._cached_file_result("fill_stats", fills_path, lambda: self._compute_fill_stats(fills_path))
+
+    def _cached_minute_history(self, minute_file: Path) -> Optional[MinuteHistoryStats]:
+        return self._cached_file_result("minute_history", minute_file, lambda: self._compute_minute_history(minute_file))
+
+    def _cached_minute_file_scan(self, minute_file: Path) -> MinuteFileScan:
+        return self._cached_file_result("minute_file_scan", minute_file, lambda: self._scan_minute_file(minute_file))
+
+    def _cached_fills_summary(self, fills_path: Path, limit: int = 50) -> FillsFileSummary:
+        safe_limit = max(1, int(limit))
+        return self._cached_file_result(
+            f"fills_summary_{safe_limit}",
+            fills_path,
+            lambda: self._scan_fills_file(fills_path, recent_limit=safe_limit),
+        )
+
+    def _exporter_self_metric_value_lines(self) -> List[str]:
+        cache_hit_ratio = (
+            float(self._render_cache_hits_total) / float(self._render_requests_total)
+            if self._render_requests_total > 0
+            else 0.0
+        )
+        lines = [
+            f"hbot_exporter_render_requests_total {float(self._render_requests_total)}",
+            f"hbot_exporter_render_cache_hits_total {float(self._render_cache_hits_total)}",
+            f"hbot_exporter_render_cache_hit_ratio {cache_hit_ratio:.6f}",
+            f"hbot_exporter_stale_cache_fallback_total {float(self._stale_cache_fallback_total)}",
+            f"hbot_exporter_render_failures_total {float(self._render_failures_total)}",
+            f"hbot_exporter_render_duration_last_ms {float(self._render_duration_last_ms):.3f}",
+            f"hbot_exporter_render_duration_p50_ms {_percentile(self._render_duration_samples_ms, 0.50):.3f}",
+            f"hbot_exporter_render_duration_p95_ms {_percentile(self._render_duration_samples_ms, 0.95):.3f}",
+            f"hbot_exporter_render_duration_p99_ms {_percentile(self._render_duration_samples_ms, 0.99):.3f}",
+        ]
+        for source, count in sorted(self._source_read_failures_total.items()):
+            lines.append(
+                f'hbot_exporter_source_read_failures_total{{source="{_escape_label(source)}"}} {float(count)}'
+            )
+        return lines
+
+    def _with_live_exporter_metrics(self, payload: str) -> str:
+        exporter_value_prefixes = (
+            "hbot_exporter_render_requests_total ",
+            "hbot_exporter_render_cache_hits_total ",
+            "hbot_exporter_render_cache_hit_ratio ",
+            "hbot_exporter_stale_cache_fallback_total ",
+            "hbot_exporter_render_failures_total ",
+            "hbot_exporter_render_duration_last_ms ",
+            "hbot_exporter_render_duration_p50_ms ",
+            "hbot_exporter_render_duration_p95_ms ",
+            "hbot_exporter_render_duration_p99_ms ",
+            "hbot_exporter_source_read_failures_total{",
+        )
+        filtered = [
+            line for line in str(payload or "").splitlines()
+            if not any(line.startswith(prefix) for prefix in exporter_value_prefixes)
+        ]
+        return "\n".join(self._exporter_self_metric_value_lines() + filtered) + "\n"
 
     def collect(self) -> List[BotSnapshot]:
         snapshots: List[BotSnapshot] = []
         try:
-            minute_files = list(self._data_root.glob("*/logs/epp_v24/*/minute.csv"))
+            minute_files = list(iter_bot_log_files(self._data_root, "minute.csv"))
         except OSError:
+            self._record_source_read_failure("minute_log_files")
             return snapshots
         for minute_file in minute_files:
-            bot_name = minute_file.parts[-5]
-            latest_minute = self._read_last_csv_row(minute_file)
-            if latest_minute is None:
-                continue
-            log_dir = minute_file.parent
-            daily_state = self._read_daily_state_any(log_dir)
-            bot_mode = str(latest_minute.get("bot_mode", "") or "").strip().lower() or "unknown"
-            accounting_source = str(latest_minute.get("accounting_source", "") or "").strip().lower() or "minute_csv"
-            fills_path = log_dir / "fills.csv"
-            fills_total = self._count_csv_rows(fills_path)
-            fill_stats = self._compute_fill_stats(fills_path)
-            recent_error_lines = self._count_recent_error_lines(self._data_root / bot_name / "logs")
-            portfolio = self._read_portfolio(log_dir / "paper_desk_v2.json")
-            minute_history = self._compute_minute_history(minute_file)
-            open_orders = self._read_open_orders(self._data_root / bot_name / "logs" / "recovery" / "open_orders_latest.json")
-            recent_fills = self._read_recent_fills(fills_path, limit=50)
-
-            ts_epoch = _safe_iso_ts_to_epoch(str(latest_minute.get("ts", ""))) or 0.0
-
-            equity_now = _safe_float(latest_minute.get("equity_quote"))
-            equity_open = _safe_float(daily_state.get("equity_open")) if daily_state else 0.0
-            daily_fills = _safe_float(daily_state.get("fills_count")) if daily_state else 0.0
-            fills_today = _safe_float(latest_minute.get("fills_count_today"))
-            if fills_today > 0:
-                daily_fills = fills_today
-
-            live_pnl = equity_now - equity_open if equity_open > 0 else 0.0
-            realized_today = _safe_float(latest_minute.get("realized_pnl_today_quote"))
-            funding_today = _safe_float(
-                latest_minute.get("funding_cost_today_quote", latest_minute.get("funding_paid_today_quote"))
-            )
-            net_realized_today = _safe_float(
-                latest_minute.get("net_realized_pnl_today_quote"),
-                realized_today - funding_today,
-            )
-
-            snapshots.append(
-                BotSnapshot(
-                    bot_name=bot_name,
-                    variant=str(latest_minute.get("bot_variant", "")),
-                    bot_mode=bot_mode,
-                    accounting_source=accounting_source if accounting_source else "minute_csv",
-                    exchange=str(latest_minute.get("exchange", "")),
-                    trading_pair=str(latest_minute.get("trading_pair", "")),
-                    state=str(latest_minute.get("state", "")),
-                    regime=str(latest_minute.get("regime", "")),
-                    ts_epoch=ts_epoch,
-                    net_edge_pct=_safe_float(latest_minute.get("net_edge_pct")),
-                    net_edge_gate_pct=_safe_float(latest_minute.get("net_edge_gate_pct")),
-                    spread_pct=_safe_float(latest_minute.get("spread_pct")),
-                    spread_floor_pct=_safe_float(latest_minute.get("spread_floor_pct")),
-                    market_spread_bps=_safe_float(latest_minute.get("market_spread_bps")),
-                    best_bid_price=_safe_float(latest_minute.get("best_bid_price")),
-                    best_ask_price=_safe_float(latest_minute.get("best_ask_price")),
-                    mid_price=_safe_float(latest_minute.get("mid")),
-                    best_bid_size=_safe_float(latest_minute.get("best_bid_size")),
-                    best_ask_size=_safe_float(latest_minute.get("best_ask_size")),
-                    book_imbalance=(
-                        (
-                            _safe_float(latest_minute.get("best_bid_size")) - _safe_float(latest_minute.get("best_ask_size"))
-                        )
-                        / max(
-                            _safe_float(latest_minute.get("best_bid_size")) + _safe_float(latest_minute.get("best_ask_size")),
-                            1e-12,
-                        )
-                    ),
-                    turnover_today_x=_safe_float(latest_minute.get("turnover_today_x")),
-                    orders_active=_safe_float(latest_minute.get("orders_active")),
-                    maker_fee_pct=_safe_float(latest_minute.get("maker_fee_pct")),
-                    taker_fee_pct=_safe_float(latest_minute.get("taker_fee_pct")),
-                    soft_pause_edge=1.0 if str(latest_minute.get("soft_pause_edge", "")).lower() == "true" else 0.0,
-                    fee_source=str(latest_minute.get("fee_source", "")),
-                    equity_quote=equity_now,
-                    base_pct=_safe_float(latest_minute.get("base_pct")),
-                    target_base_pct=_safe_float(latest_minute.get("target_base_pct")),
-                    projected_total_quote=_safe_float(latest_minute.get("projected_total_quote")),
-                    daily_loss_pct=_safe_float(latest_minute.get("daily_loss_pct")),
-                    drawdown_pct=_safe_float(latest_minute.get("drawdown_pct")),
-                    edge_pause_threshold_pct=_safe_float(latest_minute.get("edge_pause_threshold_pct")),
-                    edge_resume_threshold_pct=_safe_float(latest_minute.get("edge_resume_threshold_pct")),
-                    min_base_pct=_safe_float(latest_minute.get("min_base_pct"), _DEFAULT_MIN_BASE_PCT),
-                    max_base_pct=_safe_float(latest_minute.get("max_base_pct"), _DEFAULT_MAX_BASE_PCT),
-                    max_total_notional_quote=_safe_float(
-                        latest_minute.get("max_total_notional_quote"), _DEFAULT_MAX_TOTAL_NOTIONAL_QUOTE
-                    ),
-                    max_daily_turnover_x_hard=_safe_float(
-                        latest_minute.get("max_daily_turnover_x_hard"), _DEFAULT_MAX_DAILY_TURNOVER_X_HARD
-                    ),
-                    max_daily_loss_pct_hard=_safe_float(
-                        latest_minute.get("max_daily_loss_pct_hard"), _DEFAULT_MAX_DAILY_LOSS_PCT_HARD
-                    ),
-                    max_drawdown_pct_hard=_safe_float(
-                        latest_minute.get("max_drawdown_pct_hard"), _DEFAULT_MAX_DRAWDOWN_PCT_HARD
-                    ),
-                    margin_ratio_soft_pause_pct=_safe_float(
-                        latest_minute.get("margin_ratio_soft_pause_pct"), _DEFAULT_MARGIN_RATIO_SOFT_PAUSE_PCT
-                    ),
-                    margin_ratio_hard_stop_pct=_safe_float(
-                        latest_minute.get("margin_ratio_hard_stop_pct"), _DEFAULT_MARGIN_RATIO_HARD_STOP_PCT
-                    ),
-                    position_drift_soft_pause_pct=_safe_float(
-                        latest_minute.get("position_drift_soft_pause_pct"), _DEFAULT_POSITION_DRIFT_SOFT_PAUSE_PCT
-                    ),
-                    cancel_per_min=_safe_float(latest_minute.get("cancel_per_min")),
-                    risk_reasons=str(latest_minute.get("risk_reasons", "")),
-                    daily_pnl_quote=live_pnl,
-                    daily_fills_count=daily_fills,
-                    fills_total=float(fills_total),
-                    recent_error_lines=float(recent_error_lines),
-                    tick_duration_ms=_safe_float(latest_minute.get("_tick_duration_ms")),
-                    indicator_duration_ms=_safe_float(latest_minute.get("_indicator_duration_ms")),
-                    connector_io_duration_ms=_safe_float(latest_minute.get("_connector_io_duration_ms")),
-                    position_drift_pct=_safe_float(latest_minute.get("position_drift_pct")),
-                    margin_ratio=_safe_float(latest_minute.get("margin_ratio"), 1.0),
-                    funding_rate=_safe_float(latest_minute.get("funding_rate")),
-                    funding_cost_today_quote=funding_today,
-                    realized_pnl_today_quote=realized_today,
-                    net_realized_pnl_today_quote=net_realized_today,
-                    ws_reconnect_count=_safe_float(latest_minute.get("ws_reconnect_count")),
-                    order_book_stale=1.0 if str(latest_minute.get("order_book_stale", "")).lower() == "true" else 0.0,
-                    derisk_runtime_recovered=1.0 if str(latest_minute.get("derisk_runtime_recovered", "")).lower() == "true" else 0.0,
-                    derisk_runtime_recovery_count=_safe_float(latest_minute.get("derisk_runtime_recovery_count")),
-                    pnl_governor_target_effective_pct=_safe_float(latest_minute.get("pnl_governor_target_effective_pct")),
-                    pnl_governor_size_mult_applied=_safe_float(latest_minute.get("pnl_governor_size_mult_applied"), 1.0),
-                    spread_competitiveness_cap_active=1.0 if str(latest_minute.get("spread_competitiveness_cap_active", "")).lower() == "true" else 0.0,
-                    spread_competitiveness_cap_side_pct=_safe_float(latest_minute.get("spread_competitiveness_cap_side_pct")),
-                    pnl_governor_target_mode=str(latest_minute.get("pnl_governor_target_mode", "disabled")),
-                    position_base=_safe_float(latest_minute.get("position_base")),
-                    position_gross_base=_safe_float(latest_minute.get("position_gross_base")),
-                    position_long_base=_safe_float(latest_minute.get("position_long_base")),
-                    position_short_base=_safe_float(latest_minute.get("position_short_base")),
-                    avg_entry_price=_safe_float(latest_minute.get("avg_entry_price")),
-                    avg_entry_price_long=_safe_float(latest_minute.get("avg_entry_price_long")),
-                    avg_entry_price_short=_safe_float(latest_minute.get("avg_entry_price_short")),
-                    bot6_signal_score_active=_safe_float(latest_minute.get("bot6_signal_score_active")),
-                    bot6_cvd_divergence_ratio=_safe_float(latest_minute.get("bot6_cvd_divergence_ratio")),
-                    bot6_delta_spike_ratio=_safe_float(latest_minute.get("bot6_delta_spike_ratio")),
-                    bot7_cvd=_safe_float(latest_minute.get("bot7_cvd")),
-                    bot7_grid_levels=_safe_float(latest_minute.get("bot7_grid_levels")),
-                    bot7_hedge_target_base_pct=_safe_float(latest_minute.get("bot7_hedge_target_base_pct")),
-                    fill_stats=fill_stats,
-                    portfolio=portfolio,
-                    minute_history=minute_history,
-                    derisk_stall_seconds=minute_history.derisk_stall_seconds if minute_history else 0.0,
-                    derisk_stall_active=minute_history.derisk_stall_active if minute_history else 0.0,
-                    minute_rows_total=float(self._count_csv_rows(minute_file)),
-                    minute_last_timestamp_seconds=ts_epoch,
-                    minute_last_age_seconds=max(0.0, datetime.now(timezone.utc).timestamp() - ts_epoch) if ts_epoch > 0 else 1e9,
-                    fills_last_timestamp_seconds=fill_stats.last_fill_timestamp_seconds if fill_stats else 0.0,
-                    fills_last_age_seconds=(
-                        max(0.0, datetime.now(timezone.utc).timestamp() - fill_stats.last_fill_timestamp_seconds)
-                        if fill_stats and fill_stats.last_fill_timestamp_seconds > 0
-                        else 1e9
-                    ),
-                    open_orders_total=float(len(open_orders)),
-                    open_orders_buy=float(sum(1 for o in open_orders if o.side == "BUY")),
-                    open_orders_sell=float(sum(1 for o in open_orders if o.side == "SELL")),
-                    open_orders=open_orders,
-                    recent_fills=recent_fills,
-                )
-            )
+            snapshot = self._collect_snapshot(minute_file)
+            if snapshot is not None:
+                snapshots.append(snapshot)
         return snapshots
 
+    def _collect_snapshot(self, minute_file: Path) -> Optional[BotSnapshot]:
+        bot_name = minute_file.parts[-5]
+        minute_scan = self._cached_minute_file_scan(minute_file)
+        latest_minute = minute_scan.last_row
+        if latest_minute is None:
+            return None
+        log_dir = minute_file.parent
+        daily_state = self._read_daily_state_any(log_dir)
+        bot_mode = str(latest_minute.get("bot_mode", "") or "").strip().lower() or "unknown"
+        accounting_source = str(latest_minute.get("accounting_source", "") or "").strip().lower() or "minute_csv"
+        fills_path = log_dir / "fills.csv"
+        fills_summary = self._cached_fills_summary(fills_path, limit=50)
+        fills_total = fills_summary.row_count
+        fill_stats = fills_summary.fill_stats
+        recent_error_lines = self._count_recent_error_lines(self._data_root / bot_name / "logs")
+        portfolio = self._read_portfolio(log_dir / "paper_desk_v2.json")
+        minute_history = self._cached_minute_history(minute_file)
+        open_orders = self._read_open_orders(self._data_root / bot_name / "logs" / "recovery" / "open_orders_latest.json")
+        recent_fills = fills_summary.recent_fills
+        ts_epoch = _safe_iso_ts_to_epoch(str(latest_minute.get("ts", ""))) or 0.0
+        equity_now = _safe_float(latest_minute.get("equity_quote"))
+        equity_open = _safe_float(daily_state.get("equity_open")) if daily_state else 0.0
+        daily_fills = _safe_float(daily_state.get("fills_count")) if daily_state else 0.0
+        fills_today = _safe_float(latest_minute.get("fills_count_today"))
+        if fills_today > 0:
+            daily_fills = fills_today
+        live_pnl = equity_now - equity_open if equity_open > 0 else 0.0
+        realized_today = _safe_float(latest_minute.get("realized_pnl_today_quote"))
+        funding_today = _safe_float(
+            latest_minute.get("funding_cost_today_quote", latest_minute.get("funding_paid_today_quote"))
+        )
+        net_realized_today = _safe_float(
+            latest_minute.get("net_realized_pnl_today_quote"),
+            realized_today - funding_today,
+        )
+        return BotSnapshot(
+            bot_name=bot_name,
+            variant=str(latest_minute.get("bot_variant", "")),
+            bot_mode=bot_mode,
+            accounting_source=accounting_source if accounting_source else "minute_csv",
+            exchange=str(latest_minute.get("exchange", "")),
+            trading_pair=str(latest_minute.get("trading_pair", "")),
+            state=str(latest_minute.get("state", "")),
+            regime=str(latest_minute.get("regime", "")),
+            ts_epoch=ts_epoch,
+            net_edge_pct=_safe_float(latest_minute.get("net_edge_pct")),
+            net_edge_gate_pct=_safe_float(latest_minute.get("net_edge_gate_pct")),
+            spread_pct=_safe_float(latest_minute.get("spread_pct")),
+            spread_floor_pct=_safe_float(latest_minute.get("spread_floor_pct")),
+            market_spread_bps=_safe_float(latest_minute.get("market_spread_bps")),
+            best_bid_price=_safe_float(latest_minute.get("best_bid_price")),
+            best_ask_price=_safe_float(latest_minute.get("best_ask_price")),
+            mid_price=_safe_float(latest_minute.get("mid")),
+            best_bid_size=_safe_float(latest_minute.get("best_bid_size")),
+            best_ask_size=_safe_float(latest_minute.get("best_ask_size")),
+            book_imbalance=(
+                (
+                    _safe_float(latest_minute.get("best_bid_size")) - _safe_float(latest_minute.get("best_ask_size"))
+                )
+                / max(
+                    _safe_float(latest_minute.get("best_bid_size")) + _safe_float(latest_minute.get("best_ask_size")),
+                    1e-12,
+                )
+            ),
+            turnover_today_x=_safe_float(latest_minute.get("turnover_today_x")),
+            orders_active=_safe_float(latest_minute.get("orders_active")),
+            maker_fee_pct=_safe_float(latest_minute.get("maker_fee_pct")),
+            taker_fee_pct=_safe_float(latest_minute.get("taker_fee_pct")),
+            soft_pause_edge=1.0 if str(latest_minute.get("soft_pause_edge", "")).lower() == "true" else 0.0,
+            fee_source=str(latest_minute.get("fee_source", "")),
+            equity_quote=equity_now,
+            base_pct=_safe_float(latest_minute.get("base_pct")),
+            target_base_pct=_safe_float(latest_minute.get("target_base_pct")),
+            projected_total_quote=_safe_float(latest_minute.get("projected_total_quote")),
+            daily_loss_pct=_safe_float(latest_minute.get("daily_loss_pct")),
+            drawdown_pct=_safe_float(latest_minute.get("drawdown_pct")),
+            edge_pause_threshold_pct=_safe_float(latest_minute.get("edge_pause_threshold_pct")),
+            edge_resume_threshold_pct=_safe_float(latest_minute.get("edge_resume_threshold_pct")),
+            min_base_pct=_safe_float(latest_minute.get("min_base_pct"), _DEFAULT_MIN_BASE_PCT),
+            max_base_pct=_safe_float(latest_minute.get("max_base_pct"), _DEFAULT_MAX_BASE_PCT),
+            max_total_notional_quote=_safe_float(
+                latest_minute.get("max_total_notional_quote"), _DEFAULT_MAX_TOTAL_NOTIONAL_QUOTE
+            ),
+            max_daily_turnover_x_hard=_safe_float(
+                latest_minute.get("max_daily_turnover_x_hard"), _DEFAULT_MAX_DAILY_TURNOVER_X_HARD
+            ),
+            max_daily_loss_pct_hard=_safe_float(
+                latest_minute.get("max_daily_loss_pct_hard"), _DEFAULT_MAX_DAILY_LOSS_PCT_HARD
+            ),
+            max_drawdown_pct_hard=_safe_float(
+                latest_minute.get("max_drawdown_pct_hard"), _DEFAULT_MAX_DRAWDOWN_PCT_HARD
+            ),
+            margin_ratio_soft_pause_pct=_safe_float(
+                latest_minute.get("margin_ratio_soft_pause_pct"), _DEFAULT_MARGIN_RATIO_SOFT_PAUSE_PCT
+            ),
+            margin_ratio_hard_stop_pct=_safe_float(
+                latest_minute.get("margin_ratio_hard_stop_pct"), _DEFAULT_MARGIN_RATIO_HARD_STOP_PCT
+            ),
+            position_drift_soft_pause_pct=_safe_float(
+                latest_minute.get("position_drift_soft_pause_pct"), _DEFAULT_POSITION_DRIFT_SOFT_PAUSE_PCT
+            ),
+            cancel_per_min=_safe_float(latest_minute.get("cancel_per_min")),
+            risk_reasons=str(latest_minute.get("risk_reasons", "")),
+            daily_pnl_quote=live_pnl,
+            daily_fills_count=daily_fills,
+            fills_total=float(fills_total),
+            recent_error_lines=float(recent_error_lines),
+            tick_duration_ms=_safe_float(latest_minute.get("_tick_duration_ms")),
+            indicator_duration_ms=_safe_float(latest_minute.get("_indicator_duration_ms")),
+            connector_io_duration_ms=_safe_float(latest_minute.get("_connector_io_duration_ms")),
+            position_drift_pct=_safe_float(latest_minute.get("position_drift_pct")),
+            margin_ratio=_safe_float(latest_minute.get("margin_ratio"), 1.0),
+            funding_rate=_safe_float(latest_minute.get("funding_rate")),
+            funding_cost_today_quote=funding_today,
+            realized_pnl_today_quote=realized_today,
+            net_realized_pnl_today_quote=net_realized_today,
+            ws_reconnect_count=_safe_float(latest_minute.get("ws_reconnect_count")),
+            order_book_stale=1.0 if str(latest_minute.get("order_book_stale", "")).lower() == "true" else 0.0,
+            history_seed_status=str(latest_minute.get("history_seed_status", "disabled") or "disabled"),
+            history_seed_reason=str(latest_minute.get("history_seed_reason", "")),
+            history_seed_source=str(latest_minute.get("history_seed_source", "")),
+            history_seed_bars=_safe_float(latest_minute.get("history_seed_bars")),
+            history_seed_latency_ms=_safe_float(latest_minute.get("history_seed_latency_ms")),
+            derisk_runtime_recovered=1.0 if str(latest_minute.get("derisk_runtime_recovered", "")).lower() == "true" else 0.0,
+            derisk_runtime_recovery_count=_safe_float(latest_minute.get("derisk_runtime_recovery_count")),
+            pnl_governor_target_effective_pct=_safe_float(latest_minute.get("pnl_governor_target_effective_pct")),
+            pnl_governor_size_mult_applied=_safe_float(latest_minute.get("pnl_governor_size_mult_applied"), 1.0),
+            spread_competitiveness_cap_active=1.0 if str(latest_minute.get("spread_competitiveness_cap_active", "")).lower() == "true" else 0.0,
+            spread_competitiveness_cap_side_pct=_safe_float(latest_minute.get("spread_competitiveness_cap_side_pct")),
+            pnl_governor_target_mode=str(latest_minute.get("pnl_governor_target_mode", "disabled")),
+            position_base=_safe_float(latest_minute.get("position_base")),
+            position_gross_base=_safe_float(latest_minute.get("position_gross_base")),
+            position_long_base=_safe_float(latest_minute.get("position_long_base")),
+            position_short_base=_safe_float(latest_minute.get("position_short_base")),
+            avg_entry_price=_safe_float(latest_minute.get("avg_entry_price")),
+            avg_entry_price_long=_safe_float(latest_minute.get("avg_entry_price_long")),
+            avg_entry_price_short=_safe_float(latest_minute.get("avg_entry_price_short")),
+            bot1_signal_score=_safe_float(latest_minute.get("bot1_signal_score")),
+            bot5_signal_score=_safe_float(latest_minute.get("bot5_signal_score")),
+            bot6_signal_score=_safe_float(latest_minute.get("bot6_signal_score")),
+            bot6_signal_score_active=_safe_float(latest_minute.get("bot6_signal_score_active")),
+            bot6_cvd_divergence_ratio=_safe_float(latest_minute.get("bot6_cvd_divergence_ratio")),
+            bot6_delta_spike_ratio=_safe_float(latest_minute.get("bot6_delta_spike_ratio")),
+            bot7_signal_score=_safe_float(latest_minute.get("bot7_signal_score")),
+            bot7_cvd=_safe_float(latest_minute.get("bot7_cvd")),
+            bot7_grid_levels=_safe_float(latest_minute.get("bot7_grid_levels")),
+            bot7_hedge_target_base_pct=_safe_float(latest_minute.get("bot7_hedge_target_base_pct")),
+            fill_stats=fill_stats,
+            portfolio=portfolio,
+            minute_history=minute_history,
+            derisk_stall_seconds=minute_history.derisk_stall_seconds if minute_history else 0.0,
+            derisk_stall_active=minute_history.derisk_stall_active if minute_history else 0.0,
+            minute_rows_total=float(minute_scan.row_count),
+            minute_last_timestamp_seconds=ts_epoch,
+            minute_last_age_seconds=max(0.0, datetime.now(timezone.utc).timestamp() - ts_epoch) if ts_epoch > 0 else 1e9,
+            fills_last_timestamp_seconds=fill_stats.last_fill_timestamp_seconds if fill_stats else 0.0,
+            fills_last_age_seconds=(
+                max(0.0, datetime.now(timezone.utc).timestamp() - fill_stats.last_fill_timestamp_seconds)
+                if fill_stats and fill_stats.last_fill_timestamp_seconds > 0
+                else 1e9
+            ),
+            open_orders_total=float(len(open_orders)),
+            open_orders_buy=float(sum(1 for o in open_orders if o.side == "BUY")),
+            open_orders_sell=float(sum(1 for o in open_orders if o.side == "SELL")),
+            open_orders=open_orders,
+            recent_fills=recent_fills,
+        )
+
     def render_prometheus(self) -> str:
+        self._render_requests_total += 1
         now = time.monotonic()
         cache_is_fresh = (
             bool(self._last_render_cache)
             and (now - self._last_render_monotonic) <= self._cache_ttl_seconds
         )
         if cache_is_fresh:
-            return self._last_render_cache
+            self._render_cache_hits_total += 1
+            return self._with_live_exporter_metrics(self._last_render_cache)
 
         # Serve stale cache while another thread refreshes to avoid request pileups.
         if self._last_render_cache and not self._render_lock.acquire(blocking=False):
-            return self._last_render_cache
+            self._render_cache_hits_total += 1
+            self._stale_cache_fallback_total += 1
+            return self._with_live_exporter_metrics(self._last_render_cache)
         if self._last_render_cache:
             try:
                 return self._render_and_update_cache()
@@ -485,18 +632,25 @@ class BotMetricsExporter:
                 and (now - self._last_render_monotonic) <= self._cache_ttl_seconds
             )
             if cache_is_fresh:
-                return self._last_render_cache
+                self._render_cache_hits_total += 1
+                return self._with_live_exporter_metrics(self._last_render_cache)
             return self._render_and_update_cache()
 
     def _render_and_update_cache(self) -> str:
+        started = time.perf_counter()
         try:
             result = self._render_prometheus_impl()
-            self._last_render_cache = result
+            self._record_render_duration((time.perf_counter() - started) * 1000.0)
+            self._last_render_cache = self._with_live_exporter_metrics(result)
             self._last_render_monotonic = time.monotonic()
-            return result
+            return self._last_render_cache
         except Exception:
+            self._render_failures_total += 1
+            self._record_render_duration((time.perf_counter() - started) * 1000.0)
             _LOGGER.exception("bot_metrics_exporter render failure; serving cached payload")
-            return self._last_render_cache or "# hbot_exporter_error 1\n"
+            if self._last_render_cache:
+                self._stale_cache_fallback_total += 1
+            return self._with_live_exporter_metrics(self._last_render_cache or "# hbot_exporter_error 1\n")
 
     def _render_prometheus_impl(self) -> str:
         now = datetime.now(timezone.utc).timestamp()
@@ -505,6 +659,26 @@ class BotMetricsExporter:
         lines: List[str] = []
         lines.extend(
             [
+                "# HELP hbot_exporter_render_requests_total Total exporter render requests.",
+                "# TYPE hbot_exporter_render_requests_total counter",
+                "# HELP hbot_exporter_render_cache_hits_total Exporter cache-hit responses, including stale-cache responses.",
+                "# TYPE hbot_exporter_render_cache_hits_total counter",
+                "# HELP hbot_exporter_render_cache_hit_ratio Ratio of cache-hit responses to total render requests.",
+                "# TYPE hbot_exporter_render_cache_hit_ratio gauge",
+                "# HELP hbot_exporter_stale_cache_fallback_total Exporter renders served from stale cache after a failed or contended refresh.",
+                "# TYPE hbot_exporter_stale_cache_fallback_total counter",
+                "# HELP hbot_exporter_render_failures_total Exporter render failures before cache fallback.",
+                "# TYPE hbot_exporter_render_failures_total counter",
+                "# HELP hbot_exporter_render_duration_last_ms Last exporter render duration in milliseconds.",
+                "# TYPE hbot_exporter_render_duration_last_ms gauge",
+                "# HELP hbot_exporter_render_duration_p50_ms Median exporter render duration in milliseconds.",
+                "# TYPE hbot_exporter_render_duration_p50_ms gauge",
+                "# HELP hbot_exporter_render_duration_p95_ms P95 exporter render duration in milliseconds.",
+                "# TYPE hbot_exporter_render_duration_p95_ms gauge",
+                "# HELP hbot_exporter_render_duration_p99_ms P99 exporter render duration in milliseconds.",
+                "# TYPE hbot_exporter_render_duration_p99_ms gauge",
+                "# HELP hbot_exporter_source_read_failures_total Non-fatal source read failures by source kind.",
+                "# TYPE hbot_exporter_source_read_failures_total counter",
                 "# HELP hbot_bot_snapshot_timestamp_seconds Latest bot snapshot timestamp from minute.csv.",
                 "# TYPE hbot_bot_snapshot_timestamp_seconds gauge",
                 "# HELP hbot_bot_snapshot_age_seconds Snapshot age in seconds.",
@@ -595,8 +769,16 @@ class BotMetricsExporter:
                 "# TYPE hbot_bot_avg_entry_price_long gauge",
                 "# HELP hbot_bot_avg_entry_price_short Average entry price of the short leg.",
                 "# TYPE hbot_bot_avg_entry_price_short gauge",
+                "# HELP hbot_bot1_signal_score Bot1 baseline strategy signal score.",
+                "# TYPE hbot_bot1_signal_score gauge",
+                "# HELP hbot_bot5_signal_score Bot5 flow-conviction strategy signal score.",
+                "# TYPE hbot_bot5_signal_score gauge",
+                "# HELP hbot_bot6_signal_score Bot6 directional strategy signal score.",
+                "# TYPE hbot_bot6_signal_score gauge",
                 "# HELP hbot_bot7_cvd Bot7 cumulative volume delta from recent public trades.",
                 "# TYPE hbot_bot7_cvd gauge",
+                "# HELP hbot_bot7_signal_score Bot7 adaptive-grid strategy signal score.",
+                "# TYPE hbot_bot7_signal_score gauge",
                 "# HELP hbot_bot7_grid_levels Active bot7 grid-leg count target.",
                 "# TYPE hbot_bot7_grid_levels gauge",
                 "# HELP hbot_bot7_hedge_target_base_pct Bot7 hedge target as pct of equity/base budget.",
@@ -712,6 +894,14 @@ class BotMetricsExporter:
                 "# TYPE hbot_bot_spread_competitiveness_cap_side_pct gauge",
                 "# HELP hbot_bot_pnl_governor_target_mode_info Info metric for governor target mode label.",
                 "# TYPE hbot_bot_pnl_governor_target_mode_info gauge",
+                "# HELP hbot_history_seed_status Startup history seed status as a one-hot gauge by status label.",
+                "# TYPE hbot_history_seed_status gauge",
+                "# HELP hbot_history_seed_bars_count Number of bars loaded by the latest startup history seed.",
+                "# TYPE hbot_history_seed_bars_count gauge",
+                "# HELP hbot_history_seed_latency_ms Latency in milliseconds for the latest startup history seed.",
+                "# TYPE hbot_history_seed_latency_ms gauge",
+                "# HELP hbot_history_seed_info Info metric for latest startup history seed source/reason.",
+                "# TYPE hbot_history_seed_info gauge",
                 # Per-position metrics (one series per instrument_id)
                 "# HELP hbot_bot_position_quantity_base Signed position quantity in base asset (from paper_desk_v2.json).",
                 "# TYPE hbot_bot_position_quantity_base gauge",
@@ -743,6 +933,7 @@ class BotMetricsExporter:
                 "# TYPE hbot_bot_closed_trade_info gauge",
             ]
         )
+        self._append_exporter_self_metrics(lines)
         for snapshot in self.collect():
             base_labels = {
                 "bot": snapshot.bot_name,
@@ -857,6 +1048,19 @@ class BotMetricsExporter:
             lines.append(
                 f"hbot_bot_net_realized_pnl_today_quote{_fmt_labels(base_labels)} {snapshot.net_realized_pnl_today_quote}"
             )
+            current_history_status = snapshot.history_seed_status or "disabled"
+            for history_status in ("disabled", "fresh", "stale", "gapped", "degraded", "empty"):
+                history_status_labels = dict(base_labels)
+                history_status_labels["status"] = history_status
+                history_status_value = 1.0 if current_history_status == history_status else 0.0
+                lines.append(f"hbot_history_seed_status{_fmt_labels(history_status_labels)} {history_status_value}")
+            lines.append(f"hbot_history_seed_bars_count{_fmt_labels(base_labels)} {snapshot.history_seed_bars}")
+            lines.append(f"hbot_history_seed_latency_ms{_fmt_labels(base_labels)} {snapshot.history_seed_latency_ms}")
+            history_info_labels = dict(base_labels)
+            history_info_labels["status"] = current_history_status
+            history_info_labels["source"] = snapshot.history_seed_source or "none"
+            history_info_labels["reason"] = snapshot.history_seed_reason or "none"
+            lines.append(f"hbot_history_seed_info{_fmt_labels(history_info_labels)} 1")
             lines.append(f"hbot_bot_ws_reconnect_total{_fmt_labels(base_labels)} {snapshot.ws_reconnect_count}")
             lines.append(f"hbot_bot_order_book_stale{_fmt_labels(base_labels)} {snapshot.order_book_stale}")
             lines.append(f"hbot_bot_derisk_runtime_recovered{_fmt_labels(base_labels)} {snapshot.derisk_runtime_recovered}")
@@ -886,6 +1090,9 @@ class BotMetricsExporter:
             lines.append(f"hbot_bot_avg_entry_price{_fmt_labels(base_labels)} {snapshot.avg_entry_price}")
             lines.append(f"hbot_bot_avg_entry_price_long{_fmt_labels(base_labels)} {snapshot.avg_entry_price_long}")
             lines.append(f"hbot_bot_avg_entry_price_short{_fmt_labels(base_labels)} {snapshot.avg_entry_price_short}")
+            lines.append(f"hbot_bot1_signal_score{_fmt_labels(base_labels)} {snapshot.bot1_signal_score}")
+            lines.append(f"hbot_bot5_signal_score{_fmt_labels(base_labels)} {snapshot.bot5_signal_score}")
+            lines.append(f"hbot_bot6_signal_score{_fmt_labels(base_labels)} {snapshot.bot6_signal_score}")
             lines.append(
                 f"hbot_bot6_signal_score_active{_fmt_labels(base_labels)} {snapshot.bot6_signal_score_active}"
             )
@@ -895,6 +1102,7 @@ class BotMetricsExporter:
             lines.append(
                 f"hbot_bot6_delta_spike_ratio{_fmt_labels(base_labels)} {snapshot.bot6_delta_spike_ratio}"
             )
+            lines.append(f"hbot_bot7_signal_score{_fmt_labels(base_labels)} {snapshot.bot7_signal_score}")
             lines.append(f"hbot_bot7_cvd{_fmt_labels(base_labels)} {snapshot.bot7_cvd}")
             lines.append(f"hbot_bot7_grid_levels{_fmt_labels(base_labels)} {snapshot.bot7_grid_levels}")
             lines.append(
@@ -1088,77 +1296,85 @@ class BotMetricsExporter:
 
         return "\n".join(lines) + "\n"
 
+    def _append_exporter_self_metrics(self, lines: List[str]) -> None:
+        lines.extend(self._exporter_self_metric_value_lines())
+
     def _read_open_orders(self, snapshot_path: Path) -> List[OpenOrderSnapshot]:
         if not snapshot_path.exists():
             return []
-        try:
-            payload = json.loads(snapshot_path.read_text(encoding="utf-8"))
-            orders_raw = payload.get("orders", [])
-            if not isinstance(orders_raw, list):
-                return []
-            out: List[OpenOrderSnapshot] = []
-            for row in orders_raw:
-                if not isinstance(row, dict):
-                    continue
-                order_id = str(row.get("order_id", "")).strip()
-                if not order_id:
-                    continue
-                out.append(
-                    OpenOrderSnapshot(
-                        order_id=order_id,
-                        side=str(row.get("side", "")).upper(),
-                        pair=str(row.get("trading_pair", "")),
-                        price=_safe_float(row.get("price")),
-                        amount_base=_safe_float(row.get("amount")),
-                        age_sec=_safe_float(row.get("age_sec")),
+        def _load() -> List[OpenOrderSnapshot]:
+            try:
+                payload = json.loads(snapshot_path.read_text(encoding="utf-8"))
+                orders_raw = payload.get("orders", [])
+                if not isinstance(orders_raw, list):
+                    return []
+                out: List[OpenOrderSnapshot] = []
+                for row in orders_raw:
+                    if not isinstance(row, dict):
+                        continue
+                    order_id = str(row.get("order_id", "")).strip()
+                    if not order_id:
+                        continue
+                    out.append(
+                        OpenOrderSnapshot(
+                            order_id=order_id,
+                            side=str(row.get("side", "")).upper(),
+                            pair=str(row.get("trading_pair", "")),
+                            price=_safe_float(row.get("price")),
+                            amount_base=_safe_float(row.get("amount")),
+                            age_sec=_safe_float(row.get("age_sec")),
+                        )
                     )
-                )
-            return out
-        except Exception:
-            return []
+                return out
+            except Exception:
+                self._record_source_read_failure("open_orders")
+                return []
+        return self._cached_file_result("open_orders", snapshot_path, _load)
 
     def _read_portfolio(self, portfolio_path: Path) -> Optional[PortfolioSnapshot]:
         """Read paper_desk_v2.json and return open position metrics."""
         if not portfolio_path.exists():
             return None
-        try:
-            data = json.loads(portfolio_path.read_text(encoding="utf-8"))
-            positions_raw = data.get("portfolio", {}).get("positions", {})
-            risk_counters = data.get("risk_counters", {}) if isinstance(data.get("risk_counters"), dict) else {}
-            total_unrealized = 0.0
-            positions: List[PositionSnapshot] = []
-            for key, pos in positions_raw.items():
-                if not isinstance(pos, dict):
-                    continue
-                qty = _safe_float(pos.get("quantity"))
-                if qty == 0.0:
-                    continue
-                unr = _safe_float(pos.get("unrealized_pnl"))
-                total_unrealized += unr
-                opened_ns = _safe_float(pos.get("opened_at_ns"))
-                opened_s = opened_ns / 1e9 if opened_ns > 0 else 0.0
-                # Derive pair from key (e.g. "bitget:BTC-USDT:perp" → "BTC-USDT")
-                parts = key.split(":")
-                pair = parts[1] if len(parts) >= 2 else key
-                positions.append(PositionSnapshot(
-                    instrument_id=key,
-                    pair=pair,
-                    quantity_base=qty,
-                    avg_entry_price=_safe_float(pos.get("avg_entry_price")),
-                    unrealized_pnl_quote=unr,
-                    opened_at_seconds=opened_s,
-                    total_fees_paid_quote=_safe_float(pos.get("total_fees_paid")),
-                ))
-            return PortfolioSnapshot(
-                open_pnl_quote=total_unrealized,
-                positions=positions,
-                paper_margin_call_events_total=float(risk_counters.get("margin_call_events_total", 0.0) or 0.0),
-                paper_liquidation_events_total=float(risk_counters.get("liquidation_events_total", 0.0) or 0.0),
-                paper_liquidation_actions_total=float(risk_counters.get("liquidation_actions_total", 0.0) or 0.0),
-                paper_margin_level=str(risk_counters.get("last_margin_level", "unknown") or "unknown").strip().lower(),
-            )
-        except Exception:
-            return None
+        def _load() -> Optional[PortfolioSnapshot]:
+            try:
+                data = json.loads(portfolio_path.read_text(encoding="utf-8"))
+                positions_raw = data.get("portfolio", {}).get("positions", {})
+                risk_counters = data.get("risk_counters", {}) if isinstance(data.get("risk_counters"), dict) else {}
+                total_unrealized = 0.0
+                positions: List[PositionSnapshot] = []
+                for key, pos in positions_raw.items():
+                    if not isinstance(pos, dict):
+                        continue
+                    qty = _safe_float(pos.get("quantity"))
+                    if qty == 0.0:
+                        continue
+                    unr = _safe_float(pos.get("unrealized_pnl"))
+                    total_unrealized += unr
+                    opened_ns = _safe_float(pos.get("opened_at_ns"))
+                    opened_s = opened_ns / 1e9 if opened_ns > 0 else 0.0
+                    parts = key.split(":")
+                    pair = parts[1] if len(parts) >= 2 else key
+                    positions.append(PositionSnapshot(
+                        instrument_id=key,
+                        pair=pair,
+                        quantity_base=qty,
+                        avg_entry_price=_safe_float(pos.get("avg_entry_price")),
+                        unrealized_pnl_quote=unr,
+                        opened_at_seconds=opened_s,
+                        total_fees_paid_quote=_safe_float(pos.get("total_fees_paid")),
+                    ))
+                return PortfolioSnapshot(
+                    open_pnl_quote=total_unrealized,
+                    positions=positions,
+                    paper_margin_call_events_total=float(risk_counters.get("margin_call_events_total", 0.0) or 0.0),
+                    paper_liquidation_events_total=float(risk_counters.get("liquidation_events_total", 0.0) or 0.0),
+                    paper_liquidation_actions_total=float(risk_counters.get("liquidation_actions_total", 0.0) or 0.0),
+                    paper_margin_level=str(risk_counters.get("last_margin_level", "unknown") or "unknown").strip().lower(),
+                )
+            except Exception:
+                self._record_source_read_failure("portfolio")
+                return None
+        return self._cached_file_result("portfolio", portfolio_path, _load)
 
     def _compute_minute_history(self, minute_file: Path) -> Optional[MinuteHistoryStats]:
         """
@@ -1246,7 +1462,26 @@ class BotMetricsExporter:
                 derisk_stall_active=derisk_stall_active,
             )
         except Exception:
+            self._record_source_read_failure("minute_history")
             return None
+
+    def _scan_minute_file(self, minute_file: Path) -> MinuteFileScan:
+        scan = MinuteFileScan()
+        if not minute_file.exists():
+            return scan
+        try:
+            with minute_file.open("r", encoding="utf-8", newline="") as fp:
+                reader = csv.DictReader(fp)
+                last = None
+                count = 0
+                for row in reader:
+                    last = row
+                    count += 1
+                scan.last_row = last
+                scan.row_count = count
+        except Exception:
+            self._record_source_read_failure("minute_file_scan")
+        return scan
 
     def _read_daily_state_any(self, log_dir: Path) -> Optional[Dict[str, str]]:
         """Read any daily_state*.json file (v1 or v2 naming convention)."""
@@ -1258,6 +1493,7 @@ class BotMetricsExporter:
                 if isinstance(data, dict):
                     return data
             except Exception:
+                self._record_source_read_failure("daily_state")
                 continue
         return None
 
@@ -1265,31 +1501,39 @@ class BotMetricsExporter:
     def _read_last_csv_row(self, path: Path) -> Optional[Dict[str, str]]:
         if not path.exists():
             return None
-        try:
-            with path.open("r", encoding="utf-8", newline="") as fp:
-                reader = csv.DictReader(fp)
-                last = None
-                for row in reader:
-                    last = row
-                return last
-        except Exception:
-            return None
+        if path.name == "minute.csv":
+            return self._cached_minute_file_scan(path).last_row
+        def _load() -> Optional[Dict[str, str]]:
+            try:
+                with path.open("r", encoding="utf-8", newline="") as fp:
+                    reader = csv.DictReader(fp)
+                    last = None
+                    for row in reader:
+                        last = row
+                    return last
+            except Exception:
+                self._record_source_read_failure("minute_last_row")
+                return None
+        return self._cached_file_result("last_csv_row", path, _load)
 
-    def _compute_fill_stats(self, fills_path: Path) -> FillStats:
-        stats = FillStats()
+    def _scan_fills_file(self, fills_path: Path, recent_limit: int = 50) -> FillsFileSummary:
+        summary = FillsFileSummary()
         if not fills_path.exists():
-            return stats
+            return summary
         try:
             buy_prices, sell_prices = [], []
             pnl_values: List[float] = []
+            recent_rows: List[Dict[str, str]] = []
             first_ts_epoch: float = 0.0
             last_ts_epoch: float = 0.0
             cutoff_5m = datetime.now(timezone.utc).timestamp() - (5 * 60)
             cutoff_1h = datetime.now(timezone.utc).timestamp() - (60 * 60)
             cutoff_24h = datetime.now(timezone.utc).timestamp() - (24 * 3600)
+            safe_recent_limit = max(1, int(recent_limit))
             with fills_path.open("r", encoding="utf-8", newline="") as fp:
                 reader = csv.DictReader(fp)
                 for row in reader:
+                    summary.row_count += 1
                     side = str(row.get("side", "")).lower()
                     notional = _safe_float(row.get("notional_quote"))
                     fee = _safe_float(row.get("fee_quote"))
@@ -1302,12 +1546,12 @@ class BotMetricsExporter:
                     adverse_drift_30s = _safe_float(row.get("adverse_drift_30s"))
                     ts_str = str(row.get("ts", ""))
 
+                    stats = summary.fill_stats
                     stats.trades_total += 1
                     stats.total_fees += fee
                     stats.total_realized_pnl += pnl
                     pnl_values.append(pnl)
 
-                    # First fill timestamp
                     if first_ts_epoch == 0.0 and ts_str:
                         epoch = _safe_iso_ts_to_epoch(ts_str)
                         if epoch:
@@ -1343,7 +1587,6 @@ class BotMetricsExporter:
                     stats.last_fill_amount = amount
                     stats.last_fill_pnl = pnl
 
-                    # Execution-quality proxies (bps) from fills.csv
                     if mid_ref > 0 and price > 0:
                         if side == "sell":
                             slippage_bps = ((mid_ref - price) / mid_ref) * 10000.0
@@ -1364,12 +1607,16 @@ class BotMetricsExporter:
                         stats.fee_bps_sum += (fee / notional) * 10000.0
                         stats.fee_bps_count += 1
 
+                    recent_rows.append(row)
+                    if len(recent_rows) > safe_recent_limit:
+                        recent_rows = recent_rows[-safe_recent_limit:]
+
+            stats = summary.fill_stats
             if buy_prices:
                 stats.avg_buy_price = sum(buy_prices) / len(buy_prices)
             if sell_prices:
                 stats.avg_sell_price = sum(sell_prices) / len(sell_prices)
 
-            # FreqText table metrics
             stats.first_fill_timestamp_seconds = first_ts_epoch
             stats.last_fill_timestamp_seconds = last_ts_epoch
             stats.closed_pnl_total = sum(pnl_values)
@@ -1390,24 +1637,9 @@ class BotMetricsExporter:
             stats.trade_median_win_quote = _median(wins)
             stats.trade_median_loss_quote = _median(losses)
 
-        except Exception:
-            pass
-        return stats
-
-    def _read_recent_fills(self, fills_path: Path, limit: int = 50) -> List[Dict[str, object]]:
-        if not fills_path.exists():
-            return []
-        try:
-            rows: List[Dict[str, str]] = []
-            with fills_path.open("r", encoding="utf-8", newline="") as fp:
-                reader = csv.DictReader(fp)
-                for row in reader:
-                    rows.append(row)
-            recent = rows[-limit:]
-            recent.reverse()
-            result = []
-            for row in recent:
-                result.append({
+            recent_rows.reverse()
+            summary.recent_fills = [
+                {
                     "ts": row.get("ts", ""),
                     "side": row.get("side", ""),
                     "price": _safe_float(row.get("price")),
@@ -1419,23 +1651,72 @@ class BotMetricsExporter:
                     "order_id": row.get("order_id", ""),
                     "state": row.get("state", ""),
                     "spread_pct": _safe_float(row.get("expected_spread_pct")),
-                })
-            return result
+                }
+                for row in recent_rows
+            ]
         except Exception:
+            self._record_source_read_failure("fills_summary")
+        return summary
+
+    def _compute_fill_stats(self, fills_path: Path) -> FillStats:
+        return self._scan_fills_file(fills_path, recent_limit=1).fill_stats
+
+    def _read_recent_fills(self, fills_path: Path, limit: int = 50) -> List[Dict[str, object]]:
+        if not fills_path.exists():
             return []
+        safe_limit = max(1, int(limit))
+        if safe_limit == 50:
+            return list(self._cached_fills_summary(fills_path, limit=safe_limit).recent_fills)
+        cache_key = f"recent_fills_{int(limit)}"
+        def _load() -> List[Dict[str, object]]:
+            try:
+                rows: List[Dict[str, str]] = []
+                with fills_path.open("r", encoding="utf-8", newline="") as fp:
+                    reader = csv.DictReader(fp)
+                    for row in reader:
+                        rows.append(row)
+                recent = rows[-limit:]
+                recent.reverse()
+                result = []
+                for row in recent:
+                    result.append({
+                        "ts": row.get("ts", ""),
+                        "side": row.get("side", ""),
+                        "price": _safe_float(row.get("price")),
+                        "amount": _safe_float(row.get("amount_base")),
+                        "notional": _safe_float(row.get("notional_quote")),
+                        "fee": _safe_float(row.get("fee_quote")),
+                        "is_maker": str(row.get("is_maker", "")).lower() == "true",
+                        "pnl": _safe_float(row.get("realized_pnl_quote")),
+                        "order_id": row.get("order_id", ""),
+                        "state": row.get("state", ""),
+                        "spread_pct": _safe_float(row.get("expected_spread_pct")),
+                    })
+                return result
+            except Exception:
+                self._record_source_read_failure("recent_fills")
+                return []
+        return self._cached_file_result(cache_key, fills_path, _load)
 
     def _count_csv_rows(self, path: Path) -> int:
         if not path.exists():
             return 0
-        try:
-            with path.open("r", encoding="utf-8", newline="") as fp:
-                reader = csv.reader(fp)
-                count = -1
-                for _ in reader:
-                    count += 1
-                return max(0, count)
-        except Exception:
-            return 0
+        if path.name == "minute.csv":
+            return int(self._cached_minute_file_scan(path).row_count)
+        if path.name == "fills.csv":
+            return int(self._cached_fills_summary(path, limit=50).row_count)
+        def _load() -> int:
+            try:
+                with path.open("r", encoding="utf-8", newline="") as fp:
+                    reader = csv.reader(fp)
+                    count = -1
+                    for _ in reader:
+                        count += 1
+                    return max(0, count)
+            except Exception:
+                self._record_source_read_failure("csv_row_count")
+                return 0
+        return int(self._cached_file_result("csv_row_count", path, _load) or 0)
 
     def _count_recent_error_lines(self, bot_log_dir: Path) -> int:
         log_files = sorted(bot_log_dir.glob("*.log"), key=lambda p: p.stat().st_mtime, reverse=True)
@@ -1454,6 +1735,7 @@ class BotMetricsExporter:
             tail = lines[-self._log_tail_lines:]
             return sum(1 for line in tail if "ERROR" in line)
         except Exception:
+            self._record_source_read_failure("recent_error_lines")
             return 0
 
 
@@ -1483,7 +1765,7 @@ class MetricsHandler(BaseHTTPRequestHandler):
             limit = 50
             all_fills: list = []
             data_root = self.exporter._data_root
-            for fills_file in data_root.glob("*/logs/epp_v24/*/fills.csv"):
+            for fills_file in iter_bot_log_files(data_root, "fills.csv"):
                 bot_name = fills_file.parts[-5]
                 if bot_filter and bot_name != bot_filter:
                     continue

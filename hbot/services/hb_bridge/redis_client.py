@@ -4,8 +4,8 @@ import json
 import logging
 import time
 from typing import Dict, List, Optional, Tuple
-
 from services.contracts.stream_names import STREAM_RETENTION_MAXLEN
+from services.contracts.event_identity import validate_event_identity
 
 try:
     import redis  # type: ignore
@@ -149,6 +149,15 @@ class RedisStreamClient:
     def xadd(self, stream: str, payload: Dict[str, object], maxlen: Optional[int] = None) -> Optional[str]:
         if not self.enabled and not self._ensure_connected():
             return None
+        valid, reason = validate_event_identity(payload)
+        if not valid:
+            self._logger.warning(
+                "Dropped producer event violating identity contract stream=%s event_type=%s reason=%s",
+                stream,
+                str(payload.get("event_type", "")),
+                reason,
+            )
+            return None
         body = {"payload": json.dumps(payload)}
         kwargs: Dict[str, object] = {"name": stream, "fields": body}
         effective_maxlen = maxlen if maxlen is not None else STREAM_RETENTION_MAXLEN.get(stream)
@@ -228,11 +237,11 @@ class RedisStreamClient:
                 )
             return None
 
-    def create_group(self, stream: str, group: str) -> None:
+    def create_group(self, stream: str, group: str, *, start_id: str = "$") -> None:
         if not self.enabled and not self._ensure_connected():
             return
         try:
-            self._client.xgroup_create(name=stream, groupname=group, id="$", mkstream=True)
+            self._client.xgroup_create(name=stream, groupname=group, id=str(start_id or "$"), mkstream=True)
             self._consecutive_failures = 0
             self._redis_down_since = 0.0
         except Exception as e:
@@ -314,6 +323,70 @@ class RedisStreamClient:
                 except Exception:
                     payload = {}
                 out.append((str(entry_id), payload))
+        return out
+
+    def read_group_multi(
+        self,
+        streams: List[str],
+        group: str,
+        consumer: str,
+        count: int = 10,
+        block_ms: int = 1000,
+    ) -> List[Tuple[str, str, Dict[str, object]]]:
+        if not self.enabled and not self._ensure_connected():
+            return []
+        stream_map = {str(stream): ">" for stream in streams if str(stream).strip()}
+        if not stream_map:
+            return []
+        try:
+            records = self._client.xreadgroup(
+                groupname=group,
+                consumername=consumer,
+                streams=stream_map,
+                count=count,
+                block=block_ms,
+            )
+            self._consecutive_failures = 0
+            self._redis_down_since = 0.0
+        except (RedisConnectionError, OSError, ConnectionRefusedError) as e:
+            self._consecutive_failures += 1
+            if self._consecutive_failures == 1:
+                self._redis_down_since = time.time()
+                self._logger.warning("Redis read_group_multi failed (first failure): %s", e)
+            elif self._consecutive_failures >= 5:
+                duration = time.time() - self._redis_down_since
+                self._logger.error(
+                    "Redis down for %.1fs (%d consecutive failures): %s",
+                    duration,
+                    self._consecutive_failures,
+                    e,
+                )
+            self._client = None
+            return []
+        except Exception as e:
+            self._consecutive_failures += 1
+            if self._consecutive_failures == 1:
+                self._redis_down_since = time.time()
+                self._logger.warning("Redis read_group_multi failed (first failure): %s", e)
+            elif self._consecutive_failures >= 5:
+                duration = time.time() - self._redis_down_since
+                self._logger.error(
+                    "Redis down for %.1fs (%d consecutive failures): %s",
+                    duration,
+                    self._consecutive_failures,
+                    e,
+                )
+            return []
+
+        out: List[Tuple[str, str, Dict[str, object]]] = []
+        for stream_name, entries in records:
+            for entry_id, data in entries:
+                payload_raw = data.get("payload")
+                try:
+                    payload = json.loads(payload_raw) if isinstance(payload_raw, str) else {}
+                except Exception:
+                    payload = {}
+                out.append((str(stream_name), str(entry_id), payload))
         return out
 
     def read_pending(

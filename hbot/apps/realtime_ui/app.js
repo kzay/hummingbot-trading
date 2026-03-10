@@ -81,7 +81,9 @@
     runtimeEvents: [],
     health: {
       status: "unknown",
+      mode: "",
       stream_age_ms: null,
+      db_enabled: false,
       db_available: false,
       redis_available: false,
       fallback_active: false,
@@ -90,6 +92,10 @@
     instances: {
       names: [],
       statuses: [],
+      sources: {
+        stream: [],
+        artifacts: [],
+      },
     },
     connection: {
       wsStatus: "idle",
@@ -116,6 +122,11 @@
       source: "",
       review: null,
       error: "",
+    },
+    historyMonitor: {
+      payload: null,
+      error: "",
+      loadedAtMs: 0,
     },
     journalReview: {
       startDay: "",
@@ -161,10 +172,20 @@
     positionSummary: document.getElementById("positionSummary"),
     accountSummaryGrid: document.getElementById("accountSummaryGrid"),
     activitySummaryGrid: document.getElementById("activitySummaryGrid"),
+    globalGatesMeta: document.getElementById("globalGatesMeta"),
+    globalGatesGrid: document.getElementById("globalGatesGrid"),
     gateBoardMeta: document.getElementById("gateBoardMeta"),
     gateBoardTableBody: document.getElementById("gateBoardTableBody"),
     liveActivityGrid: document.getElementById("liveActivityGrid"),
     systemSummaryGrid: document.getElementById("systemSummaryGrid"),
+    serviceOverviewGrid: document.getElementById("serviceOverviewGrid"),
+    serviceSourceGrid: document.getElementById("serviceSourceGrid"),
+    serviceInstancesMeta: document.getElementById("serviceInstancesMeta"),
+    serviceInstancesTableBody: document.getElementById("serviceInstancesTableBody"),
+    historyMeta: document.getElementById("historyMeta"),
+    historyOverviewGrid: document.getElementById("historyOverviewGrid"),
+    historyQualityGrid: document.getElementById("historyQualityGrid"),
+    historyParityTableBody: document.getElementById("historyParityTableBody"),
     dailyDayInput: document.getElementById("dailyDayInput"),
     dailyRefreshBtn: document.getElementById("dailyRefreshBtn"),
     dailyMeta: document.getElementById("dailyMeta"),
@@ -637,6 +658,10 @@
       const instances = Array.isArray(payload?.instances) ? payload.instances : [];
       state.instances.names = instances;
       state.instances.statuses = Array.isArray(payload?.statuses) ? payload.statuses : [];
+      state.instances.sources = {
+        stream: Array.isArray(payload?.sources?.stream) ? payload.sources.stream : [],
+        artifacts: Array.isArray(payload?.sources?.artifacts) ? payload.sources.artifacts : [],
+      };
       const previousSelection = String(els.instanceInput?.value || state.instanceName || "").trim();
       const preferredSelection = chooseAutoInstance(state.instances.statuses, previousSelection, state.instancePinned);
       const nextSelection = setInstanceOptions(instances, preferredSelection || previousSelection);
@@ -644,13 +669,16 @@
         state.instanceName = nextSelection;
       }
       renderInstanceStatusBoard();
+      renderServicePage();
       return { instances, previousSelection, nextSelection };
     } catch (_err) {
       const fallbackSelection = setInstanceOptions([state.instanceName || "bot1"], state.instanceName || "bot1");
       state.instances.names = [fallbackSelection];
       state.instances.statuses = [];
+      state.instances.sources = { stream: [], artifacts: [] };
       state.instanceName = fallbackSelection;
       renderInstanceStatusBoard();
+      renderServicePage();
       return { instances: [fallbackSelection], previousSelection: fallbackSelection, nextSelection: fallbackSelection };
     }
   }
@@ -1277,10 +1305,10 @@
         ],
       },
       {
-        title: "Quote Gates",
+        title: "Bot Gates",
         highlight: {
           value: statusPill(account.quoting_status || "n/a", gateTone(account.quoting_status || "")),
-          label: account.quoting_reason ? escapeHtml(String(account.quoting_reason)) : "Why bot is quoting or not",
+          label: account.quoting_reason ? escapeHtml(String(account.quoting_reason)) : "Selected bot quote control state",
         },
         rows: quoteGates.length
           ? quoteGates.map((gate) => [
@@ -1288,6 +1316,93 @@
               `${statusPill(gate.status || "n/a", gateTone(gate.status))} <span class="mono">${escapeHtml(gate.detail || "")}</span>`,
             ])
           : [["Status", "No gate data available"]],
+      },
+    ]);
+  }
+
+  function renderGlobalGates() {
+    if (!els.globalGatesGrid) {
+      return;
+    }
+    const summary = ensureSummary();
+    const system = summary.system || {};
+    const health = state.health || {};
+    const fallbackActive = Boolean(system.fallback_active || health.fallback_active);
+    const streamAgeMs = Number(system.stream_age_ms ?? health.stream_age_ms);
+    const wsStatus = String(state.connection.wsStatus || "idle");
+    const streamTone =
+      Number.isFinite(streamAgeMs) && streamAgeMs <= 1500
+        ? "ok"
+        : Number.isFinite(streamAgeMs) && streamAgeMs <= 15000
+          ? "warn"
+          : "fail";
+    const dependencyTone =
+      (system.redis_available || health.redis_available) && (system.db_available || health.db_available)
+        ? "ok"
+        : (system.redis_available || health.redis_available) || (system.db_available || health.db_available)
+          ? "warn"
+          : "fail";
+    const fallbackTone = fallbackActive ? "warn" : "ok";
+    const wsTone =
+      wsStatus === "connected"
+        ? "ok"
+        : wsStatus === "connecting" || wsStatus === "reconnecting"
+          ? "warn"
+          : "fail";
+    if (els.globalGatesMeta) {
+      els.globalGatesMeta.innerHTML = [
+        `<span class="meta-pill">Scope Shared across all bots</span>`,
+        `<span class="meta-pill">API ${statusPill(health.status || "unknown", health.status === "ok" ? "ok" : health.status === "disabled" ? "warn" : "fail")}</span>`,
+      ].join("");
+    }
+    renderSummaryCards(els.globalGatesGrid, [
+      {
+        title: "Transport",
+        highlight: {
+          value: statusPill(wsStatus, wsTone),
+          label: `Last WS ${formatAgeMs(Date.now() - Number(state.connection.lastMessageTsMs || 0))}`,
+        },
+        rows: [
+          ["Session", statusPill(wsStatus, wsTone)],
+          ["Last Event", `<span class="mono">${escapeHtml(state.connection.lastEventType || "n/a")}</span>`],
+          ["Connected", formatTs(state.connection.connectedAtMs)],
+        ],
+      },
+      {
+        title: "Stream Freshness",
+        highlight: {
+          value: statusPill(streamTone === "ok" ? "live" : streamTone === "warn" ? "stale" : "degraded", streamTone),
+          label: `Age ${formatAgeMs(streamAgeMs)}`,
+        },
+        rows: [
+          ["Market Tick", formatTs(system.latest_market_ts_ms)],
+          ["Fill Tick", formatTs(system.latest_fill_ts_ms)],
+          ["Subscribers", String(system.subscriber_count || 0)],
+        ],
+      },
+      {
+        title: "Dependencies",
+        highlight: {
+          value: statusPill(dependencyTone === "ok" ? "ready" : dependencyTone === "warn" ? "partial" : "down", dependencyTone),
+          label: "Shared desk services",
+        },
+        rows: [
+          ["Redis", statusPill(system.redis_available || health.redis_available ? "up" : "down", system.redis_available || health.redis_available ? "ok" : "fail")],
+          ["DB", statusPill(system.db_available || health.db_available ? "up" : "down", system.db_available || health.db_available ? "ok" : "fail")],
+          ["API", statusPill(health.status || "unknown", health.status === "ok" ? "ok" : health.status === "disabled" ? "warn" : "fail")],
+        ],
+      },
+      {
+        title: "Fallback Mode",
+        highlight: {
+          value: statusPill(fallbackActive ? "active" : "off", fallbackTone),
+          label: fallbackActive ? "Degraded snapshot path in use" : "Stream-first path healthy",
+        },
+        rows: [
+          ["Fallback", statusPill(fallbackActive ? "active" : "off", fallbackTone)],
+          ["Market Keys", String(system.market_key_count || 0)],
+          ["Depth Keys", String(system.depth_key_count || 0)],
+        ],
       },
     ]);
   }
@@ -1312,7 +1427,8 @@
     const primaryGate = sortedQuoteGates.find((gate) => gatePriority(gate.status || "") < 2) || null;
     if (els.gateBoardMeta) {
       const meta = [
-        `<span class="meta-pill">Quote ${statusPill(account.quoting_status || "n/a", gateTone(account.quoting_status || ""))}</span>`,
+        `<span class="meta-pill">Scope Current bot</span>`,
+        `<span class="meta-pill">Bot Quote ${statusPill(account.quoting_status || "n/a", gateTone(account.quoting_status || ""))}</span>`,
         `<span class="meta-pill">${escapeHtml(account.quoting_reason || "No quoting reason")}</span>`,
         `<span class="meta-pill">${escapeHtml(orderState.isRuntimeFallback ? `Orders ${orderState.display} runtime` : `Orders ${orderState.display}`)}</span>`,
       ];
@@ -1568,6 +1684,312 @@
         ],
       },
     ]);
+  }
+
+  function serviceFreshnessTone(value) {
+    const raw = String(value || "").trim().toLowerCase();
+    if (raw === "live") return "ok";
+    if (raw === "stale" || raw === "artifact") return "warn";
+    if (raw === "offline") return "fail";
+    return "neutral";
+  }
+
+  function serviceQuotingTone(value) {
+    const raw = String(value || "").trim().toLowerCase();
+    if (raw === "quoting" || raw === "ready") return "ok";
+    if (raw === "limited" || raw === "waiting" || raw === "not quoting") return "warn";
+    if (raw === "blocked") return "fail";
+    return "neutral";
+  }
+
+  function renderServiceOverview() {
+    if (!els.serviceOverviewGrid) {
+      return;
+    }
+    const health = state.health || {};
+    const metrics = health.metrics || {};
+    const rows = Array.isArray(state.instances.statuses) ? state.instances.statuses : [];
+    const liveCount = rows.filter((row) => String(row?.freshness || "").toLowerCase() === "live").length;
+    const degradedCount = rows.filter((row) => ["stale", "artifact", "offline"].includes(String(row?.freshness || "").toLowerCase())).length;
+    const apiTone = health.status === "ok" ? "ok" : health.status === "disabled" ? "warn" : "fail";
+    renderSummaryCards(els.serviceOverviewGrid, [
+      {
+        title: "Service Status",
+        highlight: {
+          value: statusPill(health.status || "unknown", apiTone),
+          label: `API ${escapeHtml(state.apiBase || "n/a")}`,
+        },
+        rows: [
+          ["Mode", statusPill(health.mode || "unknown", health.mode === "disabled" ? "warn" : "ok")],
+          ["Redis", statusPill(health.redis_available ? "up" : "down", health.redis_available ? "ok" : "fail")],
+          ["DB", statusPill(health.db_enabled ? (health.db_available ? "up" : "down") : "disabled", health.db_enabled ? (health.db_available ? "ok" : "fail") : "neutral")],
+          ["Fallback", statusPill(health.fallback_active ? "active" : "off", health.fallback_active ? "warn" : "neutral")],
+          ["Stream Age", formatAgeMs(health.stream_age_ms)],
+          ["Subscribers", String(metrics.subscribers || 0)],
+        ],
+      },
+      {
+        title: "Desk Coverage",
+        highlight: {
+          value: `${liveCount}/${rows.length || 0}`,
+          label: "instances live",
+        },
+        rows: [
+          ["Tracked Instances", String(rows.length || 0)],
+          ["Live", String(liveCount)],
+          ["Degraded", String(degradedCount)],
+          ["Selected", `<span class="mono">${escapeHtml(state.instanceName || "n/a")}</span>`],
+          ["Quotes", String(metrics.market_quote_keys || 0)],
+          ["Depth", String(metrics.market_depth_keys || 0)],
+        ],
+      },
+    ]);
+  }
+
+  function renderServiceSources() {
+    if (!els.serviceSourceGrid) {
+      return;
+    }
+    const health = state.health || {};
+    const metrics = health.metrics || {};
+    const streamInstances = Array.isArray(state.instances.sources?.stream) ? state.instances.sources.stream : [];
+    const artifactInstances = Array.isArray(state.instances.sources?.artifacts) ? state.instances.sources.artifacts : [];
+    renderSummaryCards(els.serviceSourceGrid, [
+      {
+        title: "Discovery Sources",
+        highlight: {
+          value: `${streamInstances.length}/${artifactInstances.length}`,
+          label: "stream / artifact instances",
+        },
+        rows: [
+          ["Stream Instances", String(streamInstances.length)],
+          ["Artifact Instances", String(artifactInstances.length)],
+          ["Merged Instances", String((state.instances.names || []).length)],
+          ["API Token", statusPill(state.apiToken ? "set" : "empty", state.apiToken ? "ok" : "warn")],
+        ],
+      },
+      {
+        title: "State Buffers",
+        highlight: {
+          value: `${metrics.market_keys || 0} market`,
+          label: "tracked state keys",
+        },
+        rows: [
+          ["Market Keys", String(metrics.market_keys || 0)],
+          ["Quote Keys", String(metrics.market_quote_keys || 0)],
+          ["Depth Keys", String(metrics.depth_keys || 0)],
+          ["Depth Quote Keys", String(metrics.market_depth_keys || 0)],
+          ["Fill Keys", String(metrics.fills_keys || 0)],
+          ["Paper Event Keys", String(metrics.paper_event_keys || 0)],
+        ],
+      },
+    ]);
+  }
+
+  function renderServiceInstancesTable() {
+    if (!els.serviceInstancesTableBody) {
+      return;
+    }
+    const rows = Array.isArray(state.instances.statuses) ? state.instances.statuses : [];
+    if (els.serviceInstancesMeta) {
+      els.serviceInstancesMeta.innerHTML = [
+        `<span class="meta-pill">Instances ${escapeHtml(String(rows.length || 0))}</span>`,
+        `<span class="meta-pill">Stream source ${escapeHtml(String((state.instances.sources?.stream || []).length || 0))}</span>`,
+        `<span class="meta-pill">Artifact source ${escapeHtml(String((state.instances.sources?.artifacts || []).length || 0))}</span>`,
+      ].join("");
+    }
+    if (rows.length === 0) {
+      els.serviceInstancesTableBody.innerHTML = `<tr><td colspan="10">No instance status rows available yet.</td></tr>`;
+      return;
+    }
+    els.serviceInstancesTableBody.innerHTML = rows
+      .map((row) => {
+        const freshness = String(row?.freshness || "unknown");
+        const quoting = String(row?.quoting_status || "n/a");
+        return `
+          <tr>
+            <td><span class="mono">${escapeHtml(String(row?.instance_name || ""))}</span></td>
+            <td>${statusPill(freshness, serviceFreshnessTone(freshness))}</td>
+            <td><span class="mono">${escapeHtml(String(row?.source_label || "unknown"))}</span></td>
+            <td>${escapeHtml(String(row?.controller_id || ""))}</td>
+            <td>${escapeHtml(String(row?.trading_pair || ""))}</td>
+            <td>${escapeHtml(formatAgeMs(row?.stream_age_ms))}</td>
+            <td>${statusPill(quoting, serviceQuotingTone(quoting))}</td>
+            <td>${escapeHtml(String(row?.orders_active ?? 0))}</td>
+            <td><span class="${classifySigned(row?.realized_pnl_quote)}">${escapeHtml(formatSigned(row?.realized_pnl_quote, 2))}</span></td>
+            <td><span class="${classifySigned(row?.equity_quote)}">${escapeHtml(formatNumber(row?.equity_quote, 2))}</span></td>
+          </tr>
+        `;
+      })
+      .join("");
+  }
+
+  function renderServicePage() {
+    renderServiceOverview();
+    renderServiceSources();
+    renderServiceInstancesTable();
+  }
+
+  function historyQualityTone(status) {
+    const raw = String(status || "").trim().toLowerCase();
+    if (raw === "fresh") return "ok";
+    if (raw === "degraded" || raw === "stale") return "warn";
+    if (raw === "gapped" || raw === "empty") return "fail";
+    return "neutral";
+  }
+
+  function historyMonitorPayload() {
+    return state.historyMonitor?.payload && typeof state.historyMonitor.payload === "object" ? state.historyMonitor.payload : {};
+  }
+
+  function historyProviderView() {
+    const payload = historyMonitorPayload();
+    const shadow = payload.shadow && typeof payload.shadow === "object" ? payload.shadow : {};
+    const provider = shadow.provider && typeof shadow.provider === "object" ? shadow.provider : {};
+    const quality = payload.quality && typeof payload.quality === "object"
+      ? payload.quality
+      : provider.quality && typeof provider.quality === "object"
+        ? provider.quality
+        : {};
+    const sourceChain = Array.isArray(payload.source_chain)
+      ? payload.source_chain
+      : Array.isArray(provider.source_chain)
+        ? provider.source_chain
+        : [];
+    const parity = shadow.parity && typeof shadow.parity === "object" ? shadow.parity : {};
+    const candles = Array.isArray(payload.candles) ? payload.candles : [];
+    return {
+      payload,
+      shadow,
+      provider,
+      quality,
+      sourceChain,
+      parity,
+      candles,
+    };
+  }
+
+  function renderHistoryOverview() {
+    if (!els.historyOverviewGrid) {
+      return;
+    }
+    const { payload, quality, sourceChain, candles } = historyProviderView();
+    const error = String(state.historyMonitor?.error || "").trim();
+    const qualityStatus = String(quality.status || (error ? "error" : "unknown"));
+    const tone = error ? "fail" : historyQualityTone(qualityStatus);
+    if (els.historyMeta) {
+      els.historyMeta.innerHTML = [
+        `<span class="meta-pill">Instance ${escapeHtml(state.instanceName || "n/a")}</span>`,
+        `<span class="meta-pill">Pair ${escapeHtml(state.tradingPair || "auto")}</span>`,
+        `<span class="meta-pill">Timeframe ${escapeHtml(String(state.timeframeS || 60))}s</span>`,
+        `<span class="meta-pill">Updated ${escapeHtml(formatRelativeTs(state.historyMonitor?.loadedAtMs || 0))}</span>`,
+      ].join("");
+    }
+    renderSummaryCards(els.historyOverviewGrid, [
+      {
+        title: "Read Path",
+        highlight: {
+          value: statusPill(error ? "error" : payload.mode || "unknown", error ? "fail" : payload.mode === "shared" ? "ok" : payload.mode === "shadow" ? "warn" : "neutral"),
+          label: error ? error : `Source ${payload.source || "n/a"}`,
+        },
+        rows: [
+          ["Selected Pair", `<span class="mono">${escapeHtml(state.tradingPair || "auto")}</span>`],
+          ["Controller", `<span class="mono">${escapeHtml(state.controllerId || "auto")}</span>`],
+          ["Candles Returned", String(candles.length || 0)],
+          ["DB Available", statusPill(payload.db_available ? "yes" : "no", payload.db_available ? "ok" : "warn")],
+          ["CSV Failover", statusPill(payload.csv_failover_used ? "used" : "off", payload.csv_failover_used ? "warn" : "neutral")],
+          ["Source Chain", `<span class="mono">${escapeHtml(sourceChain.join(" -> ") || payload.source || "n/a")}</span>`],
+        ],
+      },
+      {
+        title: "Quality Status",
+        highlight: {
+          value: statusPill(qualityStatus, tone),
+          label: `Freshness ${formatAgeMs(quality.freshness_ms)}`,
+        },
+        rows: [
+          ["Coverage", `${formatNumber((Number(quality.coverage_ratio || 0) * 100), 1)}%`],
+          ["Max Gap", `${formatNumber(quality.max_gap_s, 0)} s`],
+          ["Bars Returned", String(quality.bars_returned ?? candles.length ?? 0)],
+          ["Bars Requested", String(quality.bars_requested ?? 0)],
+          ["Source Used", `<span class="mono">${escapeHtml(String(quality.source_used || payload.source || "n/a"))}</span>`],
+          ["Reason", escapeHtml(String(quality.degraded_reason || error || "none"))],
+        ],
+      },
+    ]);
+  }
+
+  function renderHistoryQuality() {
+    if (!els.historyQualityGrid) {
+      return;
+    }
+    const { payload, provider, quality, sourceChain, parity } = historyProviderView();
+    renderSummaryCards(els.historyQualityGrid, [
+      {
+        title: "Provider Contract",
+        highlight: {
+          value: statusPill(String(quality.status || "unknown"), historyQualityTone(quality.status)),
+          label: `Mode ${escapeHtml(String(payload.mode || "unknown"))}`,
+        },
+        rows: [
+          ["Provider Source", `<span class="mono">${escapeHtml(String(provider.source || payload.source || "n/a"))}</span>`],
+          ["Provider Chain", `<span class="mono">${escapeHtml(sourceChain.join(" + ") || "n/a")}</span>`],
+          ["Freshness", formatAgeMs(quality.freshness_ms)],
+          ["Coverage Ratio", formatNumber(Number(quality.coverage_ratio || 0), 3)],
+          ["Max Gap", `${formatNumber(quality.max_gap_s, 0)} s`],
+          ["Degraded Reason", escapeHtml(String(quality.degraded_reason || "none"))],
+        ],
+      },
+      {
+        title: "Shadow Rollout",
+        highlight: {
+          value: statusPill(payload.shadow ? "shadow active" : "no shadow data", payload.shadow ? "warn" : "neutral"),
+          label: "Legacy/shared parity visibility",
+        },
+        rows: [
+          ["Legacy Candles", String(Array.isArray(payload.candles) ? payload.candles.length : 0)],
+          ["Shared Bars", String(quality.bars_returned ?? 0)],
+          ["Missing In Shared", String(parity.missing_in_shared ?? 0)],
+          ["Missing In Legacy", String(parity.missing_in_legacy ?? 0)],
+          ["Mismatched Buckets", String(parity.mismatched_buckets ?? 0)],
+          ["Max Close Delta", formatNumber(parity.max_abs_close_delta, 8)],
+        ],
+      },
+    ]);
+  }
+
+  function renderHistoryParity() {
+    if (!els.historyParityTableBody) {
+      return;
+    }
+    const { parity } = historyProviderView();
+    const rows = [
+      ["bucket_count_legacy", parity.bucket_count_legacy],
+      ["bucket_count_shared", parity.bucket_count_shared],
+      ["missing_in_shared", parity.missing_in_shared],
+      ["missing_in_legacy", parity.missing_in_legacy],
+      ["mismatched_buckets", parity.mismatched_buckets],
+      ["max_abs_close_delta", parity.max_abs_close_delta],
+    ];
+    const hasParity = rows.some(([, value]) => value !== undefined && value !== null);
+    if (!hasParity) {
+      els.historyParityTableBody.innerHTML = `<tr><td colspan="2">No shadow parity data available for the current mode.</td></tr>`;
+      return;
+    }
+    els.historyParityTableBody.innerHTML = rows
+      .map(([label, value]) => `
+        <tr>
+          <td><span class="mono">${escapeHtml(String(label))}</span></td>
+          <td>${escapeHtml(typeof value === "number" ? String(value) : String(value ?? "n/a"))}</td>
+        </tr>
+      `)
+      .join("");
+  }
+
+  function renderHistoryPage() {
+    renderHistoryOverview();
+    renderHistoryQuality();
+    renderHistoryParity();
   }
 
   function renderDepth(depth) {
@@ -1829,7 +2251,9 @@
       const health = await fetchJson("/health");
       state.health = {
         status: health.status || "unknown",
+        mode: health.mode || "",
         stream_age_ms: health.stream_age_ms,
+        db_enabled: Boolean(health.db_enabled),
         db_available: Boolean(health.db_available),
         redis_available: Boolean(health.redis_available),
         fallback_active: Boolean(health.fallback_active),
@@ -1837,12 +2261,55 @@
       };
       setBadge(state.health.status);
       renderSystemSummary();
+      renderServicePage();
     } catch (err) {
-      state.health = { status: "fail", stream_age_ms: null, db_available: false, redis_available: false, fallback_active: false, metrics: {} };
+      state.health = {
+        status: "fail",
+        mode: "",
+        stream_age_ms: null,
+        db_enabled: false,
+        db_available: false,
+        redis_available: false,
+        fallback_active: false,
+        metrics: {},
+      };
       setBadge("fail");
       pushEventLine(`[health] ${err.message}`);
       renderSystemSummary();
+      renderServicePage();
     }
+  }
+
+  async function fetchHistoryMonitor() {
+    if (!state.instanceName) {
+      return;
+    }
+    const params = new URLSearchParams();
+    params.set("instance_name", state.instanceName);
+    params.set("timeframe_s", String(state.timeframeS || 60));
+    params.set("limit", "300");
+    if (state.controllerId) {
+      params.set("controller_id", state.controllerId);
+    }
+    if (state.tradingPair) {
+      params.set("trading_pair", state.tradingPair);
+    }
+    try {
+      const payload = await fetchJson(`/api/v1/candles?${params.toString()}`);
+      state.historyMonitor = {
+        payload,
+        error: "",
+        loadedAtMs: Date.now(),
+      };
+    } catch (err) {
+      state.historyMonitor = {
+        payload: null,
+        error: err.message || "history fetch failed",
+        loadedAtMs: Date.now(),
+      };
+      pushEventLine(`[history] ${err.message}`);
+    }
+    renderHistoryPage();
   }
 
   async function fetchLiveState() {
@@ -1891,6 +2358,9 @@
         trading_pair: stream?.market?.trading_pair || stream?.depth?.trading_pair || position?.trading_pair || state.tradingPair,
       });
       renderLiveState();
+      if (state.ui.activeView === "history") {
+        fetchHistoryMonitor();
+      }
     } catch (err) {
       pushEventLine(`[state] ${err.message}`);
     } finally {
@@ -2010,6 +2480,7 @@
     const summary = ensureSummary();
     renderMarketFrame();
     renderActivitySummary(summary.activity);
+    renderGlobalGates();
     renderGateBoard();
     renderSystemSummary();
     renderLiveActivity();
@@ -2713,6 +3184,7 @@
       fetchInstances().finally(() => {
         syncInputsToState();
         refreshHealth();
+        fetchHistoryMonitor();
         fetchDailyReview();
         fetchWeeklyReview();
         fetchJournalReview();
@@ -2724,6 +3196,7 @@
       syncInputsToState();
       renderInstanceStatusBoard();
       refreshHealth();
+      fetchHistoryMonitor();
       fetchDailyReview();
       fetchWeeklyReview();
       fetchJournalReview();
@@ -2744,6 +3217,7 @@
         syncInputsToState();
         renderInstanceStatusBoard();
         refreshHealth();
+        fetchHistoryMonitor();
         fetchDailyReview();
         fetchWeeklyReview();
         fetchJournalReview();
@@ -2755,6 +3229,7 @@
       fetchInstances().finally(() => {
         syncInputsToState();
         refreshHealth();
+        fetchHistoryMonitor();
         fetchDailyReview();
         fetchWeeklyReview();
         fetchJournalReview();
@@ -2763,6 +3238,7 @@
     });
     els.timeframeSelect.addEventListener("change", () => {
       syncInputsToState();
+      fetchHistoryMonitor();
       reconnectRealtime();
     });
     els.denseModeBtn.addEventListener("click", () => {
@@ -2804,6 +3280,9 @@
         localStorage.setItem("hbActiveView", nextView);
         renderActiveView();
         renderAlerts();
+        if (nextView === "history") {
+          fetchHistoryMonitor();
+        }
         if (nextView === "daily") {
           fetchDailyReview();
         }
@@ -2899,7 +3378,10 @@
     renderJournalReview();
     renderEventFeed();
     renderInstanceStatusBoard();
+    renderHistoryPage();
+    renderServicePage();
     refreshHealth();
+    fetchHistoryMonitor();
     fetchDailyReview();
     fetchWeeklyReview();
     fetchJournalReview();
@@ -2910,6 +3392,7 @@
         if (nextSelection && previousSelection && nextSelection !== previousSelection) {
           syncInputsToState();
           refreshHealth();
+          fetchHistoryMonitor();
           fetchDailyReview();
           fetchWeeklyReview();
           fetchJournalReview();

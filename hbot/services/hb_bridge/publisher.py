@@ -1,7 +1,9 @@
 from __future__ import annotations
 
+import logging
 from typing import Optional
 
+from services.contracts.event_identity import validate_event_identity
 from services.contracts.event_schemas import (
     AuditEvent,
     BotFillEvent,
@@ -21,6 +23,8 @@ from services.contracts.stream_names import (
 )
 from services.hb_bridge.redis_client import RedisStreamClient
 
+logger = logging.getLogger(__name__)
+
 
 class HBEventPublisher:
     def __init__(self, redis_client: RedisStreamClient, producer: str):
@@ -31,45 +35,41 @@ class HBEventPublisher:
     def available(self) -> bool:
         return self._redis.enabled and self._redis.ping()
 
+    def _publish(self, stream: str, payload: dict) -> Optional[str]:
+        valid, reason = validate_event_identity(payload)
+        if not valid:
+            logger.warning(
+                "Dropped producer event violating identity contract stream=%s event_type=%s reason=%s",
+                stream,
+                str(payload.get("event_type", "")),
+                reason,
+            )
+            return None
+        return self._redis.xadd(
+            stream,
+            payload,
+            maxlen=STREAM_RETENTION_MAXLEN.get(stream),
+        )
+
     def publish_market_snapshot(self, event: MarketSnapshotEvent) -> Optional[str]:
         event.producer = self._producer
-        return self._redis.xadd(
-            MARKET_DATA_STREAM,
-            event.model_dump(),
-            maxlen=STREAM_RETENTION_MAXLEN.get(MARKET_DATA_STREAM),
-        )
+        return self._publish(MARKET_DATA_STREAM, event.model_dump())
 
     def publish_market_depth(self, event: MarketDepthSnapshotEvent) -> Optional[str]:
         event.producer = self._producer
-        return self._redis.xadd(
-            MARKET_DEPTH_STREAM,
-            event.model_dump(),
-            maxlen=STREAM_RETENTION_MAXLEN.get(MARKET_DEPTH_STREAM),
-        )
+        return self._publish(MARKET_DEPTH_STREAM, event.model_dump())
 
     def publish_market_quote(self, event: MarketQuoteEvent) -> Optional[str]:
         event.producer = self._producer
-        return self._redis.xadd(
-            MARKET_QUOTE_STREAM,
-            event.model_dump(),
-            maxlen=STREAM_RETENTION_MAXLEN.get(MARKET_QUOTE_STREAM),
-        )
+        return self._publish(MARKET_QUOTE_STREAM, event.model_dump())
 
     def publish_market_trade(self, event: MarketTradeEvent) -> Optional[str]:
         event.producer = self._producer
-        return self._redis.xadd(
-            MARKET_TRADE_STREAM,
-            event.model_dump(),
-            maxlen=STREAM_RETENTION_MAXLEN.get(MARKET_TRADE_STREAM),
-        )
+        return self._publish(MARKET_TRADE_STREAM, event.model_dump())
 
     def publish_audit(self, event: AuditEvent) -> Optional[str]:
         event.producer = self._producer
-        return self._redis.xadd(
-            AUDIT_STREAM,
-            event.model_dump(),
-            maxlen=STREAM_RETENTION_MAXLEN.get(AUDIT_STREAM),
-        )
+        return self._publish(AUDIT_STREAM, event.model_dump())
 
     def publish_fill(self, event: BotFillEvent) -> Optional[str]:
         """Publish a fill event to BOT_TELEMETRY_STREAM.
@@ -79,9 +79,5 @@ class HBEventPublisher:
         ingestion symmetric regardless of trading mode.
         """
         event.producer = self._producer
-        return self._redis.xadd(
-            BOT_TELEMETRY_STREAM,
-            event.model_dump(),
-            maxlen=STREAM_RETENTION_MAXLEN.get(BOT_TELEMETRY_STREAM),
-        )
+        return self._publish(BOT_TELEMETRY_STREAM, event.model_dump())
 

@@ -42,6 +42,7 @@ def _snapshot_defaults() -> dict:
         "fill_edge_ewma": None,
         "adverse_fill_active": False,
         "ws_reconnect_count": 0,
+        "order_book_stale": False,
         "connector_status": "ok",
         "ob_imbalance": Decimal("0"),
         "kelly_size_active": False,
@@ -124,3 +125,66 @@ def test_build_tick_output_defaults_missing_adaptive_keys():
     assert out["pnl_governor_target_mode"] == "disabled"
     assert out["pnl_governor_size_mult_applied"] == Decimal("1")
     assert out["spread_competitiveness_cap_active"] is False
+
+
+def test_log_minute_returns_row_once_per_minute():
+    csv_logger = MagicMock()
+    emitter = TickEmitter(csv_logger=csv_logger)
+    snapshot = _snapshot_defaults()
+    snapshot.update(
+        {
+            "variant": "a",
+            "bot_mode": "paper",
+            "is_paper": True,
+            "connector_name": "bitget_perpetual",
+            "trading_pair": "BTC-USDT",
+            "cancel_per_min": 0,
+            "orders_active": 0,
+            "tick_duration_ms": 0.0,
+        }
+    )
+    pd = {
+        "regime": "neutral_low_vol",
+        "mid": Decimal("100"),
+        "equity_quote": Decimal("1000"),
+        "base_pct": Decimal("0"),
+        "target_base_pct": Decimal("0"),
+        "net_base_pct": Decimal("0"),
+        "target_net_base_pct": Decimal("0"),
+        "spread_pct": Decimal("0.001"),
+        "spread_floor_pct": Decimal("0.001"),
+        "base_spread_pct": Decimal("0.001"),
+        "net_edge_pct": Decimal("0.0002"),
+        "net_edge_gate_pct": Decimal("0.0002"),
+        "net_edge_ewma_pct": Decimal("0.0002"),
+        "turnover_x": Decimal("0"),
+        "daily_loss_pct": Decimal("0"),
+        "drawdown_pct": Decimal("0"),
+        "edge_pause_threshold_pct": Decimal("0.0001"),
+        "edge_resume_threshold_pct": Decimal("0.00015"),
+        "projected_total_quote": Decimal("0"),
+    }
+
+    row = emitter.log_minute(
+        now_ts=120.0,
+        event_ts="2026-03-08T04:02:00+00:00",
+        pd=pd,
+        state=GuardState.RUNNING,
+        risk_reasons=[],
+        snapshot=snapshot,
+    )
+    skipped = emitter.log_minute(
+        now_ts=121.0,
+        event_ts="2026-03-08T04:02:01+00:00",
+        pd=pd,
+        state=GuardState.RUNNING,
+        risk_reasons=[],
+        snapshot=snapshot,
+    )
+
+    assert row is not None
+    assert row["projected_total_quote"] == "0"
+    assert row["history_seed_status"] == "disabled"
+    assert row["history_seed_bars"] == "0"
+    assert skipped is None
+    csv_logger.log_minute.assert_called_once()

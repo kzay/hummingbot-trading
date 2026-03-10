@@ -1,10 +1,11 @@
 {
-  "ts_utc": "2026-03-07T17:10:26.848802+00:00",
+  "ts_utc": "2026-03-10T22:59:03.125524+00:00",
   "status": "pass",
   "seeded_count": 0,
   "seeded_streams": [],
   "missing_streams_without_latest_event": [
-    "hb.market_trade.v1",
-    "hb.ml_signal.v1"
+    "hb.signal.v1",
+    "hb.ml_signal.v1",
+    "hb.risk_decision.v1"
   ]
 }

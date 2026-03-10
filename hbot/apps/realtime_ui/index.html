@@ -9,10 +9,18 @@
   </head>
   <body>
     <header class="topbar">
-      <div class="topbar-head">
-        <div>
-          <h1>Kzay Capital Supervision</h1>
-          <p class="topbar-subtitle">Realtime desk monitoring for market activity, execution flow, and system health.</p>
+      <div class="topbar-shell">
+        <div class="topbar-brand">
+          <h1>Kzay Capital</h1>
+          <span class="topbar-label">Supervision</span>
+        </div>
+        <div class="view-tabs">
+          <button type="button" class="tab-btn" data-view-tab="realtime">Realtime</button>
+          <button type="button" class="tab-btn" data-view-tab="history">History</button>
+          <button type="button" class="tab-btn" data-view-tab="service">Service</button>
+          <button type="button" class="tab-btn" data-view-tab="daily">Daily</button>
+          <button type="button" class="tab-btn" data-view-tab="weekly">Weekly</button>
+          <button type="button" class="tab-btn" data-view-tab="journal">Journal</button>
         </div>
         <div class="topbar-actions">
           <button id="denseModeBtn" type="button">Dense mode</button>
@@ -21,12 +29,6 @@
         </div>
       </div>
       <div class="topbar-controls">
-        <div id="instanceStatusBoard" class="instance-status-board"></div>
-        <div class="connection-row">
-          <label>API URL <input id="apiBaseInput" type="text" value="http://localhost:9910" /></label>
-          <label>Token <input id="apiTokenInput" type="password" value="" /></label>
-          <button id="applyConnectionBtn">Apply</button>
-        </div>
         <div class="selector-row">
           <label>Instance
             <select id="instanceInput">
@@ -43,12 +45,15 @@
           </label>
           <button id="refreshBtn">Refresh</button>
         </div>
-        <div class="view-tabs">
-          <button type="button" class="tab-btn" data-view-tab="realtime">Realtime</button>
-          <button type="button" class="tab-btn" data-view-tab="daily">Daily</button>
-          <button type="button" class="tab-btn" data-view-tab="weekly">Weekly</button>
-          <button type="button" class="tab-btn" data-view-tab="journal">Journal</button>
-        </div>
+        <details class="connection-drawer">
+          <summary>Connection</summary>
+          <div class="connection-row">
+            <label>API URL <input id="apiBaseInput" type="text" value="http://localhost:9910" /></label>
+            <label>Token <input id="apiTokenInput" type="password" value="" /></label>
+            <button id="applyConnectionBtn">Apply</button>
+          </div>
+        </details>
+        <div id="instanceStatusBoard" class="instance-status-board"></div>
       </div>
     </header>
 
@@ -109,11 +114,22 @@
         <div id="activitySummaryGrid" class="summary-grid"></div>
       </section>
 
+      <section class="panel global-gates-panel" data-view="realtime">
+        <div class="panel-head">
+          <div>
+            <h2>Global Gates</h2>
+            <p class="panel-subtitle">Desk-wide transport, dependency, and fallback readiness shared across all bots.</p>
+          </div>
+        </div>
+        <div id="globalGatesMeta" class="selection-context"></div>
+        <div id="globalGatesGrid" class="summary-grid"></div>
+      </section>
+
       <section class="panel gate-board-panel" data-view="realtime">
         <div class="panel-head">
           <div>
-            <h2>Gate Board</h2>
-            <p class="panel-subtitle">Live quote status and gate-by-gate reasons for quoting, waiting, limited mode, or block.</p>
+            <h2>Bot Gate Board</h2>
+            <p class="panel-subtitle">Selected bot gate-by-gate reasons for quoting, waiting, limited mode, or block.</p>
           </div>
         </div>
         <div id="gateBoardMeta" class="selection-context"></div>
@@ -264,6 +280,110 @@
         <pre id="eventFeed"></pre>
       </section>
 
+      <section class="section-banner" data-view="history" hidden>
+        <div>
+          <h2>Shared History Monitor</h2>
+          <p>Observe shared-history read mode, source quality, fallback behavior, and shadow parity for the selected bot and pair.</p>
+        </div>
+      </section>
+
+      <section class="panel history-overview-panel" data-view="history" hidden>
+        <div class="panel-head">
+          <div>
+            <h2>History Overview</h2>
+            <p class="panel-subtitle">Current read mode, selected context, and top-line quality of the candle history path.</p>
+          </div>
+          <div id="historyMeta" class="panel-meta"></div>
+        </div>
+        <div id="historyOverviewGrid" class="summary-grid"></div>
+      </section>
+
+      <section class="panel history-quality-panel" data-view="history" hidden>
+        <div class="panel-head">
+          <div>
+            <h2>Provider Quality</h2>
+            <p class="panel-subtitle">Provider-reported freshness, gap, coverage, and fallback diagnostics.</p>
+          </div>
+        </div>
+        <div id="historyQualityGrid" class="summary-grid"></div>
+      </section>
+
+      <section class="panel history-parity-panel" data-view="history" hidden>
+        <div class="panel-head">
+          <div>
+            <h2>Shadow Parity</h2>
+            <p class="panel-subtitle">Legacy vs shared-history comparison for the current selection when UI read mode is `shadow`.</p>
+          </div>
+        </div>
+        <div class="table-wrap">
+          <table>
+            <thead>
+              <tr>
+                <th>Metric</th>
+                <th>Value</th>
+              </tr>
+            </thead>
+            <tbody id="historyParityTableBody"></tbody>
+          </table>
+        </div>
+      </section>
+
+      <section class="section-banner section-banner-ops" data-view="service" hidden>
+        <div>
+          <h2>Live Data Service</h2>
+          <p>Monitor realtime-ui-api transport health, dependency readiness, and instance coverage across the desk.</p>
+        </div>
+      </section>
+
+      <section class="panel service-overview-panel" data-view="service" hidden>
+        <div class="panel-head">
+          <div>
+            <h2>Service Overview</h2>
+            <p class="panel-subtitle">API mode, transport freshness, fallback posture, and stream coverage.</p>
+          </div>
+        </div>
+        <div id="serviceOverviewGrid" class="summary-grid"></div>
+      </section>
+
+      <section class="panel service-sources-panel" data-view="service" hidden>
+        <div class="panel-head">
+          <div>
+            <h2>Source Coverage</h2>
+            <p class="panel-subtitle">Where service visibility comes from and how many live state keys are currently tracked.</p>
+          </div>
+        </div>
+        <div id="serviceSourceGrid" class="summary-grid"></div>
+      </section>
+
+      <section class="panel service-instances-panel" data-view="service" hidden>
+        <div class="panel-head">
+          <div>
+            <h2>Instance Coverage</h2>
+            <p class="panel-subtitle">Per-instance freshness, source path, quoting state, and account snapshot context.</p>
+          </div>
+          <div id="serviceInstancesMeta" class="panel-meta"></div>
+        </div>
+        <div class="table-wrap">
+          <table>
+            <thead>
+              <tr>
+                <th>Instance</th>
+                <th>Freshness</th>
+                <th>Source</th>
+                <th>Controller</th>
+                <th>Pair</th>
+                <th>Stream Age</th>
+                <th>Quote</th>
+                <th>Orders</th>
+                <th>Day PnL</th>
+                <th>Equity</th>
+              </tr>
+            </thead>
+            <tbody id="serviceInstancesTableBody"></tbody>
+          </table>
+        </div>
+      </section>
+
       <section class="section-banner" data-view="daily" hidden>
         <div>
           <h2>Daily Review</h2>
@@ -343,8 +463,8 @@
       <section class="panel daily-gates-panel" data-view="daily" hidden>
         <div class="panel-head">
           <div>
-            <h2>Gate Timeline</h2>
-            <p class="panel-subtitle">Transitions between quoting, waiting, limited, and blocked states across the day.</p>
+            <h2>Bot Gate Timeline</h2>
+            <p class="panel-subtitle">Selected bot transitions between quoting, waiting, limited, and blocked states across the day.</p>
           </div>
         </div>
         <div class="table-wrap">
@@ -533,8 +653,8 @@
       <section class="panel journal-gates-panel" data-view="journal" hidden>
         <div class="panel-head">
           <div>
-            <h2>Trade Gate Timeline</h2>
-            <p class="panel-subtitle">Gate transitions observed during the selected trade window.</p>
+            <h2>Bot Gate Timeline</h2>
+            <p class="panel-subtitle">Selected bot gate transitions observed during the selected trade window.</p>
           </div>
         </div>
         <div class="table-wrap">

@@ -14,6 +14,7 @@ except Exception:
     ccxt = None
 
 
+from services.common.log_namespace import iter_bot_log_files
 from services.common.rate_limiter import ExchangeRateLimiter
 from services.common.retry import with_retry
 
@@ -198,7 +199,7 @@ def run() -> None:
                 perp_positions_global = {"status": "fetch_failed", "positions": [], "error": "unexpected_error"}
 
         bots: Dict[str, Dict[str, object]] = {}
-        for minute_file in data_root.glob("*/logs/epp_v24/*/minute.csv"):
+        for minute_file in iter_bot_log_files(data_root, "minute.csv"):
             bot = minute_file.parts[-5]
             row = _read_last_csv_row(minute_file)
             if row is None:

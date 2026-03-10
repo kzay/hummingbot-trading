@@ -7,6 +7,8 @@ Static web UI for operator/trader execution view:
 - Open orders overlay/table
 - Recent fills feed
 - L2 depth ladder
+- Live data service monitoring tab for API health and instance coverage
+- Shared history monitoring tab for read mode, quality, and shadow parity
 - Live updates via SSE from `realtime-ui-api`
 
 ## Local run
@@ -17,6 +19,12 @@ python -m http.server 8088
 ```
 
 Then open <http://localhost:8088> and point API URL to `http://localhost:9910`.
+
+## Current status
+
+- `hbot/apps/realtime_ui_v2` is the primary frontend target.
+- The v2 app now keeps API tokens in session storage only and does not use browser websocket auth when a bearer token is configured.
+- Keep this legacy UI as a fallback or comparison surface during migration, not as the hardened default path.
 
 ## Make a new bot visible
 
