@@ -21,7 +21,8 @@ HUMMINGBOT_AVAILABLE = _hummingbot_available()
 if HUMMINGBOT_AVAILABLE:
     from controllers.bots.bot7.pullback_v1 import PullbackV1Config, PullbackV1Controller
     from controllers.epp_v2_4_bot7_pullback import EppV24Bot7PullbackConfig, EppV24Bot7PullbackController
-    from controllers.runtime.base import StrategyRuntimeV24Config, StrategyRuntimeV24Controller
+    from controllers.runtime.directional_config import DirectionalRuntimeConfig
+    from controllers.runtime.directional_runtime import DirectionalRuntimeController
     from controllers.runtime.data_context import RuntimeDataContext
     from controllers.runtime.market_making_types import MarketConditions, QuoteGeometry, RegimeSpec, SpreadEdgeState
     from services.common.market_data_plane import MarketTrade
@@ -30,8 +31,8 @@ else:  # pragma: no cover
     PullbackV1Controller = object
     EppV24Bot7PullbackConfig = object
     EppV24Bot7PullbackController = object
-    StrategyRuntimeV24Config = object
-    StrategyRuntimeV24Controller = object
+    DirectionalRuntimeConfig = object
+    DirectionalRuntimeController = object
     RuntimeDataContext = object
     MarketConditions = object
     QuoteGeometry = object
@@ -173,7 +174,7 @@ def _make_pb_config(**overrides) -> SimpleNamespace:
         pb_sl_cap_pct=Decimal("0.01"),
         pb_tp_floor_pct=Decimal("0.006"),
         pb_tp_cap_pct=Decimal("0.02"),
-        pb_trend_quality_enabled=True,
+        pb_trend_quality_enabled=False,  # disabled in default tests; covered by TestBasisSlopeGate/TestSMATrendGate
         pb_basis_slope_bars=5,
         pb_min_basis_slope_pct=Decimal("0.0002"),
         pb_trend_sma_period=50,
@@ -360,18 +361,21 @@ def _make_pullback_long_trades() -> list[MarketTrade]:
     bb_lower=99000, bb_basis=100000: zone ≈ 99099 to 100150.
     Mid at 99800 is solidly in zone.
     Absorption: big buy trade absorbs sell pressure at zone level.
+
+    Timestamps must be ~1s before provider time (1_700_000_000.0) to stay fresh.
     """
+    _TS = 1_699_999_999_000  # 1 second before provider time in ms
     return [
-        _make_trade(1, price="99810", size="0.3", delta="-0.3", ts_ms=999_100),
-        _make_trade(2, price="99805", size="0.3", delta="-0.3", ts_ms=999_200),
-        _make_trade(3, price="99800", size="0.4", delta="-0.4", ts_ms=999_300),
-        _make_trade(4, price="99798", size="0.4", delta="-0.4", ts_ms=999_400),
-        _make_trade(5, price="99797", size="0.3", delta="0.3", ts_ms=999_500),
-        _make_trade(6, price="99796", size="0.3", delta="0.3", ts_ms=999_600),
-        _make_trade(7, price="99795", size="0.3", delta="0.5", ts_ms=999_700),
-        _make_trade(8, price="99795", size="0.3", delta="0.4", ts_ms=999_750),
+        _make_trade(1, price="99810", size="0.3", delta="-0.3", ts_ms=_TS + 100),
+        _make_trade(2, price="99805", size="0.3", delta="-0.3", ts_ms=_TS + 200),
+        _make_trade(3, price="99800", size="0.4", delta="-0.4", ts_ms=_TS + 300),
+        _make_trade(4, price="99798", size="0.4", delta="-0.4", ts_ms=_TS + 400),
+        _make_trade(5, price="99797", size="0.3", delta="0.3", ts_ms=_TS + 500),
+        _make_trade(6, price="99796", size="0.3", delta="0.3", ts_ms=_TS + 600),
+        _make_trade(7, price="99795", size="0.3", delta="0.5", ts_ms=_TS + 700),
+        _make_trade(8, price="99795", size="0.3", delta="0.4", ts_ms=_TS + 750),
         # Big absorbing buy
-        _make_trade(9, price="99795", size="3.0", delta="3.0", ts_ms=999_900),
+        _make_trade(9, price="99795", size="3.0", delta="3.0", ts_ms=_TS + 900),
     ]
 
 
@@ -380,18 +384,21 @@ def _make_pullback_short_trades() -> list[MarketTrade]:
     bb_basis=100000, bb_upper=101000: zone ≈ 99850 to 100899.
     Mid at 100200 is solidly in zone.
     Absorption: big sell trade absorbs buy pressure.
+
+    Timestamps must be ~1s before provider time (1_700_000_000.0) to stay fresh.
     """
+    _TS = 1_699_999_999_000  # 1 second before provider time in ms
     return [
-        _make_trade(1, price="100190", size="0.3", delta="0.3", ts_ms=999_100),
-        _make_trade(2, price="100195", size="0.3", delta="0.3", ts_ms=999_200),
-        _make_trade(3, price="100200", size="0.4", delta="0.4", ts_ms=999_300),
-        _make_trade(4, price="100202", size="0.4", delta="0.4", ts_ms=999_400),
-        _make_trade(5, price="100203", size="0.3", delta="-0.3", ts_ms=999_500),
-        _make_trade(6, price="100204", size="0.3", delta="-0.3", ts_ms=999_600),
-        _make_trade(7, price="100205", size="0.3", delta="-0.5", ts_ms=999_700),
-        _make_trade(8, price="100205", size="0.3", delta="-0.4", ts_ms=999_750),
+        _make_trade(1, price="100190", size="0.3", delta="0.3", ts_ms=_TS + 100),
+        _make_trade(2, price="100195", size="0.3", delta="0.3", ts_ms=_TS + 200),
+        _make_trade(3, price="100200", size="0.4", delta="0.4", ts_ms=_TS + 300),
+        _make_trade(4, price="100202", size="0.4", delta="0.4", ts_ms=_TS + 400),
+        _make_trade(5, price="100203", size="0.3", delta="-0.3", ts_ms=_TS + 500),
+        _make_trade(6, price="100204", size="0.3", delta="-0.3", ts_ms=_TS + 600),
+        _make_trade(7, price="100205", size="0.3", delta="-0.5", ts_ms=_TS + 700),
+        _make_trade(8, price="100205", size="0.3", delta="-0.4", ts_ms=_TS + 750),
         # Big absorbing sell
-        _make_trade(9, price="100205", size="3.0", delta="-3.0", ts_ms=999_900),
+        _make_trade(9, price="100205", size="3.0", delta="-3.0", ts_ms=_TS + 900),
     ]
 
 
@@ -399,13 +406,13 @@ def _make_pullback_short_trades() -> list[MarketTrade]:
 
 
 def test_pullback_class_hierarchy() -> None:
-    assert issubclass(PullbackV1Config, StrategyRuntimeV24Config)
-    assert issubclass(PullbackV1Controller, StrategyRuntimeV24Controller)
-    assert PullbackV1Config.controller_name == "bot7_pullback_v1"
+    assert issubclass(PullbackV1Config, DirectionalRuntimeConfig)
+    assert issubclass(PullbackV1Controller, DirectionalRuntimeController)
+    assert PullbackV1Config.model_fields["controller_name"].default == "bot7_pullback_v1"
 
     assert issubclass(EppV24Bot7PullbackConfig, PullbackV1Config)
     assert issubclass(EppV24Bot7PullbackController, PullbackV1Controller)
-    assert EppV24Bot7PullbackConfig.controller_name == "epp_v2_4_bot7_pullback"
+    assert EppV24Bot7PullbackConfig.model_fields["controller_name"].default == "epp_v2_4_bot7_pullback"
 
 
 def test_pullback_config_instantiates() -> None:
@@ -768,24 +775,6 @@ def test_build_runtime_execution_plan_returns_buy_spreads_on_active_long() -> No
     state = PullbackV1Controller._update_pb_state(ctrl, mid=Decimal("99800"), regime_name="up")
     assert state["active"] is True
 
-    spread_state = SpreadEdgeState(
-        spread_pct=Decimal("0.0015"),
-        turnover_x=Decimal("1"),
-        side_spread_floor=Decimal("0.0010"),
-    )
-    market = MarketConditions(
-        mid=Decimal("99800"),
-        best_bid=Decimal("99795"),
-        best_ask=Decimal("99805"),
-        side_spread_floor=Decimal("0.0010"),
-        geometry=QuoteGeometry(
-            buy_spreads=[Decimal("0.0015")],
-            sell_spreads=[Decimal("0.0015")],
-            buy_amounts_pct=[Decimal("100")],
-            sell_amounts_pct=[Decimal("100")],
-        ),
-    )
-
     plan = PullbackV1Controller.build_runtime_execution_plan(
         ctrl,
         RuntimeDataContext(
@@ -793,8 +782,8 @@ def test_build_runtime_execution_plan_returns_buy_spreads_on_active_long() -> No
             mid=Decimal("99800"),
             regime_name="up",
             regime_spec=_make_regime_spec("buy_only"),
-            spread_state=spread_state,
-            market=market,
+            spread_state=_make_spread_edge_state(),
+            market=_make_market_conditions(),
             equity_quote=Decimal("5000"),
             target_base_pct=Decimal("0"),
             target_net_base_pct=Decimal("0"),
@@ -822,24 +811,6 @@ def test_build_runtime_execution_plan_returns_empty_on_neutral_regime() -> None:
     )
     PullbackV1Controller._update_pb_state(ctrl, mid=Decimal("100000"), regime_name="neutral_low_vol")
 
-    spread_state = SpreadEdgeState(
-        spread_pct=Decimal("0.0015"),
-        turnover_x=Decimal("1"),
-        side_spread_floor=Decimal("0.0010"),
-    )
-    market = MarketConditions(
-        mid=Decimal("100000"),
-        best_bid=Decimal("99995"),
-        best_ask=Decimal("100005"),
-        side_spread_floor=Decimal("0.0010"),
-        geometry=QuoteGeometry(
-            buy_spreads=[Decimal("0.0015")],
-            sell_spreads=[Decimal("0.0015")],
-            buy_amounts_pct=[Decimal("100")],
-            sell_amounts_pct=[Decimal("100")],
-        ),
-    )
-
     plan = PullbackV1Controller.build_runtime_execution_plan(
         ctrl,
         RuntimeDataContext(
@@ -847,8 +818,8 @@ def test_build_runtime_execution_plan_returns_empty_on_neutral_regime() -> None:
             mid=Decimal("100000"),
             regime_name="neutral_low_vol",
             regime_spec=_make_regime_spec("off"),
-            spread_state=spread_state,
-            market=market,
+            spread_state=_make_spread_edge_state(),
+            market=_make_market_conditions(bid_p=Decimal("99995"), ask_p=Decimal("100005")),
             equity_quote=Decimal("5000"),
             target_base_pct=Decimal("0"),
             target_net_base_pct=Decimal("0"),
@@ -870,24 +841,6 @@ def test_warmup_quote_levels_zero_returns_empty_plan_during_warmup() -> None:
     state = PullbackV1Controller._update_pb_state(ctrl, mid=Decimal("99800"), regime_name="up")
     assert state["reason"] == "indicator_warmup"
 
-    spread_state = SpreadEdgeState(
-        spread_pct=Decimal("0.0015"),
-        turnover_x=Decimal("1"),
-        side_spread_floor=Decimal("0.0010"),
-    )
-    market = MarketConditions(
-        mid=Decimal("99800"),
-        best_bid=Decimal("99795"),
-        best_ask=Decimal("99805"),
-        side_spread_floor=Decimal("0.0010"),
-        geometry=QuoteGeometry(
-            buy_spreads=[Decimal("0.0015")],
-            sell_spreads=[Decimal("0.0015")],
-            buy_amounts_pct=[Decimal("100")],
-            sell_amounts_pct=[Decimal("100")],
-        ),
-    )
-
     plan = PullbackV1Controller.build_runtime_execution_plan(
         ctrl,
         RuntimeDataContext(
@@ -895,8 +848,8 @@ def test_warmup_quote_levels_zero_returns_empty_plan_during_warmup() -> None:
             mid=Decimal("99800"),
             regime_name="up",
             regime_spec=_make_regime_spec("buy_only"),
-            spread_state=spread_state,
-            market=market,
+            spread_state=_make_spread_edge_state(),
+            market=_make_market_conditions(),
             equity_quote=Decimal("5000"),
             target_base_pct=Decimal("0"),
             target_net_base_pct=Decimal("0"),
@@ -1119,20 +1072,26 @@ class TestBasisSlopeGate:
         # With 5 bars rising by 100 each: current_sma ≈ 100075, slope ≈ 0.00075 > 0.0002
         closes = [Decimal("100000")] * 20 + [Decimal("100100"), Decimal("100200"),
                   Decimal("100300"), Decimal("100400"), Decimal("100500")]
-        ctrl = _make_pb_controller(price_buffer=_FakePriceBuffer(
-            lower=Decimal("99000"), basis=Decimal("100000"), upper=Decimal("101000"),
-            rsi=Decimal("45"), adx=Decimal("28"), atr=Decimal("500"), bar_closes=closes,
-        ))
+        ctrl = _make_pb_controller(
+            config=_make_pb_config(pb_trend_quality_enabled=True),
+            price_buffer=_FakePriceBuffer(
+                lower=Decimal("99000"), basis=Decimal("100000"), upper=Decimal("101000"),
+                rsi=Decimal("45"), adx=Decimal("28"), atr=Decimal("500"), bar_closes=closes,
+            ),
+        )
         passed, slope = ctrl._check_basis_slope("buy")
         assert passed is True
         assert slope > Decimal("0.0002")
 
     def test_flat_slope_blocks_long(self):
         closes = [Decimal("100000")] * 25
-        ctrl = _make_pb_controller(price_buffer=_FakePriceBuffer(
-            lower=Decimal("99000"), basis=Decimal("100000"), upper=Decimal("101000"),
-            rsi=Decimal("45"), adx=Decimal("28"), atr=Decimal("500"), bar_closes=closes,
-        ))
+        ctrl = _make_pb_controller(
+            config=_make_pb_config(pb_trend_quality_enabled=True),
+            price_buffer=_FakePriceBuffer(
+                lower=Decimal("99000"), basis=Decimal("100000"), upper=Decimal("101000"),
+                rsi=Decimal("45"), adx=Decimal("28"), atr=Decimal("500"), bar_closes=closes,
+            ),
+        )
         passed, slope = ctrl._check_basis_slope("buy")
         assert passed is False
         assert slope == Decimal("0")
@@ -1150,10 +1109,13 @@ class TestBasisSlopeGate:
         # SMA-based slope: past 20-bar SMA = 100500, current includes falling bars
         closes = [Decimal("100500")] * 20 + [Decimal("100400"), Decimal("100300"),
                   Decimal("100200"), Decimal("100100"), Decimal("100000")]
-        ctrl = _make_pb_controller(price_buffer=_FakePriceBuffer(
-            lower=Decimal("99000"), basis=Decimal("100000"), upper=Decimal("101000"),
-            rsi=Decimal("55"), adx=Decimal("28"), atr=Decimal("500"), bar_closes=closes,
-        ))
+        ctrl = _make_pb_controller(
+            config=_make_pb_config(pb_trend_quality_enabled=True),
+            price_buffer=_FakePriceBuffer(
+                lower=Decimal("99000"), basis=Decimal("100000"), upper=Decimal("101000"),
+                rsi=Decimal("55"), adx=Decimal("28"), atr=Decimal("500"), bar_closes=closes,
+            ),
+        )
         passed, slope = ctrl._check_basis_slope("sell")
         assert passed is True
         assert slope < Decimal("-0.0002")
@@ -1177,21 +1139,27 @@ class TestBasisSlopeGate:
 class TestSMATrendGate:
 
     def test_above_sma_passes_long(self):
-        ctrl = _make_pb_controller(price_buffer=_FakePriceBuffer(
-            lower=Decimal("99000"), basis=Decimal("100000"), upper=Decimal("101000"),
-            rsi=Decimal("45"), adx=Decimal("28"), atr=Decimal("500"),
-            sma_value=Decimal("99800"),
-        ))
+        ctrl = _make_pb_controller(
+            config=_make_pb_config(pb_trend_quality_enabled=True),
+            price_buffer=_FakePriceBuffer(
+                lower=Decimal("99000"), basis=Decimal("100000"), upper=Decimal("101000"),
+                rsi=Decimal("45"), adx=Decimal("28"), atr=Decimal("500"),
+                sma_value=Decimal("99800"),
+            ),
+        )
         passed, sma = ctrl._check_trend_sma(Decimal("100000"), "buy")
         assert passed is True
         assert sma == Decimal("99800")
 
     def test_below_sma_blocks_long(self):
-        ctrl = _make_pb_controller(price_buffer=_FakePriceBuffer(
-            lower=Decimal("99000"), basis=Decimal("100000"), upper=Decimal("101000"),
-            rsi=Decimal("45"), adx=Decimal("28"), atr=Decimal("500"),
-            sma_value=Decimal("100200"),
-        ))
+        ctrl = _make_pb_controller(
+            config=_make_pb_config(pb_trend_quality_enabled=True),
+            price_buffer=_FakePriceBuffer(
+                lower=Decimal("99000"), basis=Decimal("100000"), upper=Decimal("101000"),
+                rsi=Decimal("45"), adx=Decimal("28"), atr=Decimal("500"),
+                sma_value=Decimal("100200"),
+            ),
+        )
         passed, sma = ctrl._check_trend_sma(Decimal("100000"), "buy")
         assert passed is False
 
@@ -1367,17 +1335,8 @@ def _make_data_context(mid=Decimal("100000")) -> RuntimeDataContext:
         mid=mid,
         regime_name="up",
         regime_spec=_make_regime_spec("buy_only"),
-        spread_state=SpreadEdgeState(
-            spread_pct=Decimal("0.002"),
-            spread_floor_pct=Decimal("0.001"),
-            skew=Decimal("0"),
-            net_edge=Decimal("0.001"),
-            turnover_x=Decimal("1.0"),
-        ),
-        market=MarketConditions(
-            order_book_stale=False,
-            side_spread_floor=Decimal("0.001"),
-        ),
+        spread_state=_make_spread_edge_state(),
+        market=_make_market_conditions(),
         equity_quote=Decimal("5000"),
         target_base_pct=Decimal("0"),
         target_net_base_pct=Decimal("0"),
