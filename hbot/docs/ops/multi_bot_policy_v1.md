@@ -46,9 +46,9 @@ Define explicit bot roles, allowed runtime modes, and safety envelopes so scalin
 
 ## Canonical Runtime Profiles
 - Live control plane with primary live bot:
-  - `docker compose --env-file ../env/.env --profile external up -d bot1`
+  - `docker compose --env-file infra/env/.env -f infra/compose/docker-compose.yml --profile external up -d bot1`
 - Validation matrix:
-  - `docker compose --env-file ../env/.env --profile test up -d bot3 bot4`
+  - `docker compose --env-file infra/env/.env -f infra/compose/docker-compose.yml --profile test up -d bot3 bot4`
 - Reserved/disabled scale slot (`bot2`) must not be started in normal operations.
 
 ## Change Control Contract

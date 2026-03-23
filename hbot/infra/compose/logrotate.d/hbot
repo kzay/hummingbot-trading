@@ -1,0 +1,25 @@
+# Logrotate config for hbot application logs on VPS.
+# Install: sudo cp hbot /etc/logrotate.d/hbot
+# Adjust DATA_ROOT to match your deployment path.
+
+/opt/hbot/data/bot*/logs/*.log {
+    daily
+    rotate 7
+    compress
+    delaycompress
+    missingok
+    notifempty
+    copytruncate
+    maxsize 50M
+}
+
+/opt/hbot/data/bot*/logs/errors.log {
+    daily
+    rotate 14
+    compress
+    delaycompress
+    missingok
+    notifempty
+    copytruncate
+    maxsize 50M
+}

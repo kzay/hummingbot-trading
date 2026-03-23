@@ -99,7 +99,7 @@ If HARD_STOP from cancel_budget_breach:
 ### API Key Issues:
 1. Rotate key per `docs/ops/secrets_and_key_rotation.md`.
 2. Verify new key has trade + read permissions but NOT withdrawal.
-3. Recreate bot: `docker compose --env-file hbot/env/.env ... up -d --no-deps bot1`
+3. Recreate bot: `docker compose --env-file hbot/infra/env/.env -f hbot/infra/compose/docker-compose.yml up -d --no-deps bot1`
 
 ---
 

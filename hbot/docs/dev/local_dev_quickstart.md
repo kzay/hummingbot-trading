@@ -5,7 +5,7 @@ Provide one-command local workflows for test/external bring-up and fast develope
 
 ## Preconditions
 - Docker Desktop running.
-- `.env` present at `hbot/env/.env`.
+- `.env` present at `hbot/infra/env/.env`.
 - Run all commands from `hbot/`.
 
 ## One-Command Profile Bring-Up
@@ -49,7 +49,11 @@ Provide one-command local workflows for test/external bring-up and fast develope
 - If controller code changes are not reflected:
   - `python scripts/release/dev_workflow.py clear-pyc --bot bot1`
   - then recreate the bot container:
-    - `docker compose --env-file env/.env -f compose/docker-compose.yml up -d --force-recreate bot1`
+    - `docker compose --env-file infra/env/.env -f infra/compose/docker-compose.yml up -d --force-recreate bot1`
 
 ## Expected Runtime
 - Fast checks should complete in a short and predictable window (typically under 1 minute on a warm workspace).
+
+## See also
+- [code_hygiene.md](code_hygiene.md) — ruff, tests, optional vulture/knip.
+- [openspec_agent_sync.md](openspec_agent_sync.md) — keep `.cursor` / `.claude` / `.github` OpenSpec copies in sync.

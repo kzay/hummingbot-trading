@@ -16,7 +16,7 @@
     - `hbot_bot_cancel_per_min`
     - `hbot_bot_risk_reasons_info`
 - Dashboard upgrade:
-  - `monitoring/grafana/dashboards/trading_overview.json` (version 2)
+  - `infra/monitoring/grafana/dashboards/trading_overview.json` (version 2)
   - new panels include:
     - aggregate equity
     - aggregate daily pnl
@@ -32,7 +32,7 @@
 - `python -m py_compile services/bot_metrics_exporter.py`
 - exporter render smoke check confirms new metric names are emitted.
 - compose config still valid:
-  - `docker compose --env-file env/.env -f compose/docker-compose.yml config`
+  - `docker compose --env-file infra/env/.env -f infra/compose/docker-compose.yml config`
 
 ## Result
 - Operators can assess multi-bot PnL, drawdown, risk reasons, and execution activity from Grafana in one pass.

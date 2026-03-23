@@ -176,8 +176,8 @@ Wave summary:
 - `hbot/scripts/release/finalize_readiness_decision.py`
 - `hbot/reports/readiness/final_decision_latest.json`
 - `hbot/docs/ops/option4_readiness_decision_latest.md`
-- `hbot/compose/images/control_plane/Dockerfile`
-- `hbot/compose/images/control_plane/requirements-control-plane.txt`
+- `hbot/infra/compose/images/control_plane/Dockerfile`
+- `hbot/infra/compose/images/control_plane/requirements-control-plane.txt`
 - `hbot/docs/ops/day8_reproducible_builds_20260222.md`
 - `hbot/docs/ops/game_day_20260222.md`
 - `hbot/scripts/release/run_replay_regression_cycle.py`
@@ -206,7 +206,7 @@ Wave summary:
 - `hbot/docs/ops/weekly_readiness_review_20260222.md`
 - `hbot/services/control_plane_metrics_exporter.py`
 - `hbot/docs/ops/day22_pro_desk_dashboards_20260222.md`
-- `hbot/monitoring/grafana/dashboards/wallet_blotter_v1.json`
+- `hbot/infra/monitoring/grafana/dashboards/wallet_blotter_v1.json`
 - `hbot/docs/ops/day23_wallet_positions_blotter_20260222.md`
 - `hbot/docs/ops/dashboard_kpi_contract_v1.md`
 - `hbot/docs/ops/day24_performance_analytics_20260222.md`
@@ -214,7 +214,7 @@ Wave summary:
 - `hbot/docs/ops/day25_postgres_ops_store_20260222.md`
 - `hbot/services/ops_db_writer/main.py`
 - `hbot/services/ops_db_writer/schema_v1.sql`
-- `hbot/monitoring/grafana/dashboards/ops_db_overview.json`
+- `hbot/infra/monitoring/grafana/dashboards/ops_db_overview.json`
 - `hbot/docs/ops/day26_ops_db_writer_20260222.md`
 - `hbot/docs/ops/prod_readiness_checklist_v1.md`
 - `hbot/docs/ops/prod_hardening_backlog_v1.md`
@@ -344,7 +344,7 @@ Wave summary:
   - risk note (if any)
 
 ## Latest Evidence Snapshot (2026-02-22)
-- Compose validation/startup/status checks executed successfully from `hbot/compose`.
+- Compose validation/startup/status checks executed successfully from `hbot/` using `infra/compose/docker-compose.yml`.
 - Monitoring services healthy: Prometheus, Grafana, Loki, bot-metrics-exporter.
 - Alertmanager and webhook sink healthy; delivery events confirmed in sink log.
 - Historical hard-stop evidence confirmed in bot CSV logs.
@@ -460,12 +460,12 @@ Wave summary:
   - current decision remains `HOLD` with blockers tied to strict/day2/soak readiness.
 - Day8 reproducible-build packaging implemented:
   - external control-plane image added with pinned dependencies:
-    - `compose/images/control_plane/Dockerfile`
-    - `compose/images/control_plane/requirements-control-plane.txt`
+    - `infra/compose/images/control_plane/Dockerfile`
+    - `infra/compose/images/control_plane/requirements-control-plane.txt`
   - compose external services now use shared image anchor `kzay-capital-control-plane:20260222` (no runtime `pip install` paths).
   - build verification:
-    - `docker compose --env-file ../env/.env --profile external -f compose/docker-compose.yml config` passed
-    - `docker compose --env-file ../env/.env --profile external -f compose/docker-compose.yml build daily-ops-reporter` built `kzay-capital-control-plane:20260222`
+    - `docker compose --env-file infra/env/.env --profile external -f infra/compose/docker-compose.yml config` passed
+    - `docker compose --env-file infra/env/.env --profile external -f infra/compose/docker-compose.yml build daily-ops-reporter` built `kzay-capital-control-plane:20260222`
   - release manifest updated with external control-plane runtime provenance.
 - Day9 game day fail-closed drill completed:
   - scenario: controlled Redis outage and recovery
@@ -600,7 +600,7 @@ Wave summary:
     - `config/multi_bot_policy_v1.json`
     - `docs/ops/multi_bot_policy_v1.md`
   - compose policy metadata aligned per bot:
-    - `compose/docker-compose.yml` (`BOT_POLICY_ROLE`, `BOT_POLICY_MODE`, `BOT_POLICY_VERSION`)
+    - `infra/compose/docker-compose.yml` (`BOT_POLICY_ROLE`, `BOT_POLICY_MODE`, `BOT_POLICY_VERSION`)
   - enforceable policy scope checker added:
     - `scripts/release/check_multi_bot_policy.py`
     - output artifact: `reports/policy/latest.json`
@@ -636,13 +636,13 @@ Wave summary:
 - Day22 pro desk dashboards v1 completed:
   - control-plane metrics exporter implemented:
     - `services/control_plane_metrics_exporter.py`
-    - compose service: `control-plane-metrics-exporter` in `compose/docker-compose.yml`
+    - compose service: `control-plane-metrics-exporter` in `infra/compose/docker-compose.yml`
   - Prometheus scrape target added:
-    - `monitoring/prometheus/prometheus.yml` (`job_name=control-plane-metrics`)
+    - `infra/monitoring/prometheus/prometheus.yml` (`job_name=control-plane-metrics`)
   - control-plane alert rules added:
-    - `monitoring/prometheus/alert_rules.yml` (`ControlPlaneReportMissing`, `ControlPlaneReportStale`, `PromotionGateFailed`, `StrictCycleFailed`, `Day2GateNotGo`)
+    - `infra/monitoring/prometheus/alert_rules.yml` (`ControlPlaneReportMissing`, `ControlPlaneReportStale`, `PromotionGateFailed`, `StrictCycleFailed`, `Day2GateNotGo`)
   - Grafana dashboard added:
-    - `monitoring/grafana/dashboards/control_plane_overview.json` (`Trading Desk Control Plane`)
+    - `infra/monitoring/grafana/dashboards/control_plane_overview.json` (`Trading Desk Control Plane`)
   - implementation note/evidence doc:
     - `docs/ops/day22_pro_desk_dashboards_20260222.md`
 - Day23 wallet/positions + blotter v1 completed:
@@ -657,9 +657,9 @@ Wave summary:
       - `hbot_bot_blotter_last_fill_age_seconds`
     - includes `variant=no_fills` fallback series when fills CSVs are absent
   - exporter compose env updated with data path:
-    - `compose/docker-compose.yml` (`HB_DATA_ROOT=/workspace/hbot/data`)
+    - `infra/compose/docker-compose.yml` (`HB_DATA_ROOT=/workspace/hbot/data`)
   - dashboard added:
-    - `monitoring/grafana/dashboards/wallet_blotter_v1.json` (`Trading Desk Wallet and Blotter`)
+    - `infra/monitoring/grafana/dashboards/wallet_blotter_v1.json` (`Trading Desk Wallet and Blotter`)
   - ops docs updated:
     - `docs/ops/day23_wallet_positions_blotter_20260222.md`
     - `docs/ops/runbooks.md` (dashboard startup list)
@@ -675,18 +675,18 @@ Wave summary:
       - `hbot_bot_cancel_per_min`
       - `hbot_bot_risk_reasons_info`
   - trading overview dashboard upgraded:
-    - `monitoring/grafana/dashboards/trading_overview.json` (v2 panels for equity, drawdown, pnl distribution, rolling stats, risk posture)
+    - `infra/monitoring/grafana/dashboards/trading_overview.json` (v2 panels for equity, drawdown, pnl distribution, rolling stats, risk posture)
   - KPI contract published:
     - `docs/ops/dashboard_kpi_contract_v1.md`
   - implementation/evidence note:
     - `docs/ops/day24_performance_analytics_20260222.md`
 - Day25 PostgreSQL operational store v1 completed:
   - compose runtime additions:
-    - `compose/docker-compose.yml`
+    - `infra/compose/docker-compose.yml`
     - services: `postgres` (profile `ops`), optional `pgadmin` (profile `ops-tools`)
     - persistent volume: `postgres-data`
   - Grafana datasource provisioning:
-    - `monitoring/grafana/provisioning/datasources/datasource.yml` (`uid=postgres-ops`)
+    - `infra/monitoring/grafana/provisioning/datasources/datasource.yml` (`uid=postgres-ops`)
   - ops docs/runbook updates:
     - `docs/ops/postgres_ops_store_v1.md`
     - `docs/ops/day25_postgres_ops_store_20260222.md`
@@ -698,11 +698,11 @@ Wave summary:
     - `services/ops_db_writer/main.py`
     - `services/ops_db_writer/schema_v1.sql`
   - compose wiring:
-    - `compose/docker-compose.yml` (`ops-db-writer`, profile `ops`, depends on healthy `postgres`)
+    - `infra/compose/docker-compose.yml` (`ops-db-writer`, profile `ops`, depends on healthy `postgres`)
   - control-plane image dependency:
-    - `compose/images/control_plane/requirements-control-plane.txt` (`psycopg[binary]==3.2.13`)
+    - `infra/compose/images/control_plane/requirements-control-plane.txt` (`psycopg[binary]==3.2.13`)
   - first Postgres-driven Grafana dashboard:
-    - `monitoring/grafana/dashboards/ops_db_overview.json` (`Trading Desk Ops DB Overview`)
+    - `infra/monitoring/grafana/dashboards/ops_db_overview.json` (`Trading Desk Ops DB Overview`)
   - runbook/docs updates:
     - `docs/ops/runbooks.md`
     - `docs/ops/postgres_ops_store_v1.md`
@@ -736,7 +736,7 @@ Wave summary:
     - `reports/ops_db_writer/latest.json` (`status=pass`)
 - Day28 prod hardening sprint v1 completed:
   - runtime reliability hardening:
-    - `compose/docker-compose.yml` adds healthchecks and freshness thresholds for critical control-plane + ops-db-writer services
+    - `infra/compose/docker-compose.yml` adds healthchecks and freshness thresholds for critical control-plane + ops-db-writer services
   - gate fail-closed tightening:
     - `scripts/release/run_promotion_gates.py` adds critical `portfolio_risk_status` and tighter freshness defaults
     - `scripts/release/run_strict_promotion_cycle.py` now runs gate in `--ci` mode with stricter default freshness
@@ -765,7 +765,7 @@ Wave summary:
     - `docs/ops/day29_strategy_catalog_20260222.md`
 - Day30 compose mount simplification + drift prevention completed:
   - compose mount strategy simplified from per-file controller binds to shared directory mounts:
-    - `compose/docker-compose.yml` (bots `bot1`..`bot4`)
+    - `infra/compose/docker-compose.yml` (bots `bot1`..`bot4`)
     - `../controllers:/home/hummingbot/controllers:ro`
     - `../controllers:/home/hummingbot/controllers/market_making:ro`
   - drift-prevention checker added:
@@ -794,7 +794,7 @@ Wave summary:
     - `scripts/release/run_promotion_gates.py` adds critical `unit_service_integration_tests`
     - `docs/validation/promotion_gate_contract.md` updated
   - reproducible test deps pinned:
-    - `compose/images/control_plane/requirements-control-plane.txt` adds `pytest`, `pytest-cov`
+    - `infra/compose/images/control_plane/requirements-control-plane.txt` adds `pytest`, `pytest-cov`
   - validation fix for deterministic intent idempotency behavior:
     - `services/hb_bridge/intent_consumer.py` adds same-batch duplicate guard (`seen_in_batch`)
   - validation evidence:
@@ -810,7 +810,7 @@ Wave summary:
     - explicit gating via `COORD_ENABLED`, `COORD_REQUIRE_ML_ENABLED`, `ML_ENABLED`
     - policy-driven target clamps + intent TTL + health artifact output
   - compose + healthcheck wiring:
-    - `compose/docker-compose.yml` (`coordination-service`)
+    - `infra/compose/docker-compose.yml` (`coordination-service`)
   - policy checker + gate integration:
     - `scripts/release/check_coordination_policy.py`
     - `scripts/release/run_promotion_gates.py` adds critical `coordination_policy_scope`
@@ -826,11 +826,11 @@ Wave summary:
     - includes `coordination` + `coordination_policy` freshness and explicit coordination runtime metrics
     - exports per-check promotion gate statuses (`source=promotion_latest`) including `coordination_policy_scope`
   - Prometheus alert coverage expanded:
-    - `monitoring/prometheus/alert_rules.yml`
+    - `infra/monitoring/prometheus/alert_rules.yml`
     - includes coordination reports in stale/missing checks
     - adds `CoordinationPolicyGateFailed` and `CoordinationRuntimeNotHealthy`
   - Grafana control-plane dashboard expanded:
-    - `monitoring/grafana/dashboards/control_plane_overview.json`
+    - `infra/monitoring/grafana/dashboards/control_plane_overview.json`
     - adds `Coord Policy Gate` + `Coord Runtime Health`
   - runbook + execution note:
     - `docs/ops/runbooks.md`

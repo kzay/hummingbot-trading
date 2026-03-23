@@ -6,14 +6,14 @@
 
 ## Implemented
 - Compose runtime:
-  - `compose/docker-compose.yml`
+  - `infra/compose/docker-compose.yml`
   - new services:
     - `postgres` (profile `ops`)
     - optional `pgadmin` (profile `ops-tools`)
   - new volume:
     - `postgres-data`
 - Grafana datasource provisioning:
-  - `monitoring/grafana/provisioning/datasources/datasource.yml`
+  - `infra/monitoring/grafana/provisioning/datasources/datasource.yml`
   - added datasource `PostgreSQL Ops` (`uid=postgres-ops`)
 - Ops documentation:
   - `docs/ops/postgres_ops_store_v1.md`

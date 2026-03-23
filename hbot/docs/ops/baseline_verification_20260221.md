@@ -8,9 +8,9 @@ Track Day 1 verification outcomes for Option 4 baseline freeze.
 ### 1) Reproducible Startup from Manifest
 - Status: PASS
 - Command set to run:
-  - `docker compose --env-file ../env/.env -f docker-compose.yml config`
-  - `docker compose --env-file ../env/.env -f docker-compose.yml up -d`
-  - `docker compose --env-file ../env/.env -f docker-compose.yml ps`
+  - `docker compose --env-file infra/env/.env -f infra/compose/docker-compose.yml config`
+  - `docker compose --env-file infra/env/.env -f infra/compose/docker-compose.yml up -d`
+  - `docker compose --env-file infra/env/.env -f infra/compose/docker-compose.yml ps`
 - Evidence file/link: terminal session output (2026-02-21)
   - compose config check: PASS
   - services brought up with `--profile test`: PASS
@@ -50,7 +50,7 @@ Track Day 1 verification outcomes for Option 4 baseline freeze.
   - Alertmanager service started successfully and ready endpoint returns 200.
   - Webhook sink service running and healthy (`alert-webhook-sink`).
   - Alertmanager receivers configured to sink URL in:
-    - `hbot/monitoring/alertmanager/alertmanager.yml`
+    - `hbot/infra/monitoring/alertmanager/alertmanager.yml`
   - Delivery evidence from sink event log:
     - event log exists
     - event lines > 0

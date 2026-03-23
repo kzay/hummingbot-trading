@@ -13,7 +13,7 @@
   - stateful offsets and periodic health artifacts.
 - Grafana datasource:
   - `ClickHouse Events` (`uid: clickhouse-events`)
-  - provisioned in `monitoring/grafana/provisioning/datasources/datasource.yml`
+  - provisioned in `infra/monitoring/grafana/provisioning/datasources/datasource.yml`
 - Ops policy doc:
   - `docs/ops/clickhouse_event_analytics_v1.md`
 

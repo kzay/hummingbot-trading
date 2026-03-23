@@ -77,7 +77,7 @@ Operate and validate the reconciliation service introduced in Option 4 Day 3.
 
 ## Commands
 - Start with external profile:
-  - `docker compose --env-file ../env/.env --profile external up -d reconciliation-service`
+  - `docker compose --env-file infra/env/.env -f infra/compose/docker-compose.yml --profile external up -d reconciliation-service`
 - One-off local cycle:
   - `PYTHONPATH=. python services/reconciliation_service/main.py --once`
 - Synthetic drift test:

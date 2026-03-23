@@ -33,7 +33,7 @@
 
 3. **Restart Redis:**
    ```bash
-   docker compose --env-file hbot/env/.env -f hbot/compose/docker-compose.yml restart redis
+   docker compose --env-file hbot/infra/env/.env -f hbot/infra/compose/docker-compose.yml restart redis
    ```
 
 4. **Verify Redis recovered:**
@@ -62,7 +62,7 @@
 
 ### 1. Restart Redis and verify health
 ```bash
-docker compose --env-file hbot/env/.env -f hbot/compose/docker-compose.yml restart redis
+docker compose --env-file hbot/infra/env/.env -f hbot/infra/compose/docker-compose.yml restart redis
 sleep 10
 docker exec kzay-capital-redis redis-cli ping  # should return PONG
 docker ps --filter name=kzay-capital-redis     # should show (healthy)
@@ -70,7 +70,7 @@ docker ps --filter name=kzay-capital-redis     # should show (healthy)
 
 ### 2. Restart dependent services to reconnect consumer groups
 ```bash
-docker compose --env-file hbot/env/.env -f hbot/compose/docker-compose.yml \
+docker compose --env-file hbot/infra/env/.env -f hbot/infra/compose/docker-compose.yml \
   --profile external restart \
   signal-service risk-service kill-switch event-store-service coordination-service
 ```

@@ -12,7 +12,7 @@ Day 2 - Event Store Foundation
 - Service scaffold:
   - `hbot/services/event_store/main.py`
 - Compose wiring:
-  - `hbot/compose/docker-compose.yml` (`event-store-service` under `external` profile)
+  - `hbot/infra/compose/docker-compose.yml` (`event-store-service` under `external` profile)
 - Schema baseline:
   - `hbot/docs/architecture/event_schema_v1.md`
 - Consumer-group topology hardening:

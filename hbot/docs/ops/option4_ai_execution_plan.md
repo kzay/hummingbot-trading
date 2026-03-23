@@ -18,7 +18,7 @@ Execute a semi-pro desk hardening path with:
 - Strategy/controller: `hbot/controllers/epp_v2_4.py`
 - Paper/sim adapter: `hbot/controllers/paper_engine.py`
 - Ops guardrails: `hbot/controllers/ops_guard.py`
-- Deployment/orchestration: `hbot/compose/docker-compose.yml`
+- Deployment/orchestration: `hbot/infra/compose/docker-compose.yml`
 - Validation docs: `hbot/docs/validation/validation_plan.md`, `hbot/docs/validation/release_gates.md`
 - Monitoring exporter: `hbot/services/bot_metrics_exporter.py`
 
@@ -666,7 +666,7 @@ These are optional building blocks to improve repeatability, observability, and 
 - Update runbooks for the new structure (including pycache invalidation guidance for dev vs prod).
 
 ### Deliverables
-- Updated `hbot/compose/docker-compose.yml` mounting strategy (shared controllers/services).
+- Updated `hbot/infra/compose/docker-compose.yml` mounting strategy (shared controllers/services).
 - `scripts/release/check_strategy_catalog_consistency.py` (or equivalent) run as part of promotion gates.
 - Runbook updates: “add new strategy”, “add new bot”, “select strategy by config”.
 
@@ -1046,7 +1046,7 @@ Grafana cannot render a TradingView-style candlestick chart with interactive fil
 - Run selector: URL param `?run_id=<id>` or dropdown fetched from API
 
 ### Deliverables
-- `monitoring/grafana/dashboards/backtest_review.json` (Grafana analytics)
+- `infra/monitoring/grafana/dashboards/backtest_review.json` (Grafana analytics)
 - `scripts/backtest/viewer/backtest_chart.html` (lightweight-charts chart view)
 - `scripts/backtest/viewer/serve.py` (thin local API: candles + fills + bars from Postgres)
 - Backtest summary row added to `control_plane_health.json` (latest N runs: strategy/PnL/drawdown).
@@ -1726,7 +1726,7 @@ No timing instrumentation exists on the hot path.  We cannot validate optimizati
 ### Deliverables
 - Updated `controllers/epp_v2_4.py` (timing instrumentation)
 - Updated `services/bot_metrics_exporter.py` (new Prometheus metrics)
-- Updated `monitoring/grafana/dashboards/trading_overview.json` (performance panels)
+- Updated `infra/monitoring/grafana/dashboards/trading_overview.json` (performance panels)
 
 ### Done Criteria
 - Tick duration is visible in Grafana
@@ -2064,8 +2064,8 @@ No dashboard for execution quality (fill rate, maker ratio, spread capture, adve
 No scheduled Postgres backup. No event store archival. No automated config drift detection.
 
 ### Tasks
-- **Postgres backup script**: `scripts/ops/pg_backup.sh` — daily `pg_dump` to `backups/` directory with 7-day retention. Compose service under `ops` profile.
-- **Event store archival**: compress and archive `reports/event_store/events_*.jsonl` files older than 3 days to `backups/event_store/`. Delete originals after 7 days.
+- **Postgres backup script**: `scripts/ops/pg_backup.py` — compressed logical backups, retention, and evidence under `reports/ops/` (Compose `ops` profile / scheduled job).
+- **Event store archival**: compress and archive `reports/event_store/events_*.jsonl` files older than 3 days to a host-managed archive path (outside the repo). Delete originals after the retention window.
 - **Config drift cron**: run `check_strategy_catalog_consistency.py` daily (compose service or cron).
 - **Add `/health` HTTP endpoint** to `bot_metrics_exporter.py` and `control_plane_metrics_exporter.py` — returns 200 with last scrape age.
 

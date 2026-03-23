@@ -11,7 +11,7 @@ including provenance, license attribution, and anti-lock-in guardrails.
 
 ## Decision Matrix Location
 - Machine-readable matrix: `docs/validation/nautilus_reuse_matrix.json`
-- Third-party attribution: `third_party/nautilus_trader.LICENSE.txt`
+- Third-party attribution: `docs/legal/nautilus_trader.LICENSE.txt`
 
 ## Boundary Rules
 1. Reuse is contract-level (`adopt|adapt|reimplement`) and must be documented per module.

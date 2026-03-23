@@ -17,7 +17,7 @@
     - policy-driven TTL (`intent_ttl_ms`)
     - health artifact writer (`reports/coordination/latest.json`)
 - Compose/runtime wiring:
-  - `compose/docker-compose.yml` (`coordination-service` env + healthcheck)
+  - `infra/compose/docker-compose.yml` (`coordination-service` env + healthcheck)
 - Promotion checker:
   - `scripts/release/check_coordination_policy.py`
   - evidence pointer: `reports/policy/coordination_policy_latest.json`

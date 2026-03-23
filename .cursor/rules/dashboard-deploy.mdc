@@ -1,0 +1,35 @@
+---
+description: Auto-deploy realtime UI dashboard after any code change
+globs:
+  - hbot/apps/realtime_ui_v2/**
+alwaysApply: false
+---
+
+# Dashboard Deploy Rule
+
+After making ANY code change to `hbot/apps/realtime_ui_v2/`, always finish by deploying the new version to Docker.
+
+## Deploy steps (mandatory, in order)
+
+1. **Run tests first** — `npx vitest run` from `hbot/apps/realtime_ui_v2/`. Do not proceed if tests fail.
+
+2. **Build the image**:
+   ```
+   docker build -t kzay-capital-realtime-ui-web-v2:latest .
+   ```
+   Run from `hbot/apps/realtime_ui_v2/`.
+
+3. **Recreate the container**:
+   ```
+   docker compose --env-file ../env/.env -f docker-compose.yml up -d --no-deps --force-recreate realtime-ui-web
+   ```
+   Run from `hbot/infra/compose/`.
+
+4. **Verify** — Confirm the new container is up and healthy:
+   ```
+   docker ps --filter "name=realtime-ui-web" --format "table {{.Names}}\t{{.Image}}\t{{.Status}}"
+   ```
+
+## Do not
+- Skip the deploy steps — every UI change must go live immediately.
+- Change the Dockerfile or nginx.conf without rebuilding.

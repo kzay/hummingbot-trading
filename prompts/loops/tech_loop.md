@@ -15,18 +15,21 @@ You are a senior Python engineer + performance specialist + SRE running a monthl
 engineering review for a live algorithmic trading system.
 
 ## System context
-- Main process: hbot/controllers/epp_v2_4.py (~3000 lines) in Hummingbot async clock (~1s tick)
-- Paper Engine: hbot/controllers/paper_engine_v2/ (desk.py, hb_bridge.py, matching_engine.py,
-  portfolio.py, fill_models.py, funding_simulator.py, latency_model.py)
-- Strategy wrapper: hbot/scripts/shared/v2_with_controllers.py (config hot-reload, watchdog heartbeat)
-- Services: hbot/services/ (event_store, kill_switch, reconciliation_service, signal_service,
-  bot_metrics_exporter, portfolio_risk_service, exchange_snapshot_service, telegram_bot)
-- Infra: hbot/compose/docker-compose.yml, Redis, Prometheus, Grafana
-- Tests: hbot/tests/ (controllers/, services/), run: PYTHONPATH=hbot python -m pytest hbot/tests/ -x -q
-- Coverage: PYTHONPATH=hbot python -m pytest hbot/tests/ --cov=hbot --cov-report=term-missing
-- Gate: PYTHONPATH=hbot python scripts/release/run_strict_promotion_cycle.py
-- Python 3.11+, deps: hbot/compose/images/control_plane/requirements-control-plane.txt
+- Primary runtime/controller path: discover the active controller entrypoint under `hbot/controllers/`
+- Paper engine and execution simulation: `hbot/controllers/paper_engine_v2/`
+- Runtime wrappers and orchestration: `hbot/scripts/shared/` and related launch/release scripts
+- Services: `hbot/services/`
+- Infra: `hbot/infra/compose/`, Redis, Prometheus, Grafana
+- Tests: `hbot/tests/` (controllers/, services/), run: `PYTHONPATH=hbot python -m pytest hbot/tests/ -x -q`
+- Coverage: `PYTHONPATH=hbot python -m pytest hbot/tests/ --cov=hbot --cov-report=term-missing`
+- Release/promotion gates: `hbot/scripts/release/`
+- Python/runtime deps: discover the active requirements files under `hbot/infra/compose/` and related images
 - Scope rule: listed files/folders are anchors, not limits. Inspect any additional relevant paths in the repo.
+
+## Discovery protocol (mandatory)
+- Start by identifying the current controller entrypoint, wrapper/orchestrator, and active service set from the repo.
+- Treat named files in findings as examples or historical anchors, not fixed filenames that must still exist.
+- If a component moved, review the current equivalent and note the substitution.
 
 ## Known past incidents (always verify these are STILL fixed)
 | Incident | Root cause | Fix location | Verify |
@@ -147,7 +150,7 @@ Estimate cost of each call in `on_tick` / `_compute_levels_and_sizing` / `_build
 
 ### Dead code and duplication
 - Unused imports, unreachable branches, commented-out logic
-- Duplicated calculation logic across epp_v2_4.py and spread_engine.py
+- Duplicated calculation logic across the active controller entrypoint and spread/risk helper modules
 - Copy-paste config parsing in multiple services
 
 ---
@@ -157,7 +160,7 @@ Estimate cost of each call in `on_tick` / `_compute_levels_and_sizing` / `_build
 ### Coverage gaps (from provided %)
 Test files live in: `hbot/tests/controllers/` and `hbot/tests/services/`
 Identify which modules / functions are under-tested:
-- Priority 1: risk rules in epp_v2_4.py, PnL governor, kill switch logic, reconciliation parity
+- Priority 1: risk rules in the active strategy/runtime controller, PnL governor, kill switch logic, reconciliation parity
 - Priority 2: fill_models.py, funding_simulator.py, matching_engine edge cases
 - Priority 3: config hot-reload failure path (v2_with_controllers.py), Redis disconnect recovery
 - Priority 4: adverse_inference.py, signal_consumer.py (newer files, likely no tests)

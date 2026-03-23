@@ -45,8 +45,8 @@ This document describes the hybrid architecture where external services generate
 ## Startup
 
 ```bash
-cd hbot/compose
-docker compose --env-file ../env/.env --profile multi --profile external up -d
+cd hbot
+docker compose --env-file infra/env/.env -f infra/compose/docker-compose.yml --profile multi --profile external up -d
 ```
 
 ## ML Runtime (MVP)
@@ -58,7 +58,7 @@ Phase 1 supports:
 
 Model source options:
 
-- `ML_MODEL_SOURCE=local` with `ML_MODEL_URI=/workspace/hbot/models/current/model.joblib`
+- `ML_MODEL_SOURCE=local` with `ML_MODEL_URI=/workspace/hbot/data/ml/models/current/model.joblib` (see `README.md` for artifact layout)
 - `ML_MODEL_SOURCE=http` or presigned URL (`https://...`) through `ML_MODEL_URI`
 - `s3://` URI supported when `boto3` credentials are available in the signal-service runtime
 

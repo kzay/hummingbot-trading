@@ -5,12 +5,12 @@ Provide a high-volume analytics store for event-store JSONL with low-latency que
 
 ## Components
 - Runtime database:
-  - `clickhouse` service in `compose/docker-compose.yml` (`ops` profile)
+  - `clickhouse` service in `infra/compose/docker-compose.yml` (`ops` profile)
 - Ingestion service:
   - `services/clickhouse_ingest/main.py`
   - container: `clickhouse-ingest`
 - Grafana datasource:
-  - `monitoring/grafana/provisioning/datasources/datasource.yml`
+  - `infra/monitoring/grafana/provisioning/datasources/datasource.yml`
   - datasource uid: `clickhouse-events`
 
 ## Ingestion Contract

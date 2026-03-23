@@ -18,10 +18,10 @@
   - fallback behavior:
     - emits `variant=no_fills` zeroed blotter metrics when no fills file exists yet, so dashboard remains explicit (not blank).
 - Compose exporter runtime updated with explicit data root:
-  - `compose/docker-compose.yml`
+  - `infra/compose/docker-compose.yml`
   - `HB_DATA_ROOT=/workspace/hbot/data`
 - Added Grafana dashboard:
-  - `monitoring/grafana/dashboards/wallet_blotter_v1.json`
+  - `infra/monitoring/grafana/dashboards/wallet_blotter_v1.json`
   - title: `Trading Desk Wallet and Blotter`
 
 ## Validation

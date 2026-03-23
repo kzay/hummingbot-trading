@@ -12,8 +12,8 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PROJECT_DIR="$(dirname "$SCRIPT_DIR")"
 BACKUP_DIR="${PROJECT_DIR}/backups"
-COMPOSE_DIR="${PROJECT_DIR}/compose"
-ENV_FILE="${PROJECT_DIR}/env/.env"
+COMPOSE_DIR="${PROJECT_DIR}/infra/compose"
+ENV_FILE="${PROJECT_DIR}/infra/env/.env"
 
 BOT_NAME="${1:?Usage: rollback.sh <bot_name> [backup_file]}"
 BACKUP_FILE="${2:-}"

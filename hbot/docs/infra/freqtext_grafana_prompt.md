@@ -1,7 +1,7 @@
 # Prompt: Generate/Update FreqText-style Grafana Dashboard JSON
 
 Copy and paste the block below to an LLM to regenerate or update
-`hbot/monitoring/grafana/dashboards/ftui_bot_monitor.json`.
+`hbot/infra/monitoring/grafana/dashboards/ftui_bot_monitor.json`.
 
 ---
 
@@ -12,7 +12,7 @@ data shown in a FreqText/FTUI terminal trading dashboard screenshot.
 
 ## Existing dashboard to update
 
-File: hbot/monitoring/grafana/dashboards/ftui_bot_monitor.json
+File: hbot/infra/monitoring/grafana/dashboards/ftui_bot_monitor.json
 The file already has correct settings for: uid, title, timezone (utc), style
 (dark), refresh (15s), annotations (hard_stop, derisk Loki annotations),
 dashboard links (Trading Desk, Bot Deep Dive), and template variables:

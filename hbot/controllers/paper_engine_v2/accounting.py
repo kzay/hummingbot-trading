@@ -2,7 +2,7 @@
 
 Inspired by NautilusTrader position.pyx accounting semantics.
 Upstream reference: https://github.com/nautechsystems/nautilus_trader
-(Licensed LGPLv3; attribution in hbot/third_party/nautilus_trader.LICENSE.txt)
+(Licensed LGPLv3; attribution in hbot/docs/legal/nautilus_trader.LICENSE.txt)
 
 This module is a dependency-free, pure-Python reimplementation of position
 lifecycle accounting. It is intentionally kept separate from persistence,
@@ -36,8 +36,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from decimal import Decimal
-from enum import Enum
-from typing import Tuple
+from enum import Enum, StrEnum
 
 _ZERO = Decimal("0")
 _ONE = Decimal("1")
@@ -48,13 +47,13 @@ _EPS = Decimal("1e-10")
 # Position side / transition enums
 # ---------------------------------------------------------------------------
 
-class PositionSide(str, Enum):
+class PositionSide(StrEnum):
     FLAT = "flat"
     LONG = "long"
     SHORT = "short"
 
 
-class FillTransition(str, Enum):
+class FillTransition(StrEnum):
     """Result of applying a fill to a position."""
     OPEN = "open"           # flat → long or short
     ADD = "add"             # adding to existing direction

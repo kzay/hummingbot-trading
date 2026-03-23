@@ -76,7 +76,7 @@ Bot auto-resumes. If pause lasts > 30 minutes, consider reducing `min_net_edge_b
 
 ### HARD_STOP — Cancel Budget Breach:
 1. Bot enters HARD_STOP after 3 breaches of `cancel_budget_per_min: 50`.
-2. Restart bot: `docker compose --env-file hbot/env/.env -f hbot/compose/docker-compose.yml restart bot1`
+2. Restart bot: `docker compose --env-file hbot/infra/env/.env -f hbot/infra/compose/docker-compose.yml restart bot1`
 3. If recurring: reduce `max_active_executors` or increase `executor_refresh_time` in config.
 
 ### HARD_STOP — Fee Unresolved:
@@ -87,7 +87,7 @@ Bot auto-resumes. If pause lasts > 30 minutes, consider reducing `min_net_edge_b
 ### HARD_STOP — Unknown / Unexpected:
 1. Capture full logs: `docker logs kzay-capital-bot1 > /tmp/bot1_incident.log 2>&1`
 2. Check for exceptions: `grep -i "error\|exception\|traceback" /tmp/bot1_incident.log | tail -20`
-3. If crash without recovery: `docker compose --env-file hbot/env/.env ... restart bot1`
+3. If crash without recovery: `docker compose --env-file hbot/infra/env/.env -f hbot/infra/compose/docker-compose.yml restart bot1`
 
 ---
 

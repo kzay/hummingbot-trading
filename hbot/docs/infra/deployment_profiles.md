@@ -15,14 +15,16 @@ Profile combinations for baseline and external orchestration operation.
 - `external`: enables Redis + signal/risk/coordination services.
 
 ## Recommended Commands
+Run from `hbot/` (repository app root).
+
 - Baseline:
-  - `docker compose --env-file ../env/.env up -d`
+  - `docker compose --env-file infra/env/.env -f infra/compose/docker-compose.yml up -d`
 - Include reserved slot:
-  - `docker compose --env-file ../env/.env --profile multi up -d`
+  - `docker compose --env-file infra/env/.env -f infra/compose/docker-compose.yml --profile multi up -d`
 - Bring up validation lanes:
-  - `docker compose --env-file ../env/.env --profile test up -d`
+  - `docker compose --env-file infra/env/.env -f infra/compose/docker-compose.yml --profile test up -d`
 - Full external orchestration with all bot lanes:
-  - `docker compose --env-file ../env/.env --profile multi --profile test --profile external up -d`
+  - `docker compose --env-file infra/env/.env -f infra/compose/docker-compose.yml --profile multi --profile test --profile external up -d`
 
 ## Rollback
 - Disable external layer quickly:

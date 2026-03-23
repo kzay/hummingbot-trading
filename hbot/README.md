@@ -27,33 +27,39 @@ Production-ready, Docker-based trading infrastructure for Kzay Capital, built on
 
 ```
 hbot/
-├── compose/                          # Docker Compose files
-│   └── docker-compose.yml            # Main orchestration file
+├── infra/                            # Operational infrastructure
+│   ├── compose/                      # Docker Compose files
+│   │   └── docker-compose.yml        # Main orchestration file
+│   ├── monitoring/
+│   │   ├── prometheus/
+│   │   │   ├── prometheus.yml        # Prometheus scrape configuration
+│   │   │   └── alert_rules.yml       # Alerting rules
+│   │   ├── grafana/
+│   │   │   ├── provisioning/
+│   │   │   │   ├── datasources/      # Auto-provisioned datasources
+│   │   │   │   └── dashboards/       # Dashboard provisioning config
+│   │   │   └── dashboards/           # JSON dashboard definitions
+│   │   └── alertmanager/
+│   │       └── alertmanager.yml      # Alert routing config
+│   ├── env/
+│   │   └── .env.template             # Environment variable template
+│   └── firewall-rules.sh             # Firewall / UFW helper (was security/)
 ├── data/                             # Per-bot persistent data
 │   ├── bot1/
 │   │   ├── conf/                     # Hummingbot config files + API keys (encrypted)
 │   │   ├── logs/                     # Bot log output
 │   │   ├── data/                     # SQLite databases, trade history
 │   │   ├── scripts/                  # Bot-specific scripts
-│   │   └── pmm_scripts/             # PMM script overrides
+│   │   └── pmm_scripts/              # PMM script overrides
 │   ├── bot2/                         # Same structure, Bot D no-trade monitor
-│   └── bot3/                         # Paper trade smoke test instance
-├── monitoring/
-│   ├── prometheus/
-│   │   ├── prometheus.yml            # Prometheus scrape configuration
-│   │   └── alert_rules.yml           # Alerting rules
-│   ├── grafana/
-│   │   ├── provisioning/
-│   │   │   ├── datasources/          # Auto-provisioned datasources
-│   │   │   └── dashboards/           # Dashboard provisioning config
-│   │   └── dashboards/               # JSON dashboard definitions
-│   └── alertmanager/
-│       └── alertmanager.yml          # Alert routing config
+│   ├── bot3/                         # Paper trade smoke test instance
+│   └── ml/
+│       └── models/                   # ML model artifacts (was top-level models/)
 ├── scripts/                          # Operational scripts
 │   ├── utils/                        # Shared utilities
 │   │   └── health_check.py           # System health checker
 │   ├── deploy.sh                     # First-time VPS setup
-│   ├── backup.sh                     # Backup bot data
+│   ├── backup.sh                     # Backup bot data (writes gitignored backups/ under hbot/)
 │   ├── update.sh                     # Safe update procedure
 │   ├── rollback.sh                   # Restore from backup
 │   ├── add-bot.sh                    # Add new bot instance
@@ -63,13 +69,10 @@ hbot/
 │   ├── strategy/                     # EPP and ML strategy specs
 │   ├── risk/                         # Risk policy and kill switches
 │   ├── infra/                        # Deployment, secrets, profiles
+│   ├── legal/                        # Third-party notices (was third_party/)
 │   ├── ops/                          # Runbooks and incident response
 │   ├── validation/                   # Test plans and release gates
 │   └── governance/                   # Doc standards and change log
-├── env/
-│   └── .env.template                 # Environment variable template
-├── backups/                          # Backup archives (gitignored)
-├── security/                         # Security configs (firewall rules, etc.)
 ├── .gitignore                        # Git exclusions
 └── README.md                         # This file
 ```
@@ -85,6 +88,7 @@ Comprehensive documentation is organized under:
 - `docs/financial/`
 - `docs/strategy/`
 - `docs/risk/`
+- `docs/legal/` (third-party notices)
 - `docs/ops/`
 - `docs/validation/`
 - `docs/governance/`
@@ -93,14 +97,17 @@ Comprehensive documentation is organized under:
 
 | Folder | Purpose | Git tracked? |
 |--------|---------|-------------|
-| `compose/` | Docker Compose orchestration | Yes |
+| `infra/compose/` | Docker Compose orchestration | Yes |
 | `data/botX/conf/` | Bot configuration, encrypted API keys | Partial (.gitkeep only) |
 | `data/botX/logs/` | Runtime logs | No |
 | `data/botX/data/` | SQLite DB, trade history | No |
 | `scripts/utils/` | Shared utilities | Yes |
-| `monitoring/` | Prometheus, Grafana configs | Yes |
-| `env/` | Environment variables (.env) | Template only |
-| `backups/` | Compressed backup archives | No |
+| `infra/monitoring/` | Prometheus, Grafana configs | Yes |
+| `infra/env/` | Environment variables (.env) | Template only |
+| `infra/firewall-rules.sh` | Firewall / UFW helper | Yes |
+| `docs/legal/` | Third-party / license notices | Yes |
+| `data/ml/models/` | ML model artifacts for services | Partial (often gitignored) |
+| `backups/` (under `hbot/`) | Archives from `scripts/backup.sh` | No (gitignored, not shipped in repo) |
 
 ---
 
@@ -174,7 +181,7 @@ This script will:
 
 ```bash
 # Edit the environment file with your real credentials
-nano env/.env
+nano infra/env/.env
 ```
 
 Required changes:
@@ -185,7 +192,7 @@ Required changes:
 ### 4.3 First Start
 
 ```bash
-cd compose/
+cd infra/compose/
 
 # Start bot1 + monitoring stack
 docker compose --env-file ../env/.env up -d
@@ -269,11 +276,11 @@ The `CONFIG_PASSWORD` environment variable in docker-compose.yml auto-sets the e
 
 ### 5.4 Environment Variable Template
 
-The `env/.env.template` file contains all configurable variables. Copy it to `env/.env` and never commit the `.env` file:
+The `infra/env/.env.template` file contains all configurable variables. Copy it to `infra/env/.env` and never commit the `.env` file:
 
 ```bash
-cp env/.env.template env/.env
-chmod 600 env/.env
+cp infra/env/.env.template infra/env/.env
+chmod 600 infra/env/.env
 ```
 
 ### 5.5 Spot vs Perpetual
@@ -310,7 +317,7 @@ The repository is intentionally clean of custom strategy/controller code.
 
 ### 7.2 Pre-installed Dashboards
 
-The infrastructure dashboard (`monitoring/grafana/dashboards/infrastructure.json`) includes:
+The infrastructure dashboard (`infra/monitoring/grafana/dashboards/infrastructure.json`) includes:
 
 - **System Overview**: CPU %, Memory %, Disk %
 - **Container Metrics**: Per-container CPU, Memory, Network I/O
@@ -331,7 +338,7 @@ To import: Grafana > Dashboards > Import > Enter ID > Select Prometheus datasour
 
 ### 7.4 Alert Rules
 
-Configured in `monitoring/prometheus/alert_rules.yml`:
+Configured in `infra/monitoring/prometheus/alert_rules.yml`:
 
 | Alert | Condition | Severity |
 |-------|-----------|----------|
@@ -347,10 +354,10 @@ Configured in `monitoring/prometheus/alert_rules.yml`:
 
 ```bash
 # Start with alerts profile
-cd compose/
+cd infra/compose/
 docker compose --env-file ../env/.env --profile alerts up -d
 
-# Configure Slack/webhook in monitoring/alertmanager/alertmanager.yml
+# Configure Slack/webhook in infra/monitoring/alertmanager/alertmanager.yml
 ```
 
 ---
@@ -374,7 +381,7 @@ This will:
 Bot2+ use the `multi` profile. To start them:
 
 ```bash
-cd compose/
+cd infra/compose/
 
 # Start bot1 + bot2
 docker compose --env-file ../env/.env --profile multi up -d
@@ -403,7 +410,7 @@ Each bot consumes approximately 256-512 MB RAM and 0.25-0.5 CPU cores during act
 # 1. Check current versions
 docker compose --env-file ../env/.env ps
 
-# 2. Edit env/.env to pin new version
+# 2. Edit infra/env/.env to pin new version
 #    HUMMINGBOT_IMAGE=hummingbot/hummingbot:1.29.0
 
 # 3. Run safe update
@@ -441,7 +448,7 @@ docker compose --env-file ../env/.env --profile multi up -d bot-staging
 **Always pin versions in production:**
 
 ```yaml
-# env/.env
+# infra/env/.env
 HUMMINGBOT_IMAGE=hummingbot/hummingbot:1.28.0   # PINNED
 ```
 
@@ -502,7 +509,7 @@ crontab -e
 - `data/botX/data/` - SQLite database, trade history
 - `data/botX/scripts/` - Bot-specific scripts
 - `data/botX/pmm_scripts/` - PMM scripts
-- `env/.env` - Environment variables (separate backup)
+- `infra/env/.env` - Environment variables (separate backup)
 - Monitoring configs
 
 **Not backed up:** Log files (too large, not critical).
@@ -575,8 +582,8 @@ Configured in docker-compose.yml:
 | Secret | Storage | Protection |
 |--------|---------|-----------|
 | Exchange API keys | `data/shared/conf/connectors/` | Encrypted by Hummingbot with CONFIG_PASSWORD and mounted into every bot |
-| CONFIG_PASSWORD | `env/.env` | File permissions 600, gitignored |
-| Grafana password | `env/.env` | File permissions 600, gitignored |
+| CONFIG_PASSWORD | `infra/env/.env` | File permissions 600, gitignored |
+| Grafana password | `infra/env/.env` | File permissions 600, gitignored |
 | SSH keys | `~/.ssh/` | Standard SSH key management |
 
 ### 11.5 Additional Hardening
@@ -745,7 +752,7 @@ ls -lt backups/bot1_*.tar.gz
 
 ```bash
 # ---- Lifecycle ----
-cd hbot/compose
+cd hbot/infra/compose
 
 # Start (bot1 + monitoring)
 docker compose --env-file ../env/.env up -d
@@ -848,7 +855,7 @@ rules come from the canonical live connector (`bitget`) for realistic validation
 1. Start bot containers:
 
 ```bash
-cd hbot/compose
+cd hbot/infra/compose
 docker compose --env-file ../env/.env --profile multi up -d bot1 bot2
 ```
 
@@ -977,7 +984,7 @@ The project now supports a hybrid external orchestration model:
 
 ### 15.1 Enable External Stack
 
-Set in `env/.env`:
+Set in `infra/env/.env`:
 
 ```bash
 EXT_SIGNAL_RISK_ENABLED=true
@@ -993,7 +1000,7 @@ RISK_MAX_ABS_SIGNAL=0.25
 Start with external profile:
 
 ```bash
-cd hbot/compose
+cd hbot/infra/compose
 docker compose --env-file ../env/.env --profile multi --profile external up -d
 ```
 
@@ -1021,13 +1028,13 @@ ML is injected with the same external pipeline:
 
 `market_data -> ml_signal -> risk_decision -> execution_intent -> Hummingbot`
 
-Enable in `env/.env`:
+Enable in `infra/env/.env`:
 
 ```bash
 ML_ENABLED=true
 ML_RUNTIME=sklearn_joblib
 ML_MODEL_SOURCE=local
-ML_MODEL_URI=/workspace/hbot/models/current/model.joblib
+ML_MODEL_URI=/workspace/hbot/data/ml/models/current/model.joblib
 ML_CONFIDENCE_MIN=0.60
 ML_MAX_SIGNAL_AGE_MS=3000
 ML_INFERENCE_TIMEOUT_MS=200
@@ -1042,7 +1049,7 @@ ML_RUNTIME=custom_python
 ML_CUSTOM_CLASS_PATH=your_module_path:YourModelClass
 ```
 
-The model directory is mounted to signal-service at `/workspace/hbot/models`.
+The model directory is mounted to signal-service at `/workspace/hbot/data/ml/models`.
 Keep the first rollout in shadow mode and verify `hb.ml_signal.v1` before increasing intent authority.
 
 ---
@@ -1114,13 +1121,13 @@ The monitoring stack now includes a bot KPI exporter plus centralized logs:
 - Prometheus scrape job: `bot-metrics`
 - Loki + Promtail for log aggregation in Grafana
 - Dashboards:
-  - `monitoring/grafana/dashboards/trading_overview.json`
-  - `monitoring/grafana/dashboards/bot_deep_dive.json`
+  - `infra/monitoring/grafana/dashboards/trading_overview.json`
+  - `infra/monitoring/grafana/dashboards/bot_deep_dive.json`
 
 ### 15.1 Start Monitoring Stack
 
 ```bash
-cd hbot/compose
+cd hbot/infra/compose
 docker compose --env-file ../env/.env up -d prometheus grafana node-exporter cadvisor bot-metrics-exporter loki promtail
 ```
 

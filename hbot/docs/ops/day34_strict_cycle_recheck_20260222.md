@@ -35,9 +35,9 @@
 ## Unblock sequence (when Docker is available)
 1. Start Docker Desktop / Docker daemon.
 2. Start minimal external services:
-   - `docker compose --env-file ../env/.env -f compose/docker-compose.yml --profile external up -d redis event-store-service event-store-monitor day2-gate-monitor`
+   - `docker compose --env-file infra/env/.env -f infra/compose/docker-compose.yml --profile external up -d redis event-store-service event-store-monitor day2-gate-monitor`
 3. Verify health:
-   - `docker compose --env-file ../env/.env -f compose/docker-compose.yml ps redis event-store-service event-store-monitor day2-gate-monitor`
+   - `docker compose --env-file infra/env/.env -f infra/compose/docker-compose.yml ps redis event-store-service event-store-monitor day2-gate-monitor`
 4. Re-run strict cycle:
    - `python hbot/scripts/release/run_strict_promotion_cycle.py --max-report-age-min 20`
 5. Confirm latest artifacts:

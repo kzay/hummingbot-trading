@@ -15,6 +15,35 @@ for one bot lane cannot alter strategy behavior for other lanes.
 - Legacy `controllers/epp_v2_4_bot*` files are compatibility wrappers only.
 - `controllers/market_making/*` is reserved for market-making loader shims only.
 
+## Runtime Family Hierarchy
+
+```
+SharedRuntimeKernel(MarketMakingControllerBase)    <- shared infrastructure
+  ├── EppV24Controller(SharedRuntimeKernel)         <- MM-specific machinery
+  │     └── SharedMmV24Controller                   <- alias for bot1
+  │           └── Bot1BaselineV1Controller
+  └── DirectionalRuntimeController(SharedRuntimeKernel)  <- directional stubs
+        ├── Bot5IftJotaV1Controller
+        ├── Bot6CvdDivergenceV1Controller
+        └── Bot7AdaptiveGridV1Controller
+```
+
+- **SharedRuntimeKernel** is the shared base class in `shared_mm_v24.py`.
+  It provides price buffer, risk limits, fill handling, logging, paper bridge,
+  fee resolution, and OpsGuard. MM-specific methods use polymorphic `self._`
+  dispatch, allowing subclasses to override them.
+- **EppV24Controller** extends the kernel and provides full MM machinery
+  (edge gate, PnL governor, selective quoting, alpha policy, adaptive spread
+  knobs, auto-calibration, Kelly sizing).
+- **DirectionalRuntimeController** extends the kernel directly (NOT through
+  EppV24Controller), stubbing all MM-only methods to safe no-ops.
+- Directional configs extend `DirectionalStrategyRuntimeV24Config`, which
+  sets all MM-only enable flags to `False` by default.
+- Canonical imports for new directional lanes:
+  ```python
+  from controllers.runtime.base import DirectionalStrategyRuntimeV24Config, DirectionalStrategyRuntimeV24Controller
+  ```
+
 ## Allowed Dependency Direction
 1. `controllers/bots/*` -> `controllers/runtime/*` + generic services.
 2. Legacy wrappers -> corresponding strategy lane module only.
@@ -26,6 +55,8 @@ for one bot lane cannot alter strategy behavior for other lanes.
 - One strategy lane importing another strategy lane.
 - Strategy logic implemented in legacy wrapper files.
 - Non-market-making strategy logic added under `controllers/market_making/`.
+- Directional bots extending `StrategyRuntimeV24Controller` directly (must use `DirectionalStrategyRuntimeV24Controller`).
+- Directional bot configs manually setting MM disable flags (handled by `DirectionalRuntimeConfig`).
 
 ## Runtime Event Identity Contract
 - Bot-scoped telemetry/events must include stable routing identity:

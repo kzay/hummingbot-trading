@@ -28,7 +28,7 @@
 - Contract update:
   - `docs/validation/promotion_gate_contract.md`
 - Reproducible image deps updated for test tooling:
-  - `compose/images/control_plane/requirements-control-plane.txt`
+  - `infra/compose/images/control_plane/requirements-control-plane.txt`
   - added `pytest==8.4.2`, `pytest-cov==7.0.0`
 
 ## Outcome

@@ -4,12 +4,12 @@
 Define safe handling rules, key rotation procedure, and break-glass policy for trading credentials.
 
 ## Scope
-- Environment variables in `env/.env`.
+- Environment variables in `infra/env/.env`.
 - Exchange credentials used by bot connectors and external services.
 - Operational artifacts (logs/reports/docs) where accidental leaks can appear.
 
 ## Non-Negotiable Rules
-- Never commit `env/.env` or plaintext credentials.
+- Never commit `infra/env/.env` or plaintext credentials.
 - Never paste secret values in:
   - `docs/`
   - `reports/`
@@ -59,7 +59,7 @@ Use three distinct API keys for production:
 3. **Restart services** — Recreate affected containers:
    - Bot key: `bot1`, `exchange-snapshot-service`
    - Kill-switch key: `kill-switch`
-   - Example: `docker compose --env-file env/.env -f compose/docker-compose.yml up -d --force-recreate bot1 exchange-snapshot-service kill-switch`
+   - Example: `docker compose --env-file infra/env/.env -f infra/compose/docker-compose.yml up -d --force-recreate bot1 exchange-snapshot-service kill-switch`
 4. **Revoke old key** — After validation, revoke at exchange.
 5. **Verify** — Snapshot healthy; reconciliation within thresholds; kill-switch dry-run succeeds.
 
@@ -68,14 +68,14 @@ Use three distinct API keys for production:
    - Generate new exchange keys with least privilege.
    - Keep old keys active during cutover window.
 2. **Stage**
-   - Update `env/.env` on host (never in repo history).
+   - Update `infra/env/.env` on host (never in repo history).
    - Verify key prefixes map correctly in `config/exchange_account_map.json`.
 3. **Cutover**
    - Recreate only required services:
      - `exchange-snapshot-service`
      - affected bot container(s)
    - Example:
-     - `docker compose --env-file env/.env -f compose/docker-compose.yml up -d --force-recreate exchange-snapshot-service bot1`
+     - `docker compose --env-file infra/env/.env -f infra/compose/docker-compose.yml up -d --force-recreate exchange-snapshot-service bot1`
 4. **Validate**
    - Confirm snapshot probe status is healthy in:
      - `reports/exchange_snapshots/latest.json`

@@ -18,8 +18,8 @@ set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PROJECT_DIR="$(dirname "$SCRIPT_DIR")"
-COMPOSE_DIR="${PROJECT_DIR}/compose"
-ENV_FILE="${PROJECT_DIR}/env/.env"
+COMPOSE_DIR="${PROJECT_DIR}/infra/compose"
+ENV_FILE="${PROJECT_DIR}/infra/env/.env"
 
 TARGET="${1:-all}"
 HEALTH_WAIT=30  # seconds to wait for health check
@@ -30,7 +30,7 @@ echo "============================================"
 
 # Pre-flight checks
 if [ ! -f "$ENV_FILE" ]; then
-    echo "ERROR: env/.env not found. Run deploy.sh first."
+    echo "ERROR: infra/env/.env not found. Run deploy.sh first."
     exit 1
 fi
 

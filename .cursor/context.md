@@ -15,7 +15,7 @@
 
 ```
 hbot/
-├── compose/docker-compose.yml          # Orchestration: bot1, bot2, Prometheus, Grafana, node-exporter, cAdvisor
+├── infra/compose/docker-compose.yml    # Orchestration: bot1, bot2, Prometheus, Grafana, node-exporter, cAdvisor
 ├── controllers/market_making/
 │   └── pmm_rsi_llm.py                  # V2 custom controller (RSI + NATR + LLM sentiment)
 ├── data/bot1/
@@ -31,9 +31,9 @@ hbot/
 ├── scripts/
 │   ├── strategies/                      # V1 legacy scripts (pmm_rsi_hedge_llm.py, bitget_spot_mm.py)
 │   └── utils/                           # Reusable modules (indicators.py, llm_sentiment.py, health_check.py)
-├── monitoring/                          # Prometheus, Grafana, Alertmanager configs
-├── env/.env                             # Secrets (gitignored) — API keys, passwords, LLM keys
-└── env/.env.template                    # Template for .env
+├── infra/monitoring/                    # Prometheus, Grafana, Alertmanager configs
+├── infra/env/.env                       # Secrets (gitignored) — API keys, passwords, LLM keys
+└── infra/env/.env.template              # Template for .env
 ```
 
 ---
@@ -213,7 +213,7 @@ Access via SSH tunnel: `ssh -L 3000:127.0.0.1:3000 user@vps`
 
 ```bash
 # Start bot1 + monitoring
-cd hbot/compose
+cd hbot/infra/compose
 docker compose --env-file ../env/.env up -d
 
 # Attach to bot
@@ -236,9 +236,9 @@ docker compose --env-file ../env/.env up -d bot1
 
 | Path | Contains secrets? | Git tracked? |
 |------|-------------------|-------------|
-| `env/.env` | YES — API keys, passwords | NO (gitignored) |
+| `infra/env/.env` | YES — API keys, passwords | NO (gitignored) |
 | `data/*/conf/connectors/` | YES — encrypted exchange keys | NO |
-| `env/.env.template` | No — placeholders only | YES |
+| `infra/env/.env.template` | No — placeholders only | YES |
 | `controllers/**/*.py` | No | YES |
 | `data/*/scripts/*.py` | No — copied from image | NO (gitignored) |
 | `data/*/conf/controllers/*.yml` | Possibly LLM keys | Partial |

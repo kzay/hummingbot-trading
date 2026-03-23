@@ -73,7 +73,7 @@ COMPOSE_BLOCK
 
 echo ""
 echo "============================================"
-echo "Add the following to env/.env:"
+echo "Add the following to infra/env/.env:"
 echo "============================================"
 echo ""
 cat << ENV_BLOCK
@@ -87,5 +87,5 @@ ENV_BLOCK
 
 echo ""
 echo "After editing, start with:"
-echo "  cd ${PROJECT_DIR}/compose"
+echo "  cd ${PROJECT_DIR}/infra/compose"
 echo "  docker compose --env-file ../env/.env --profile multi up -d ${BOT_NAME}"

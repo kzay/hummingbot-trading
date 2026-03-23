@@ -4,7 +4,7 @@
 Define the desk performance KPIs shown in Grafana and the source metric for each panel.
 
 ## Dashboard
-- `monitoring/grafana/dashboards/trading_overview.json`
+- `infra/monitoring/grafana/dashboards/trading_overview.json`
 - Title: `Kzay Capital Trading Desk`
 
 ## KPI Contract

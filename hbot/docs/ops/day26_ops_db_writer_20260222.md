@@ -17,12 +17,12 @@
     - `reconciliation_report`, `parity_report`, `portfolio_risk_report`
     - `promotion_gate_run`
 - Compose wiring:
-  - `compose/docker-compose.yml`
+  - `infra/compose/docker-compose.yml`
   - service: `ops-db-writer` (profile `ops`, depends on healthy `postgres`)
 - Runtime dependency for DB client:
-  - `compose/images/control_plane/requirements-control-plane.txt` adds `psycopg==3.2.13`
+  - `infra/compose/images/control_plane/requirements-control-plane.txt` adds `psycopg==3.2.13`
 - First Postgres-driven dashboard:
-  - `monitoring/grafana/dashboards/ops_db_overview.json`
+  - `infra/monitoring/grafana/dashboards/ops_db_overview.json`
   - panels:
     - blotter table (last 100 fills)
     - wallet equity history (Postgres)

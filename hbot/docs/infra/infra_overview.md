@@ -4,11 +4,11 @@
 Describe runtime infrastructure and deployment topology for bot, monitoring, and external signal/risk services.
 
 ## Scope
-Applies to Docker deployments defined in `hbot/compose/docker-compose.yml`.
+Applies to Docker deployments defined in `hbot/infra/compose/docker-compose.yml`.
 
 ## Assumptions
 - Docker/Compose available.
-- `env/.env` is configured from `env/.env.template`.
+- `infra/env/.env` is configured from `infra/env/.env.template`.
 
 ## Topology
 - Trading network:
@@ -28,8 +28,8 @@ Applies to Docker deployments defined in `hbot/compose/docker-compose.yml`.
 - Monitoring down -> trading can continue, observability degraded.
 
 ## Source of Truth
-- `hbot/compose/docker-compose.yml`
-- `hbot/env/.env.template`
+- `hbot/infra/compose/docker-compose.yml`
+- `hbot/infra/env/.env.template`
 
 ## Owner
 - Engineering/Infrastructure

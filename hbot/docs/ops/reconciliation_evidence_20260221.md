@@ -62,7 +62,7 @@ Day 3 - Reconciliation Service (MVP + hardening pass)
 
 ## Runtime Activation
 - Service started:
-  - `docker compose --env-file ../env/.env --profile external up -d reconciliation-service`
+  - `docker compose --env-file infra/env/.env -f infra/compose/docker-compose.yml --profile external up -d reconciliation-service`
 - Status check:
   - `reconciliation-service` up/running
 

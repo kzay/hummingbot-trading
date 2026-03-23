@@ -42,7 +42,7 @@ Protected files (`latest`/anchor artifacts) are never deleted by retention:
 - Apply deletions:
   - `python scripts/release/run_artifact_retention.py --apply`
 - Scheduled apply:
-  - `artifact-retention` service in `compose/docker-compose.yml`
+  - `artifact-retention` service in `infra/compose/docker-compose.yml`
   - controlled by `ARTIFACT_RETENTION_APPLY` and `ARTIFACT_RETENTION_INTERVAL_SEC`
 - Output:
   - `reports/ops_retention/latest.json`

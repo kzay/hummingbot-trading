@@ -99,7 +99,7 @@ tail -3 hbot/data/bot1/logs/epp_v24/bot1_a/minute.csv
 ### If the bot does NOT automatically resume at midnight:
 ```bash
 # Manual restart
-docker compose --env-file hbot/env/.env -f hbot/compose/docker-compose.yml restart bot1
+docker compose --env-file hbot/infra/env/.env -f hbot/infra/compose/docker-compose.yml restart bot1
 ```
 
 ### Config adjustment (do this BEFORE resuming if cause is identified):

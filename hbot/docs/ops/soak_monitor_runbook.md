@@ -34,7 +34,7 @@ Track readiness during the Day 7 soak window using one aggregated snapshot that 
 - Continuous local watch:
   - `python scripts/release/soak_monitor.py --interval-sec 300 --freshness-max-min 30`
 - Compose runtime:
-  - `docker compose --env-file ../env/.env --profile external up -d soak-monitor`
+  - `docker compose --env-file infra/env/.env -f infra/compose/docker-compose.yml --profile external up -d soak-monitor`
 - Daily report watcher (optional):
   - `python scripts/release/watch_daily_ops_report.py --interval-sec 900`
   - compose service: `daily-ops-reporter`

@@ -4,10 +4,10 @@
 Provide a persistent operational datastore for desk analytics and dashboards (blotter/wallet/equity history).
 
 ## Runtime Components
-- `postgres` service in `compose/docker-compose.yml` (profile: `ops`)
+- `postgres` service in `infra/compose/docker-compose.yml` (profile: `ops`)
 - optional `pgadmin` service (profile: `ops-tools`)
 - Grafana datasource provisioning:
-  - `monitoring/grafana/provisioning/datasources/datasource.yml`
+  - `infra/monitoring/grafana/provisioning/datasources/datasource.yml`
   - datasource uid: `postgres-ops`
 
 ## Environment Contract
@@ -22,15 +22,15 @@ Provide a persistent operational datastore for desk analytics and dashboards (bl
 
 ## Startup
 1. Start database:
-   - `docker compose --env-file env/.env --profile ops -f compose/docker-compose.yml up -d postgres`
+   - `docker compose --env-file infra/env/.env --profile ops -f infra/compose/docker-compose.yml up -d postgres`
 2. Check health:
-   - `docker compose --env-file env/.env --profile ops -f compose/docker-compose.yml ps postgres`
+   - `docker compose --env-file infra/env/.env --profile ops -f infra/compose/docker-compose.yml ps postgres`
 3. Optional pgAdmin:
-   - `docker compose --env-file env/.env --profile ops --profile ops-tools -f compose/docker-compose.yml up -d pgadmin`
+   - `docker compose --env-file infra/env/.env --profile ops --profile ops-tools -f infra/compose/docker-compose.yml up -d pgadmin`
 
 ## Sanity Query
 Run a basic SQL check:
-- `docker compose --env-file env/.env --profile ops -f compose/docker-compose.yml exec -T postgres psql -U ${OPS_DB_USER:-kzay_capital} -d ${OPS_DB_NAME:-kzay_capital_ops} -c "select now() as ts_utc;"`
+- `docker compose --env-file infra/env/.env --profile ops -f infra/compose/docker-compose.yml exec -T postgres psql -U ${OPS_DB_USER:-kzay_capital} -d ${OPS_DB_NAME:-kzay_capital_ops} -c "select now() as ts_utc;"`
 
 ## Backup/Restore + Drill (TS8)
 - Automated backup cadence + verification:
@@ -45,7 +45,7 @@ Run a basic SQL check:
   - `python scripts/ops/run_ops_db_drills.py`
   - Evidence: `reports/ops/ops_db_drills_latest.json`
 - Rollback drill (`db_primary` -> `csv_compat`):
-  - `python scripts/ops/data_plane_rollback_drill.py --env-file env/.env --apply`
+  - `python scripts/ops/data_plane_rollback_drill.py --env-file infra/env/.env --apply`
   - Evidence: `reports/ops/data_plane_rollback_drill_latest.json`
 
 ## Retention and Access
@@ -56,8 +56,8 @@ Run a basic SQL check:
 
 ## Rollback
 - Fast mode rollback from canonical DB primary to CSV compatibility:
-  1. `python scripts/ops/data_plane_rollback_drill.py --env-file env/.env --apply --from-mode db_primary --to-mode csv_compat`
+  1. `python scripts/ops/data_plane_rollback_drill.py --env-file infra/env/.env --apply --from-mode db_primary --to-mode csv_compat`
   2. `python scripts/release/run_promotion_gates.py --max-report-age-min 20`
 - Stop `ops` profile services when needed:
-  - `docker compose --env-file env/.env --profile ops -f compose/docker-compose.yml down`
+  - `docker compose --env-file infra/env/.env --profile ops -f infra/compose/docker-compose.yml down`
 - Monitoring stack remains functional without Postgres-backed panels.

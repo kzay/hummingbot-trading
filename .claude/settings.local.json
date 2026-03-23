@@ -1,0 +1,20 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(curl -s \"https://api.github.com/repos/VoltAgent/awesome-claude-code-subagents/contents/categories/03-infrastructure\")",
+      "Bash(MSYS_NO_PATHCONV=1 docker compose --env-file infra/env/.env -f infra/compose/docker-compose.yml exec bot7 bash -c 'ls /home/hummingbot/conf/controllers/epp_v2_4_bot7*')",
+      "Bash(MSYS_NO_PATHCONV=1 docker compose --env-file infra/env/.env -f infra/compose/docker-compose.yml exec bot7 bash -c 'cat /home/hummingbot/conf/controllers/epp_v2_4_bot7_pullback_paper.yml | grep -c \"\"pb_\"\"')",
+      "Bash(MSYS_NO_PATHCONV=1 docker compose --env-file infra/env/.env -f infra/compose/docker-compose.yml exec bot7 bash -c 'head -5 /home/hummingbot/controllers/bots/bot7/pullback_v1.py && grep -c \"\"pb_absorption_zscore_enabled\\\\|pb_vol_decline_enabled\\\\|pb_trend_confidence_enabled\"\" /home/hummingbot/controllers/bots/bot7/pullback_v1.py')",
+      "Bash(MSYS_NO_PATHCONV=1 docker compose --env-file infra/env/.env -f infra/compose/docker-compose.yml restart bot7)",
+      "Bash(MSYS_NO_PATHCONV=1 docker compose --env-file infra/env/.env -f infra/compose/docker-compose.yml logs bot7 --tail 40)",
+      "Bash(MSYS_NO_PATHCONV=1 docker compose --env-file infra/env/.env -f infra/compose/docker-compose.yml exec bot7 bash -c 'source activate hummingbot && cd /home/hummingbot && python -m pytest /home/hummingbot/tests_tmp/test_epp_v2_4_bot7_pullback.py -v --tb=line 2>&1 | tail -80')",
+      "Bash(MSYS_NO_PATHCONV=1 docker compose --env-file infra/env/.env -f infra/compose/docker-compose.yml exec bot7 bash -c 'source activate hummingbot && cd /home/hummingbot && python -m pytest /home/hummingbot/tests_tmp/test_epp_v2_4_bot7_pullback.py::test_pullback_class_hierarchy -v --tb=short 2>&1 | tail -20')",
+      "Bash(MSYS_NO_PATHCONV=1 docker compose --env-file infra/env/.env -f infra/compose/docker-compose.yml exec bot7 bash -c 'source activate hummingbot && cd /home/hummingbot && python -m pytest /home/hummingbot/tests_tmp/test_epp_v2_4_bot7_pullback.py::test_pullback_class_hierarchy -v --tb=long 2>&1 | grep -A 20 \"\"FAILED\\\\|assert\\\\|Error\"\"')",
+      "Bash(MSYS_NO_PATHCONV=1 docker compose --env-file infra/env/.env -f infra/compose/docker-compose.yml exec bot7 bash -c 'source activate hummingbot && python -c \"\"from controllers.bots.bot7.pullback_v1 import PullbackV1Config; print\\(PullbackV1Config.__mro__\\)\"\"')",
+      "Bash(MSYS_NO_PATHCONV=1 docker compose --env-file infra/env/.env -f infra/compose/docker-compose.yml exec bot7 bash -c 'source activate hummingbot && python -c \"\"from controllers.runtime.base import StrategyRuntimeV24Config; print\\(StrategyRuntimeV24Config.__mro__\\)\"\"')",
+      "Bash(MSYS_NO_PATHCONV=1 docker compose --env-file infra/env/.env -f infra/compose/docker-compose.yml exec bot7 bash -c 'source activate hummingbot && python -c \"\":*)",
+      "Bash(MSYS_NO_PATHCONV=1 docker compose --env-file infra/env/.env -f infra/compose/docker-compose.yml exec bot7 bash -c 'source activate hummingbot && cd /home/hummingbot && python -m pytest /home/hummingbot/tests_tmp/test_epp_v2_4_bot7_pullback.py -v --tb=short 2>&1')",
+      "Bash(MSYS_NO_PATHCONV=1 docker exec realtime-ui-api python3 -c \":*)"
+    ]
+  }
+}

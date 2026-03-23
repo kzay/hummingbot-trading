@@ -1,7 +1,7 @@
 # FreqText → Grafana Dashboard Spec
 
 **Target dashboard:** `Kzay Capital FTUI Bot Monitor` (uid: `kzay-capital-ftui`,
-file: `hbot/monitoring/grafana/dashboards/ftui_bot_monitor.json`)
+file: `hbot/infra/monitoring/grafana/dashboards/ftui_bot_monitor.json`)
 
 **Canonical terminal reference:** `hbot/scripts/analysis/ftui_dashboard.py`  
 **Screenshot reference:** FreqText TUI as shown in `docs/infra/` assets

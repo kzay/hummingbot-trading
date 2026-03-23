@@ -7,13 +7,12 @@ import os
 import re
 import subprocess
 import sys
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
-from typing import Dict, List, Tuple
 
 
 def _utc_now() -> str:
-    return datetime.now(timezone.utc).isoformat()
+    return datetime.now(UTC).isoformat()
 
 
 def _mode_env_key(bot: str) -> str:
@@ -23,7 +22,7 @@ def _mode_env_key(bot: str) -> str:
     return f"PAPER_EXCHANGE_MODE_{suffix}"
 
 
-def _upsert_env_text(text: str, updates: Dict[str, str]) -> str:
+def _upsert_env_text(text: str, updates: dict[str, str]) -> str:
     lines = text.splitlines()
     for key, value in updates.items():
         key_re = re.compile(rf"^\s*{re.escape(str(key))}\s*=")
@@ -42,8 +41,8 @@ def _upsert_env_text(text: str, updates: Dict[str, str]) -> str:
     return out
 
 
-def _read_env_map(path: Path) -> Dict[str, str]:
-    out: Dict[str, str] = {}
+def _read_env_map(path: Path) -> dict[str, str]:
+    out: dict[str, str] = {}
     if not path.exists():
         return out
     for raw in path.read_text(encoding="utf-8").splitlines():
@@ -55,7 +54,7 @@ def _read_env_map(path: Path) -> Dict[str, str]:
     return out
 
 
-def _build_compose_start_cmd(env_path: Path, compose_path: Path) -> List[str]:
+def _build_compose_start_cmd(env_path: Path, compose_path: Path) -> list[str]:
     return [
         "docker",
         "compose",
@@ -75,7 +74,7 @@ def _build_compose_start_cmd(env_path: Path, compose_path: Path) -> List[str]:
     ]
 
 
-def _build_bot_recreate_cmd(env_path: Path, compose_path: Path, bot: str) -> List[str]:
+def _build_bot_recreate_cmd(env_path: Path, compose_path: Path, bot: str) -> list[str]:
     bot_norm = str(bot).strip().lower()
     cmd = ["docker", "compose", "--env-file", str(env_path), "-f", str(compose_path)]
     if bot_norm in {"bot3", "bot4"}:
@@ -87,12 +86,12 @@ def _build_bot_recreate_cmd(env_path: Path, compose_path: Path, bot: str) -> Lis
 
 
 def _run_command(
-    cmd: List[str],
+    cmd: list[str],
     *,
     cwd: Path,
     timeout_sec: int = 300,
     pythonpath_root: Path | None = None,
-) -> Tuple[int, str]:
+) -> tuple[int, str]:
     env = os.environ.copy()
     if pythonpath_root is not None:
         root_str = str(pythonpath_root)
@@ -130,7 +129,7 @@ def _latest_harness_run_id(root: Path) -> str:
         return ""
 
 
-def _critical_alert_count_from_steps(steps: List[Dict[str, object]]) -> int:
+def _critical_alert_count_from_steps(steps: list[dict[str, object]]) -> int:
     critical_steps = {
         "compose_start_paper_exchange",
         "recreate_bot",
@@ -168,24 +167,24 @@ def run_canary(
     active_mode_rollout_concurrency_bots: int,
     service_only_mode: str,
 ) -> int:
-    env_path = root / "env" / ".env"
-    compose_path = root / "compose" / "docker-compose.yml"
+    env_path = root / "infra" / "env" / ".env"
+    compose_path = root / "infra" / "compose" / "docker-compose.yml"
     reports_dir = root / "reports" / "ops"
     reports_dir.mkdir(parents=True, exist_ok=True)
 
-    steps: List[Dict[str, object]] = []
+    steps: list[dict[str, object]] = []
     rc_final = 0
 
     if not env_path.exists():
         report = {
             "ts_utc": _utc_now(),
             "status": "fail",
-            "reason": "env/.env missing",
+            "reason": "infra/env/.env missing",
             "bot": bot,
             "mode": mode,
             "steps": [],
         }
-        stamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
+        stamp = datetime.now(UTC).strftime("%Y%m%dT%H%M%SZ")
         out_path = reports_dir / f"paper_exchange_canary_{stamp}.json"
         latest_path = reports_dir / "paper_exchange_canary_latest.json"
         payload = json.dumps(report, indent=2)
@@ -209,7 +208,7 @@ def run_canary(
             updates["PAPER_EXCHANGE_SERVICE_ONLY"] = service_only_mode_norm
         updated = _upsert_env_text(original, updates)
         if updated != original and not dry_run:
-            stamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
+            stamp = datetime.now(UTC).strftime("%Y%m%dT%H%M%SZ")
             env_backup_path = str(reports_dir / f"paper_exchange_canary_env_backup_{stamp}.env")
             Path(env_backup_path).write_text(original, encoding="utf-8")
             env_path.write_text(updated, encoding="utf-8")
@@ -413,7 +412,7 @@ def run_canary(
         },
         "steps": steps,
     }
-    stamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
+    stamp = datetime.now(UTC).strftime("%Y%m%dT%H%M%SZ")
     out_path = reports_dir / f"paper_exchange_canary_{stamp}.json"
     latest_path = reports_dir / "paper_exchange_canary_latest.json"
     payload = json.dumps(report, indent=2)
@@ -443,13 +442,13 @@ def main() -> int:
         "--apply-env",
         action="store_true",
         default=True,
-        help="Patch env/.env mode + minimal paper-exchange keys before compose actions (default: true).",
+        help="Patch infra/env/.env mode + minimal paper-exchange keys before compose actions (default: true).",
     )
     parser.add_argument(
         "--no-apply-env",
         action="store_false",
         dest="apply_env",
-        help="Do not modify env/.env; use current env file values.",
+        help="Do not modify infra/env/.env; use current env file values.",
     )
     parser.add_argument(
         "--run-gates",
@@ -515,7 +514,7 @@ def main() -> int:
         default="preserve",
         choices=["preserve", "true", "false"],
         help=(
-            "Optionally patch PAPER_EXCHANGE_SERVICE_ONLY in env/.env "
+            "Optionally patch PAPER_EXCHANGE_SERVICE_ONLY in infra/env/.env "
             "(preserve keeps existing value)."
         ),
     )

@@ -7,7 +7,7 @@ Define repeatable recovery drills for control-plane services and event/report fr
 - Scenario:
   - stop `event-store-service` and wait beyond freshness threshold.
 - Steps:
-  1. `docker compose --env-file env/.env --profile external -f compose/docker-compose.yml stop event-store-service`
+  1. `docker compose --env-file infra/env/.env --profile external -f infra/compose/docker-compose.yml stop event-store-service`
   2. wait until `event_store_integrity_freshness` should become stale
   3. run `python scripts/release/run_promotion_gates.py --ci`
 - Expected:
@@ -22,7 +22,7 @@ Define repeatable recovery drills for control-plane services and event/report fr
 - Scenario:
   - stop `portfolio-risk-service` and verify freshness block.
 - Steps:
-  1. `docker compose --env-file env/.env --profile external -f compose/docker-compose.yml stop portfolio-risk-service`
+  1. `docker compose --env-file infra/env/.env --profile external -f infra/compose/docker-compose.yml stop portfolio-risk-service`
   2. wait beyond `PORTFOLIO_RISK_HEALTH_MAX_SEC`
   3. run `python scripts/release/run_promotion_gates.py --ci`
 - Expected:
@@ -37,7 +37,7 @@ Define repeatable recovery drills for control-plane services and event/report fr
 - Scenario:
   - restart writer and ensure no duplicate amplification.
 - Steps:
-  1. run `docker compose --env-file env/.env --profile ops -f compose/docker-compose.yml run --rm ops-db-writer python /workspace/hbot/services/ops_db_writer/main.py --once`
+  1. run `docker compose --env-file infra/env/.env --profile ops -f infra/compose/docker-compose.yml run --rm ops-db-writer python /workspace/hbot/services/ops_db_writer/main.py --once`
   2. capture row counts
   3. run same command again
   4. compare row counts and key uniqueness constraints

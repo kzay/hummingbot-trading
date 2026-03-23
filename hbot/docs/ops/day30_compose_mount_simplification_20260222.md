@@ -6,7 +6,7 @@
 
 ## Implemented
 - Compose mount simplification:
-  - `compose/docker-compose.yml`
+  - `infra/compose/docker-compose.yml`
   - bots `bot1`..`bot4` now mount:
     - `../controllers:/home/hummingbot/controllers:ro`
     - `../controllers:/home/hummingbot/controllers/market_making:ro`

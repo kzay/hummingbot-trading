@@ -9,13 +9,13 @@
 - Metrics exporter:
   - `services/control_plane_metrics_exporter.py`
 - Compose service:
-  - `compose/docker-compose.yml` (`control-plane-metrics-exporter`)
+  - `infra/compose/docker-compose.yml` (`control-plane-metrics-exporter`)
 - Prometheus scrape target:
-  - `monitoring/prometheus/prometheus.yml` (`job_name: control-plane-metrics`)
+  - `infra/monitoring/prometheus/prometheus.yml` (`job_name: control-plane-metrics`)
 - Alert rules:
-  - `monitoring/prometheus/alert_rules.yml` (`group: control_plane`)
+  - `infra/monitoring/prometheus/alert_rules.yml` (`group: control_plane`)
 - Grafana dashboard:
-  - `monitoring/grafana/dashboards/control_plane_overview.json`
+  - `infra/monitoring/grafana/dashboards/control_plane_overview.json`
 
 ## Exposed Metrics (Core)
 - `hbot_control_plane_report_present{report=*}`

@@ -86,21 +86,21 @@ echo "[7/8] Setting up project permissions..."
 cd "$PROJECT_DIR"
 
 # Create .env from template if not exists
-if [ ! -f "env/.env" ]; then
-    cp env/.env.template env/.env
-    chmod 600 env/.env
-    echo "Created env/.env from template - EDIT WITH YOUR API KEYS"
+if [ ! -f "infra/env/.env" ]; then
+    cp infra/env/.env.template infra/env/.env
+    chmod 600 infra/env/.env
+    echo "Created infra/env/.env from template - EDIT WITH YOUR API KEYS"
 else
-    echo "env/.env already exists - skipping"
+    echo "infra/env/.env already exists - skipping"
 fi
 
 # Set secure permissions on data directories
 find data/ -type d -exec chmod 750 {} \;
-find env/ -type f -exec chmod 600 {} \;
+find infra/env/ -type f -exec chmod 600 {} \;
 
 # ---- 8. Pull Docker images ----
 echo "[8/8] Pulling Docker images..."
-cd compose/
+cd infra/compose/
 docker compose --env-file ../env/.env pull
 
 echo ""
@@ -109,8 +109,8 @@ echo " Setup Complete!"
 echo "============================================"
 echo ""
 echo " Next steps:"
-echo "  1. Edit env/.env with your API keys"
-echo "  2. cd ${PROJECT_DIR}/compose"
+echo "  1. Edit infra/env/.env with your API keys"
+echo "  2. cd ${PROJECT_DIR}/infra/compose"
 echo "  3. docker compose --env-file ../env/.env up -d"
 echo ""
 echo " To access Grafana (from your local machine):"

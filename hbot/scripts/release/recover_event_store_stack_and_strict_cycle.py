@@ -5,32 +5,31 @@ import json
 import subprocess
 import sys
 import time
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
-from typing import Dict, List
 
 
 def _utc_now() -> str:
-    return datetime.now(timezone.utc).isoformat()
+    return datetime.now(UTC).isoformat()
 
 
 def _root() -> Path:
     return Path("/workspace/hbot") if Path("/.dockerenv").exists() else Path(__file__).resolve().parents[2]
 
 
-def _compose_cmd(*args: str) -> List[str]:
+def _compose_cmd(*args: str) -> list[str]:
     return [
         "docker",
         "compose",
         "--env-file",
-        "env/.env",
+        "infra/env/.env",
         "-f",
-        "compose/docker-compose.yml",
+        "infra/compose/docker-compose.yml",
         *args,
     ]
 
 
-def _run_cmd(root: Path, cmd: List[str], timeout_sec: int = 60) -> Dict[str, object]:
+def _run_cmd(root: Path, cmd: list[str], timeout_sec: int = 60) -> dict[str, object]:
     try:
         proc = subprocess.run(
             cmd,
@@ -66,10 +65,10 @@ def _container_state(root: Path, container_name: str) -> str:
     return str(out.get("stdout", "")).strip().lower() or "unknown"
 
 
-def _write_report(root: Path, payload: Dict[str, object]) -> Path:
+def _write_report(root: Path, payload: dict[str, object]) -> Path:
     out_dir = root / "reports" / "recovery"
     out_dir.mkdir(parents=True, exist_ok=True)
-    stamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
+    stamp = datetime.now(UTC).strftime("%Y%m%dT%H%M%SZ")
     out = out_dir / f"recover_event_store_strict_{stamp}.json"
     out.write_text(json.dumps(payload, indent=2), encoding="utf-8")
     (out_dir / "latest.json").write_text(json.dumps(payload, indent=2), encoding="utf-8")
@@ -100,11 +99,11 @@ def main() -> int:
             "status": "blocked",
             "reason": "docker_unavailable",
             "docker_info": docker_info,
-            "service_states": {k: "unknown" for k in containers.keys()},
+            "service_states": {k: "unknown" for k in containers},
             "strict_cycle": {"rc": None, "stdout": "", "stderr": ""},
         }
         out = _write_report(root, payload)
-        print(f"[recover-event-store] status=blocked")
+        print("[recover-event-store] status=blocked")
         print(f"[recover-event-store] evidence={out}")
         return 2
 
@@ -124,7 +123,7 @@ def main() -> int:
     )
 
     start = time.time()
-    service_states: Dict[str, str] = {}
+    service_states: dict[str, str] = {}
     healthy = False
     while time.time() - start <= max(30, int(args.max_wait_sec)):
         service_states = {name: _container_state(root, cname) for name, cname in containers.items()}

@@ -1,6 +1,6 @@
 ---
 description: Docker Compose conventions for this project
-globs: compose/docker-compose.yml
+globs: hbot/infra/compose/docker-compose.yml
 alwaysApply: false
 ---
 

@@ -17,19 +17,24 @@ performance review for a trading platform with Python services, Docker infrastru
 Redis event flows, and a React/Vite supervision frontend.
 
 ## System context
-- Main runtime/controller: hbot/controllers/epp_v2_4.py
-- Shared runtime: hbot/controllers/runtime/
-- Paper engine: hbot/controllers/paper_engine_v2/
-- Backend services: hbot/services/
-- Release/ops scripts: hbot/scripts/
-- Frontend app: hbot/apps/realtime_ui_v2/
-- Legacy frontend fallback: hbot/apps/realtime_ui/
-- Compose/infrastructure: hbot/compose/docker-compose.yml
-- Environment template: hbot/env/.env.template
-- Monitoring: hbot/monitoring/
+- Primary runtime/controller path: discover the active controller entrypoint under `hbot/controllers/`
+- Shared runtime: `hbot/controllers/runtime/`
+- Paper engine: `hbot/controllers/paper_engine_v2/`
+- Backend services: `hbot/services/`
+- Release/ops scripts: `hbot/scripts/`
+- Active frontend app(s): discover current UI directories under `hbot/apps/`
+- Maintained fallback frontend, if any: discover from `hbot/apps/` and docs
+- Compose/infrastructure: hbot/infra/compose/docker-compose.yml
+- Environment template: hbot/infra/env/.env.template
+- Monitoring: hbot/infra/monitoring/
 - Reports/artifacts: hbot/reports/
 - Test suite: hbot/tests/
 - Scope rule: listed files/folders are anchors, not limits. Inspect any additional relevant paths in the repo.
+
+## Discovery protocol (mandatory)
+- Start by identifying the active runtime entrypoint, active services, and active frontend before reviewing bottlenecks.
+- Treat named apps and files as examples or anchor patterns, not fixed filenames.
+- If the repo structure changed, use the current equivalent and note the substitution.
 
 ## Primary objective
 Identify the top bottlenecks, saturation risks, and performance regressions across:

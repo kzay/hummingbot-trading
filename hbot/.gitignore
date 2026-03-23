@@ -3,9 +3,9 @@
 # ============================================
 
 # ---- Secrets - NEVER commit ----
-env/.env
-env/.env.*
-!env/.env.template
+infra/env/.env
+infra/env/.env.*
+!infra/env/.env.template
 .env
 !.env.example
 *.pem
@@ -85,14 +85,12 @@ reports/soak/latest.json
 reports/event_store/day2_gate_eval_latest.json
 
 # ---- Grafana / Prometheus runtime ----
-monitoring/grafana/grafana.db
-monitoring/grafana/plugins/
-monitoring/prometheus/data/
+infra/monitoring/grafana/grafana.db
+infra/monitoring/grafana/plugins/
+infra/monitoring/prometheus/data/
 
-# ---- Backups ----
-backups/*.tar.gz
-backups/*.zip
-backups/*.sql
+# ---- ML model artifacts (deployment) ----
+data/ml/models/
 data/bot1/archive/
 
 # ---- Docker local override ----
@@ -109,6 +107,9 @@ desktop.ini
 *.swp
 *.swo
 *~
+
+# ---- Node.js ----
+node_modules/
 
 # ---- Python ----
 __pycache__/
@@ -137,3 +138,7 @@ htmlcov/
 
 # ---- Debug / temp scripts ----
 scripts/check_telemetry_stream.py
+
+# ---- Ad-hoc screenshots / Playwright crumbs at hbot root (never commit) ----
+screenshot*.png
+screenshot_*.js

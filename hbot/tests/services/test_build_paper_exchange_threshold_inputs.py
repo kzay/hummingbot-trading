@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import json
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
 from scripts.release.build_paper_exchange_threshold_inputs import build_report
@@ -13,7 +13,7 @@ def _write_json(path: Path, payload: dict) -> None:
 
 
 def test_build_report_merges_computed_and_manual_metrics(tmp_path: Path) -> None:
-    now = datetime.now(timezone.utc)
+    now = datetime.now(UTC)
     now_iso = now.isoformat()
 
     _write_json(
@@ -99,7 +99,7 @@ def test_build_report_merges_computed_and_manual_metrics(tmp_path: Path) -> None
 
 
 def test_build_report_treats_manual_only_metrics_as_informational(tmp_path: Path) -> None:
-    now = datetime.now(timezone.utc)
+    now = datetime.now(UTC)
     manual_path = tmp_path / "reports" / "verification" / "paper_exchange_threshold_metrics_manual.json"
     _write_json(
         manual_path,
@@ -123,14 +123,14 @@ def test_build_report_treats_manual_only_metrics_as_informational(tmp_path: Path
 
 
 def test_build_report_marks_stale_sources(tmp_path: Path) -> None:
-    stale_iso = (datetime.now(timezone.utc) - timedelta(hours=2)).isoformat()
+    stale_iso = (datetime.now(UTC) - timedelta(hours=2)).isoformat()
     _write_json(
         tmp_path / "reports" / "parity" / "latest.json",
         {"ts_utc": stale_iso, "status": "pass", "bots": []},
     )
     report = build_report(
         tmp_path,
-        now_ts=datetime.now(timezone.utc).timestamp(),
+        now_ts=datetime.now(UTC).timestamp(),
         max_source_age_min=20.0,
         manual_metrics_path=tmp_path / "reports" / "verification" / "paper_exchange_threshold_metrics_manual.json",
     )
@@ -141,7 +141,7 @@ def test_build_report_marks_stale_sources(tmp_path: Path) -> None:
 
 
 def test_build_report_derives_privileged_command_metrics_from_journal(tmp_path: Path) -> None:
-    now = datetime.now(timezone.utc)
+    now = datetime.now(UTC)
     now_iso = now.isoformat()
     _write_json(tmp_path / "reports" / "parity" / "latest.json", {"ts_utc": now_iso, "status": "pass", "bots": []})
     _write_json(
@@ -204,7 +204,7 @@ def test_build_report_derives_privileged_command_metrics_from_journal(tmp_path: 
 
 
 def test_build_report_derives_unauthorized_producer_acceptance_rate_from_authorization_flags(tmp_path: Path) -> None:
-    now = datetime.now(timezone.utc)
+    now = datetime.now(UTC)
     now_iso = now.isoformat()
     _write_json(tmp_path / "reports" / "parity" / "latest.json", {"ts_utc": now_iso, "status": "pass", "bots": []})
     _write_json(
@@ -258,7 +258,7 @@ def test_build_report_derives_unauthorized_producer_acceptance_rate_from_authori
 
 
 def test_build_report_derives_market_data_contract_metrics(tmp_path: Path) -> None:
-    now = datetime.now(timezone.utc)
+    now = datetime.now(UTC)
     now_iso = now.isoformat()
     _write_json(tmp_path / "reports" / "parity" / "latest.json", {"ts_utc": now_iso, "status": "pass", "bots": []})
     _write_json(
@@ -355,7 +355,7 @@ def test_build_report_derives_market_data_contract_metrics(tmp_path: Path) -> No
 
 
 def test_build_report_derives_accounting_contract_metrics_and_keeps_p1_6_computed(tmp_path: Path) -> None:
-    now = datetime.now(timezone.utc)
+    now = datetime.now(UTC)
     now_iso = now.isoformat()
     _write_json(
         tmp_path / "reports" / "parity" / "latest.json",
@@ -467,7 +467,7 @@ def test_build_report_derives_accounting_contract_metrics_and_keeps_p1_6_compute
 
 
 def test_build_report_derives_p1_7_window_and_command_count(tmp_path: Path) -> None:
-    now = datetime.now(timezone.utc)
+    now = datetime.now(UTC)
     now_iso = now.isoformat()
     event_store_file = tmp_path / "reports" / "event_store" / "events_20260304.jsonl"
     event_store_file.parent.mkdir(parents=True, exist_ok=True)
@@ -534,7 +534,7 @@ def test_build_report_derives_p1_7_window_and_command_count(tmp_path: Path) -> N
 
 
 def test_build_report_derives_p1_9_rollout_metrics_and_keeps_computed(tmp_path: Path) -> None:
-    now = datetime.now(timezone.utc)
+    now = datetime.now(UTC)
     now_iso = now.isoformat()
     _write_json(tmp_path / "reports" / "parity" / "latest.json", {"ts_utc": now_iso, "status": "pass", "bots": []})
     _write_json(
@@ -606,7 +606,7 @@ def test_build_report_derives_p1_9_rollout_metrics_and_keeps_computed(tmp_path: 
 
 
 def test_build_report_p1_9_duration_falls_back_to_manual_when_missing(tmp_path: Path) -> None:
-    now = datetime.now(timezone.utc)
+    now = datetime.now(UTC)
     now_iso = now.isoformat()
     _write_json(tmp_path / "reports" / "parity" / "latest.json", {"ts_utc": now_iso, "status": "pass", "bots": []})
     _write_json(
@@ -673,7 +673,7 @@ def test_build_report_p1_9_duration_falls_back_to_manual_when_missing(tmp_path: 
 
 
 def test_build_report_derives_p2_10_metrics_from_nautilus_matrix_and_keeps_computed(tmp_path: Path) -> None:
-    now = datetime.now(timezone.utc)
+    now = datetime.now(UTC)
     now_iso = now.isoformat()
     _write_json(tmp_path / "reports" / "parity" / "latest.json", {"ts_utc": now_iso, "status": "pass", "bots": []})
     _write_json(
@@ -722,7 +722,7 @@ def test_build_report_derives_p2_10_metrics_from_nautilus_matrix_and_keeps_compu
                     "rationale": "pure-python deterministic accounting",
                     "boundary": "local module only",
                     "license": "LGPL-3.0-or-later",
-                    "attribution_file": "third_party/nautilus_trader.LICENSE.txt",
+                    "attribution_file": "docs/legal/nautilus_trader.LICENSE.txt",
                     "test_refs": [
                         "tests/controllers/test_paper_engine_v2/test_accounting.py::test_accounting_parity_contract"
                     ],
@@ -730,8 +730,8 @@ def test_build_report_derives_p2_10_metrics_from_nautilus_matrix_and_keeps_compu
             ]
         },
     )
-    (tmp_path / "third_party").mkdir(parents=True, exist_ok=True)
-    (tmp_path / "third_party" / "nautilus_trader.LICENSE.txt").write_text(
+    (tmp_path / "docs" / "legal").mkdir(parents=True, exist_ok=True)
+    (tmp_path / "docs" / "legal" / "nautilus_trader.LICENSE.txt").write_text(
         "LGPL attribution\n",
         encoding="utf-8",
     )
@@ -763,7 +763,7 @@ def test_build_report_derives_p2_10_metrics_from_nautilus_matrix_and_keeps_compu
 
 
 def test_build_report_p2_10_detects_undocumented_direct_nautilus_import(tmp_path: Path) -> None:
-    now = datetime.now(timezone.utc)
+    now = datetime.now(UTC)
     now_iso = now.isoformat()
     _write_json(tmp_path / "reports" / "parity" / "latest.json", {"ts_utc": now_iso, "status": "pass", "bots": []})
     _write_json(
@@ -797,8 +797,8 @@ def test_build_report_p2_10_detects_undocumented_direct_nautilus_import(tmp_path
         encoding="utf-8",
     )
     _write_json(tmp_path / "docs" / "validation" / "nautilus_reuse_matrix.json", {"entries": []})
-    (tmp_path / "third_party").mkdir(parents=True, exist_ok=True)
-    (tmp_path / "third_party" / "nautilus_trader.LICENSE.txt").write_text("LGPL attribution\n", encoding="utf-8")
+    (tmp_path / "docs" / "legal").mkdir(parents=True, exist_ok=True)
+    (tmp_path / "docs" / "legal" / "nautilus_trader.LICENSE.txt").write_text("LGPL attribution\n", encoding="utf-8")
 
     report = build_report(
         tmp_path,
@@ -811,7 +811,7 @@ def test_build_report_p2_10_detects_undocumented_direct_nautilus_import(tmp_path
 
 
 def test_build_report_p1_6_realized_pnl_drift_ignores_no_fill_bots(tmp_path: Path) -> None:
-    now = datetime.now(timezone.utc)
+    now = datetime.now(UTC)
     now_iso = now.isoformat()
     _write_json(
         tmp_path / "reports" / "parity" / "latest.json",
@@ -869,7 +869,7 @@ def test_build_report_p1_6_realized_pnl_drift_ignores_no_fill_bots(tmp_path: Pat
 
 
 def test_build_report_derives_namespace_isolation_metrics_pass_path(tmp_path: Path) -> None:
-    now = datetime.now(timezone.utc)
+    now = datetime.now(UTC)
     now_iso = now.isoformat()
     _write_json(tmp_path / "reports" / "parity" / "latest.json", {"ts_utc": now_iso, "status": "pass", "bots": []})
     _write_json(
@@ -963,7 +963,7 @@ def test_build_report_derives_namespace_isolation_metrics_pass_path(tmp_path: Pa
 
 
 def test_build_report_derives_namespace_isolation_metrics_detects_collision_violation(tmp_path: Path) -> None:
-    now = datetime.now(timezone.utc)
+    now = datetime.now(UTC)
     now_iso = now.isoformat()
     _write_json(tmp_path / "reports" / "parity" / "latest.json", {"ts_utc": now_iso, "status": "pass", "bots": []})
     _write_json(
@@ -1035,7 +1035,7 @@ def test_build_report_derives_namespace_isolation_metrics_detects_collision_viol
 
 
 def test_build_report_derives_active_failure_policy_metrics_from_golden_path(tmp_path: Path) -> None:
-    now = datetime.now(timezone.utc)
+    now = datetime.now(UTC)
     now_iso = now.isoformat()
     _write_json(tmp_path / "reports" / "parity" / "latest.json", {"ts_utc": now_iso, "status": "pass", "bots": []})
     _write_json(
@@ -1091,7 +1091,7 @@ def test_build_report_derives_active_failure_policy_metrics_from_golden_path(tmp
 
 
 def test_build_report_active_failure_policy_metrics_fail_closed_when_required_scenario_missing(tmp_path: Path) -> None:
-    now = datetime.now(timezone.utc)
+    now = datetime.now(UTC)
     now_iso = now.isoformat()
     _write_json(tmp_path / "reports" / "parity" / "latest.json", {"ts_utc": now_iso, "status": "pass", "bots": []})
     _write_json(
@@ -1132,7 +1132,7 @@ def test_build_report_active_failure_policy_metrics_fail_closed_when_required_sc
 
 
 def test_build_report_derives_p0_11_hb_compat_metrics_and_keeps_computed(tmp_path: Path) -> None:
-    now = datetime.now(timezone.utc)
+    now = datetime.now(UTC)
     now_iso = now.isoformat()
     _write_json(tmp_path / "reports" / "parity" / "latest.json", {"ts_utc": now_iso, "status": "pass", "bots": []})
     _write_json(
@@ -1210,7 +1210,7 @@ def test_build_report_derives_p0_11_hb_compat_metrics_and_keeps_computed(tmp_pat
 
 
 def test_build_report_p0_11_metrics_fail_closed_when_required_scenario_missing(tmp_path: Path) -> None:
-    now = datetime.now(timezone.utc)
+    now = datetime.now(UTC)
     now_iso = now.isoformat()
     _write_json(tmp_path / "reports" / "parity" / "latest.json", {"ts_utc": now_iso, "status": "pass", "bots": []})
     _write_json(
@@ -1251,7 +1251,7 @@ def test_build_report_p0_11_metrics_fail_closed_when_required_scenario_missing(t
 
 
 def test_build_report_ingests_load_backpressure_metrics(tmp_path: Path) -> None:
-    now = datetime.now(timezone.utc)
+    now = datetime.now(UTC)
     now_iso = now.isoformat()
     _write_json(tmp_path / "reports" / "parity" / "latest.json", {"ts_utc": now_iso, "status": "pass", "bots": []})
     _write_json(
@@ -1307,7 +1307,7 @@ def test_build_report_ingests_load_backpressure_metrics(tmp_path: Path) -> None:
 
 
 def test_build_report_generates_paper_exchange_state_dr_metrics(tmp_path: Path) -> None:
-    now = datetime.now(timezone.utc)
+    now = datetime.now(UTC)
     now_iso = now.isoformat()
     _write_json(tmp_path / "reports" / "parity" / "latest.json", {"ts_utc": now_iso, "status": "pass", "bots": []})
     _write_json(

@@ -89,7 +89,7 @@ curl -X POST http://localhost:9900/kill
 ### If bot continues placing orders after flatten:
 ```bash
 # Restart bot with fresh daily state
-docker compose --env-file hbot/env/.env -f hbot/compose/docker-compose.yml restart bot1
+docker compose --env-file hbot/infra/env/.env -f hbot/infra/compose/docker-compose.yml restart bot1
 ```
 
 ---

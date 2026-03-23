@@ -4,9 +4,11 @@
 Operational SOPs for startup, shutdown, recovery, and controlled changes.
 
 ## Startup (external orchestration)
-1. Validate `env/.env`.
+From the `hbot/` directory:
+
+1. Validate `infra/env/.env`.
 2. Start:
-   - `docker compose --env-file ../env/.env --profile multi --profile test --profile external up -d`
+   - `docker compose --env-file infra/env/.env -f infra/compose/docker-compose.yml --profile multi --profile test --profile external up -d`
 3. Confirm service health (`ps`, logs, Redis ping).
 4. Start/verify strategy in bot terminal.
 
@@ -30,15 +32,15 @@ Operational SOPs for startup, shutdown, recovery, and controlled changes.
 
 ## Shutdown
 - Graceful:
-  - `docker compose --env-file ../env/.env --profile multi --profile external down`
+  - `docker compose --env-file infra/env/.env -f infra/compose/docker-compose.yml --profile multi --profile external down`
 
 ## Graceful Shutdown Verification
 Use this before deploy, rollback, or host maintenance so stateful services drain cleanly.
 
 1. Stop with a bounded timeout:
-   - `docker compose --env-file ../env/.env --profile multi --profile external stop --timeout 10`
+   - `docker compose --env-file infra/env/.env -f infra/compose/docker-compose.yml --profile multi --profile external stop --timeout 10`
 2. Confirm containers exit:
-   - `docker compose --env-file ../env/.env ps`
+   - `docker compose --env-file infra/env/.env -f infra/compose/docker-compose.yml ps`
 3. Verify state artifacts were left in a readable state:
    - `reports/verification/paper_exchange_state_snapshot_latest.json`
    - `reports/verification/paper_exchange_pair_snapshot_latest.json`
@@ -114,7 +116,7 @@ Use this sequence when preparing a candidate build so ROAD-1 / ROAD-5 evidence a
 - Canonical policy:
   - `docs/ops/secrets_and_key_rotation.md`
   - `docs/infra/secrets_and_env.md`
-- Never print or commit secret values from `env/.env`.
+- Never print or commit secret values from `infra/env/.env`.
 - Only use masked secret diagnostics (`****ABCD`) in logs/reports.
 - If secret exposure is suspected:
   - move to safe mode (`soft_pause`/`kill_switch`)
@@ -122,7 +124,7 @@ Use this sequence when preparing a candidate build so ROAD-1 / ROAD-5 evidence a
   - document incident without secret values
 
 ## Key Rotation (Planned)
-1. Update keys in host `env/.env`.
+1. Update keys in host `infra/env/.env`.
 2. Recreate affected containers only:
    - `exchange-snapshot-service`
    - impacted bot containers
@@ -134,7 +136,7 @@ Use this sequence when preparing a candidate build so ROAD-1 / ROAD-5 evidence a
 ## Break-Glass Credential Response
 1. Pause/stop impacted bots.
 2. Revoke compromised keys at exchange.
-3. Apply emergency rotated keys in `env/.env`.
+3. Apply emergency rotated keys in `infra/env/.env`.
 4. Recreate affected services and rerun promotion checks.
 5. Record incident metadata and evidence paths in `docs/ops/incidents.md`.
 
@@ -144,9 +146,9 @@ Use this when Redis must be restarted or recovered.
 1. Pre-checkpoint:
    - `python scripts/release/run_bus_recovery_check.py --label pre_restart`
 2. Restart Redis:
-   - `docker compose --env-file ../env/.env -f docker-compose.yml restart redis`
+   - `docker compose --env-file infra/env/.env -f infra/compose/docker-compose.yml restart redis`
 3. Wait for health:
-   - `docker compose --env-file ../env/.env -f docker-compose.yml ps redis`
+   - `docker compose --env-file infra/env/.env -f infra/compose/docker-compose.yml ps redis`
    - ensure status includes `healthy`.
 4. Post-checkpoint:
    - `python scripts/release/run_bus_recovery_check.py --label post_restart`
@@ -169,11 +171,11 @@ Policy source:
 
 Canonical startup modes:
 1. Live primary bot + control plane:
-   - `docker compose --env-file ../env/.env --profile external up -d bot1`
+   - `docker compose --env-file infra/env/.env -f infra/compose/docker-compose.yml --profile external up -d bot1`
 2. Validation bots (paper + connector testnet):
-   - `docker compose --env-file ../env/.env --profile test up -d bot3 bot4 bot5`
+   - `docker compose --env-file infra/env/.env -f infra/compose/docker-compose.yml --profile test up -d bot3 bot4 bot5`
 3. Reserved scale slot:
-   - `docker compose --env-file ../env/.env --profile multi up -d bot2`
+   - `docker compose --env-file infra/env/.env -f infra/compose/docker-compose.yml --profile multi up -d bot2`
    - keep `bot2` in no-trade mode unless an explicit policy revision is approved.
 
 Required policy gate before promotion:
@@ -291,7 +293,7 @@ Controller refresh guidance:
 
 ## Realtime UI + L2 Operations
 1. Enable services:
-   - `docker compose --env-file ../env/.env --profile external up -d realtime-ui-api realtime-ui-web`
+   - `docker compose --env-file infra/env/.env -f infra/compose/docker-compose.yml --profile external up -d realtime-ui-api realtime-ui-web`
 2. Set rollout mode:
    - `REALTIME_UI_API_MODE=shadow` for parallel validation.
    - `REALTIME_UI_API_MODE=active` when operator cutover is approved.
@@ -392,7 +394,7 @@ Rollback:
 
 ## ClickHouse Event Analytics (Day 40)
 - Bring up ClickHouse stack:
-  - `docker compose --env-file env/.env --profile ops -f compose/docker-compose.yml up -d clickhouse clickhouse-ingest`
+  - `docker compose --env-file infra/env/.env --profile ops -f infra/compose/docker-compose.yml up -d clickhouse clickhouse-ingest`
 - One-shot dry run (no DB writes):
   - `python services/clickhouse_ingest/main.py --once --dry-run`
 - One-shot real ingest:
@@ -424,11 +426,11 @@ Rollback:
   - `reports/upgrade/latest.json`
 - Controlled rollout:
   1. test profile first:
-     - `HUMMINGBOT_IMAGE=<target> docker compose --env-file env/.env -f compose/docker-compose.yml --profile test up -d --force-recreate bot3 bot4`
+     - `HUMMINGBOT_IMAGE=<target> docker compose --env-file infra/env/.env -f infra/compose/docker-compose.yml --profile test up -d --force-recreate bot3 bot4`
   2. run checks:
      - `python scripts/release/run_promotion_gates.py --ci`
   3. no-trade live safety rollout:
-     - `HUMMINGBOT_IMAGE=<target> docker compose --env-file env/.env -f compose/docker-compose.yml up -d --force-recreate bot1`
+     - `HUMMINGBOT_IMAGE=<target> docker compose --env-file infra/env/.env -f infra/compose/docker-compose.yml up -d --force-recreate bot1`
   4. monitor:
      - `reports/reconciliation/latest.json`
      - `reports/parity/latest.json`
@@ -488,11 +490,11 @@ One-command canary launcher (recommended):
   - `python scripts/ops/run_paper_exchange_canary.py --bot bot3 --mode auto --dry-run`
 
 1. Start service in isolated profile:
-   - `docker compose --env-file ../env/.env --profile external --profile paper-exchange up -d redis paper-exchange-service`
+   - `docker compose --env-file infra/env/.env -f infra/compose/docker-compose.yml --profile external --profile paper-exchange up -d redis paper-exchange-service`
 2. Canary in shadow mode on a validation bot (recommended `bot3`):
-   - set `PAPER_EXCHANGE_MODE_BOT3=shadow` in `env/.env`
+   - set `PAPER_EXCHANGE_MODE_BOT3=shadow` in `infra/env/.env`
    - recreate canary bot:
-     - `docker compose --env-file ../env/.env --profile test up -d --force-recreate bot3`
+     - `docker compose --env-file infra/env/.env -f infra/compose/docker-compose.yml --profile test up -d --force-recreate bot3`
 3. Validate parity + load evidence:
    - `python scripts/release/run_promotion_gates.py --check-paper-exchange-thresholds --run-paper-exchange-load-harness`
 4. Promote canary to active mode:
@@ -539,11 +541,11 @@ Optional strict-cycle wiring:
 ### Paper Exchange Rollback
 
 1. Immediate rollback for impacted bot:
-   - set `PAPER_EXCHANGE_MODE_BOT<id>=disabled` in `env/.env`
+   - set `PAPER_EXCHANGE_MODE_BOT<id>=disabled` in `infra/env/.env`
    - recreate that bot container (`--force-recreate`)
 2. If service instability persists:
    - stop service profile:
-     - `docker compose --env-file ../env/.env --profile paper-exchange stop paper-exchange-service`
+     - `docker compose --env-file infra/env/.env -f infra/compose/docker-compose.yml --profile paper-exchange stop paper-exchange-service`
 3. Confirm rollback health:
    - `python scripts/ops/preflight_paper_exchange.py`
    - `python scripts/release/run_promotion_gates.py --check-paper-exchange-thresholds`
@@ -579,7 +581,7 @@ Operator checks:
 Use this when canonical DB mode (`db_primary`) needs immediate fallback to CSV compatibility (`csv_compat`).
 
 1. Apply timed rollback drill (writes evidence + mode flags):
-   - `python scripts/ops/data_plane_rollback_drill.py --env-file env/.env --apply --from-mode db_primary --to-mode csv_compat`
+   - `python scripts/ops/data_plane_rollback_drill.py --env-file infra/env/.env --apply --from-mode db_primary --to-mode csv_compat`
 2. Verify promotion checks in fallback mode:
    - `python scripts/release/run_promotion_gates.py --max-report-age-min 20`
 3. Validate drill evidence:
@@ -619,7 +621,7 @@ Track these KPIs from `minute.csv` / `fills.csv` before changing capital:
   (`bitget_perpetual` via Paper Engine v2), rather than using the old direct
   paper-trade wrapper path.
 - Start bot3:
-  - `docker compose --env-file ../env/.env --profile test up -d bot3`
+  - `docker compose --env-file infra/env/.env -f infra/compose/docker-compose.yml --profile test up -d bot3`
 - Active paper trading scenario:
   - `start --script v2_with_controllers.py --conf v2_epp_v2_4_bot3_paper_smoke.yml`
 - No-trade safety scenario:
@@ -635,7 +637,7 @@ Track these KPIs from `minute.csv` / `fills.csv` before changing capital:
 - It preserves its distinct IFT/JOTA strategy configuration while using the same
   hardened paper/runtime baseline as Bot1.
 - Start bot5:
-  - `docker compose --env-file ../env/.env --profile test up -d bot5`
+  - `docker compose --env-file infra/env/.env -f infra/compose/docker-compose.yml --profile test up -d bot5`
 - Active paper trading scenario:
   - `start --script v2_with_controllers.py --conf v2_epp_v2_4_bot5_ift_jota_paper.yml`
 - Pass criteria:
@@ -648,7 +650,7 @@ Track these KPIs from `minute.csv` / `fills.csv` before changing capital:
 ## Bot4 Binance Testnet V2 Matrix
 - Bot4 is the dedicated V2 validation bot for Binance testnet scenarios.
 - Start bot4:
-  - `docker compose --env-file ../env/.env --profile test up -d --force-recreate bot4`
+  - `docker compose --env-file infra/env/.env -f infra/compose/docker-compose.yml --profile test up -d --force-recreate bot4`
 - Configure connector credentials in bot4 once:
   - `connect binance_perpetual_testnet`
 - Scenarios:
@@ -679,7 +681,7 @@ Track these KPIs from `minute.csv` / `fills.csv` before changing capital:
   - Risk envelopes reviewed and approved for micro-cap.
   - Strict gate status reviewed before run.
 - Start bot1:
-  - `docker compose --env-file ../env/.env --profile multi up -d --force-recreate bot1`
+  - `docker compose --env-file infra/env/.env -f infra/compose/docker-compose.yml --profile multi up -d --force-recreate bot1`
 - Scenarios:
   - Live micro-cap:
     - `start --script v2_with_controllers.py --conf v2_epp_v2_4_bot1_bitget_live_microcap.yml`
@@ -693,7 +695,7 @@ Track these KPIs from `minute.csv` / `fills.csv` before changing capital:
      - `start --script v2_with_controllers.py --conf v2_epp_v2_4_bitget_paper_smoke.yml`
   3. If needed, recreate bot container and clear cache:
      - `python scripts/release/dev_workflow.py clear-pyc --bot bot1`
-     - `docker compose --env-file ../env/.env -f compose/docker-compose.yml up -d --force-recreate bot1`
+     - `docker compose --env-file infra/env/.env -f infra/compose/docker-compose.yml up -d --force-recreate bot1`
 
 ## Bitget Live Incident Taxonomy (Day 15)
 - `bitget_disconnect`: websocket/API session drops or reconnect storms.
@@ -711,7 +713,7 @@ Fix:
 ```bash
 docker exec kzay-capital-bot1 rm -rf /home/hummingbot/controllers/__pycache__ \
     /home/hummingbot/controllers/market_making/__pycache__
-docker compose --env-file ../env/.env -f docker-compose.yml up -d --force-recreate bot1
+docker compose --env-file infra/env/.env -f infra/compose/docker-compose.yml up -d --force-recreate bot1
 ```
 
 For other bots, replace `kzay-capital-bot1` / `bot1` with the affected bot container
@@ -733,7 +735,7 @@ and compose service name (`bot2`, `bot3`, `bot4`, or `bot5`).
 ### Startup
 
 1. Start monitoring services:
-   - `docker compose --env-file ../env/.env up -d prometheus grafana node-exporter cadvisor bot-metrics-exporter loki promtail`
+   - `docker compose --env-file infra/env/.env -f infra/compose/docker-compose.yml up -d prometheus grafana node-exporter cadvisor bot-metrics-exporter loki promtail`
 2. Verify Prometheus target health (`/targets`) and datasource health in Grafana.
 3. Open dashboards:
    - `Kzay Capital Trading Desk`
@@ -756,20 +758,20 @@ PostgreSQL operational store:
   - `docs/ops/postgres_ops_store_v1.md`
 
 Startup:
-1. `docker compose --env-file env/.env --profile ops -f compose/docker-compose.yml up -d postgres`
-2. `docker compose --env-file env/.env --profile ops -f compose/docker-compose.yml ps postgres`
+1. `docker compose --env-file infra/env/.env --profile ops -f infra/compose/docker-compose.yml up -d postgres`
+2. `docker compose --env-file infra/env/.env --profile ops -f infra/compose/docker-compose.yml ps postgres`
 3. Optional `pgadmin`:
-   - `docker compose --env-file env/.env --profile ops --profile ops-tools -f compose/docker-compose.yml up -d pgadmin`
+   - `docker compose --env-file infra/env/.env --profile ops --profile ops-tools -f infra/compose/docker-compose.yml up -d pgadmin`
 4. Start writer:
-   - `docker compose --env-file env/.env --profile ops -f compose/docker-compose.yml up -d ops-db-writer`
+   - `docker compose --env-file infra/env/.env --profile ops -f infra/compose/docker-compose.yml up -d ops-db-writer`
 
 Sanity check:
-- `docker compose --env-file env/.env --profile ops -f compose/docker-compose.yml exec -T postgres psql -U kzay_capital -d kzay_capital_ops -c "select now() as ts_utc;"`
+- `docker compose --env-file infra/env/.env --profile ops -f infra/compose/docker-compose.yml exec -T postgres psql -U kzay_capital -d kzay_capital_ops -c "select now() as ts_utc;"`
 - one-shot writer check:
-  - `docker compose --env-file env/.env --profile ops -f compose/docker-compose.yml run --rm ops-db-writer python /workspace/hbot/services/ops_db_writer/main.py --once`
+  - `docker compose --env-file infra/env/.env --profile ops -f infra/compose/docker-compose.yml run --rm ops-db-writer python /workspace/hbot/services/ops_db_writer/main.py --once`
 
 Backup:
-- `docker compose --env-file env/.env --profile ops -f compose/docker-compose.yml exec -T postgres pg_dump -U kzay_capital kzay_capital_ops > reports/ops_db/postgres_dump_latest.sql`
+- `docker compose --env-file infra/env/.env --profile ops -f infra/compose/docker-compose.yml exec -T postgres pg_dump -U kzay_capital kzay_capital_ops > reports/ops_db/postgres_dump_latest.sql`
 
 ### Incident Triage (Trading)
 

@@ -4,7 +4,7 @@
 Freeze a reproducible Day 1 baseline for Option 4 execution.
 
 ## Runtime Baseline
-- Compose file: `hbot/compose/docker-compose.yml`
+- Compose file: `hbot/infra/compose/docker-compose.yml`
 - Hummingbot base image (default): `hummingbot/hummingbot:version-2.12.0`
 - Restart policy: `unless-stopped`
 - Strategy runtime mode: Hummingbot v2 controller-based execution
@@ -48,8 +48,8 @@ Freeze a reproducible Day 1 baseline for Option 4 execution.
 - Compose variable:
   - `KZAY_CAPITAL_CONTROL_PLANE_IMAGE`
 - Build provenance:
-  - Dockerfile: `hbot/compose/images/control_plane/Dockerfile`
-  - pinned dependencies: `hbot/compose/images/control_plane/requirements-control-plane.txt`
+  - Dockerfile: `hbot/infra/compose/images/control_plane/Dockerfile`
+  - pinned dependencies: `hbot/infra/compose/images/control_plane/requirements-control-plane.txt`
 - External services using this image:
   - `signal-service`, `risk-service`, `coordination-service`
   - `event-store-service`, `event-store-monitor`, `day2-gate-monitor`

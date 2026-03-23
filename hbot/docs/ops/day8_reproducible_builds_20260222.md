@@ -6,8 +6,8 @@ Convert external control-plane services to reproducible, pinned images with no r
 ## Build Artifact
 - Image tag (default): `kzay-capital-control-plane:20260222`
 - Compose variable: `KZAY_CAPITAL_CONTROL_PLANE_IMAGE`
-- Dockerfile: `hbot/compose/images/control_plane/Dockerfile`
-- Dependency lock file: `hbot/compose/images/control_plane/requirements-control-plane.txt`
+- Dockerfile: `hbot/infra/compose/images/control_plane/Dockerfile`
+- Dependency lock file: `hbot/infra/compose/images/control_plane/requirements-control-plane.txt`
 
 ## Pinned Dependencies
 - `redis==7.2.0`
@@ -35,17 +35,17 @@ Convert external control-plane services to reproducible, pinned images with no r
 
 ## Build and Run
 1. Build image once:
-   - `docker compose --env-file ../env/.env --profile external -f compose/docker-compose.yml build`
+   - `docker compose --env-file infra/env/.env --profile external -f infra/compose/docker-compose.yml build`
 2. Start external profile:
-   - `docker compose --env-file ../env/.env --profile external -f compose/docker-compose.yml up -d`
+   - `docker compose --env-file infra/env/.env --profile external -f infra/compose/docker-compose.yml up -d`
 
 ## Verification
 - Validate compose config:
-  - `docker compose --env-file ../env/.env --profile external -f compose/docker-compose.yml config`
+  - `docker compose --env-file infra/env/.env --profile external -f infra/compose/docker-compose.yml config`
 - Validate services are up:
-  - `docker compose --env-file ../env/.env --profile external -f compose/docker-compose.yml ps`
+  - `docker compose --env-file infra/env/.env --profile external -f infra/compose/docker-compose.yml ps`
 - Confirm no runtime `pip install` commands remain in external service commands:
-  - inspect `compose/docker-compose.yml` command entries under external services.
+  - inspect `infra/compose/docker-compose.yml` command entries under external services.
 
 ## Risk/Rollback
 - Rollback path:

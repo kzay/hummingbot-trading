@@ -21,14 +21,14 @@ import os
 import subprocess
 import sys
 from pathlib import Path
+from urllib.error import HTTPError, URLError
 from urllib.request import Request, urlopen
-from urllib.error import URLError, HTTPError
 
 
 def _check_env_file(root: Path) -> tuple[bool, str]:
-    env_path = root / "env" / ".env"
+    env_path = root / "infra" / "env" / ".env"
     if not env_path.exists():
-        return False, "env/.env not found"
+        return False, "infra/env/.env not found"
     # Check BOT1_PASSWORD in env file (not .env.template)
     try:
         content = env_path.read_text(encoding="utf-8")
@@ -178,7 +178,7 @@ def _read_json(path: Path) -> dict:
 
 
 def _check_recon_exchange_ready(root: Path) -> tuple[bool, str, dict]:
-    env_path = root / "env" / ".env"
+    env_path = root / "infra" / "env" / ".env"
     recon_path = root / "reports" / "reconciliation" / "latest.json"
     snapshot_path = root / "reports" / "exchange_snapshots" / "latest.json"
 

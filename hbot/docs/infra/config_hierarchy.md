@@ -8,14 +8,14 @@ The hbot trading system uses four config sources with defined precedence. This d
 
 | Source | Location | Loaded By | When |
 |--------|----------|-----------|------|
-| **Env vars** | `env/.env` | Docker Compose / shell | Before container start |
-| **Docker Compose env blocks** | `compose/docker-compose.yml` | Compose | Service definition (defaults, overrides) |
+| **Env vars** | `infra/env/.env` | Docker Compose / shell | Before container start |
+| **Docker Compose env blocks** | `infra/compose/docker-compose.yml` | Compose | Service definition (defaults, overrides) |
 | **JSON policy configs** | `config/*.json` | Services / controllers | At startup or per-cycle |
 | **YAML controller config** | `data/bot1/conf/controllers/*.yml` | Hummingbot strategy | When strategy loads |
 
 ## Precedence Order
 
-1. **Env var** (highest) — values from `env/.env` passed via `--env-file`
+1. **Env var** (highest) — values from `infra/env/.env` passed via `--env-file`
 2. **Docker Compose** — service `environment:` blocks with `${VAR:-default}` syntax
 3. **Service default** — hardcoded fallback in code
 
@@ -59,8 +59,8 @@ Evidence: `processed_data.fee_source` shows `api:bitget:user_fee_query`, `projec
 
 ## Related Files
 
-- `env/.env.template` — full env var list
-- `compose/docker-compose.yml` — service env blocks
+- `infra/env/.env.template` — full env var list
+- `infra/compose/docker-compose.yml` — service env blocks
 - `config/fee_profiles.json` — fee profiles for `fee_mode: project` / fallback
 - `config/multi_bot_policy_v1.json` — bot roles and modes
 - `data/bot1/conf/controllers/epp_v2_4_bot_a.yml` — controller YAML

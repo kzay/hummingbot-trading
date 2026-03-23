@@ -8,9 +8,8 @@ import os
 import re
 import shutil
 import time
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
-from typing import Dict, List, Optional, Tuple
 
 from scripts.release.check_paper_exchange_thresholds import THRESHOLD_CLAUSES, _source_artifacts_for_metric
 
@@ -23,10 +22,10 @@ _DR_SUCCESS_WINDOW_DAYS = 30
 
 
 def _utc_now() -> str:
-    return datetime.now(timezone.utc).isoformat()
+    return datetime.now(UTC).isoformat()
 
 
-def _parse_ts(value: str) -> Optional[datetime]:
+def _parse_ts(value: str) -> datetime | None:
     s = str(value or "").strip()
     if not s:
         return None
@@ -52,7 +51,7 @@ def _minutes_since_file_mtime(path: Path, now_ts: float) -> float:
         return 1e9
 
 
-def _read_json(path: Path) -> Dict[str, object]:
+def _read_json(path: Path) -> dict[str, object]:
     if not path.exists():
         return {}
     try:
@@ -62,7 +61,7 @@ def _read_json(path: Path) -> Dict[str, object]:
         return {}
 
 
-def _to_float(value: object) -> Optional[float]:
+def _to_float(value: object) -> float | None:
     try:
         if value is None:
             return None
@@ -104,14 +103,14 @@ def _sha256_file(path: Path) -> str:
     return h.hexdigest()
 
 
-def _dict_size(payload: Dict[str, object], key: str) -> Optional[int]:
+def _dict_size(payload: dict[str, object], key: str) -> int | None:
     raw = payload.get(key)
     if not isinstance(raw, dict):
         return None
     return len(raw)
 
 
-def _count_mismatch(payload: Dict[str, object], count_key: str, values_key: str) -> int:
+def _count_mismatch(payload: dict[str, object], count_key: str, values_key: str) -> int:
     expected = _to_float(payload.get(count_key))
     observed = _dict_size(payload, values_key)
     if expected is None or observed is None:
@@ -129,10 +128,10 @@ def _latest_backup_age_hours(backup_root: Path, now_ts: float) -> float:
     return _hours_since_file_mtime(newest, now_ts)
 
 
-def _paper_exchange_state_dr_report(reports: Path, now_ts: float) -> Dict[str, object]:
+def _paper_exchange_state_dr_report(reports: Path, now_ts: float) -> dict[str, object]:
     verification = reports / "verification"
     verification.mkdir(parents=True, exist_ok=True)
-    stamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
+    stamp = datetime.now(UTC).strftime("%Y%m%dT%H%M%SZ")
 
     required_sources = {
         "paper_exchange_command_journal_latest": verification / "paper_exchange_command_journal_latest.json",
@@ -149,9 +148,9 @@ def _paper_exchange_state_dr_report(reports: Path, now_ts: float) -> Dict[str, o
     report_ts = verification / f"paper_exchange_state_dr_{stamp}.json"
 
     integrity_mismatch_count = 0
-    missing_artifacts: List[str] = []
-    copy_failures: List[str] = []
-    hash_mismatches: List[str] = []
+    missing_artifacts: list[str] = []
+    copy_failures: list[str] = []
+    hash_mismatches: list[str] = []
 
     started = time.perf_counter()
     for artifact_name, src in required_sources.items():
@@ -198,7 +197,7 @@ def _paper_exchange_state_dr_report(reports: Path, now_ts: float) -> Dict[str, o
     history_payload = _read_json(history_latest)
     existing_runs_raw = history_payload.get("runs", [])
     existing_runs = existing_runs_raw if isinstance(existing_runs_raw, list) else []
-    retained_runs: List[Dict[str, object]] = []
+    retained_runs: list[dict[str, object]] = []
     max_retention_seconds = float(_DR_BACKUP_RETENTION_DAYS) * 86400.0
     for run in existing_runs:
         if not isinstance(run, dict):
@@ -272,7 +271,7 @@ def _paper_exchange_state_dr_report(reports: Path, now_ts: float) -> Dict[str, o
     return report
 
 
-def _paper_exchange_state_dr_fail_closed_report(error_text: str) -> Dict[str, object]:
+def _paper_exchange_state_dr_fail_closed_report(error_text: str) -> dict[str, object]:
     return {
         "ts_utc": _utc_now(),
         "status": "fail",
@@ -296,7 +295,7 @@ def _namespace_base_key(instance_name: str, connector_name: str, trading_pair: s
     )
 
 
-def _namespace_key_from_record(record: Dict[str, object]) -> str:
+def _namespace_key_from_record(record: dict[str, object]) -> str:
     explicit = str(record.get("namespace_key", "")).strip()
     if explicit:
         return explicit
@@ -307,7 +306,7 @@ def _namespace_key_from_record(record: Dict[str, object]) -> str:
     )
 
 
-def _ordering_value(record: Dict[str, object], fallback: int) -> int:
+def _ordering_value(record: dict[str, object], fallback: int) -> int:
     metadata = record.get("metadata", {})
     metadata = metadata if isinstance(metadata, dict) else {}
     sequence = _to_float(metadata.get("command_sequence"))
@@ -322,13 +321,13 @@ def _ordering_value(record: Dict[str, object], fallback: int) -> int:
 def _paper_exchange_namespace_isolation_report(
     reports: Path,
     *,
-    command_journal: Dict[str, object],
-    state_snapshot: Dict[str, object],
-    pair_snapshot: Dict[str, object],
-) -> Dict[str, object]:
+    command_journal: dict[str, object],
+    state_snapshot: dict[str, object],
+    pair_snapshot: dict[str, object],
+) -> dict[str, object]:
     verification = reports / "verification"
     verification.mkdir(parents=True, exist_ok=True)
-    stamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
+    stamp = datetime.now(UTC).strftime("%Y%m%dT%H%M%SZ")
     report_latest = verification / "paper_exchange_namespace_isolation_latest.json"
     report_ts = verification / f"paper_exchange_namespace_isolation_{stamp}.json"
 
@@ -339,7 +338,7 @@ def _paper_exchange_namespace_isolation_report(
     raw_commands = command_journal.get("commands", {})
     raw_commands = raw_commands if isinstance(raw_commands, dict) else {}
 
-    accepted_namespace_by_order_id: Dict[str, str] = {}
+    accepted_namespace_by_order_id: dict[str, str] = {}
     state_collision_count = 0
     malformed_order_records = 0
     for order_key, order_record in raw_orders.items():
@@ -369,7 +368,7 @@ def _paper_exchange_namespace_isolation_report(
         if expected_pair_key and str(pair_key).strip() and str(pair_key).strip() != expected_pair_key:
             pair_namespace_mismatch_count += 1
 
-    ordered_commands: List[Dict[str, object]] = []
+    ordered_commands: list[dict[str, object]] = []
     for idx, record in enumerate(raw_commands.values()):
         if not isinstance(record, dict):
             continue
@@ -382,7 +381,7 @@ def _paper_exchange_namespace_isolation_report(
     correct_routing_checks = 0
     routing_violation_count = 0
     accepted_namespace_collision_count = 0
-    violation_samples: List[Dict[str, object]] = []
+    violation_samples: list[dict[str, object]] = []
 
     for record in ordered_commands:
         command = str(record.get("command", "")).strip().lower()
@@ -504,7 +503,7 @@ def _paper_exchange_namespace_isolation_report(
     return report
 
 
-def _paper_exchange_namespace_isolation_fail_closed_report(error_text: str) -> Dict[str, object]:
+def _paper_exchange_namespace_isolation_fail_closed_report(error_text: str) -> dict[str, object]:
     return {
         "ts_utc": _utc_now(),
         "status": "fail",
@@ -519,7 +518,7 @@ def _paper_exchange_namespace_isolation_fail_closed_report(error_text: str) -> D
     }
 
 
-def _failure_policy_fail_closed_metrics() -> Dict[str, float]:
+def _failure_policy_fail_closed_metrics() -> dict[str, float]:
     return {
         "p1_16_service_down_detection_delay_seconds": P1_16_DELAY_SECONDS_SENTINEL,
         "p1_16_safety_state_transition_delay_seconds": P1_16_DELAY_SECONDS_SENTINEL,
@@ -528,10 +527,10 @@ def _failure_policy_fail_closed_metrics() -> Dict[str, float]:
     }
 
 
-def _paper_exchange_active_failure_policy_report(reports: Path, golden_path: Dict[str, object]) -> Dict[str, object]:
+def _paper_exchange_active_failure_policy_report(reports: Path, golden_path: dict[str, object]) -> dict[str, object]:
     verification = reports / "verification"
     verification.mkdir(parents=True, exist_ok=True)
-    stamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
+    stamp = datetime.now(UTC).strftime("%Y%m%dT%H%M%SZ")
     report_latest = verification / "paper_exchange_active_failure_policy_latest.json"
     report_ts = verification / f"paper_exchange_active_failure_policy_{stamp}.json"
 
@@ -546,7 +545,7 @@ def _paper_exchange_active_failure_policy_report(reports: Path, golden_path: Dic
     golden_status = str(golden_path.get("status", "")).strip().lower()
     scenarios_raw = golden_path.get("scenarios", [])
     scenarios = scenarios_raw if isinstance(scenarios_raw, list) else []
-    scenario: Optional[Dict[str, object]] = None
+    scenario: dict[str, object] | None = None
     for row in scenarios:
         if not isinstance(row, dict):
             continue
@@ -557,8 +556,8 @@ def _paper_exchange_active_failure_policy_report(reports: Path, golden_path: Dic
     scenario_status = str(scenario.get("status", "")).strip().lower() if isinstance(scenario, dict) else ""
     raw_metrics = scenario.get("derived_metrics", {}) if isinstance(scenario, dict) else {}
     raw_metrics = raw_metrics if isinstance(raw_metrics, dict) else {}
-    parsed_metrics: Dict[str, float] = {}
-    missing_metric_keys: List[str] = []
+    parsed_metrics: dict[str, float] = {}
+    missing_metric_keys: list[str] = []
     for metric_name in required_metric_names:
         parsed = _to_float(raw_metrics.get(metric_name))
         if parsed is None:
@@ -592,7 +591,7 @@ def _paper_exchange_active_failure_policy_report(reports: Path, golden_path: Dic
     return report
 
 
-def _paper_exchange_active_failure_policy_fail_closed_report(error_text: str) -> Dict[str, object]:
+def _paper_exchange_active_failure_policy_fail_closed_report(error_text: str) -> dict[str, object]:
     return {
         "ts_utc": _utc_now(),
         "status": "fail",
@@ -603,7 +602,7 @@ def _paper_exchange_active_failure_policy_fail_closed_report(error_text: str) ->
     }
 
 
-def _hb_executor_compat_fail_closed_metrics() -> Dict[str, float]:
+def _hb_executor_compat_fail_closed_metrics() -> dict[str, float]:
     return {
         "p0_11_hb_executor_lifecycle_tests_pass_rate_pct": 0.0,
         "p0_11_hb_event_count_delta_pct": 100.0,
@@ -612,10 +611,10 @@ def _hb_executor_compat_fail_closed_metrics() -> Dict[str, float]:
     }
 
 
-def _paper_exchange_hb_executor_compat_report(reports: Path, golden_path: Dict[str, object]) -> Dict[str, object]:
+def _paper_exchange_hb_executor_compat_report(reports: Path, golden_path: dict[str, object]) -> dict[str, object]:
     verification = reports / "verification"
     verification.mkdir(parents=True, exist_ok=True)
-    stamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
+    stamp = datetime.now(UTC).strftime("%Y%m%dT%H%M%SZ")
     report_latest = verification / "paper_exchange_hb_compatibility_latest.json"
     report_ts = verification / f"paper_exchange_hb_compatibility_{stamp}.json"
 
@@ -630,7 +629,7 @@ def _paper_exchange_hb_executor_compat_report(reports: Path, golden_path: Dict[s
     golden_status = str(golden_path.get("status", "")).strip().lower()
     scenarios_raw = golden_path.get("scenarios", [])
     scenarios = scenarios_raw if isinstance(scenarios_raw, list) else []
-    scenario: Optional[Dict[str, object]] = None
+    scenario: dict[str, object] | None = None
     for row in scenarios:
         if not isinstance(row, dict):
             continue
@@ -641,8 +640,8 @@ def _paper_exchange_hb_executor_compat_report(reports: Path, golden_path: Dict[s
     scenario_status = str(scenario.get("status", "")).strip().lower() if isinstance(scenario, dict) else ""
     raw_metrics = scenario.get("derived_metrics", {}) if isinstance(scenario, dict) else {}
     raw_metrics = raw_metrics if isinstance(raw_metrics, dict) else {}
-    parsed_metrics: Dict[str, float] = {}
-    missing_metric_keys: List[str] = []
+    parsed_metrics: dict[str, float] = {}
+    missing_metric_keys: list[str] = []
     for metric_name in required_metric_names:
         parsed = _to_float(raw_metrics.get(metric_name))
         if parsed is None:
@@ -684,7 +683,7 @@ def _paper_exchange_hb_executor_compat_report(reports: Path, golden_path: Dict[s
     return report
 
 
-def _command_journal_metrics(command_journal: Dict[str, object]) -> Dict[str, float]:
+def _command_journal_metrics(command_journal: dict[str, object]) -> dict[str, float]:
     raw_commands = command_journal.get("commands", {})
     if not isinstance(raw_commands, dict):
         return {}
@@ -748,9 +747,9 @@ def _command_journal_metrics(command_journal: Dict[str, object]) -> Dict[str, fl
 
 
 def _market_data_contract_metrics(
-    pair_snapshot: Dict[str, object],
-    command_journal: Dict[str, object],
-) -> Dict[str, float]:
+    pair_snapshot: dict[str, object],
+    command_journal: dict[str, object],
+) -> dict[str, float]:
     raw_pairs = pair_snapshot.get("pairs", {})
     pairs = raw_pairs if isinstance(raw_pairs, dict) else {}
 
@@ -830,11 +829,11 @@ def _market_data_contract_metrics(
     }
 
 
-def _extract_parity_metric_max_abs_delta(parity: Dict[str, object], metric_name: str) -> Optional[float]:
+def _extract_parity_metric_max_abs_delta(parity: dict[str, object], metric_name: str) -> float | None:
     bots = parity.get("bots", [])
     if not isinstance(bots, list):
         return None
-    vals: List[float] = []
+    vals: list[float] = []
     for bot in bots:
         if not isinstance(bot, dict):
             continue
@@ -855,11 +854,11 @@ def _extract_parity_metric_max_abs_delta(parity: Dict[str, object], metric_name:
     return max(vals)
 
 
-def _extract_parity_equity_delta_pct(parity: Dict[str, object]) -> Optional[float]:
+def _extract_parity_equity_delta_pct(parity: dict[str, object]) -> float | None:
     bots = parity.get("bots", [])
     if not isinstance(bots, list):
         return None
-    vals: List[float] = []
+    vals: list[float] = []
     for bot in bots:
         if not isinstance(bot, dict):
             continue
@@ -879,10 +878,10 @@ def _extract_parity_equity_delta_pct(parity: Dict[str, object]) -> Optional[floa
 
 
 def _parity_replay_window_metrics(
-    parity: Dict[str, object],
-    command_journal: Dict[str, object],
-    replay_multi_window: Dict[str, object],
-) -> Dict[str, float]:
+    parity: dict[str, object],
+    command_journal: dict[str, object],
+    replay_multi_window: dict[str, object],
+) -> dict[str, float]:
     commands = command_journal.get("commands", {})
     command_records = list(commands.values()) if isinstance(commands, dict) else []
 
@@ -890,7 +889,7 @@ def _parity_replay_window_metrics(
     if command_count <= 0:
         windows = replay_multi_window.get("windows", [])
         windows = windows if isinstance(windows, list) else []
-        replay_counts: List[float] = []
+        replay_counts: list[float] = []
         for window in windows:
             if not isinstance(window, dict):
                 continue
@@ -902,7 +901,7 @@ def _parity_replay_window_metrics(
         if replay_counts:
             command_count = max(replay_counts)
 
-    span_timestamps: List[float] = []
+    span_timestamps: list[float] = []
     for record in command_records:
         if not isinstance(record, dict):
             continue
@@ -936,7 +935,7 @@ def _parity_replay_window_metrics(
     }
 
 
-def _metric_bot_active(summary: Dict[str, object]) -> bool:
+def _metric_bot_active(summary: dict[str, object]) -> bool:
     for key in ("intents_total", "actionable_intents", "fills_total", "order_failed_total", "risk_denied_total"):
         value = _to_float(summary.get(key))
         if value is not None and value > 0:
@@ -944,11 +943,11 @@ def _metric_bot_active(summary: Dict[str, object]) -> bool:
     return False
 
 
-def _parity_equity_by_bot(parity: Dict[str, object]) -> Dict[str, float]:
+def _parity_equity_by_bot(parity: dict[str, object]) -> dict[str, float]:
     bots = parity.get("bots", [])
     if not isinstance(bots, list):
         return {}
-    out: Dict[str, float] = {}
+    out: dict[str, float] = {}
     for idx, bot in enumerate(bots):
         if not isinstance(bot, dict):
             continue
@@ -964,11 +963,11 @@ def _parity_equity_by_bot(parity: Dict[str, object]) -> Dict[str, float]:
     return out
 
 
-def _extract_parity_realized_pnl_drift_pct_equity(parity: Dict[str, object]) -> float:
+def _extract_parity_realized_pnl_drift_pct_equity(parity: dict[str, object]) -> float:
     bots = parity.get("bots", [])
     if not isinstance(bots, list):
         return 0.0
-    vals: List[float] = []
+    vals: list[float] = []
     for bot in bots:
         if not isinstance(bot, dict):
             continue
@@ -1002,14 +1001,14 @@ def _extract_parity_realized_pnl_drift_pct_equity(parity: Dict[str, object]) -> 
 
 
 def _accounting_contract_metrics(
-    command_journal: Dict[str, object],
-    parity: Dict[str, object],
-) -> Dict[str, float]:
+    command_journal: dict[str, object],
+    parity: dict[str, object],
+) -> dict[str, float]:
     commands = command_journal.get("commands", {})
     command_records = list(commands.values()) if isinstance(commands, dict) else []
 
-    fee_error_pct_notional_values: List[float] = []
-    margin_drift_pct_equity_values: List[float] = []
+    fee_error_pct_notional_values: list[float] = []
+    margin_drift_pct_equity_values: list[float] = []
     funding_sign_mismatch_count = 0
     equity_by_bot = _parity_equity_by_bot(parity)
 
@@ -1129,11 +1128,11 @@ def _test_ref_exists(root: Path, ref: str) -> bool:
     return re.search(rf"(?m)^\s*def\s+{re.escape(test_symbol)}\s*\(", text) is not None
 
 
-def _discover_nautilus_reference_modules(root: Path) -> List[str]:
+def _discover_nautilus_reference_modules(root: Path) -> list[str]:
     base = root / "controllers" / "paper_engine_v2"
     if not base.exists():
         return []
-    out: List[str] = []
+    out: list[str] = []
     for path in sorted(base.glob("*.py")):
         try:
             text = path.read_text(encoding="utf-8")
@@ -1144,8 +1143,8 @@ def _discover_nautilus_reference_modules(root: Path) -> List[str]:
     return out
 
 
-def _find_direct_nautilus_import_files(root: Path) -> List[str]:
-    out: List[str] = []
+def _find_direct_nautilus_import_files(root: Path) -> list[str]:
+    out: list[str] = []
     for path in sorted(root.rglob("*.py")):
         rel = _repo_rel_path(root, path)
         if rel.startswith("tests/") or rel.startswith(".venv/"):
@@ -1162,24 +1161,24 @@ def _find_direct_nautilus_import_files(root: Path) -> List[str]:
 def _paper_exchange_nautilus_reuse_report(
     root: Path,
     reports: Path,
-    tests: Dict[str, object],
-) -> Dict[str, object]:
+    tests: dict[str, object],
+) -> dict[str, object]:
     verification_dir = reports / "verification"
     verification_dir.mkdir(parents=True, exist_ok=True)
-    stamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
+    stamp = datetime.now(UTC).strftime("%Y%m%dT%H%M%SZ")
     latest_path = verification_dir / "paper_exchange_nautilus_reuse_latest.json"
     ts_path = verification_dir / f"paper_exchange_nautilus_reuse_{stamp}.json"
 
     matrix_path = root / "docs" / "validation" / "nautilus_reuse_matrix.json"
     license_boundary_path = root / "docs" / "validation" / "nautilus_license_boundary.md"
-    attribution_license_path = root / "third_party" / "nautilus_trader.LICENSE.txt"
+    attribution_license_path = root / "docs" / "legal" / "nautilus_trader.LICENSE.txt"
 
     matrix_payload = _read_json(matrix_path)
     entries_raw = matrix_payload.get("entries", [])
     entries = entries_raw if isinstance(entries_raw, list) else []
     discovered_modules = _discover_nautilus_reference_modules(root)
 
-    entries_by_module: Dict[str, Dict[str, object]] = {}
+    entries_by_module: dict[str, dict[str, object]] = {}
     for entry in entries:
         if not isinstance(entry, dict):
             continue
@@ -1189,9 +1188,9 @@ def _paper_exchange_nautilus_reuse_report(
         entries_by_module[module] = dict(entry)
 
     missing_entries = [module for module in discovered_modules if module not in entries_by_module]
-    missing_provenance: Dict[str, List[str]] = {}
-    invalid_test_refs: Dict[str, List[str]] = {}
-    documented_modules: List[str] = []
+    missing_provenance: dict[str, list[str]] = {}
+    invalid_test_refs: dict[str, list[str]] = {}
+    documented_modules: list[str] = []
     license_failures = 0
     adopted_total = 0
     adopted_structural_pass = 0
@@ -1216,11 +1215,11 @@ def _paper_exchange_nautilus_reuse_report(
         attribution_file = _normalize_rel_path(entry.get("attribution_file"))
 
         refs_raw = entry.get("test_refs", [])
-        refs: List[str] = []
+        refs: list[str] = []
         if isinstance(refs_raw, list):
             refs = [str(v).strip() for v in refs_raw if str(v).strip()]
 
-        missing_fields: List[str] = []
+        missing_fields: list[str] = []
         if decision not in _NAUTILUS_REUSE_DECISIONS:
             missing_fields.append("decision")
         if not upstream_component:
@@ -1285,7 +1284,7 @@ def _paper_exchange_nautilus_reuse_report(
         if (
             coverage_pct >= 100.0
             and int(license_failures) == 0
-            and int(len(undocumented_direct_import_files)) == 0
+            and len(undocumented_direct_import_files) == 0
             and adopted_pass_rate_pct >= 100.0
         )
         else "fail"
@@ -1317,7 +1316,7 @@ def _paper_exchange_nautilus_reuse_report(
     return report
 
 
-def _count_canary_critical_alerts(canary: Dict[str, object]) -> float:
+def _count_canary_critical_alerts(canary: dict[str, object]) -> float:
     explicit = _to_float(canary.get("canary_critical_alert_count"))
     if explicit is not None and explicit >= 0:
         return float(explicit)
@@ -1345,8 +1344,8 @@ def _count_canary_critical_alerts(canary: Dict[str, object]) -> float:
     return 0.0 if status == "pass" else 1.0
 
 
-def _rollout_plan_metrics(canary: Dict[str, object], rollback: Dict[str, object]) -> Dict[str, float]:
-    metrics: Dict[str, float] = {}
+def _rollout_plan_metrics(canary: dict[str, object], rollback: dict[str, object]) -> dict[str, float]:
+    metrics: dict[str, float] = {}
 
     canary_duration_hours = _to_float(canary.get("target_canary_duration_hours"))
     if canary_duration_hours is None:
@@ -1390,14 +1389,14 @@ def _rollout_plan_metrics(canary: Dict[str, object], rollback: Dict[str, object]
     return metrics
 
 
-def _read_manual_metrics(path: Path) -> Dict[str, float]:
+def _read_manual_metrics(path: Path) -> dict[str, float]:
     payload = _read_json(path)
     if not payload:
         return {}
     maybe_metrics = payload.get("metrics", payload)
     if not isinstance(maybe_metrics, dict):
         return {}
-    out: Dict[str, float] = {}
+    out: dict[str, float] = {}
     for key, value in maybe_metrics.items():
         v = _to_float(value)
         if v is not None:
@@ -1405,12 +1404,12 @@ def _read_manual_metrics(path: Path) -> Dict[str, float]:
     return out
 
 
-def _read_artifact_metrics(path: Path) -> Dict[str, float]:
+def _read_artifact_metrics(path: Path) -> dict[str, float]:
     payload = _read_json(path)
     raw_metrics = payload.get("metrics", {})
     if not isinstance(raw_metrics, dict):
         return {}
-    out: Dict[str, float] = {}
+    out: dict[str, float] = {}
     for key, value in raw_metrics.items():
         parsed = _to_float(value)
         if parsed is None:
@@ -1419,7 +1418,7 @@ def _read_artifact_metrics(path: Path) -> Dict[str, float]:
     return out
 
 
-def _artifact_info(path: Path, now_ts: float) -> Dict[str, object]:
+def _artifact_info(path: Path, now_ts: float) -> dict[str, object]:
     exists = path.exists()
     payload = _read_json(path) if exists else {}
     ts_utc = str(payload.get("ts_utc", "")).strip()
@@ -1437,11 +1436,11 @@ def _artifact_info(path: Path, now_ts: float) -> Dict[str, object]:
 def build_report(
     root: Path,
     *,
-    now_ts: Optional[float] = None,
+    now_ts: float | None = None,
     max_source_age_min: float = 20.0,
-    manual_metrics_path: Optional[Path] = None,
-) -> Dict[str, object]:
-    now_ts = float(now_ts if now_ts is not None else datetime.now(timezone.utc).timestamp())
+    manual_metrics_path: Path | None = None,
+) -> dict[str, object]:
+    now_ts = float(now_ts if now_ts is not None else datetime.now(UTC).timestamp())
     reports = root / "reports"
     manual_path = manual_metrics_path or (reports / "verification" / "paper_exchange_threshold_metrics_manual.json")
 
@@ -1583,7 +1582,7 @@ def build_report(
         "manual_metrics": _artifact_info(manual_path, now_ts),
     }
 
-    computed_metrics: Dict[str, float] = {}
+    computed_metrics: dict[str, float] = {}
 
     # From tests gate
     tests_status = str(tests.get("status", "")).strip().lower()
@@ -1592,7 +1591,7 @@ def build_report(
     computed_metrics["p1_17_gate_path_tests_pass_rate_pct"] = tests_pass_rate
 
     # Promotion checks include paper exchange gates when wired/enabled.
-    check_names: List[str] = []
+    check_names: list[str] = []
     checks = promotion.get("checks", [])
     if isinstance(checks, list):
         for c in checks:
@@ -1713,10 +1712,10 @@ def build_report(
             computed_metrics[str(metric_name)] = float(parsed)
 
     manual_metrics = _read_manual_metrics(manual_path)
-    merged_metrics: Dict[str, float] = dict(computed_metrics)
+    merged_metrics: dict[str, float] = dict(computed_metrics)
     # Manual values are used as fallback, except P0-11, P1-6, P1-9, and P2-10 where computed
     # evidence must remain authoritative.
-    manual_metrics_used: List[str] = []
+    manual_metrics_used: list[str] = []
     for key, value in manual_metrics.items():
         metric_name = str(key)
         if (
@@ -1842,7 +1841,7 @@ def run_builder(
 
     out_dir = root / "reports" / "verification"
     out_dir.mkdir(parents=True, exist_ok=True)
-    stamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
+    stamp = datetime.now(UTC).strftime("%Y%m%dT%H%M%SZ")
     out_ts = out_dir / f"paper_exchange_threshold_inputs_{stamp}.json"
     out_latest = Path(output_path) if str(output_path).strip() else (out_dir / "paper_exchange_threshold_inputs_latest.json")
     payload = json.dumps(report, indent=2)

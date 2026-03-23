@@ -58,7 +58,7 @@ backup_bot() {
 # Backup env file separately (encrypted ideally)
 backup_env() {
     local env_backup="${BACKUP_DIR}/env_${TIMESTAMP}.tar.gz"
-    tar -czf "$env_backup" -C "${PROJECT_DIR}" env/.env 2>/dev/null || true
+    tar -czf "$env_backup" -C "${PROJECT_DIR}" infra/env/.env 2>/dev/null || true
     chmod 600 "$env_backup"
     echo "Backed up env to: ${env_backup}"
 }
@@ -68,11 +68,11 @@ backup_monitoring() {
     local mon_backup="${BACKUP_DIR}/monitoring_${TIMESTAMP}.tar.gz"
     tar -czf "$mon_backup" \
         -C "${PROJECT_DIR}" \
-        monitoring/prometheus/prometheus.yml \
-        monitoring/prometheus/alert_rules.yml \
-        monitoring/grafana/provisioning \
-        monitoring/grafana/dashboards \
-        monitoring/alertmanager/alertmanager.yml \
+        infra/monitoring/prometheus/prometheus.yml \
+        infra/monitoring/prometheus/alert_rules.yml \
+        infra/monitoring/grafana/provisioning \
+        infra/monitoring/grafana/dashboards \
+        infra/monitoring/alertmanager/alertmanager.yml \
         2>/dev/null || true
     echo "Backed up monitoring to: ${mon_backup}"
 }

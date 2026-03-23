@@ -15,20 +15,19 @@ You are a senior frontend engineer + design systems reviewer + web performance s
 running a recurring review for the trading supervision frontend and its dependencies.
 
 ## System context
-- Primary frontend: hbot/apps/realtime_ui_v2/ (React 19 + TypeScript + Vite + Zustand + Zod)
-- Legacy fallback frontend: hbot/apps/realtime_ui/
-- Frontend entry: hbot/apps/realtime_ui_v2/src/main.tsx
-- Main shell: hbot/apps/realtime_ui_v2/src/App.tsx
-- Components: hbot/apps/realtime_ui_v2/src/components/
-- Hooks: hbot/apps/realtime_ui_v2/src/hooks/
-- Store: hbot/apps/realtime_ui_v2/src/store/useDashboardStore.ts
-- Shared types/utils: hbot/apps/realtime_ui_v2/src/types/ and src/utils/
-- Frontend package: hbot/apps/realtime_ui_v2/package.json
-- Lockfile: hbot/apps/realtime_ui_v2/package-lock.json
-- API backend feeding the UI: hbot/services/realtime_ui_api/main.py
-- Docker/runtime integration: hbot/apps/realtime_ui_v2/Dockerfile, hbot/apps/realtime_ui_v2/nginx.conf, hbot/compose/docker-compose.yml
-- Docs: hbot/apps/realtime_ui_v2/README.md and hbot/apps/realtime_ui/README.md
+- Active frontend app(s): discover current UI directories under `hbot/apps/`
+- App entrypoints and shell components: discover current `src/` entry files for the active frontend
+- UI components, hooks, store, and shared utilities: inspect the active frontend's `src/` tree
+- Frontend package manifests and lockfiles: inspect the active frontend root
+- API/backend feeding the UI: discover the current service under `hbot/services/`
+- Docker/runtime integration: inspect frontend Docker/nginx assets plus `hbot/infra/compose/docker-compose.yml`
+- Frontend docs: inspect README files for the active frontend and any maintained fallback
 - Scope rule: listed files/folders are anchors, not limits. Inspect any additional relevant paths in the repo.
+
+## Discovery protocol (mandatory)
+- Start each review by identifying which frontend is primary, which is fallback, and whether both are still maintained.
+- Treat concrete filenames, hook names, and store files as examples or anchors, not stable contracts.
+- If the UI structure changed, review the current equivalent modules and note the substitution.
 
 ## Current dependency baseline
 - Runtime deps: react, react-dom, @tanstack/react-table, lightweight-charts, zod, zustand
@@ -43,7 +42,7 @@ running a recurring review for the trading supervision frontend and its dependen
 ## Inputs I will provide (paste values below)
 - MODE: {{INITIAL_AUDIT or ITERATION}}
 - Period covered: {{e.g. 2026-03-01 to 2026-03-08}}
-- Target frontend: {{realtime_ui_v2 / legacy realtime_ui / both}}
+- Target frontend: {{primary frontend / fallback frontend / both / specific path}}
 - Release context: {{feature work / stabilization / pre-release / post-incident}}
 - Build status: {{pass / fail}}
 - Lint error count: {{N}}
@@ -115,7 +114,7 @@ Identify: any new regressions introduced since last cycle?
 ## PHASE 3 — Frontend runtime reliability audit
 
 ### Data transport and state integrity
-- `useRealtimeTransport`: reconnect backoff bounded and observable?
+- Realtime transport hook/service: reconnect backoff bounded and observable?
 - Are duplicate websocket events deduplicated where required?
 - Can stale API responses overwrite fresher realtime state?
 - Are malformed payloads rejected safely with useful diagnostics?

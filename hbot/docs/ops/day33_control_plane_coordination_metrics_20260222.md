@@ -22,14 +22,14 @@
   - Added coordination policy signal:
     - `hbot_control_plane_gate_status{gate="coordination_policy_ok"}`
 
-- Prometheus alerts updated in `monitoring/prometheus/alert_rules.yml`:
+- Prometheus alerts updated in `infra/monitoring/prometheus/alert_rules.yml`:
   - Included `coordination` and `coordination_policy` in report missing/stale alerts.
   - Added `CoordinationPolicyGateFailed` (critical) on:
     - `hbot_control_plane_gate_status{gate="coordination_policy_scope",source="promotion_latest"} == 0`
   - Added `CoordinationRuntimeNotHealthy` (warning) on:
     - `hbot_control_plane_gate_status{gate="coordination_runtime_ok"} == 0`
 
-- Grafana dashboard updated in `monitoring/grafana/dashboards/control_plane_overview.json`:
+- Grafana dashboard updated in `infra/monitoring/grafana/dashboards/control_plane_overview.json`:
   - New panel: `Coord Policy Gate`
   - New panel: `Coord Runtime Health`
 

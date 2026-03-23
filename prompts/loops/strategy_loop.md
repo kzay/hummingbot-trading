@@ -15,16 +15,19 @@ You are a quant researcher + execution engineer + risk manager running a recurri
 strategy review for a semi-pro BTC-USDT perpetuals market-making desk (EPP v2.4, Bitget, paper).
 
 ## System context
-- Strategy: EPP v2.4 — adaptive market-making with PnL governor, regime detection, spread competitiveness cap
-- Main controller: hbot/controllers/epp_v2_4.py (~3000 lines)
-- Spread engine: hbot/controllers/spread_engine.py
-- Regime detector: hbot/controllers/regime_detector.py
-- Tick emitter / CSV logger: hbot/controllers/tick_emitter.py
-- Config: hbot/data/bot1/conf/controllers/epp_v2_4_bot_a.yml
-- Paper logs: hbot/data/bot1/logs/epp_v24/bot1_a/minute.csv, fills.csv
-- Strategy reports: hbot/reports/strategy/multi_day_summary_latest.json
-- Promotion gates: hbot/scripts/release/run_strict_promotion_cycle.py
+- Strategy family: adaptive market-making and directional controllers under `hbot/controllers/`
+- Primary controller entrypoints: discover the active strategy controller(s) in `hbot/controllers/` and `hbot/controllers/bots/`
+- Shared helpers: spread/risk/regime/logging modules in `hbot/controllers/`
+- Strategy configs: `hbot/data/*/conf/controllers/`
+- Runtime logs: `hbot/data/*/logs/` including minute/fill CSV artifacts when present
+- Strategy reports: `hbot/reports/strategy/`, `hbot/reports/analysis/`, `hbot/reports/verification/`
+- Promotion and release checks: `hbot/scripts/release/`
 - Scope rule: listed files/folders are anchors, not limits. Inspect any additional relevant paths in the repo.
+
+## Discovery protocol (mandatory)
+- Start each review by identifying the active bot ids, config paths, controller entrypoints, and latest report artifacts.
+- Treat concrete paths and filenames as examples or anchor patterns, not hard requirements.
+- If the repo has moved or renamed a component, use the current equivalent and note the substitution.
 
 ## Full config parameter reference (use when reviewing or proposing changes)
 | Parameter | Type | Unit | Notes |
@@ -96,7 +99,7 @@ Compare this cycle vs last baseline:
 ## PHASE 2 — Strategy logic review
 (Skip in INITIAL_AUDIT if code has not been read — flag as "needs code review")
 
-### Correctness checks (reference: epp_v2_4.py)
+### Correctness checks (reference: active controller entrypoint plus supporting helpers)
 - Lookahead / repaint risk: are any indicators computed using future data?
 - Signal timing: is the signal computed on the same bar it acts on?
 - Regime detector (regime_detector.py): does detected regime match observed market behavior this week?
@@ -155,7 +158,7 @@ Compare this cycle vs last baseline:
 - Funding (funding_simulator.py): is 8h funding payment modeled correctly for BTC-USDT perps?
 - Latency (latency_model.py): does the paper engine account for order placement latency?
 - Portfolio accounting (portfolio.py): does realized PnL match what exchange would report?
-- Cross-check: compare hbot/reports/reconciliation/latest.json vs fill count in minute.csv
+- Cross-check: compare `hbot/reports/reconciliation/latest.json` vs fill count in the active minute/fill logs
 
 ---
 

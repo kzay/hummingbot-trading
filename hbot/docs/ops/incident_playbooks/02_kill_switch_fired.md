@@ -76,7 +76,7 @@ tail -20 hbot/data/bot1/logs/epp_v24/bot1_a/minute.csv | cut -d',' -f<risk_reaso
 1. If stop was correct (real risk limit breach): wait for UTC midnight rollover.
 2. If false positive: fix the underlying issue, restart bot:
    ```bash
-   docker compose --env-file hbot/env/.env -f hbot/compose/docker-compose.yml restart bot1
+   docker compose --env-file hbot/infra/env/.env -f hbot/infra/compose/docker-compose.yml restart bot1
    ```
 3. If kill switch had `KILL_SWITCH_DRY_RUN=true` in live mode: **this is a critical gap** — set `KILL_SWITCH_DRY_RUN=false` and add real API credentials before resuming.
 

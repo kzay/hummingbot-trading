@@ -48,16 +48,16 @@ Status is evidence-backed from current artifacts and runtime topology.
 |---|---:|---|---|
 | Hummingbot bots (`bot1`, `bot4`) | L1 | no formal per-bot SLO alerts; connector/paper parity noise; incomplete fill activity for blotter validation | `docs/ops/release_manifest_20260221.md`, `reports/parity/latest.json` |
 | Redis (Streams bus) | L1 | backup/restore drill incomplete; durability SLO not enforced by gate; retention pressure policy not auto-checked | `docs/ops/bus_durability_policy.md` |
-| `signal-service` | L1 | Redis-ping healthcheck is connectivity-only (not process liveness); no service-specific error-rate metric/alert; no output freshness SLO | `compose/docker-compose.yml` |
-| `risk-service` | L1 | Redis-ping healthcheck is connectivity-only; no explicit deny/latency SLO alert; no output freshness SLO | `compose/docker-compose.yml` |
-| `coordination-service` | L1 | Redis-ping healthcheck is connectivity-only; policy/SLO not explicit; no dedicated freshness/lag alert | `compose/docker-compose.yml` |
+| `signal-service` | L1 | Redis-ping healthcheck is connectivity-only (not process liveness); no service-specific error-rate metric/alert; no output freshness SLO | `infra/compose/docker-compose.yml` |
+| `risk-service` | L1 | Redis-ping healthcheck is connectivity-only; no explicit deny/latency SLO alert; no output freshness SLO | `infra/compose/docker-compose.yml` |
+| `coordination-service` | L1 | Redis-ping healthcheck is connectivity-only; policy/SLO not explicit; no dedicated freshness/lag alert | `infra/compose/docker-compose.yml` |
 | `event-store-service` | L1.5 | JSONL growth/rotation control; healthcheck is freshness-based (events JSONL mtime) not process liveness; freshness SLO not yet strict-blocking in all paths | `reports/event_store/integrity_20260222.json`, `reports/event_store/day2_gate_eval_latest.json` |
 | `reconciliation-service` | L1.5 | warnings still recurrent; healthcheck is report-freshness-based (not process liveness); accounting checks still v1 scope | `reports/reconciliation/latest.json` |
 | `shadow-parity-service` | L1.5 | insufficient data paths tolerated too often; healthcheck is report-freshness-based; parity freshness alert ownership not explicit | `reports/parity/latest.json` |
 | `portfolio-risk-service` | L1.5 | concentration brief cleared (status=ok); healthcheck is report-freshness-based; action SLO/false-positive budget not defined; kill-switch review checklist missing | `reports/portfolio_risk/latest.json` |
 | `exchange-snapshot-service` | L1.5 | healthcheck is report-freshness-based (not process liveness); snapshot cadence SLO not explicit; history currently thin for trend analytics | `reports/exchange_snapshots/latest.json` |
 | Promotion gates | L2 | CI automation not formalized; strict mode not mandatory in every release; stale-input fail-closed policy needs tightening | `reports/promotion_gates/latest.json`, `docs/validation/promotion_gate_contract.md` |
-| Monitoring stack (Prometheus/Grafana/Loki/Alertmanager) | L2 | some ownership gaps on new alerts; dashboard-to-SLO mapping incomplete; periodic alert fire-drill cadence not formalized | `monitoring/prometheus/alert_rules.yml`, `docs/ops/runbooks.md` |
+| Monitoring stack (Prometheus/Grafana/Loki/Alertmanager) | L2 | some ownership gaps on new alerts; dashboard-to-SLO mapping incomplete; periodic alert fire-drill cadence not formalized | `infra/monitoring/prometheus/alert_rules.yml`, `docs/ops/runbooks.md` |
 | Postgres + `ops-db-writer` | L1.5 | backup-restore drill pending; writer healthcheck present (report-freshness-based); fill table validation limited (fills rows = 0) | `reports/ops_db/postgres_sanity_latest.json`, `reports/ops_db_writer/latest.json` |
 
 ## SLO and Alert Ownership Matrix (Day 27 Baseline)

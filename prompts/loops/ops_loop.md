@@ -16,23 +16,25 @@ You are an SRE and trading desk operator running a recurring ops review
 for a semi-pro BTC-USDT perpetuals market-making desk.
 
 ## System context
-- Bot1: paper mode (BOT_MODE=paper, bitget_perpetual_paper connector)
+- Active target bot/service set: discover the current paper or test target from compose and config before reviewing
 - Monitoring: Grafana (localhost:3000), Prometheus (localhost:9090)
 - Metrics endpoint: http://localhost:9101/metrics (bot_metrics_exporter)
-- Alert rules: hbot/monitoring/prometheus/alert_rules.yml
-- Recording rules: hbot/monitoring/prometheus/recording_rules.yml
-- Dashboard: hbot/monitoring/grafana/dashboards/bot_deep_dive.json
-- Heartbeat: hbot/data/bot1/logs/heartbeat/strategy_heartbeat.json
-- Bot log: hbot/data/bot1/logs/logs_v2_epp_v2_4_bot_a.log
-- CSV logs: hbot/data/bot1/logs/epp_v24/bot1_a/minute.csv + fills.csv
+- Alert and recording rules: `hbot/infra/monitoring/prometheus/`
+- Dashboard JSONs: `hbot/infra/monitoring/grafana/dashboards/`
+- Heartbeat, logs, and CSV artifacts: discover the active paths under `hbot/data/*/logs/`
 - Incident playbooks: hbot/docs/ops/incident_playbooks/ (01–06)
 - Go-live checklist: hbot/docs/ops/go_live_hardening_checklist.md
 - Scope rule: listed files/folders are anchors, not limits. Inspect any additional relevant paths in the repo.
 
+## Discovery protocol (mandatory)
+- Start each review by identifying `TARGET_BOT`, its mode/connector, and the active dashboard/log/report paths.
+- Replace repo-specific names in queries and tables with the current target values instead of assuming `bot1`.
+- Treat named files as examples or anchor patterns, not fixed filenames.
+
 ## Service report paths (check age at each review — stale = > 30 min)
 | Service | Report path |
 |---|---|
-| bot1 state | hbot/reports/desk_snapshot/bot1/latest.json |
+| target bot state | hbot/reports/desk_snapshot/{{TARGET_BOT}}/latest.json |
 | reconciliation | hbot/reports/reconciliation/latest.json |
 | event_store integrity | hbot/reports/event_store/integrity_YYYYMMDD.json |
 | day2 event-store gate | hbot/reports/event_store/day2_gate_eval_latest.json |
@@ -47,26 +49,27 @@ for a semi-pro BTC-USDT perpetuals market-making desk.
 ## Key Prometheus queries (paste into Prometheus or Grafana Explorer)
 ```promql
 # Bot state — 1=running, 2=soft_pause, 3=hard_stop (should be 1)
-sum without(state) ((hbot_bot_state{bot="bot1",state="running"} * 1) or (hbot_bot_state{bot="bot1",state="soft_pause"} * 2) or (hbot_bot_state{bot="bot1",state="hard_stop"} * 3))
+sum without(state) ((hbot_bot_state{bot="{{TARGET_BOT}}",state="running"} * 1) or (hbot_bot_state{bot="{{TARGET_BOT}}",state="soft_pause"} * 2) or (hbot_bot_state{bot="{{TARGET_BOT}}",state="hard_stop"} * 3))
 
 # Snapshot age in seconds (desk snapshot minute age; should be < 180)
-hbot_desk_snapshot_minute_age_s{bot="bot1"}
+hbot_desk_snapshot_minute_age_s{bot="{{TARGET_BOT}}"}
 
 # Order book stale flag (should be 0)
-hbot_bot_order_book_stale{bot="bot1"}
+hbot_bot_order_book_stale{bot="{{TARGET_BOT}}"}
 
 # PnL governor multiplier (1.0=full size, < 0.7 = dampened → investigate)
-hbot_bot_pnl_governor_size_mult_applied{bot="bot1"}
+hbot_bot_pnl_governor_size_mult_applied{bot="{{TARGET_BOT}}"}
 
 # Soft-pause active ratio over 24h (target < 0.20)
-avg_over_time((sum by (bot) (hbot_bot_state{bot="bot1",state="soft_pause"}))[24h:1m])
+avg_over_time((sum by (bot) (hbot_bot_state{bot="{{TARGET_BOT}}",state="soft_pause"}))[24h:1m])
 
 # Fill count in last hour
-hbot_bot_fills_1h_count{bot="bot1"}
+hbot_bot_fills_1h_count{bot="{{TARGET_BOT}}"}
 ```
 
 ## Inputs (paste values before running)
 - MODE: {{DAILY_SCAN / WEEKLY_REVIEW / INITIAL_AUDIT}}
+- TARGET_BOT: {{bot id, e.g. bot1}}
 - Timestamp (UTC): {{}}
 - bot_state: {{running / soft_pause / hard_stop}}
 - snapshot_age_seconds: {{N}}
@@ -163,13 +166,13 @@ Full trend analysis + observability + service health + improvement proposals.
 - Any metric with data gaps > 5 min in the past 7 days?
 - Is cardinality under control? (no label explosion in bot_metrics_exporter.py)
 
-**Alerting quality** (reference: monitoring/prometheus/alert_rules.yml)
+**Alerting quality** (reference: infra/monitoring/prometheus/alert_rules.yml)
 - Which alerts fired this week? Were they actionable (true positive)?
 - Any false positives? Any incident with no alert (missed detection)?
 - Thresholds: too tight (noise) or too loose (late)?
 - Telegram bot: send test message, confirm received — do this every review
 
-**Dashboard health** (reference: monitoring/grafana/dashboards/bot_deep_dive.json)
+**Dashboard health** (reference: active dashboard JSON under `hbot/infra/monitoring/grafana/dashboards/`)
 - Any Grafana panel showing "No data"?
 - Any panel with wrong unit (should be USD but shows raw float, etc.)?
 - Any missing panel that would have been useful this week?
@@ -185,7 +188,7 @@ For each service, check report file age and any error logs:
 
 | Service | Running | Report path | Age ok? | Error logs? | Issues |
 |---|---|---|---|---|---|
-| bot1 | | reports/desk_snapshot/bot1/latest.json | | | |
+| {{TARGET_BOT}} | | reports/desk_snapshot/{{TARGET_BOT}}/latest.json | | | |
 | event_store | | reports/event_store/integrity_YYYYMMDD.json | | | |
 | kill_switch | | reports/risk_service/latest.json | | | |
 | reconciliation | | reports/reconciliation/latest.json | | | |
@@ -300,7 +303,7 @@ First-run only. Establish the complete ops baseline before starting the weekly l
    - Has it ever fired?
    - Score: too tight / calibrated / too loose / missing
 
-3. **Dashboard inventory** — read bot_deep_dive.json. For each panel:
+3. **Dashboard inventory** — read the active dashboard JSON. For each panel:
    - Is it showing real data?
    - Is the unit correct?
    - Is it useful for daily ops?

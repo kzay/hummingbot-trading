@@ -25,15 +25,20 @@ Your job is not just to optimize parameters. Your job is to determine:
 ## System context
 - Controllers: hbot/controllers/
 - Strategy lanes: hbot/controllers/bots/
-- Main legacy/shared controller: hbot/controllers/epp_v2_4.py
+- Primary shared/controller entrypoint: discover the active shared or legacy controller under `hbot/controllers/`
 - Shared runtime: hbot/controllers/runtime/
 - Paper engine and parity assumptions: hbot/controllers/paper_engine_v2/
 - Strategy configs: hbot/data/*/conf/controllers/
 - Strategy reports: hbot/reports/strategy/, hbot/reports/analysis/, hbot/reports/verification/
 - Logs and minute/fill data: hbot/data/*/logs/
 - Experiment ledger: hbot/docs/strategy/experiment_ledger.md
-- Promotion gates: hbot/scripts/release/run_strict_promotion_cycle.py
+- Promotion/release checks: hbot/scripts/release/
 - Scope rule: listed files/folders are anchors, not limits. Inspect any additional relevant paths in the repo.
+
+## Discovery protocol (mandatory)
+- Start by identifying the exact bot ids, strategy lanes, config paths, and latest evidence artifacts under review.
+- Treat concrete filenames as examples or historical anchors, not fixed contracts.
+- If controller or report names changed, use the current equivalents and note the substitution.
 
 ## Target review scope
 This review can cover:

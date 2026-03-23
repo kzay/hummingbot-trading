@@ -31,7 +31,7 @@ All runtime services using `env/.env` and encrypted connector configs.
 - Invalid rate oracle source -> client config errors.
 
 ## Source of Truth
-- `hbot/env/.env.template`
+- `hbot/infra/env/.env.template`
 - `hbot/data/bot*/conf/conf_client.yml`
 
 ## Owner

@@ -5,32 +5,31 @@ import importlib
 import json
 import subprocess
 import sys
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
-from typing import Dict, List
 
 
 def _utc_now() -> str:
-    return datetime.now(timezone.utc).isoformat()
+    return datetime.now(UTC).isoformat()
 
 
 def _root() -> Path:
     return Path("/workspace/hbot") if Path("/.dockerenv").exists() else Path(__file__).resolve().parents[2]
 
 
-def _compose_cmd(*args: str) -> List[str]:
+def _compose_cmd(*args: str) -> list[str]:
     return [
         "docker",
         "compose",
         "--env-file",
-        "env/.env",
+        "infra/env/.env",
         "-f",
-        "compose/docker-compose.yml",
+        "infra/compose/docker-compose.yml",
         *args,
     ]
 
 
-def _run_cmd(root: Path, cmd: List[str], label: str) -> Dict[str, object]:
+def _run_cmd(root: Path, cmd: list[str], label: str) -> dict[str, object]:
     proc = subprocess.run(cmd, cwd=str(root), capture_output=True, text=True, check=False)
     return {
         "name": label,
@@ -41,9 +40,9 @@ def _run_cmd(root: Path, cmd: List[str], label: str) -> Dict[str, object]:
     }
 
 
-def _run_pytest_style_module(module_name: str) -> Dict[str, object]:
+def _run_pytest_style_module(module_name: str) -> dict[str, object]:
     module = importlib.import_module(module_name)
-    failures: List[str] = []
+    failures: list[str] = []
     total = 0
     for name in sorted(dir(module)):
         if not name.startswith("test_"):
@@ -64,7 +63,7 @@ def _run_pytest_style_module(module_name: str) -> Dict[str, object]:
     }
 
 
-def _check_minimal_smoke(root: Path) -> Dict[str, object]:
+def _check_minimal_smoke(root: Path) -> dict[str, object]:
     minute_files = sorted((root / "data" / "bot4" / "logs").glob("epp_v24/*/minute.csv"))
     snapshot_path = root / "reports" / "exchange_snapshots" / "latest.json"
     snapshot_ok = False
@@ -108,7 +107,7 @@ def _check_minimal_smoke(root: Path) -> Dict[str, object]:
     }
 
 
-def _run_unit_checks_in_control_plane(root: Path, modules: List[str]) -> Dict[str, object]:
+def _run_unit_checks_in_control_plane(root: Path, modules: list[str]) -> dict[str, object]:
     marker = "__UNIT_JSON__"
     py_code = "\n".join(
         [
@@ -139,7 +138,7 @@ def _run_unit_checks_in_control_plane(root: Path, modules: List[str]) -> Dict[st
     )
     cmd = _compose_cmd("run", "--rm", "daily-ops-reporter", "python", "-c", py_code)
     result = _run_cmd(root, cmd, "unit_checks_control_plane")
-    parsed: List[Dict[str, object]] = []
+    parsed: list[dict[str, object]] = []
     for line in str(result.get("stdout", "")).splitlines():
         if line.startswith(marker):
             raw = line[len(marker) :].strip()
@@ -152,10 +151,10 @@ def _run_unit_checks_in_control_plane(root: Path, modules: List[str]) -> Dict[st
     return {"runner": result, "results": parsed}
 
 
-def _write_report(root: Path, payload: Dict[str, object]) -> Path:
+def _write_report(root: Path, payload: dict[str, object]) -> Path:
     out_dir = root / "reports" / "dev_checks"
     out_dir.mkdir(parents=True, exist_ok=True)
-    stamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
+    stamp = datetime.now(UTC).strftime("%Y%m%dT%H%M%SZ")
     out = out_dir / f"dev_fast_checks_{stamp}.json"
     out.write_text(json.dumps(payload, indent=2), encoding="utf-8")
     (out_dir / "latest.json").write_text(json.dumps(payload, indent=2), encoding="utf-8")
