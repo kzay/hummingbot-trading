@@ -1,0 +1,38 @@
+{
+  "ts_utc": "2026-03-23T16:54:32.203181+00:00",
+  "metrics": {
+    "desk_svc_loop_ms": {
+      "samples": 388.0,
+      "p50_ms": 46.5299719999166,
+      "p95_ms": 183.48029140003055,
+      "p99_ms": 350.13454380000195,
+      "max_ms": 430.66772599991054,
+      "last_ms": 126.74633400001767
+    },
+    "desk_svc_process_command_rows_ms": {
+      "samples": 38.0,
+      "p50_ms": 1.6972509999959584,
+      "p95_ms": 31.100690049993997,
+      "p99_ms": 52.35992319999689,
+      "max_ms": 53.965737999995156,
+      "last_ms": 1.7473870000230818
+    },
+    "desk_svc_process_market_rows_ms": {
+      "samples": 512.0,
+      "p50_ms": 0.5294245000868614,
+      "p95_ms": 1.7411566000532723,
+      "p99_ms": 9.799463749905028,
+      "max_ms": 66.6780659998949,
+      "last_ms": 0.7048840000152268
+    }
+  },
+  "last_values_ms": {
+    "desk_svc_loop_ms": 126.74633400001767,
+    "desk_svc_process_command_rows_ms": 1.7473870000230818,
+    "desk_svc_process_market_rows_ms": 0.7048840000152268
+  },
+  "extra": {
+    "tenant_count": 4,
+    "total_pairs": 5
+  }
+}

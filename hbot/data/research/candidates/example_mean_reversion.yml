@@ -1,0 +1,48 @@
+name: btc_mean_reversion_v1
+hypothesis: >-
+  BTC-USDT perpetual shows mean-reverting behavior after large 1m candle
+  spikes (>2 ATR). A counter-trend entry with tight stop should capture
+  the reversion while limiting adverse selection.
+
+adapter_mode: candle
+parameter_space:
+  spike_atr_mult: [1.5, 2.0, 2.5, 3.0]
+  take_profit_atr: [0.3, 0.5, 0.8]
+  stop_loss_atr: [1.0, 1.5, 2.0]
+  holding_bars: [3, 5, 10]
+
+entry_logic: >-
+  Enter short when close > open + spike_atr_mult * ATR(14).
+  Enter long when open > close + spike_atr_mult * ATR(14).
+
+exit_logic: >-
+  Close at take_profit_atr * ATR(14) from entry, or
+  stop at stop_loss_atr * ATR(14) adverse, or
+  time-exit after holding_bars bars.
+
+base_config:
+  strategy_class: candle
+  strategy_config:
+    atr_period: 14
+  data_source:
+    exchange: bitget
+    pair: BTC-USDT
+    resolution: 1m
+    instrument_type: perp
+  initial_equity: "500"
+  leverage: 1
+  seed: 42
+  step_interval_s: 60
+  warmup_bars: 60
+
+required_tests:
+  - test_adapter_compiles
+  - test_no_lookahead_in_entry
+  - test_stop_loss_fires
+
+metadata:
+  author: research_lab
+  version: "1.0"
+  created: "2026-03-23"
+
+lifecycle: candidate

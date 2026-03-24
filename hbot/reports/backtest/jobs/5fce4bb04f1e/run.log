@@ -1,0 +1,18 @@
+2026-03-20 14:38:29,245 INFO __main__  Starting backtest: 
+Traceback (most recent call last):
+  File "<frozen runpy>", line 198, in _run_module_as_main
+  File "<frozen runpy>", line 88, in _run_code
+  File "/workspace/hbot/controllers/backtesting/harness_cli.py", line 138, in <module>
+    main()
+  File "/workspace/hbot/controllers/backtesting/harness_cli.py", line 129, in main
+    result = harness.run()
+             ^^^^^^^^^^^^^
+  File "/workspace/hbot/controllers/backtesting/harness.py", line 204, in run
+    return self._run_impl()
+           ^^^^^^^^^^^^^^^^
+  File "/workspace/hbot/controllers/backtesting/harness.py", line 213, in _run_impl
+    candles = self._load_candles()
+              ^^^^^^^^^^^^^^^^^^^^
+  File "/workspace/hbot/controllers/backtesting/harness.py", line 520, in _load_candles
+    raise FileNotFoundError(
+FileNotFoundError: No dataset found for bitget/BTC-USDT/1m. Download with: python -m scripts.backtest.download_data --exchange bitget --pair BTC-USDT --resolution 1m --start 2025-01-01 --end 2025-03-31

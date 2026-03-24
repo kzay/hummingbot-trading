@@ -1,0 +1,102 @@
+{
+  "config": {
+    "mode": "replay",
+    "strategy_module": "controllers.bots.bot7.pullback_v1",
+    "strategy_class": "PullbackV1Controller",
+    "exchange": "bitget",
+    "pair": "BTC-USDT",
+    "instrument_type": "perp",
+    "step_interval_s": 60,
+    "warmup_bars": 180
+  },
+  "total_return_pct": 0.0,
+  "cagr_pct": 0.0,
+  "sharpe_ratio": 0.0,
+  "sortino_ratio": 0.0,
+  "calmar_ratio": 0.0,
+  "max_drawdown_pct": 0.0,
+  "max_drawdown_duration_days": 5,
+  "win_rate": 0.0,
+  "profit_factor": 0.0,
+  "avg_win_loss_ratio": 0.0,
+  "total_fees": "0",
+  "maker_fees": "0",
+  "taker_fees": "0",
+  "funding_paid": "0",
+  "funding_received": "0",
+  "fee_drag_pct": 0.0,
+  "maker_fill_ratio": 0.0,
+  "fill_count": 0,
+  "order_count": 0,
+  "fill_rate": 0.0,
+  "avg_slippage_bps": 0.0,
+  "avg_mid_slippage_bps": 0.0,
+  "partial_fill_ratio": 0.0,
+  "total_notional_traded": "0",
+  "avg_daily_turnover": "0.0",
+  "turnover_ratio": 0.0,
+  "edge_decay_curve": [],
+  "regime_metrics": [],
+  "spread_capture_efficiency": 0.0,
+  "theoretical_max_pnl": "0",
+  "inventory_half_life_minutes": 0.0,
+  "equity_curve": [
+    {
+      "date": "2026-03-12",
+      "equity": "5000",
+      "drawdown_pct": "0.0",
+      "daily_return_pct": "0.0",
+      "cumulative_return_pct": "0.0",
+      "position_notional": "0E-10",
+      "num_fills": 0
+    },
+    {
+      "date": "2026-03-13",
+      "equity": "5000",
+      "drawdown_pct": "0.0",
+      "daily_return_pct": "0.0",
+      "cumulative_return_pct": "0.0",
+      "position_notional": "0E-10",
+      "num_fills": 0
+    },
+    {
+      "date": "2026-03-14",
+      "equity": "5000",
+      "drawdown_pct": "0.0",
+      "daily_return_pct": "0.0",
+      "cumulative_return_pct": "0.0",
+      "position_notional": "0E-10",
+      "num_fills": 0
+    },
+    {
+      "date": "2026-03-15",
+      "equity": "5000",
+      "drawdown_pct": "0.0",
+      "daily_return_pct": "0.0",
+      "cumulative_return_pct": "0.0",
+      "position_notional": "0E-10",
+      "num_fills": 0
+    },
+    {
+      "date": "2026-03-15",
+      "equity": "5000",
+      "drawdown_pct": "0.0",
+      "daily_return_pct": "0.0",
+      "cumulative_return_pct": "0.0",
+      "position_notional": "0.0",
+      "num_fills": 0
+    }
+  ],
+  "fills": [],
+  "run_duration_s": 167.125,
+  "data_start": "2026-03-11",
+  "data_end": "2026-03-14",
+  "strategy_name": "PullbackV1Controller",
+  "total_ticks": 5761,
+  "warnings": [
+    "Zero variance in position series \u2014 inventory is flat",
+    "No trades executed \u2014 check strategy configuration",
+    "Replay mode patches runtime clock surfaces and suppresses the live price-sampler task."
+  ],
+  "fill_disclaimer": "Replay uses the real controller and PaperDesk fills, but quote/depth state is derived from replayed trades and candle-synthesized books rather than full native exchange L2."
+}

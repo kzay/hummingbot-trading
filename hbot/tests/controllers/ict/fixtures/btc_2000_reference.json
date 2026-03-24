@@ -1,0 +1,110 @@
+{
+  "bar_count": 2000,
+  "swing_count": 85,
+  "fvg_total_count": 804,
+  "fvg_active_count": 2,
+  "structure_count": 53,
+  "ob_total_count": 53,
+  "ob_active_count": 0,
+  "displacement_count": 86,
+  "vi_total_count": 0,
+  "vi_active_count": 0,
+  "breaker_count": 45,
+  "trend": 1,
+  "last_5_swings": [
+    {
+      "index": 1917,
+      "direction": 1,
+      "level": "98085.2"
+    },
+    {
+      "index": 1923,
+      "direction": -1,
+      "level": "97924.0"
+    },
+    {
+      "index": 1941,
+      "direction": 1,
+      "level": "98041.5"
+    },
+    {
+      "index": 1948,
+      "direction": -1,
+      "level": "97943.3"
+    },
+    {
+      "index": 1979,
+      "direction": 1,
+      "level": "98675.1"
+    }
+  ],
+  "last_5_fvgs": [
+    {
+      "index": 1988,
+      "direction": -1,
+      "top": "98480.0",
+      "bottom": "98465.7",
+      "mitigated": false
+    },
+    {
+      "index": 1991,
+      "direction": -1,
+      "top": "98443.8",
+      "bottom": "98385.1",
+      "mitigated": false
+    },
+    {
+      "index": 1995,
+      "direction": -1,
+      "top": "98362.6",
+      "bottom": "98355.0",
+      "mitigated": true
+    },
+    {
+      "index": 1996,
+      "direction": -1,
+      "top": "98330.1",
+      "bottom": "98321.1",
+      "mitigated": true
+    },
+    {
+      "index": 1998,
+      "direction": 1,
+      "top": "98346.3",
+      "bottom": "98321.1",
+      "mitigated": false
+    }
+  ],
+  "last_5_structures": [
+    {
+      "index": 1807,
+      "direction": -1,
+      "event_type": "bos",
+      "level": "97826.9"
+    },
+    {
+      "index": 1829,
+      "direction": -1,
+      "event_type": "bos",
+      "level": "97624.2"
+    },
+    {
+      "index": 1844,
+      "direction": -1,
+      "event_type": "bos",
+      "level": "97534.2"
+    },
+    {
+      "index": 1917,
+      "direction": 1,
+      "event_type": "choch",
+      "level": "98085.2"
+    },
+    {
+      "index": 1979,
+      "direction": 1,
+      "event_type": "bos",
+      "level": "98675.1"
+    }
+  ]
+}

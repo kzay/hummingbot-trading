@@ -1,0 +1,1119 @@
+{
+  "config": {
+    "strategy_class": "",
+    "exchange": "bitget",
+    "pair": "BTC-USDT",
+    "resolution": "1m",
+    "initial_equity": "500",
+    "fill_model": "latency_aware",
+    "step_interval_s": 60,
+    "warmup_bars": 60,
+    "seed": 42
+  },
+  "total_return_pct": -0.01508922574018925,
+  "cagr_pct": -0.06257113157068783,
+  "sharpe_ratio": -0.7377587416618047,
+  "sortino_ratio": -0.9296654667143346,
+  "calmar_ratio": -1.393586299264554,
+  "max_drawdown_pct": 0.0448993590161649,
+  "max_drawdown_duration_days": 89,
+  "win_rate": 0.0,
+  "profit_factor": 0.0,
+  "avg_win_loss_ratio": 0.0,
+  "total_fees": "0.000491436492546251265951384",
+  "maker_fees": "0.000491436492546251265951384",
+  "taker_fees": "0",
+  "funding_paid": "0",
+  "funding_received": "0",
+  "fee_drag_pct": 0.0,
+  "maker_fill_ratio": 1.0,
+  "fill_count": 1,
+  "order_count": 104,
+  "fill_rate": 0.009615384615384616,
+  "avg_slippage_bps": 13.432391829541055,
+  "avg_mid_slippage_bps": 13.432391829541055,
+  "partial_fill_ratio": 0.0,
+  "total_notional_traded": "2.4571824627312564",
+  "avg_daily_turnover": "0.02792252798558246",
+  "turnover_ratio": 0.004915054281689496,
+  "edge_decay_curve": [
+    [
+      "2025-02-01",
+      -1.2512650312241709
+    ],
+    [
+      "2025-02-02",
+      -1.2512650312241709
+    ],
+    [
+      "2025-02-03",
+      -1.2512650312241709
+    ],
+    [
+      "2025-02-04",
+      -1.2512650312241709
+    ],
+    [
+      "2025-02-05",
+      -1.2512650312241707
+    ],
+    [
+      "2025-02-06",
+      -1.2512650312241707
+    ],
+    [
+      "2025-02-07",
+      -1.2512650312241707
+    ],
+    [
+      "2025-02-08",
+      -1.2512650312241707
+    ],
+    [
+      "2025-02-09",
+      -1.2512650312241707
+    ],
+    [
+      "2025-02-10",
+      -1.2512650312241707
+    ],
+    [
+      "2025-02-11",
+      -1.2512650312241707
+    ],
+    [
+      "2025-02-12",
+      -1.2512650312241704
+    ],
+    [
+      "2025-02-13",
+      0.8112029926439289
+    ],
+    [
+      "2025-02-14",
+      2.0830809458339976
+    ],
+    [
+      "2025-02-15",
+      1.365412875924007
+    ],
+    [
+      "2025-02-16",
+      1.0111766315820059
+    ],
+    [
+      "2025-02-17",
+      4.420541587357805
+    ],
+    [
+      "2025-02-18",
+      3.4880749227427272
+    ],
+    [
+      "2025-02-19",
+      0.0
+    ],
+    [
+      "2025-02-20",
+      0.0
+    ],
+    [
+      "2025-02-21",
+      0.0
+    ],
+    [
+      "2025-02-22",
+      0.0
+    ],
+    [
+      "2025-02-23",
+      0.0
+    ],
+    [
+      "2025-02-24",
+      0.0
+    ],
+    [
+      "2025-02-25",
+      0.0
+    ],
+    [
+      "2025-02-26",
+      0.0
+    ],
+    [
+      "2025-02-27",
+      0.0
+    ],
+    [
+      "2025-02-28",
+      0.0
+    ],
+    [
+      "2025-03-01",
+      0.0
+    ],
+    [
+      "2025-03-02",
+      0.0
+    ],
+    [
+      "2025-03-03",
+      0.0
+    ],
+    [
+      "2025-03-04",
+      0.0
+    ],
+    [
+      "2025-03-05",
+      0.0
+    ],
+    [
+      "2025-03-06",
+      0.0
+    ],
+    [
+      "2025-03-07",
+      0.0
+    ],
+    [
+      "2025-03-08",
+      0.0
+    ],
+    [
+      "2025-03-09",
+      0.0
+    ],
+    [
+      "2025-03-10",
+      0.0
+    ],
+    [
+      "2025-03-11",
+      0.0
+    ],
+    [
+      "2025-03-12",
+      0.0
+    ],
+    [
+      "2025-03-13",
+      0.0
+    ],
+    [
+      "2025-03-14",
+      0.0
+    ],
+    [
+      "2025-03-15",
+      0.0
+    ],
+    [
+      "2025-03-16",
+      0.0
+    ],
+    [
+      "2025-03-17",
+      0.0
+    ],
+    [
+      "2025-03-18",
+      0.0
+    ],
+    [
+      "2025-03-19",
+      0.0
+    ],
+    [
+      "2025-03-20",
+      0.0
+    ],
+    [
+      "2025-03-21",
+      0.0
+    ],
+    [
+      "2025-03-22",
+      0.0
+    ],
+    [
+      "2025-03-23",
+      0.0
+    ],
+    [
+      "2025-03-24",
+      0.0
+    ],
+    [
+      "2025-03-25",
+      0.0
+    ],
+    [
+      "2025-03-26",
+      0.0
+    ],
+    [
+      "2025-03-27",
+      0.0
+    ],
+    [
+      "2025-03-28",
+      0.0
+    ],
+    [
+      "2025-03-29",
+      0.0
+    ],
+    [
+      "2025-03-30",
+      0.0
+    ],
+    [
+      "2025-03-30",
+      0.0
+    ]
+  ],
+  "regime_metrics": [
+    {
+      "regime_name": "neutral_low_vol",
+      "time_fraction": 1.0113636363636365,
+      "sharpe": -0.7336434750133649,
+      "max_drawdown_pct": 0.04490368439865774,
+      "fill_count": 0,
+      "net_edge_bps": 0.0,
+      "num_days": 89
+    }
+  ],
+  "spread_capture_efficiency": -26.85730630007277,
+  "theoretical_max_pnl": "0.002809147271062038470284419777",
+  "inventory_half_life_minutes": 11506.243197231553,
+  "equity_curve": [
+    {
+      "date": "2025-01-02",
+      "equity": "500",
+      "drawdown_pct": "0.0",
+      "daily_return_pct": "0.0",
+      "cumulative_return_pct": "0.0",
+      "position_notional": "0E-10",
+      "num_fills": 0
+    },
+    {
+      "date": "2025-01-03",
+      "equity": "500",
+      "drawdown_pct": "0.0",
+      "daily_return_pct": "0.0",
+      "cumulative_return_pct": "0.0",
+      "position_notional": "0E-10",
+      "num_fills": 0
+    },
+    {
+      "date": "2025-01-04",
+      "equity": "500",
+      "drawdown_pct": "0.0",
+      "daily_return_pct": "0.0",
+      "cumulative_return_pct": "0.0",
+      "position_notional": "0E-10",
+      "num_fills": 0
+    },
+    {
+      "date": "2025-01-05",
+      "equity": "500",
+      "drawdown_pct": "0.0",
+      "daily_return_pct": "0.0",
+      "cumulative_return_pct": "0.0",
+      "position_notional": "0E-10",
+      "num_fills": 0
+    },
+    {
+      "date": "2025-01-06",
+      "equity": "500",
+      "drawdown_pct": "0.0",
+      "daily_return_pct": "0.0",
+      "cumulative_return_pct": "0.0",
+      "position_notional": "0E-10",
+      "num_fills": 0
+    },
+    {
+      "date": "2025-01-07",
+      "equity": "500",
+      "drawdown_pct": "0.0",
+      "daily_return_pct": "0.0",
+      "cumulative_return_pct": "0.0",
+      "position_notional": "0E-10",
+      "num_fills": 0
+    },
+    {
+      "date": "2025-01-08",
+      "equity": "500",
+      "drawdown_pct": "0.0",
+      "daily_return_pct": "0.0",
+      "cumulative_return_pct": "0.0",
+      "position_notional": "0E-10",
+      "num_fills": 0
+    },
+    {
+      "date": "2025-01-09",
+      "equity": "500",
+      "drawdown_pct": "0.0",
+      "daily_return_pct": "0.0",
+      "cumulative_return_pct": "0.0",
+      "position_notional": "0E-10",
+      "num_fills": 0
+    },
+    {
+      "date": "2025-01-10",
+      "equity": "500",
+      "drawdown_pct": "0.0",
+      "daily_return_pct": "0.0",
+      "cumulative_return_pct": "0.0",
+      "position_notional": "0E-10",
+      "num_fills": 0
+    },
+    {
+      "date": "2025-01-11",
+      "equity": "500",
+      "drawdown_pct": "0.0",
+      "daily_return_pct": "0.0",
+      "cumulative_return_pct": "0.0",
+      "position_notional": "0E-10",
+      "num_fills": 0
+    },
+    {
+      "date": "2025-01-12",
+      "equity": "500",
+      "drawdown_pct": "0.0",
+      "daily_return_pct": "0.0",
+      "cumulative_return_pct": "0.0",
+      "position_notional": "0E-10",
+      "num_fills": 0
+    },
+    {
+      "date": "2025-01-13",
+      "equity": "500",
+      "drawdown_pct": "0.0",
+      "daily_return_pct": "0.0",
+      "cumulative_return_pct": "0.0",
+      "position_notional": "0E-10",
+      "num_fills": 0
+    },
+    {
+      "date": "2025-01-14",
+      "equity": "499.8840311998887767186863686",
+      "drawdown_pct": "0.00028845660285102526",
+      "daily_return_pct": "-0.00023193760022244657",
+      "cumulative_return_pct": "-0.00023193760022244657",
+      "position_notional": "-2.572659826349933359804600000",
+      "num_fills": 1
+    },
+    {
+      "date": "2025-01-15",
+      "equity": "499.8269007256476126970793686",
+      "drawdown_pct": "0.0004027110919203249",
+      "daily_return_pct": "-0.00011428745604061763",
+      "cumulative_return_pct": "-0.00034619854870477463",
+      "position_notional": "-2.629790300591097381411600000",
+      "num_fills": 0
+    },
+    {
+      "date": "2025-01-16",
+      "equity": "499.8618435673035591718333686",
+      "drawdown_pct": "0.0003328293593938865",
+      "daily_return_pct": "0.00006990988601297075",
+      "cumulative_return_pct": "-0.00027631286539288167",
+      "position_notional": "-2.594847458935150906657600000",
+      "num_fills": 0
+    },
+    {
+      "date": "2025-01-17",
+      "equity": "499.8783166212270767956459686",
+      "drawdown_pct": "0.00029988511405999404",
+      "daily_return_pct": "0.00003295521379658902",
+      "cumulative_return_pct": "-0.0002433667575458464",
+      "position_notional": "-2.578374405011633282845000000",
+      "num_fills": 0
+    },
+    {
+      "date": "2025-01-18",
+      "equity": "499.7755032049191508490691686",
+      "drawdown_pct": "0.0005055003221561896",
+      "daily_return_pct": "-0.00020567688753307293",
+      "cumulative_return_pct": "-0.0004489935901616983",
+      "position_notional": "-2.681187821319559229421800000",
+      "num_fills": 0
+    },
+    {
+      "date": "2025-01-19",
+      "equity": "499.8887749739225244039969686",
+      "drawdown_pct": "0.000278969591134684",
+      "daily_return_pct": "0.0002266453002938193",
+      "cumulative_return_pct": "-0.0002224500521549512",
+      "position_notional": "-2.567916052316185674494000000",
+      "num_fills": 0
+    },
+    {
+      "date": "2025-01-20",
+      "equity": "499.9245538712990732790671686",
+      "drawdown_pct": "0.00020741584169503633",
+      "daily_return_pct": "0.0000715737163300283",
+      "cumulative_return_pct": "-0.00015089225740185343",
+      "position_notional": "0",
+      "num_fills": 0
+    },
+    {
+      "date": "2025-01-21",
+      "equity": "499.9245538712990732790671686",
+      "drawdown_pct": "0.00020741584169503633",
+      "daily_return_pct": "0.0",
+      "cumulative_return_pct": "-0.00015089225740185343",
+      "position_notional": "0",
+      "num_fills": 0
+    },
+    {
+      "date": "2025-01-22",
+      "equity": "499.9245538712990732790671686",
+      "drawdown_pct": "0.00020741584169503633",
+      "daily_return_pct": "0.0",
+      "cumulative_return_pct": "-0.00015089225740185343",
+      "position_notional": "0",
+      "num_fills": 0
+    },
+    {
+      "date": "2025-01-23",
+      "equity": "499.9245538712990732790671686",
+      "drawdown_pct": "0.00020741584169503633",
+      "daily_return_pct": "0.0",
+      "cumulative_return_pct": "-0.00015089225740185343",
+      "position_notional": "0",
+      "num_fills": 0
+    },
+    {
+      "date": "2025-01-24",
+      "equity": "499.9245538712990732790671686",
+      "drawdown_pct": "0.00020741584169503633",
+      "daily_return_pct": "0.0",
+      "cumulative_return_pct": "-0.00015089225740185343",
+      "position_notional": "0",
+      "num_fills": 0
+    },
+    {
+      "date": "2025-01-25",
+      "equity": "499.9245538712990732790671686",
+      "drawdown_pct": "0.00020741584169503633",
+      "daily_return_pct": "0.0",
+      "cumulative_return_pct": "-0.00015089225740185343",
+      "position_notional": "0",
+      "num_fills": 0
+    },
+    {
+      "date": "2025-01-26",
+      "equity": "499.9245538712990732790671686",
+      "drawdown_pct": "0.00020741584169503633",
+      "daily_return_pct": "0.0",
+      "cumulative_return_pct": "-0.00015089225740185343",
+      "position_notional": "0",
+      "num_fills": 0
+    },
+    {
+      "date": "2025-01-27",
+      "equity": "499.9245538712990732790671686",
+      "drawdown_pct": "0.00020741584169503633",
+      "daily_return_pct": "0.0",
+      "cumulative_return_pct": "-0.00015089225740185343",
+      "position_notional": "0",
+      "num_fills": 0
+    },
+    {
+      "date": "2025-01-28",
+      "equity": "499.9245538712990732790671686",
+      "drawdown_pct": "0.00020741584169503633",
+      "daily_return_pct": "0.0",
+      "cumulative_return_pct": "-0.00015089225740185343",
+      "position_notional": "0",
+      "num_fills": 0
+    },
+    {
+      "date": "2025-01-29",
+      "equity": "499.9245538712990732790671686",
+      "drawdown_pct": "0.00020741584169503633",
+      "daily_return_pct": "0.0",
+      "cumulative_return_pct": "-0.00015089225740185343",
+      "position_notional": "0",
+      "num_fills": 0
+    },
+    {
+      "date": "2025-01-30",
+      "equity": "499.9245538712990732790671686",
+      "drawdown_pct": "0.00020741584169503633",
+      "daily_return_pct": "0.0",
+      "cumulative_return_pct": "-0.00015089225740185343",
+      "position_notional": "0",
+      "num_fills": 0
+    },
+    {
+      "date": "2025-01-31",
+      "equity": "499.9245538712990732790671686",
+      "drawdown_pct": "0.00020741584169503633",
+      "daily_return_pct": "0.0",
+      "cumulative_return_pct": "-0.00015089225740185343",
+      "position_notional": "0",
+      "num_fills": 0
+    },
+    {
+      "date": "2025-02-01",
+      "equity": "499.9245538712990732790671686",
+      "drawdown_pct": "0.00020741584169503633",
+      "daily_return_pct": "0.0",
+      "cumulative_return_pct": "-0.00015089225740185343",
+      "position_notional": "0",
+      "num_fills": 0
+    },
+    {
+      "date": "2025-02-02",
+      "equity": "499.9245538712990732790671686",
+      "drawdown_pct": "0.00020741584169503633",
+      "daily_return_pct": "0.0",
+      "cumulative_return_pct": "-0.00015089225740185343",
+      "position_notional": "0",
+      "num_fills": 0
+    },
+    {
+      "date": "2025-02-03",
+      "equity": "499.9245538712990732790671686",
+      "drawdown_pct": "0.00020741584169503633",
+      "daily_return_pct": "0.0",
+      "cumulative_return_pct": "-0.00015089225740185343",
+      "position_notional": "0",
+      "num_fills": 0
+    },
+    {
+      "date": "2025-02-04",
+      "equity": "499.9245538712990732790671686",
+      "drawdown_pct": "0.00020741584169503633",
+      "daily_return_pct": "0.0",
+      "cumulative_return_pct": "-0.00015089225740185343",
+      "position_notional": "0",
+      "num_fills": 0
+    },
+    {
+      "date": "2025-02-05",
+      "equity": "499.9245538712990732790671686",
+      "drawdown_pct": "0.00020741584169503633",
+      "daily_return_pct": "0.0",
+      "cumulative_return_pct": "-0.00015089225740185343",
+      "position_notional": "0",
+      "num_fills": 0
+    },
+    {
+      "date": "2025-02-06",
+      "equity": "499.9245538712990732790671686",
+      "drawdown_pct": "0.00020741584169503633",
+      "daily_return_pct": "0.0",
+      "cumulative_return_pct": "-0.00015089225740185343",
+      "position_notional": "0",
+      "num_fills": 0
+    },
+    {
+      "date": "2025-02-07",
+      "equity": "499.9245538712990732790671686",
+      "drawdown_pct": "0.00020741584169503633",
+      "daily_return_pct": "0.0",
+      "cumulative_return_pct": "-0.00015089225740185343",
+      "position_notional": "0",
+      "num_fills": 0
+    },
+    {
+      "date": "2025-02-08",
+      "equity": "499.9245538712990732790671686",
+      "drawdown_pct": "0.00020741584169503633",
+      "daily_return_pct": "0.0",
+      "cumulative_return_pct": "-0.00015089225740185343",
+      "position_notional": "0",
+      "num_fills": 0
+    },
+    {
+      "date": "2025-02-09",
+      "equity": "499.9245538712990732790671686",
+      "drawdown_pct": "0.00020741584169503633",
+      "daily_return_pct": "0.0",
+      "cumulative_return_pct": "-0.00015089225740185343",
+      "position_notional": "0",
+      "num_fills": 0
+    },
+    {
+      "date": "2025-02-10",
+      "equity": "499.9245538712990732790671686",
+      "drawdown_pct": "0.00020741584169503633",
+      "daily_return_pct": "0.0",
+      "cumulative_return_pct": "-0.00015089225740185343",
+      "position_notional": "0",
+      "num_fills": 0
+    },
+    {
+      "date": "2025-02-11",
+      "equity": "499.9245538712990732790671686",
+      "drawdown_pct": "0.00020741584169503633",
+      "daily_return_pct": "0.0",
+      "cumulative_return_pct": "-0.00015089225740185343",
+      "position_notional": "0",
+      "num_fills": 0
+    },
+    {
+      "date": "2025-02-12",
+      "equity": "499.9245538712990732790671686",
+      "drawdown_pct": "0.00020741584169503633",
+      "daily_return_pct": "0.0",
+      "cumulative_return_pct": "-0.00015089225740185343",
+      "position_notional": "0",
+      "num_fills": 0
+    },
+    {
+      "date": "2025-02-13",
+      "equity": "499.9245538712990732790671686",
+      "drawdown_pct": "0.00020741584169503633",
+      "daily_return_pct": "0.0",
+      "cumulative_return_pct": "-0.00015089225740185343",
+      "position_notional": "0",
+      "num_fills": 0
+    },
+    {
+      "date": "2025-02-14",
+      "equity": "499.9245538712990732790671686",
+      "drawdown_pct": "0.00020741584169503633",
+      "daily_return_pct": "0.0",
+      "cumulative_return_pct": "-0.00015089225740185343",
+      "position_notional": "0",
+      "num_fills": 0
+    },
+    {
+      "date": "2025-02-15",
+      "equity": "499.9245538712990732790671686",
+      "drawdown_pct": "0.00020741584169503633",
+      "daily_return_pct": "0.0",
+      "cumulative_return_pct": "-0.00015089225740185343",
+      "position_notional": "0",
+      "num_fills": 0
+    },
+    {
+      "date": "2025-02-16",
+      "equity": "499.9245538712990732790671686",
+      "drawdown_pct": "0.00020741584169503633",
+      "daily_return_pct": "0.0",
+      "cumulative_return_pct": "-0.00015089225740185343",
+      "position_notional": "0",
+      "num_fills": 0
+    },
+    {
+      "date": "2025-02-17",
+      "equity": "499.9245538712990732790671686",
+      "drawdown_pct": "0.00020741584169503633",
+      "daily_return_pct": "0.0",
+      "cumulative_return_pct": "-0.00015089225740185343",
+      "position_notional": "0",
+      "num_fills": 0
+    },
+    {
+      "date": "2025-02-18",
+      "equity": "499.9245538712990732790671686",
+      "drawdown_pct": "0.00020741584169503633",
+      "daily_return_pct": "0.0",
+      "cumulative_return_pct": "-0.00015089225740185343",
+      "position_notional": "0",
+      "num_fills": 0
+    },
+    {
+      "date": "2025-02-19",
+      "equity": "499.9245538712990732790671686",
+      "drawdown_pct": "0.00020741584169503633",
+      "daily_return_pct": "0.0",
+      "cumulative_return_pct": "-0.00015089225740185343",
+      "position_notional": "0",
+      "num_fills": 0
+    },
+    {
+      "date": "2025-02-20",
+      "equity": "499.9245538712990732790671686",
+      "drawdown_pct": "0.00020741584169503633",
+      "daily_return_pct": "0.0",
+      "cumulative_return_pct": "-0.00015089225740185343",
+      "position_notional": "0",
+      "num_fills": 0
+    },
+    {
+      "date": "2025-02-21",
+      "equity": "499.9245538712990732790671686",
+      "drawdown_pct": "0.00020741584169503633",
+      "daily_return_pct": "0.0",
+      "cumulative_return_pct": "-0.00015089225740185343",
+      "position_notional": "0",
+      "num_fills": 0
+    },
+    {
+      "date": "2025-02-22",
+      "equity": "499.9245538712990732790671686",
+      "drawdown_pct": "0.00020741584169503633",
+      "daily_return_pct": "0.0",
+      "cumulative_return_pct": "-0.00015089225740185343",
+      "position_notional": "0",
+      "num_fills": 0
+    },
+    {
+      "date": "2025-02-23",
+      "equity": "499.9245538712990732790671686",
+      "drawdown_pct": "0.00020741584169503633",
+      "daily_return_pct": "0.0",
+      "cumulative_return_pct": "-0.00015089225740185343",
+      "position_notional": "0",
+      "num_fills": 0
+    },
+    {
+      "date": "2025-02-24",
+      "equity": "499.9245538712990732790671686",
+      "drawdown_pct": "0.00020741584169503633",
+      "daily_return_pct": "0.0",
+      "cumulative_return_pct": "-0.00015089225740185343",
+      "position_notional": "0",
+      "num_fills": 0
+    },
+    {
+      "date": "2025-02-25",
+      "equity": "499.9245538712990732790671686",
+      "drawdown_pct": "0.00020741584169503633",
+      "daily_return_pct": "0.0",
+      "cumulative_return_pct": "-0.00015089225740185343",
+      "position_notional": "0",
+      "num_fills": 0
+    },
+    {
+      "date": "2025-02-26",
+      "equity": "499.9245538712990732790671686",
+      "drawdown_pct": "0.00020741584169503633",
+      "daily_return_pct": "0.0",
+      "cumulative_return_pct": "-0.00015089225740185343",
+      "position_notional": "0",
+      "num_fills": 0
+    },
+    {
+      "date": "2025-02-27",
+      "equity": "499.9245538712990732790671686",
+      "drawdown_pct": "0.00020741584169503633",
+      "daily_return_pct": "0.0",
+      "cumulative_return_pct": "-0.00015089225740185343",
+      "position_notional": "0",
+      "num_fills": 0
+    },
+    {
+      "date": "2025-02-28",
+      "equity": "499.9245538712990732790671686",
+      "drawdown_pct": "0.00020741584169503633",
+      "daily_return_pct": "0.0",
+      "cumulative_return_pct": "-0.00015089225740185343",
+      "position_notional": "0",
+      "num_fills": 0
+    },
+    {
+      "date": "2025-03-01",
+      "equity": "499.9245538712990732790671686",
+      "drawdown_pct": "0.00020741584169503633",
+      "daily_return_pct": "0.0",
+      "cumulative_return_pct": "-0.00015089225740185343",
+      "position_notional": "0",
+      "num_fills": 0
+    },
+    {
+      "date": "2025-03-02",
+      "equity": "499.9245538712990732790671686",
+      "drawdown_pct": "0.00020741584169503633",
+      "daily_return_pct": "0.0",
+      "cumulative_return_pct": "-0.00015089225740185343",
+      "position_notional": "0",
+      "num_fills": 0
+    },
+    {
+      "date": "2025-03-03",
+      "equity": "499.9245538712990732790671686",
+      "drawdown_pct": "0.00020741584169503633",
+      "daily_return_pct": "0.0",
+      "cumulative_return_pct": "-0.00015089225740185343",
+      "position_notional": "0",
+      "num_fills": 0
+    },
+    {
+      "date": "2025-03-04",
+      "equity": "499.9245538712990732790671686",
+      "drawdown_pct": "0.00020741584169503633",
+      "daily_return_pct": "0.0",
+      "cumulative_return_pct": "-0.00015089225740185343",
+      "position_notional": "0",
+      "num_fills": 0
+    },
+    {
+      "date": "2025-03-05",
+      "equity": "499.9245538712990732790671686",
+      "drawdown_pct": "0.00020741584169503633",
+      "daily_return_pct": "0.0",
+      "cumulative_return_pct": "-0.00015089225740185343",
+      "position_notional": "0",
+      "num_fills": 0
+    },
+    {
+      "date": "2025-03-06",
+      "equity": "499.9245538712990732790671686",
+      "drawdown_pct": "0.00020741584169503633",
+      "daily_return_pct": "0.0",
+      "cumulative_return_pct": "-0.00015089225740185343",
+      "position_notional": "0",
+      "num_fills": 0
+    },
+    {
+      "date": "2025-03-07",
+      "equity": "499.9245538712990732790671686",
+      "drawdown_pct": "0.00020741584169503633",
+      "daily_return_pct": "0.0",
+      "cumulative_return_pct": "-0.00015089225740185343",
+      "position_notional": "0",
+      "num_fills": 0
+    },
+    {
+      "date": "2025-03-08",
+      "equity": "499.9245538712990732790671686",
+      "drawdown_pct": "0.00020741584169503633",
+      "daily_return_pct": "0.0",
+      "cumulative_return_pct": "-0.00015089225740185343",
+      "position_notional": "0",
+      "num_fills": 0
+    },
+    {
+      "date": "2025-03-09",
+      "equity": "499.9245538712990732790671686",
+      "drawdown_pct": "0.00020741584169503633",
+      "daily_return_pct": "0.0",
+      "cumulative_return_pct": "-0.00015089225740185343",
+      "position_notional": "0",
+      "num_fills": 0
+    },
+    {
+      "date": "2025-03-10",
+      "equity": "499.9245538712990732790671686",
+      "drawdown_pct": "0.00020741584169503633",
+      "daily_return_pct": "0.0",
+      "cumulative_return_pct": "-0.00015089225740185343",
+      "position_notional": "0",
+      "num_fills": 0
+    },
+    {
+      "date": "2025-03-11",
+      "equity": "499.9245538712990732790671686",
+      "drawdown_pct": "0.00020741584169503633",
+      "daily_return_pct": "0.0",
+      "cumulative_return_pct": "-0.00015089225740185343",
+      "position_notional": "0",
+      "num_fills": 0
+    },
+    {
+      "date": "2025-03-12",
+      "equity": "499.9245538712990732790671686",
+      "drawdown_pct": "0.00020741584169503633",
+      "daily_return_pct": "0.0",
+      "cumulative_return_pct": "-0.00015089225740185343",
+      "position_notional": "0",
+      "num_fills": 0
+    },
+    {
+      "date": "2025-03-13",
+      "equity": "499.9245538712990732790671686",
+      "drawdown_pct": "0.00020741584169503633",
+      "daily_return_pct": "0.0",
+      "cumulative_return_pct": "-0.00015089225740185343",
+      "position_notional": "0",
+      "num_fills": 0
+    },
+    {
+      "date": "2025-03-14",
+      "equity": "499.9245538712990732790671686",
+      "drawdown_pct": "0.00020741584169503633",
+      "daily_return_pct": "0.0",
+      "cumulative_return_pct": "-0.00015089225740185343",
+      "position_notional": "0",
+      "num_fills": 0
+    },
+    {
+      "date": "2025-03-15",
+      "equity": "499.9245538712990732790671686",
+      "drawdown_pct": "0.00020741584169503633",
+      "daily_return_pct": "0.0",
+      "cumulative_return_pct": "-0.00015089225740185343",
+      "position_notional": "0",
+      "num_fills": 0
+    },
+    {
+      "date": "2025-03-16",
+      "equity": "499.9245538712990732790671686",
+      "drawdown_pct": "0.00020741584169503633",
+      "daily_return_pct": "0.0",
+      "cumulative_return_pct": "-0.00015089225740185343",
+      "position_notional": "0",
+      "num_fills": 0
+    },
+    {
+      "date": "2025-03-17",
+      "equity": "499.9245538712990732790671686",
+      "drawdown_pct": "0.00020741584169503633",
+      "daily_return_pct": "0.0",
+      "cumulative_return_pct": "-0.00015089225740185343",
+      "position_notional": "0",
+      "num_fills": 0
+    },
+    {
+      "date": "2025-03-18",
+      "equity": "499.9245538712990732790671686",
+      "drawdown_pct": "0.00020741584169503633",
+      "daily_return_pct": "0.0",
+      "cumulative_return_pct": "-0.00015089225740185343",
+      "position_notional": "0",
+      "num_fills": 0
+    },
+    {
+      "date": "2025-03-19",
+      "equity": "499.9245538712990732790671686",
+      "drawdown_pct": "0.00020741584169503633",
+      "daily_return_pct": "0.0",
+      "cumulative_return_pct": "-0.00015089225740185343",
+      "position_notional": "0",
+      "num_fills": 0
+    },
+    {
+      "date": "2025-03-20",
+      "equity": "499.9245538712990732790671686",
+      "drawdown_pct": "0.00020741584169503633",
+      "daily_return_pct": "0.0",
+      "cumulative_return_pct": "-0.00015089225740185343",
+      "position_notional": "0",
+      "num_fills": 0
+    },
+    {
+      "date": "2025-03-21",
+      "equity": "499.9245538712990732790671686",
+      "drawdown_pct": "0.00020741584169503633",
+      "daily_return_pct": "0.0",
+      "cumulative_return_pct": "-0.00015089225740185343",
+      "position_notional": "0",
+      "num_fills": 0
+    },
+    {
+      "date": "2025-03-22",
+      "equity": "499.9245538712990732790671686",
+      "drawdown_pct": "0.00020741584169503633",
+      "daily_return_pct": "0.0",
+      "cumulative_return_pct": "-0.00015089225740185343",
+      "position_notional": "0",
+      "num_fills": 0
+    },
+    {
+      "date": "2025-03-23",
+      "equity": "499.9245538712990732790671686",
+      "drawdown_pct": "0.00020741584169503633",
+      "daily_return_pct": "0.0",
+      "cumulative_return_pct": "-0.00015089225740185343",
+      "position_notional": "0",
+      "num_fills": 0
+    },
+    {
+      "date": "2025-03-24",
+      "equity": "499.9245538712990732790671686",
+      "drawdown_pct": "0.00020741584169503633",
+      "daily_return_pct": "0.0",
+      "cumulative_return_pct": "-0.00015089225740185343",
+      "position_notional": "0",
+      "num_fills": 0
+    },
+    {
+      "date": "2025-03-25",
+      "equity": "499.9245538712990732790671686",
+      "drawdown_pct": "0.00020741584169503633",
+      "daily_return_pct": "0.0",
+      "cumulative_return_pct": "-0.00015089225740185343",
+      "position_notional": "0",
+      "num_fills": 0
+    },
+    {
+      "date": "2025-03-26",
+      "equity": "499.9245538712990732790671686",
+      "drawdown_pct": "0.00020741584169503633",
+      "daily_return_pct": "0.0",
+      "cumulative_return_pct": "-0.00015089225740185343",
+      "position_notional": "0",
+      "num_fills": 0
+    },
+    {
+      "date": "2025-03-27",
+      "equity": "499.9245538712990732790671686",
+      "drawdown_pct": "0.00020741584169503633",
+      "daily_return_pct": "0.0",
+      "cumulative_return_pct": "-0.00015089225740185343",
+      "position_notional": "0",
+      "num_fills": 0
+    },
+    {
+      "date": "2025-03-28",
+      "equity": "499.9245538712990732790671686",
+      "drawdown_pct": "0.00020741584169503633",
+      "daily_return_pct": "0.0",
+      "cumulative_return_pct": "-0.00015089225740185343",
+      "position_notional": "0",
+      "num_fills": 0
+    },
+    {
+      "date": "2025-03-29",
+      "equity": "499.9245538712990732790671686",
+      "drawdown_pct": "0.00020741584169503633",
+      "daily_return_pct": "0.0",
+      "cumulative_return_pct": "-0.00015089225740185343",
+      "position_notional": "0",
+      "num_fills": 0
+    },
+    {
+      "date": "2025-03-30",
+      "equity": "499.9245538712990732790671686",
+      "drawdown_pct": "0.00020741584169503633",
+      "daily_return_pct": "0.0",
+      "cumulative_return_pct": "-0.00015089225740185343",
+      "position_notional": "0",
+      "num_fills": 0
+    },
+    {
+      "date": "2025-03-30",
+      "equity": "499.9245538712990732790671686",
+      "drawdown_pct": "0.00020741584169503633",
+      "daily_return_pct": "0.0",
+      "cumulative_return_pct": "-0.00015089225740185343",
+      "position_notional": "0",
+      "num_fills": 0
+    }
+  ],
+  "fills": [
+    {
+      "timestamp_ns": 1736737200000000000,
+      "order_id": "paper_v2_68",
+      "side": "sell",
+      "fill_price": "80235.18",
+      "fill_quantity": "0.000030624751670417594",
+      "fee": "0.000491436492546251265951384",
+      "is_maker": true,
+      "slippage_bps": "13.43239182954105579695082714",
+      "mid_slippage_bps": "13.43239182954105579695082714",
+      "source_bot": "backtest"
+    }
+  ],
+  "run_duration_s": 386.34400000000005,
+  "data_start": "2025-01-01T14:20:00Z",
+  "data_end": "2025-03-30T19:12:00Z",
+  "strategy_name": "",
+  "total_ticks": 127013,
+  "warnings": [
+    "WARNING: Spread capture efficiency (-26.86) below 0.20 \u2014 severe adverse selection",
+    "WARNING: Inventory accumulating (half-life 11506min > 90min threshold)",
+    "CRITICAL: Negative Sharpe in neutral_low_vol regime (-0.73 < -0.5 threshold)"
+  ],
+  "fill_disclaimer": "Fills are approximate: synthetic order books from OHLCV candles. Use LatencyAwareFillModel for conservative estimates."
+}

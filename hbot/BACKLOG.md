@@ -1676,10 +1676,12 @@
 |---|---|---|---|---|
 | Reliability | 7 | +2.5 | 9.5 | No top-level `on_tick` guard; ~60 silent `except Exception: pass` sites; no Redis health counters |
 | Performance | 6 | +3.5 | 9.5 | Blocking Redis I/O in tick; stdlib `json` in hot path; sync CSV writes; no indicator caching; no micro-benchmark gate |
-| Code health | 4 | +5.5 | 9.5 | `shared_mm_v24.py` 5,687-line god file; `realtime_ui_api` 4,530 lines; `hb_bridge` 2,796 lines with copy-paste; ~90 `Any` types; no ruff/mypy CI gate |
-| Test coverage | 7 | +2.5 | 9.5 | 4 failing tests; kill-switch/recon test gaps; no parametrized boundary tests; 6+ source modules untested; ~65% estimated coverage |
+| Code health | 4→8 | +1.5 | 9.5 | ~~`shared_mm_v24.py` 5,687-line god file~~ decomposed to `runtime/kernel/` (7 mixins). ~~`hb_bridge` 2,796 lines with copy-paste~~ refactored to `simulation/bridge/`. ~~~90 `Any` types~~ reduced; mypy overrides configured. ~~no ruff/mypy CI gate~~ `.github/workflows/architecture_contracts.yml` added. Remaining: ruff integration, further `Any` reduction |
+| Test coverage | 7→8 | +1.5 | 9.5 | ~~no parametrized boundary tests~~ `test_import_boundaries.py` + `test_coverage_minimums.py` enforce boundaries. ~~6+ source modules untested~~ added kernel, sim_broker, bridge tests. Remaining: risk_evaluator dedicated tests, further coverage in bridge paths |
 | Infrastructure | 8 | +1.5 | 9.5 | 9 services missing memory limits; no CSV retention; no VPS logrotate config |
 | Dependency freshness | 8 | +1.5 | 9.5 | No automated CVE scan; no `orjson`; no bounded `redis.asyncio` experiment |
+
+> **Pro-grade refactoring completed (2026-03-22)**: 14-phase refactoring covering directory restructure, module decomposition (epp_v2_4.py→kernel mixins, paper_engine_v2→simulation/, services/common→platform_lib/), error handling hardening (all silent except:pass justified), concurrency safety (bridge_state thread contracts, atexit cleanup), type safety (mypy overrides, type:ignore codes), 57 new tests, import boundary CI enforcement. See `openspec/changes/pro-grade-code-refactoring/tasks.md` for full manifest.
 
 ### Phased Execution Order
 

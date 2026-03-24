@@ -1,0 +1,47 @@
+{
+  "ts_utc": "2026-03-12T01:20:24.197498+00:00",
+  "iterations": 1000,
+  "status": "pass",
+  "warn_threshold_ms": 50.0,
+  "fail_threshold_ms": 100.0,
+  "total": {
+    "samples": 1000,
+    "p50_ms": 0.0429,
+    "p95_ms": 0.0818,
+    "p99_ms": 0.1461,
+    "max_ms": 6.0761,
+    "mean_ms": 0.0576
+  },
+  "snapshot_build": {
+    "samples": 1000,
+    "p50_ms": 0.0152,
+    "p95_ms": 0.0182,
+    "p99_ms": 0.0556,
+    "max_ms": 0.1739,
+    "mean_ms": 0.0159
+  },
+  "spread_compute": {
+    "samples": 1000,
+    "p50_ms": 0.0007,
+    "p95_ms": 0.0008,
+    "p99_ms": 0.0012,
+    "max_ms": 0.0143,
+    "mean_ms": 0.0008
+  },
+  "json_serialize": {
+    "samples": 1000,
+    "p50_ms": 0.0078,
+    "p95_ms": 0.0093,
+    "p99_ms": 0.0239,
+    "max_ms": 0.1257,
+    "mean_ms": 0.0084
+  },
+  "csv_format": {
+    "samples": 1000,
+    "p50_ms": 0.0186,
+    "p95_ms": 0.046,
+    "p99_ms": 0.1047,
+    "max_ms": 6.0523,
+    "mean_ms": 0.0325
+  }
+}

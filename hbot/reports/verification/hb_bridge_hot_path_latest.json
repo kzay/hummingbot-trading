@@ -1,0 +1,13 @@
+{
+  "_ts": "2026-03-24T00:27:58Z",
+  "hb_bridge_command_publish_ms_p50": 1.463,
+  "hb_bridge_command_publish_ms_p95": 1.463,
+  "hb_bridge_command_publish_ms_p99": 1.463,
+  "hb_bridge_command_publish_ms_count": 1,
+  "_last_values_ms": {
+    "hb_bridge_command_publish_ms": 1.4630529985879548
+  },
+  "mode": "shadow",
+  "command": "submit_order",
+  "service_redis_available": true
+}

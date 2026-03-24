@@ -1,0 +1,93 @@
+{
+  "total_return_pct": -0.033191048684104114,
+  "sharpe_ratio": -2.4469434973827653,
+  "sortino_ratio": -2.8700580878407584,
+  "calmar_ratio": -15.88802105734626,
+  "max_drawdown_pct": 0.09461094551805935,
+  "max_drawdown_duration_days": 3,
+  "cagr_pct": -1.5031806946463666,
+  "fill_count": 8,
+  "order_count": 97,
+  "total_ticks": 11461,
+  "win_rate": 0.6666666666666666,
+  "profit_factor": 4.127615128746472,
+  "total_fees": "0.007351306645423278034705200",
+  "maker_fill_ratio": 1.0,
+  "fee_drag_pct": 0.0,
+  "avg_slippage_bps": 19.07014280349953,
+  "spread_capture_efficiency": -1.2941466879125008,
+  "inventory_half_life_minutes": 1409.8399036184069,
+  "run_duration_s": 268.4689999999973,
+  "warnings": [
+    "WARNING: Spread capture efficiency (-1.29) below 0.20 \u2014 severe adverse selection",
+    "WARNING: Inventory accumulating (half-life 1410min > 90min threshold)",
+    "WARNING: Edge is regime-dependent (800% weighted deviation > 20% threshold)"
+  ],
+  "equity_curve": [
+    {
+      "date": "2025-01-14",
+      "equity": "500.0689441810588340007404911",
+      "drawdown_pct": "0.000011984731593473137",
+      "daily_return_pct": "0.000137888362117668"
+    },
+    {
+      "date": "2025-01-15",
+      "equity": "500.1310909896236124242446911",
+      "drawdown_pct": "0.00005053341173298522",
+      "daily_return_pct": "0.0001242764808491628"
+    },
+    {
+      "date": "2025-01-16",
+      "equity": "500.2519178848640779996122911",
+      "drawdown_pct": "0.000009678576342280905",
+      "daily_return_pct": "0.00024159044981863047"
+    },
+    {
+      "date": "2025-01-17",
+      "equity": "500.2359042022156166397096911",
+      "drawdown_pct": "0.000054079370033659206",
+      "daily_return_pct": "-0.00003201123689074392"
+    },
+    {
+      "date": "2025-01-18",
+      "equity": "500.3616218702978479048390911",
+      "drawdown_pct": "0.00010531088034241177",
+      "daily_return_pct": "0.0002513167628035973"
+    },
+    {
+      "date": "2025-01-19",
+      "equity": "500.3763768756526551016282911",
+      "drawdown_pct": "0.00007582530261753148",
+      "daily_return_pct": "0.000029488683204068643"
+    },
+    {
+      "date": "2025-01-20",
+      "equity": "500.2812937670093568905642663",
+      "drawdown_pct": "0.000372193064716276",
+      "daily_return_pct": "-0.00019002317662755508"
+    },
+    {
+      "date": "2025-01-21",
+      "equity": "499.9029660543416342887976949",
+      "drawdown_pct": "0.002142419582682497",
+      "daily_return_pct": "-0.000756229979775972"
+    },
+    {
+      "date": "2025-01-21",
+      "equity": "499.9029660543416342887976949",
+      "drawdown_pct": "0.002142419582682497",
+      "daily_return_pct": "0.0"
+    }
+  ],
+  "config": {
+    "strategy_class": "",
+    "exchange": "bitget",
+    "pair": "BTC-USDT",
+    "resolution": "1m",
+    "initial_equity": "500",
+    "fill_model": "latency_aware",
+    "step_interval_s": 60,
+    "warmup_bars": 60,
+    "seed": 42
+  }
+}

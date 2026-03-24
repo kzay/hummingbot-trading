@@ -1,0 +1,1538 @@
+{
+  "config": {
+    "strategy_class": "",
+    "exchange": "bitget",
+    "pair": "BTC-USDT",
+    "resolution": "1m",
+    "initial_equity": "500",
+    "fill_model": "latency_aware",
+    "step_interval_s": 60,
+    "warmup_bars": 60,
+    "seed": 42
+  },
+  "total_return_pct": 14.970721996157096,
+  "cagr_pct": 78.3608055520304,
+  "sharpe_ratio": 3.217917778515905,
+  "sortino_ratio": 8.61029906294281,
+  "calmar_ratio": 28.1573397876341,
+  "max_drawdown_pct": 2.7829619610032985,
+  "max_drawdown_duration_days": 70,
+  "win_rate": 0.8571428571428571,
+  "profit_factor": 2.4312153703200687,
+  "avg_win_loss_ratio": 0.40520256172001146,
+  "total_fees": "0.1123664059731369066406393503",
+  "maker_fees": "0.1123664059731369066406393503",
+  "taker_fees": "0",
+  "funding_paid": "0",
+  "funding_received": "0",
+  "fee_drag_pct": 0.14986592228546666,
+  "maker_fill_ratio": 1.0,
+  "fill_count": 36,
+  "order_count": 191,
+  "fill_rate": 0.18848167539267016,
+  "avg_slippage_bps": 8.977763247107251,
+  "avg_mid_slippage_bps": 8.977763247107251,
+  "partial_fill_ratio": 0.0,
+  "total_notional_traded": "561.8320298656846",
+  "avg_daily_turnover": "6.384454884837325",
+  "turnover_ratio": 0.9928738210321048,
+  "edge_decay_curve": [
+    [
+      "2025-02-01",
+      5.607507740127623
+    ],
+    [
+      "2025-02-02",
+      5.572375475363309
+    ],
+    [
+      "2025-02-03",
+      5.570796174081554
+    ],
+    [
+      "2025-02-04",
+      5.677135100482359
+    ],
+    [
+      "2025-02-05",
+      6.3159037885550156
+    ],
+    [
+      "2025-02-06",
+      5.622137283858284
+    ],
+    [
+      "2025-02-07",
+      4.703717371608297
+    ],
+    [
+      "2025-02-08",
+      4.358533688917451
+    ],
+    [
+      "2025-02-09",
+      3.9722699215723147
+    ],
+    [
+      "2025-02-10",
+      3.8392752457053954
+    ],
+    [
+      "2025-02-11",
+      4.211455222385798
+    ],
+    [
+      "2025-02-12",
+      2.2912931007898165
+    ],
+    [
+      "2025-02-13",
+      0.8721658822599383
+    ],
+    [
+      "2025-02-14",
+      2.128616927913572
+    ],
+    [
+      "2025-02-15",
+      1.4119276619871348
+    ],
+    [
+      "2025-02-16",
+      1.0610956437334924
+    ],
+    [
+      "2025-02-17",
+      4.400280233676147
+    ],
+    [
+      "2025-02-18",
+      3.488074922742724
+    ],
+    [
+      "2025-02-19",
+      0.0
+    ],
+    [
+      "2025-02-20",
+      0.0
+    ],
+    [
+      "2025-02-21",
+      0.0
+    ],
+    [
+      "2025-02-22",
+      0.0
+    ],
+    [
+      "2025-02-23",
+      0.0
+    ],
+    [
+      "2025-02-24",
+      0.0
+    ],
+    [
+      "2025-02-25",
+      0.0
+    ],
+    [
+      "2025-02-26",
+      0.0
+    ],
+    [
+      "2025-02-27",
+      0.0
+    ],
+    [
+      "2025-02-28",
+      0.0
+    ],
+    [
+      "2025-03-01",
+      0.0
+    ],
+    [
+      "2025-03-02",
+      0.0
+    ],
+    [
+      "2025-03-03",
+      0.0
+    ],
+    [
+      "2025-03-04",
+      0.0
+    ],
+    [
+      "2025-03-05",
+      0.0
+    ],
+    [
+      "2025-03-06",
+      0.0
+    ],
+    [
+      "2025-03-07",
+      0.0
+    ],
+    [
+      "2025-03-08",
+      0.0
+    ],
+    [
+      "2025-03-09",
+      0.0
+    ],
+    [
+      "2025-03-10",
+      0.0
+    ],
+    [
+      "2025-03-11",
+      0.0
+    ],
+    [
+      "2025-03-12",
+      0.0
+    ],
+    [
+      "2025-03-13",
+      0.0
+    ],
+    [
+      "2025-03-14",
+      0.0
+    ],
+    [
+      "2025-03-15",
+      0.0
+    ],
+    [
+      "2025-03-16",
+      0.0
+    ],
+    [
+      "2025-03-17",
+      0.0
+    ],
+    [
+      "2025-03-18",
+      0.0
+    ],
+    [
+      "2025-03-19",
+      0.0
+    ],
+    [
+      "2025-03-20",
+      0.0
+    ],
+    [
+      "2025-03-21",
+      0.0
+    ],
+    [
+      "2025-03-22",
+      0.0
+    ],
+    [
+      "2025-03-23",
+      0.0
+    ],
+    [
+      "2025-03-24",
+      0.0
+    ],
+    [
+      "2025-03-25",
+      0.0
+    ],
+    [
+      "2025-03-26",
+      0.0
+    ],
+    [
+      "2025-03-27",
+      0.0
+    ],
+    [
+      "2025-03-28",
+      0.0
+    ],
+    [
+      "2025-03-29",
+      0.0
+    ],
+    [
+      "2025-03-30",
+      0.0
+    ],
+    [
+      "2025-03-30",
+      0.0
+    ]
+  ],
+  "regime_metrics": [
+    {
+      "regime_name": "neutral_low_vol",
+      "time_fraction": 1.0113636363636365,
+      "sharpe": 3.1999568014775326,
+      "max_drawdown_pct": 2.7710919835416403,
+      "fill_count": 19,
+      "net_edge_bps": 9.256874126279284,
+      "num_days": 89
+    }
+  ],
+  "spread_capture_efficiency": 375.16368408682547,
+  "theoretical_max_pnl": "0.1995544697917777720483031766",
+  "inventory_half_life_minutes": 6559.859547260302,
+  "equity_curve": [
+    {
+      "date": "2025-01-02",
+      "equity": "500.0104201157330029850781650",
+      "drawdown_pct": "0.0",
+      "daily_return_pct": "0.00002084023146600597",
+      "cumulative_return_pct": "0.00002084023146600597",
+      "position_notional": "5.972500320268180017068000000",
+      "num_fills": 1
+    },
+    {
+      "date": "2025-01-03",
+      "equity": "500.4267242709239246673004968",
+      "drawdown_pct": "0.000019792646316816814",
+      "daily_return_pct": "0.0008325909589935414",
+      "cumulative_return_pct": "0.0008534485418478493",
+      "position_notional": "3.198665381972175691128000000",
+      "num_fills": 8
+    },
+    {
+      "date": "2025-01-04",
+      "equity": "500.4453414663608440643987102",
+      "drawdown_pct": "0.00014472620163153113",
+      "daily_return_pct": "0.00003720264033469226",
+      "cumulative_return_pct": "0.0008906829327216881",
+      "position_notional": "8.444199147641731804541000000",
+      "num_fills": 7
+    },
+    {
+      "date": "2025-01-05",
+      "equity": "499.2209136026146122118913735",
+      "drawdown_pct": "0.003053088503324531",
+      "daily_return_pct": "-0.002446676514479126",
+      "cumulative_return_pct": "-0.0015581727947707755",
+      "position_notional": "-99.77295449072319110261073936",
+      "num_fills": 15
+    },
+    {
+      "date": "2025-01-06",
+      "equity": "492.6778094793184158112106096",
+      "drawdown_pct": "0.034531810011536546",
+      "daily_return_pct": "-0.013106630641889693",
+      "cumulative_return_pct": "-0.014644381041363168",
+      "position_notional": "-341.4445574337889690992333140",
+      "num_fills": 4
+    },
+    {
+      "date": "2025-01-07",
+      "equity": "502.0672093151531933189442898",
+      "drawdown_pct": "0.0314024073072682",
+      "daily_return_pct": "0.01905789068470096",
+      "cumulative_return_pct": "0.004134418630306387",
+      "position_notional": "-332.0551575979541915914996338",
+      "num_fills": 0
+    },
+    {
+      "date": "2025-01-08",
+      "equity": "515.5214830020863836058922688",
+      "drawdown_pct": "0.005446167061328415",
+      "daily_return_pct": "0.02679775423948827",
+      "cumulative_return_pct": "0.031042966004172768",
+      "position_notional": "-318.6008839110210013045516549",
+      "num_fills": 0
+    },
+    {
+      "date": "2025-01-09",
+      "equity": "519.8115370371154587366494356",
+      "drawdown_pct": "0.027404809925583334",
+      "daily_return_pct": "0.00832177547683636",
+      "cumulative_return_pct": "0.039623074074230914",
+      "position_notional": "-314.3108298759919261737944880",
+      "num_fills": 0
+    },
+    {
+      "date": "2025-01-10",
+      "equity": "524.7037946056405950198827948",
+      "drawdown_pct": "0.01825113433216732",
+      "daily_return_pct": "0.00941159866595231",
+      "cumulative_return_pct": "0.04940758921128119",
+      "position_notional": "-309.4185723074667898905611288",
+      "num_fills": 0
+    },
+    {
+      "date": "2025-01-11",
+      "equity": "526.3327163952796188024927531",
+      "drawdown_pct": "0.015203334534108577",
+      "daily_return_pct": "0.0031044597092409",
+      "cumulative_return_pct": "0.052665432790559234",
+      "position_notional": "-307.7896505178277661079511706",
+      "num_fills": 0
+    },
+    {
+      "date": "2025-01-12",
+      "equity": "522.1166455196768301545237022",
+      "drawdown_pct": "0.023091828656414525",
+      "daily_return_pct": "-0.008010277043915487",
+      "cumulative_return_pct": "0.04423329103935366",
+      "position_notional": "-312.0057213934305547559202215",
+      "num_fills": 0
+    },
+    {
+      "date": "2025-01-13",
+      "equity": "556.9738615428551978808707476",
+      "drawdown_pct": "0.03407824381407747",
+      "daily_return_pct": "0.0667613574903057",
+      "cumulative_return_pct": "0.1139477230857104",
+      "position_notional": "-387.3194634415326313867750449",
+      "num_fills": 1
+    },
+    {
+      "date": "2025-01-14",
+      "equity": "568.9535095571437978141274980",
+      "drawdown_pct": "0.03566707751789836",
+      "daily_return_pct": "0.021508456395250158",
+      "cumulative_return_pct": "0.1379070191142876",
+      "position_notional": "-375.3398154272440314535182945",
+      "num_fills": 0
+    },
+    {
+      "date": "2025-01-15",
+      "equity": "560.6184232634486675830777934",
+      "drawdown_pct": "0.0497944147954132",
+      "daily_return_pct": "-0.014649854783711431",
+      "cumulative_return_pct": "0.12123684652689734",
+      "position_notional": "-383.6749017209391616845679991",
+      "num_fills": 0
+    },
+    {
+      "date": "2025-01-16",
+      "equity": "565.7164310153147322272095077",
+      "drawdown_pct": "0.041153679424925704",
+      "daily_return_pct": "0.0090935430237732",
+      "cumulative_return_pct": "0.13143286203062945",
+      "position_notional": "-378.5768939690730970404362848",
+      "num_fills": 0
+    },
+    {
+      "date": "2025-01-17",
+      "equity": "568.1197775269087341308716015",
+      "drawdown_pct": "0.037080189893124456",
+      "daily_return_pct": "0.004248323682733797",
+      "cumulative_return_pct": "0.13623955505381746",
+      "position_notional": "-376.1735474574790951367741910",
+      "num_fills": 0
+    },
+    {
+      "date": "2025-01-18",
+      "equity": "553.1197498103752089570950975",
+      "drawdown_pct": "0.0625040959280067",
+      "daily_return_pct": "-0.02640293175821195",
+      "cumulative_return_pct": "0.10623949962075042",
+      "position_notional": "-391.1735751740126203105506950",
+      "num_fills": 0
+    },
+    {
+      "date": "2025-01-19",
+      "equity": "569.6456054386197429616962995",
+      "drawdown_pct": "0.03449402764157188",
+      "daily_return_pct": "0.029877536706852458",
+      "cumulative_return_pct": "0.13929121087723947",
+      "position_notional": "-374.6477195457680863059494930",
+      "num_fills": 0
+    },
+    {
+      "date": "2025-01-20",
+      "equity": "574.8655900630764680482336192",
+      "drawdown_pct": "0.02564655074995002",
+      "daily_return_pct": "0.009163565161601491",
+      "cumulative_return_pct": "0.14973118012615294",
+      "position_notional": "0",
+      "num_fills": 0
+    },
+    {
+      "date": "2025-01-21",
+      "equity": "574.8655900630764680482336192",
+      "drawdown_pct": "0.02564655074995002",
+      "daily_return_pct": "0.0",
+      "cumulative_return_pct": "0.14973118012615294",
+      "position_notional": "0",
+      "num_fills": 0
+    },
+    {
+      "date": "2025-01-22",
+      "equity": "574.8655900630764680482336192",
+      "drawdown_pct": "0.02564655074995002",
+      "daily_return_pct": "0.0",
+      "cumulative_return_pct": "0.14973118012615294",
+      "position_notional": "0",
+      "num_fills": 0
+    },
+    {
+      "date": "2025-01-23",
+      "equity": "574.8655900630764680482336192",
+      "drawdown_pct": "0.02564655074995002",
+      "daily_return_pct": "0.0",
+      "cumulative_return_pct": "0.14973118012615294",
+      "position_notional": "0",
+      "num_fills": 0
+    },
+    {
+      "date": "2025-01-24",
+      "equity": "574.8655900630764680482336192",
+      "drawdown_pct": "0.02564655074995002",
+      "daily_return_pct": "0.0",
+      "cumulative_return_pct": "0.14973118012615294",
+      "position_notional": "0",
+      "num_fills": 0
+    },
+    {
+      "date": "2025-01-25",
+      "equity": "574.8655900630764680482336192",
+      "drawdown_pct": "0.02564655074995002",
+      "daily_return_pct": "0.0",
+      "cumulative_return_pct": "0.14973118012615294",
+      "position_notional": "0",
+      "num_fills": 0
+    },
+    {
+      "date": "2025-01-26",
+      "equity": "574.8655900630764680482336192",
+      "drawdown_pct": "0.02564655074995002",
+      "daily_return_pct": "0.0",
+      "cumulative_return_pct": "0.14973118012615294",
+      "position_notional": "0",
+      "num_fills": 0
+    },
+    {
+      "date": "2025-01-27",
+      "equity": "574.8655900630764680482336192",
+      "drawdown_pct": "0.02564655074995002",
+      "daily_return_pct": "0.0",
+      "cumulative_return_pct": "0.14973118012615294",
+      "position_notional": "0",
+      "num_fills": 0
+    },
+    {
+      "date": "2025-01-28",
+      "equity": "574.8655900630764680482336192",
+      "drawdown_pct": "0.02564655074995002",
+      "daily_return_pct": "0.0",
+      "cumulative_return_pct": "0.14973118012615294",
+      "position_notional": "0",
+      "num_fills": 0
+    },
+    {
+      "date": "2025-01-29",
+      "equity": "574.8655900630764680482336192",
+      "drawdown_pct": "0.02564655074995002",
+      "daily_return_pct": "0.0",
+      "cumulative_return_pct": "0.14973118012615294",
+      "position_notional": "0",
+      "num_fills": 0
+    },
+    {
+      "date": "2025-01-30",
+      "equity": "574.8655900630764680482336192",
+      "drawdown_pct": "0.02564655074995002",
+      "daily_return_pct": "0.0",
+      "cumulative_return_pct": "0.14973118012615294",
+      "position_notional": "0",
+      "num_fills": 0
+    },
+    {
+      "date": "2025-01-31",
+      "equity": "574.8655900630764680482336192",
+      "drawdown_pct": "0.02564655074995002",
+      "daily_return_pct": "0.0",
+      "cumulative_return_pct": "0.14973118012615294",
+      "position_notional": "0",
+      "num_fills": 0
+    },
+    {
+      "date": "2025-02-01",
+      "equity": "574.8655900630764680482336192",
+      "drawdown_pct": "0.02564655074995002",
+      "daily_return_pct": "0.0",
+      "cumulative_return_pct": "0.14973118012615294",
+      "position_notional": "0",
+      "num_fills": 0
+    },
+    {
+      "date": "2025-02-02",
+      "equity": "574.8655900630764680482336192",
+      "drawdown_pct": "0.02564655074995002",
+      "daily_return_pct": "0.0",
+      "cumulative_return_pct": "0.14973118012615294",
+      "position_notional": "0",
+      "num_fills": 0
+    },
+    {
+      "date": "2025-02-03",
+      "equity": "574.8655900630764680482336192",
+      "drawdown_pct": "0.02564655074995002",
+      "daily_return_pct": "0.0",
+      "cumulative_return_pct": "0.14973118012615294",
+      "position_notional": "0",
+      "num_fills": 0
+    },
+    {
+      "date": "2025-02-04",
+      "equity": "574.8655900630764680482336192",
+      "drawdown_pct": "0.02564655074995002",
+      "daily_return_pct": "0.0",
+      "cumulative_return_pct": "0.14973118012615294",
+      "position_notional": "0",
+      "num_fills": 0
+    },
+    {
+      "date": "2025-02-05",
+      "equity": "574.8655900630764680482336192",
+      "drawdown_pct": "0.02564655074995002",
+      "daily_return_pct": "0.0",
+      "cumulative_return_pct": "0.14973118012615294",
+      "position_notional": "0",
+      "num_fills": 0
+    },
+    {
+      "date": "2025-02-06",
+      "equity": "574.8655900630764680482336192",
+      "drawdown_pct": "0.02564655074995002",
+      "daily_return_pct": "0.0",
+      "cumulative_return_pct": "0.14973118012615294",
+      "position_notional": "0",
+      "num_fills": 0
+    },
+    {
+      "date": "2025-02-07",
+      "equity": "574.8655900630764680482336192",
+      "drawdown_pct": "0.02564655074995002",
+      "daily_return_pct": "0.0",
+      "cumulative_return_pct": "0.14973118012615294",
+      "position_notional": "0",
+      "num_fills": 0
+    },
+    {
+      "date": "2025-02-08",
+      "equity": "574.8655900630764680482336192",
+      "drawdown_pct": "0.02564655074995002",
+      "daily_return_pct": "0.0",
+      "cumulative_return_pct": "0.14973118012615294",
+      "position_notional": "0",
+      "num_fills": 0
+    },
+    {
+      "date": "2025-02-09",
+      "equity": "574.8655900630764680482336192",
+      "drawdown_pct": "0.02564655074995002",
+      "daily_return_pct": "0.0",
+      "cumulative_return_pct": "0.14973118012615294",
+      "position_notional": "0",
+      "num_fills": 0
+    },
+    {
+      "date": "2025-02-10",
+      "equity": "574.8655900630764680482336192",
+      "drawdown_pct": "0.02564655074995002",
+      "daily_return_pct": "0.0",
+      "cumulative_return_pct": "0.14973118012615294",
+      "position_notional": "0",
+      "num_fills": 0
+    },
+    {
+      "date": "2025-02-11",
+      "equity": "574.8655900630764680482336192",
+      "drawdown_pct": "0.02564655074995002",
+      "daily_return_pct": "0.0",
+      "cumulative_return_pct": "0.14973118012615294",
+      "position_notional": "0",
+      "num_fills": 0
+    },
+    {
+      "date": "2025-02-12",
+      "equity": "574.8655900630764680482336192",
+      "drawdown_pct": "0.02564655074995002",
+      "daily_return_pct": "0.0",
+      "cumulative_return_pct": "0.14973118012615294",
+      "position_notional": "0",
+      "num_fills": 0
+    },
+    {
+      "date": "2025-02-13",
+      "equity": "574.8655900630764680482336192",
+      "drawdown_pct": "0.02564655074995002",
+      "daily_return_pct": "0.0",
+      "cumulative_return_pct": "0.14973118012615294",
+      "position_notional": "0",
+      "num_fills": 0
+    },
+    {
+      "date": "2025-02-14",
+      "equity": "574.8655900630764680482336192",
+      "drawdown_pct": "0.02564655074995002",
+      "daily_return_pct": "0.0",
+      "cumulative_return_pct": "0.14973118012615294",
+      "position_notional": "0",
+      "num_fills": 0
+    },
+    {
+      "date": "2025-02-15",
+      "equity": "574.8655900630764680482336192",
+      "drawdown_pct": "0.02564655074995002",
+      "daily_return_pct": "0.0",
+      "cumulative_return_pct": "0.14973118012615294",
+      "position_notional": "0",
+      "num_fills": 0
+    },
+    {
+      "date": "2025-02-16",
+      "equity": "574.8655900630764680482336192",
+      "drawdown_pct": "0.02564655074995002",
+      "daily_return_pct": "0.0",
+      "cumulative_return_pct": "0.14973118012615294",
+      "position_notional": "0",
+      "num_fills": 0
+    },
+    {
+      "date": "2025-02-17",
+      "equity": "574.8655900630764680482336192",
+      "drawdown_pct": "0.02564655074995002",
+      "daily_return_pct": "0.0",
+      "cumulative_return_pct": "0.14973118012615294",
+      "position_notional": "0",
+      "num_fills": 0
+    },
+    {
+      "date": "2025-02-18",
+      "equity": "574.8655900630764680482336192",
+      "drawdown_pct": "0.02564655074995002",
+      "daily_return_pct": "0.0",
+      "cumulative_return_pct": "0.14973118012615294",
+      "position_notional": "0",
+      "num_fills": 0
+    },
+    {
+      "date": "2025-02-19",
+      "equity": "574.8655900630764680482336192",
+      "drawdown_pct": "0.02564655074995002",
+      "daily_return_pct": "0.0",
+      "cumulative_return_pct": "0.14973118012615294",
+      "position_notional": "0",
+      "num_fills": 0
+    },
+    {
+      "date": "2025-02-20",
+      "equity": "574.8655900630764680482336192",
+      "drawdown_pct": "0.02564655074995002",
+      "daily_return_pct": "0.0",
+      "cumulative_return_pct": "0.14973118012615294",
+      "position_notional": "0",
+      "num_fills": 0
+    },
+    {
+      "date": "2025-02-21",
+      "equity": "574.8655900630764680482336192",
+      "drawdown_pct": "0.02564655074995002",
+      "daily_return_pct": "0.0",
+      "cumulative_return_pct": "0.14973118012615294",
+      "position_notional": "0",
+      "num_fills": 0
+    },
+    {
+      "date": "2025-02-22",
+      "equity": "574.8655900630764680482336192",
+      "drawdown_pct": "0.02564655074995002",
+      "daily_return_pct": "0.0",
+      "cumulative_return_pct": "0.14973118012615294",
+      "position_notional": "0",
+      "num_fills": 0
+    },
+    {
+      "date": "2025-02-23",
+      "equity": "574.8655900630764680482336192",
+      "drawdown_pct": "0.02564655074995002",
+      "daily_return_pct": "0.0",
+      "cumulative_return_pct": "0.14973118012615294",
+      "position_notional": "0",
+      "num_fills": 0
+    },
+    {
+      "date": "2025-02-24",
+      "equity": "574.8655900630764680482336192",
+      "drawdown_pct": "0.02564655074995002",
+      "daily_return_pct": "0.0",
+      "cumulative_return_pct": "0.14973118012615294",
+      "position_notional": "0",
+      "num_fills": 0
+    },
+    {
+      "date": "2025-02-25",
+      "equity": "574.8655900630764680482336192",
+      "drawdown_pct": "0.02564655074995002",
+      "daily_return_pct": "0.0",
+      "cumulative_return_pct": "0.14973118012615294",
+      "position_notional": "0",
+      "num_fills": 0
+    },
+    {
+      "date": "2025-02-26",
+      "equity": "574.8655900630764680482336192",
+      "drawdown_pct": "0.02564655074995002",
+      "daily_return_pct": "0.0",
+      "cumulative_return_pct": "0.14973118012615294",
+      "position_notional": "0",
+      "num_fills": 0
+    },
+    {
+      "date": "2025-02-27",
+      "equity": "574.8655900630764680482336192",
+      "drawdown_pct": "0.02564655074995002",
+      "daily_return_pct": "0.0",
+      "cumulative_return_pct": "0.14973118012615294",
+      "position_notional": "0",
+      "num_fills": 0
+    },
+    {
+      "date": "2025-02-28",
+      "equity": "574.8655900630764680482336192",
+      "drawdown_pct": "0.02564655074995002",
+      "daily_return_pct": "0.0",
+      "cumulative_return_pct": "0.14973118012615294",
+      "position_notional": "0",
+      "num_fills": 0
+    },
+    {
+      "date": "2025-03-01",
+      "equity": "574.8655900630764680482336192",
+      "drawdown_pct": "0.02564655074995002",
+      "daily_return_pct": "0.0",
+      "cumulative_return_pct": "0.14973118012615294",
+      "position_notional": "0",
+      "num_fills": 0
+    },
+    {
+      "date": "2025-03-02",
+      "equity": "574.8655900630764680482336192",
+      "drawdown_pct": "0.02564655074995002",
+      "daily_return_pct": "0.0",
+      "cumulative_return_pct": "0.14973118012615294",
+      "position_notional": "0",
+      "num_fills": 0
+    },
+    {
+      "date": "2025-03-03",
+      "equity": "574.8655900630764680482336192",
+      "drawdown_pct": "0.02564655074995002",
+      "daily_return_pct": "0.0",
+      "cumulative_return_pct": "0.14973118012615294",
+      "position_notional": "0",
+      "num_fills": 0
+    },
+    {
+      "date": "2025-03-04",
+      "equity": "574.8655900630764680482336192",
+      "drawdown_pct": "0.02564655074995002",
+      "daily_return_pct": "0.0",
+      "cumulative_return_pct": "0.14973118012615294",
+      "position_notional": "0",
+      "num_fills": 0
+    },
+    {
+      "date": "2025-03-05",
+      "equity": "574.8655900630764680482336192",
+      "drawdown_pct": "0.02564655074995002",
+      "daily_return_pct": "0.0",
+      "cumulative_return_pct": "0.14973118012615294",
+      "position_notional": "0",
+      "num_fills": 0
+    },
+    {
+      "date": "2025-03-06",
+      "equity": "574.8655900630764680482336192",
+      "drawdown_pct": "0.02564655074995002",
+      "daily_return_pct": "0.0",
+      "cumulative_return_pct": "0.14973118012615294",
+      "position_notional": "0",
+      "num_fills": 0
+    },
+    {
+      "date": "2025-03-07",
+      "equity": "574.8655900630764680482336192",
+      "drawdown_pct": "0.02564655074995002",
+      "daily_return_pct": "0.0",
+      "cumulative_return_pct": "0.14973118012615294",
+      "position_notional": "0",
+      "num_fills": 0
+    },
+    {
+      "date": "2025-03-08",
+      "equity": "574.8655900630764680482336192",
+      "drawdown_pct": "0.02564655074995002",
+      "daily_return_pct": "0.0",
+      "cumulative_return_pct": "0.14973118012615294",
+      "position_notional": "0",
+      "num_fills": 0
+    },
+    {
+      "date": "2025-03-09",
+      "equity": "574.8655900630764680482336192",
+      "drawdown_pct": "0.02564655074995002",
+      "daily_return_pct": "0.0",
+      "cumulative_return_pct": "0.14973118012615294",
+      "position_notional": "0",
+      "num_fills": 0
+    },
+    {
+      "date": "2025-03-10",
+      "equity": "574.8655900630764680482336192",
+      "drawdown_pct": "0.02564655074995002",
+      "daily_return_pct": "0.0",
+      "cumulative_return_pct": "0.14973118012615294",
+      "position_notional": "0",
+      "num_fills": 0
+    },
+    {
+      "date": "2025-03-11",
+      "equity": "574.8655900630764680482336192",
+      "drawdown_pct": "0.02564655074995002",
+      "daily_return_pct": "0.0",
+      "cumulative_return_pct": "0.14973118012615294",
+      "position_notional": "0",
+      "num_fills": 0
+    },
+    {
+      "date": "2025-03-12",
+      "equity": "574.8655900630764680482336192",
+      "drawdown_pct": "0.02564655074995002",
+      "daily_return_pct": "0.0",
+      "cumulative_return_pct": "0.14973118012615294",
+      "position_notional": "0",
+      "num_fills": 0
+    },
+    {
+      "date": "2025-03-13",
+      "equity": "574.8655900630764680482336192",
+      "drawdown_pct": "0.02564655074995002",
+      "daily_return_pct": "0.0",
+      "cumulative_return_pct": "0.14973118012615294",
+      "position_notional": "0",
+      "num_fills": 0
+    },
+    {
+      "date": "2025-03-14",
+      "equity": "574.8655900630764680482336192",
+      "drawdown_pct": "0.02564655074995002",
+      "daily_return_pct": "0.0",
+      "cumulative_return_pct": "0.14973118012615294",
+      "position_notional": "0",
+      "num_fills": 0
+    },
+    {
+      "date": "2025-03-15",
+      "equity": "574.8655900630764680482336192",
+      "drawdown_pct": "0.02564655074995002",
+      "daily_return_pct": "0.0",
+      "cumulative_return_pct": "0.14973118012615294",
+      "position_notional": "0",
+      "num_fills": 0
+    },
+    {
+      "date": "2025-03-16",
+      "equity": "574.8655900630764680482336192",
+      "drawdown_pct": "0.02564655074995002",
+      "daily_return_pct": "0.0",
+      "cumulative_return_pct": "0.14973118012615294",
+      "position_notional": "0",
+      "num_fills": 0
+    },
+    {
+      "date": "2025-03-17",
+      "equity": "574.8655900630764680482336192",
+      "drawdown_pct": "0.02564655074995002",
+      "daily_return_pct": "0.0",
+      "cumulative_return_pct": "0.14973118012615294",
+      "position_notional": "0",
+      "num_fills": 0
+    },
+    {
+      "date": "2025-03-18",
+      "equity": "574.8655900630764680482336192",
+      "drawdown_pct": "0.02564655074995002",
+      "daily_return_pct": "0.0",
+      "cumulative_return_pct": "0.14973118012615294",
+      "position_notional": "0",
+      "num_fills": 0
+    },
+    {
+      "date": "2025-03-19",
+      "equity": "574.8655900630764680482336192",
+      "drawdown_pct": "0.02564655074995002",
+      "daily_return_pct": "0.0",
+      "cumulative_return_pct": "0.14973118012615294",
+      "position_notional": "0",
+      "num_fills": 0
+    },
+    {
+      "date": "2025-03-20",
+      "equity": "574.8655900630764680482336192",
+      "drawdown_pct": "0.02564655074995002",
+      "daily_return_pct": "0.0",
+      "cumulative_return_pct": "0.14973118012615294",
+      "position_notional": "0",
+      "num_fills": 0
+    },
+    {
+      "date": "2025-03-21",
+      "equity": "574.8655900630764680482336192",
+      "drawdown_pct": "0.02564655074995002",
+      "daily_return_pct": "0.0",
+      "cumulative_return_pct": "0.14973118012615294",
+      "position_notional": "0",
+      "num_fills": 0
+    },
+    {
+      "date": "2025-03-22",
+      "equity": "574.8655900630764680482336192",
+      "drawdown_pct": "0.02564655074995002",
+      "daily_return_pct": "0.0",
+      "cumulative_return_pct": "0.14973118012615294",
+      "position_notional": "0",
+      "num_fills": 0
+    },
+    {
+      "date": "2025-03-23",
+      "equity": "574.8655900630764680482336192",
+      "drawdown_pct": "0.02564655074995002",
+      "daily_return_pct": "0.0",
+      "cumulative_return_pct": "0.14973118012615294",
+      "position_notional": "0",
+      "num_fills": 0
+    },
+    {
+      "date": "2025-03-24",
+      "equity": "574.8655900630764680482336192",
+      "drawdown_pct": "0.02564655074995002",
+      "daily_return_pct": "0.0",
+      "cumulative_return_pct": "0.14973118012615294",
+      "position_notional": "0",
+      "num_fills": 0
+    },
+    {
+      "date": "2025-03-25",
+      "equity": "574.8655900630764680482336192",
+      "drawdown_pct": "0.02564655074995002",
+      "daily_return_pct": "0.0",
+      "cumulative_return_pct": "0.14973118012615294",
+      "position_notional": "0",
+      "num_fills": 0
+    },
+    {
+      "date": "2025-03-26",
+      "equity": "574.8655900630764680482336192",
+      "drawdown_pct": "0.02564655074995002",
+      "daily_return_pct": "0.0",
+      "cumulative_return_pct": "0.14973118012615294",
+      "position_notional": "0",
+      "num_fills": 0
+    },
+    {
+      "date": "2025-03-27",
+      "equity": "574.8655900630764680482336192",
+      "drawdown_pct": "0.02564655074995002",
+      "daily_return_pct": "0.0",
+      "cumulative_return_pct": "0.14973118012615294",
+      "position_notional": "0",
+      "num_fills": 0
+    },
+    {
+      "date": "2025-03-28",
+      "equity": "574.8655900630764680482336192",
+      "drawdown_pct": "0.02564655074995002",
+      "daily_return_pct": "0.0",
+      "cumulative_return_pct": "0.14973118012615294",
+      "position_notional": "0",
+      "num_fills": 0
+    },
+    {
+      "date": "2025-03-29",
+      "equity": "574.8655900630764680482336192",
+      "drawdown_pct": "0.02564655074995002",
+      "daily_return_pct": "0.0",
+      "cumulative_return_pct": "0.14973118012615294",
+      "position_notional": "0",
+      "num_fills": 0
+    },
+    {
+      "date": "2025-03-30",
+      "equity": "574.8655900630764680482336192",
+      "drawdown_pct": "0.02564655074995002",
+      "daily_return_pct": "0.0",
+      "cumulative_return_pct": "0.14973118012615294",
+      "position_notional": "0",
+      "num_fills": 0
+    },
+    {
+      "date": "2025-03-30",
+      "equity": "574.8655900630764680482336192",
+      "drawdown_pct": "0.02564655074995002",
+      "daily_return_pct": "0.0",
+      "cumulative_return_pct": "0.14973118012615294",
+      "position_notional": "0",
+      "num_fills": 0
+    }
+  ],
+  "fills": [
+    {
+      "timestamp_ns": 1735775700000000000,
+      "order_id": "paper_v2_5",
+      "side": "buy",
+      "fill_price": "97321.41",
+      "fill_quantity": "0.000061249503340835188",
+      "fee": "0.001192177605385958214755016",
+      "is_maker": true,
+      "slippage_bps": "7.116548520239130837143015788",
+      "mid_slippage_bps": "7.116548520239130837143015788",
+      "source_bot": "backtest"
+    },
+    {
+      "timestamp_ns": 1735776120000000000,
+      "order_id": "paper_v2_7",
+      "side": "sell",
+      "fill_price": "97387.70",
+      "fill_quantity": "0.000017085805360664924",
+      "fee": "0.000332789457344565483806960",
+      "is_maker": true,
+      "slippage_bps": "11.51794871794871794871794872",
+      "mid_slippage_bps": "11.51794871794871794871794872",
+      "source_bot": "backtest"
+    },
+    {
+      "timestamp_ns": 1735784460000000000,
+      "order_id": "paper_v2_12",
+      "side": "sell",
+      "fill_price": "98213.10",
+      "fill_quantity": "0.000016857517877870454",
+      "fee": "0.000331125817818215737149480",
+      "is_maker": true,
+      "slippage_bps": "3.745550886056881482831025782",
+      "mid_slippage_bps": "3.745550886056881482831025782",
+      "source_bot": "backtest"
+    },
+    {
+      "timestamp_ns": 1735826520000000000,
+      "order_id": "paper_v2_17",
+      "side": "sell",
+      "fill_price": "98954.00",
+      "fill_quantity": "0.00005314590364222517",
+      "fee": "0.00105179994980254989443600",
+      "is_maker": true,
+      "slippage_bps": "3.323672122270724712057858161",
+      "mid_slippage_bps": "3.323672122270724712057858161",
+      "source_bot": "backtest"
+    },
+    {
+      "timestamp_ns": 1735829280000000000,
+      "order_id": "paper_v2_19",
+      "side": "sell",
+      "fill_price": "99234.30",
+      "fill_quantity": "0.00007166013196744786",
+      "fee": "0.00142222860673946223471960",
+      "is_maker": true,
+      "slippage_bps": "2.871166237502871166237502871",
+      "mid_slippage_bps": "2.871166237502871166237502871",
+      "source_bot": "backtest"
+    },
+    {
+      "timestamp_ns": 1735848900000000000,
+      "order_id": "paper_v2_20",
+      "side": "sell",
+      "fill_price": "96532.38",
+      "fill_quantity": "0.00012773951529835174",
+      "fee": "0.00246619988635926070786824",
+      "is_maker": true,
+      "slippage_bps": "8.737610850286906624934793949",
+      "mid_slippage_bps": "8.737610850286906624934793949",
+      "source_bot": "backtest"
+    },
+    {
+      "timestamp_ns": 1735849680000000000,
+      "order_id": "paper_v2_21",
+      "side": "buy",
+      "fill_price": "96356.30",
+      "fill_quantity": "0.00016400983010894936",
+      "fee": "0.00316067607858539144339360",
+      "is_maker": true,
+      "slippage_bps": "8.631685661222437812392233768",
+      "mid_slippage_bps": "8.631685661222437812392233768",
+      "source_bot": "backtest"
+    },
+    {
+      "timestamp_ns": 1735858320000000000,
+      "order_id": "paper_v2_30",
+      "side": "buy",
+      "fill_price": "95074.80",
+      "fill_quantity": "0.00002177014637834248",
+      "fee": "0.00041395846257832712350080",
+      "is_maker": true,
+      "slippage_bps": "14.98959787217233297342848866",
+      "mid_slippage_bps": "14.98959787217233297342848866",
+      "source_bot": "backtest"
+    },
+    {
+      "timestamp_ns": 1735860420000000000,
+      "order_id": "paper_v2_32",
+      "side": "buy",
+      "fill_price": "95086.20",
+      "fill_quantity": "0.00007305832649770964",
+      "fee": "0.00138936772900530367419360",
+      "is_maker": true,
+      "slippage_bps": "3.808521830615465544450289321",
+      "mid_slippage_bps": "3.808521830615465544450289321",
+      "source_bot": "backtest"
+    },
+    {
+      "timestamp_ns": 1735869240000000000,
+      "order_id": "paper_v2_34",
+      "side": "sell",
+      "fill_price": "95485.00",
+      "fill_quantity": "0.000035257157452147503",
+      "fee": "0.000673305935863660864791000",
+      "is_maker": true,
+      "slippage_bps": "31.98616994845048720448808557",
+      "mid_slippage_bps": "31.98616994845048720448808557",
+      "source_bot": "backtest"
+    },
+    {
+      "timestamp_ns": 1735896240000000000,
+      "order_id": "paper_v2_47",
+      "side": "buy",
+      "fill_price": "94228.74",
+      "fill_quantity": "0.000044140200117362072",
+      "fee": "0.000831855088081376033669856",
+      "is_maker": true,
+      "slippage_bps": "5.802019875953154848307549528",
+      "mid_slippage_bps": "5.802019875953154848307549528",
+      "source_bot": "backtest"
+    },
+    {
+      "timestamp_ns": 1735917720000000000,
+      "order_id": "paper_v2_51",
+      "side": "sell",
+      "fill_price": "94531.90",
+      "fill_quantity": "0.000040538252527905894",
+      "fee": "0.000766431606828549436203720",
+      "is_maker": true,
+      "slippage_bps": "4.546660900513772681758056313",
+      "mid_slippage_bps": "4.546660900513772681758056313",
+      "source_bot": "backtest"
+    },
+    {
+      "timestamp_ns": 1735934340000000000,
+      "order_id": "paper_v2_53",
+      "side": "sell",
+      "fill_price": "94989.90",
+      "fill_quantity": "0.00003368844754343793",
+      "fee": "0.00064001245266128292538140",
+      "is_maker": true,
+      "slippage_bps": "7.311218038405460164907415784",
+      "mid_slippage_bps": "7.311218038405460164907415784",
+      "source_bot": "backtest"
+    },
+    {
+      "timestamp_ns": 1735943940000000000,
+      "order_id": "paper_v2_56",
+      "side": "buy",
+      "fill_price": "93039.00",
+      "fill_quantity": "0.00002643817456333499",
+      "fee": "0.00049195626463962482692200",
+      "is_maker": true,
+      "slippage_bps": "4.623854789453309819777194718",
+      "mid_slippage_bps": "4.623854789453309819777194718",
+      "source_bot": "backtest"
+    },
+    {
+      "timestamp_ns": 1735944120000000000,
+      "order_id": "paper_v2_55",
+      "side": "buy",
+      "fill_price": "92974.70",
+      "fill_quantity": "0.0000597999831897865",
+      "fee": "0.0011119770994150885803100",
+      "is_maker": true,
+      "slippage_bps": "4.400982204536992999317793957",
+      "mid_slippage_bps": "4.400982204536992999317793957",
+      "source_bot": "backtest"
+    },
+    {
+      "timestamp_ns": 1735947840000000000,
+      "order_id": "paper_v2_61",
+      "side": "buy",
+      "fill_price": "92809.10",
+      "fill_quantity": "0.00003708171336413573",
+      "fee": "0.00068830408875668187582860",
+      "is_maker": true,
+      "slippage_bps": "20.56822279758061555670243342",
+      "mid_slippage_bps": "20.56822279758061555670243342",
+      "source_bot": "backtest"
+    },
+    {
+      "timestamp_ns": 1735958400000000000,
+      "order_id": "paper_v2_70",
+      "side": "sell",
+      "fill_price": "95055.60",
+      "fill_quantity": "0.0000810036800034538",
+      "fee": "0.0015399706809872606062560",
+      "is_maker": true,
+      "slippage_bps": "12.90208702814924394610541888",
+      "mid_slippage_bps": "12.90208702814924394610541888",
+      "source_bot": "backtest"
+    },
+    {
+      "timestamp_ns": 1735968360000000000,
+      "order_id": "paper_v2_78",
+      "side": "sell",
+      "fill_price": "96458.90",
+      "fill_quantity": "0.00004269423307424649",
+      "fee": "0.00082364775173708695085220",
+      "is_maker": true,
+      "slippage_bps": "12.31131792192408607361111974",
+      "mid_slippage_bps": "12.31131792192408607361111974",
+      "source_bot": "backtest"
+    },
+    {
+      "timestamp_ns": 1735969080000000000,
+      "order_id": "paper_v2_80",
+      "side": "sell",
+      "fill_price": "96637.20",
+      "fill_quantity": "0.00005429576939142056",
+      "fee": "0.00104939822516651738816640",
+      "is_maker": true,
+      "slippage_bps": "15.37412435682846692703490174",
+      "mid_slippage_bps": "15.37412435682846692703490174",
+      "source_bot": "backtest"
+    },
+    {
+      "timestamp_ns": 1735974900000000000,
+      "order_id": "paper_v2_83",
+      "side": "sell",
+      "fill_price": "96482.33",
+      "fill_quantity": "0.00015569520370434678",
+      "fee": "0.00300436720464400169247948",
+      "is_maker": true,
+      "slippage_bps": "5.828756580269446625494879768",
+      "mid_slippage_bps": "5.828756580269446625494879768",
+      "source_bot": "backtest"
+    },
+    {
+      "timestamp_ns": 1735975920000000000,
+      "order_id": "paper_v2_84",
+      "side": "buy",
+      "fill_price": "96584.64",
+      "fill_quantity": "0.00008482763245465772",
+      "fee": "0.00163860926853708644188416",
+      "is_maker": true,
+      "slippage_bps": "2.696807948748221287384034151",
+      "mid_slippage_bps": "2.696807948748221287384034151",
+      "source_bot": "backtest"
+    },
+    {
+      "timestamp_ns": 1735988700000000000,
+      "order_id": "paper_v2_87",
+      "side": "sell",
+      "fill_price": "97049.20",
+      "fill_quantity": "0.00002267543912454614",
+      "fee": "0.00044012664533718065001760",
+      "is_maker": true,
+      "slippage_bps": "13.82949386522005770520952095",
+      "mid_slippage_bps": "13.82949386522005770520952095",
+      "source_bot": "backtest"
+    },
+    {
+      "timestamp_ns": 1736004600000000000,
+      "order_id": "paper_v2_93",
+      "side": "sell",
+      "fill_price": "100483.50",
+      "fill_quantity": "0.00008472849661680677",
+      "fee": "0.00170276317795898061465900",
+      "is_maker": true,
+      "slippage_bps": "3.283043082478995985733685514",
+      "mid_slippage_bps": "3.283043082478995985733685514",
+      "source_bot": "backtest"
+    },
+    {
+      "timestamp_ns": 1736013900000000000,
+      "order_id": "paper_v2_98",
+      "side": "sell",
+      "fill_price": "102450.00",
+      "fill_quantity": "0.00006271972583186023",
+      "fee": "0.00128512718229481611270000",
+      "is_maker": true,
+      "slippage_bps": "9.653921539946757159991808794",
+      "mid_slippage_bps": "9.653921539946757159991808794",
+      "source_bot": "backtest"
+    },
+    {
+      "timestamp_ns": 1736015280000000000,
+      "order_id": "paper_v2_101",
+      "side": "sell",
+      "fill_price": "102628.50",
+      "fill_quantity": "0.00006842595645513405",
+      "fee": "0.00140449065441114497008500",
+      "is_maker": true,
+      "slippage_bps": "3.574726392195213178370080612",
+      "mid_slippage_bps": "3.574726392195213178370080612",
+      "source_bot": "backtest"
+    },
+    {
+      "timestamp_ns": 1736015580000000000,
+      "order_id": "paper_v2_101",
+      "side": "sell",
+      "fill_price": "102628.50",
+      "fill_quantity": "0.00006369590338460967462502985332",
+      "fee": "0.001307403004101482798450975260",
+      "is_maker": true,
+      "slippage_bps": "22.73911555631601051501812130",
+      "mid_slippage_bps": "22.73911555631601051501812130",
+      "source_bot": "backtest"
+    },
+    {
+      "timestamp_ns": 1736015760000000000,
+      "order_id": "paper_v2_101",
+      "side": "sell",
+      "fill_price": "102628.50",
+      "fill_quantity": "0.00009674467158050531166350219499",
+      "fee": "0.001985752105459977875611547004",
+      "is_maker": true,
+      "slippage_bps": "22.91370564297394039908928471",
+      "mid_slippage_bps": "22.91370564297394039908928471",
+      "source_bot": "backtest"
+    },
+    {
+      "timestamp_ns": 1736016360000000000,
+      "order_id": "paper_v2_103",
+      "side": "sell",
+      "fill_price": "102792.00",
+      "fill_quantity": "0.0002637826605418690",
+      "fee": "0.0054229494484839596496000",
+      "is_maker": true,
+      "slippage_bps": "3.316278649097845780400112423",
+      "mid_slippage_bps": "3.316278649097845780400112423",
+      "source_bot": "backtest"
+    },
+    {
+      "timestamp_ns": 1736016540000000000,
+      "order_id": "paper_v2_103",
+      "side": "sell",
+      "fill_price": "102792.00",
+      "fill_quantity": "0.00003865312190610454930837601162",
+      "fee": "0.0007946463413944597665013173972",
+      "is_maker": true,
+      "slippage_bps": "8.349703872260223041100177978",
+      "mid_slippage_bps": "8.349703872260223041100177978",
+      "source_bot": "backtest"
+    },
+    {
+      "timestamp_ns": 1736021940000000000,
+      "order_id": "paper_v2_103",
+      "side": "sell",
+      "fill_price": "102792.00",
+      "fill_quantity": "0.0001510589282617441828639319333",
+      "fee": "0.003105529870776241608989858258",
+      "is_maker": true,
+      "slippage_bps": "13.69823088805339395529130600",
+      "mid_slippage_bps": "13.69823088805339395529130600",
+      "source_bot": "backtest"
+    },
+    {
+      "timestamp_ns": 1736024760000000000,
+      "order_id": "paper_v2_104",
+      "side": "buy",
+      "fill_price": "103773.91",
+      "fill_quantity": "0.00003968975258557370",
+      "fee": "0.00082375216254751848843340",
+      "is_maker": true,
+      "slippage_bps": "8.488135802457228996420921263",
+      "mid_slippage_bps": "8.488135802457228996420921263",
+      "source_bot": "backtest"
+    },
+    {
+      "timestamp_ns": 1736038020000000000,
+      "order_id": "paper_v2_108",
+      "side": "sell",
+      "fill_price": "103926.50",
+      "fill_quantity": "0.00048137626390181463",
+      "fee": "0.01000555005807838762893900",
+      "is_maker": true,
+      "slippage_bps": "3.222393228164678722585609850",
+      "mid_slippage_bps": "3.222393228164678722585609850",
+      "source_bot": "backtest"
+    },
+    {
+      "timestamp_ns": 1736038080000000000,
+      "order_id": "paper_v2_108",
+      "side": "sell",
+      "fill_price": "103926.50",
+      "fill_quantity": "0.0001867884702029778500641227214",
+      "fee": "0.003882454389709955506937810002",
+      "is_maker": true,
+      "slippage_bps": "6.394661179117825238237189042",
+      "mid_slippage_bps": "6.394661179117825238237189042",
+      "source_bot": "backtest"
+    },
+    {
+      "timestamp_ns": 1736038140000000000,
+      "order_id": "paper_v2_108",
+      "side": "sell",
+      "fill_price": "103926.50",
+      "fill_quantity": "0.0001532319243256345249953828150",
+      "fee": "0.003184971516685611292386530424",
+      "is_maker": true,
+      "slippage_bps": "3.828163549150061125576268464",
+      "mid_slippage_bps": "3.828163549150061125576268464",
+      "source_bot": "backtest"
+    },
+    {
+      "timestamp_ns": 1736040780000000000,
+      "order_id": "paper_v2_110",
+      "side": "sell",
+      "fill_price": "104091.00",
+      "fill_quantity": "0.00143922773442646454",
+      "fee": "0.02996213082083702408662800",
+      "is_maker": true,
+      "slippage_bps": "2.593211548435429032443957817",
+      "mid_slippage_bps": "2.593211548435429032443957817",
+      "source_bot": "backtest"
+    },
+    {
+      "timestamp_ns": 1736703960000000000,
+      "order_id": "paper_v2_114",
+      "side": "sell",
+      "fill_price": "89058.40",
+      "fill_quantity": "0.00123731165921029984",
+      "fee": "0.02203859933412291345413120",
+      "is_maker": true,
+      "slippage_bps": "4.220167010864685283289934453",
+      "mid_slippage_bps": "4.220167010864685283289934453",
+      "source_bot": "backtest"
+    }
+  ],
+  "run_duration_s": 336.01500000000124,
+  "data_start": "2025-01-01T14:20:00Z",
+  "data_end": "2025-03-30T19:12:00Z",
+  "strategy_name": "",
+  "total_ticks": 127013,
+  "warnings": [
+    "WARNING: Spread capture efficiency (375.16) exceeds 0.80 \u2014 fill model may be unrealistically generous",
+    "WARNING: Inventory accumulating (half-life 6560min > 90min threshold)"
+  ],
+  "fill_disclaimer": "Fills are approximate: synthetic order books from OHLCV candles. Use LatencyAwareFillModel for conservative estimates."
+}
