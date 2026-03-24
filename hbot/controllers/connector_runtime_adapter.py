@@ -3,7 +3,7 @@ from __future__ import annotations
 import logging
 import time
 from decimal import Decimal
-from typing import Any, Dict, Optional, Tuple
+from typing import Any
 
 try:
     from hummingbot.core.data_type.common import PositionAction, PriceType
@@ -13,14 +13,14 @@ except ImportError:
     class PositionAction:  # pragma: no cover - lightweight test fallback
         AUTO = "auto"
 
-from services.common.market_data_plane import (
-    CanonicalMarketState,
+from platform_lib.market_data.market_data_plane import (
     CanonicalMarketDataReader,
+    CanonicalMarketState,
     DirectionalTradeFeatures,
     MarketTopOfBook,
     TradeFlowFeatures,
 )
-from services.common.utils import to_decimal
+from platform_lib.core.utils import to_decimal
 
 logger = logging.getLogger(__name__)
 
@@ -35,12 +35,14 @@ class ConnectorRuntimeAdapter:
     provides structured logging on failures.
     """
 
+    _MAX_STALE_MID_AGE_S: int = 300  # 5 min — fail-safe after this
+
     def __init__(self, controller: Any):
         self._controller = controller
         self.balance_read_failed: bool = False
         pair = str(controller.config.trading_pair)
         self._base_asset, self._quote_asset = pair.split("-") if "-" in pair else (pair, "USDT")
-        self._cached_connector: Optional[Any] = None
+        self._cached_connector: Any | None = None
         self._last_mid_price: Decimal = _ZERO_D
         self._last_mid_price_ts: float = 0.0
         self._last_mid_fallback_log_ts: float = 0.0
@@ -48,7 +50,7 @@ class ConnectorRuntimeAdapter:
             connector_name=str(controller.config.connector_name),
             trading_pair=str(controller.config.trading_pair),
         )
-        self._aux_market_readers: Dict[str, CanonicalMarketDataReader] = {}
+        self._aux_market_readers: dict[str, CanonicalMarketDataReader] = {}
 
     @property
     def connector_name(self) -> str:
@@ -58,7 +60,7 @@ class ConnectorRuntimeAdapter:
     def trading_pair(self) -> str:
         return str(self._controller.config.trading_pair)
 
-    def refresh_connector_cache(self) -> Optional[Any]:
+    def refresh_connector_cache(self) -> Any | None:
         """Resolve and cache the connector reference. Call once per tick."""
         strategy = getattr(self._controller, "strategy", None) or getattr(self._controller, "_strategy", None)
         if strategy is not None:
@@ -75,12 +77,12 @@ class ConnectorRuntimeAdapter:
             self._cached_connector = None
         return self._cached_connector
 
-    def get_connector(self) -> Optional[Any]:
+    def get_connector(self) -> Any | None:
         if self._cached_connector is not None:
             return self._cached_connector
         return self.refresh_connector_cache()
 
-    def get_trading_rule(self) -> Optional[Any]:
+    def get_trading_rule(self) -> Any | None:
         connector = self.get_connector()
         if connector is None:
             return None
@@ -148,6 +150,13 @@ class ConnectorRuntimeAdapter:
         # 4) Avoid returning zero on transient connector gaps: use last known mid.
         if self._last_mid_price > _ZERO_D:
             now = time.time()
+            age_s = int(now - self._last_mid_price_ts) if self._last_mid_price_ts > 0 else -1
+            if age_s > self._MAX_STALE_MID_AGE_S:
+                logger.error(
+                    "STALE_PRICE_EXPIRED: %s/%s last mid age=%ds exceeds max=%ds — returning 0 to fail-safe.",
+                    self.connector_name, self.trading_pair, age_s, self._MAX_STALE_MID_AGE_S,
+                )
+                return Decimal("0")
             if now - self._last_mid_fallback_log_ts >= 120.0:
                 self._last_mid_fallback_log_ts = now
                 logger.warning(
@@ -155,12 +164,44 @@ class ConnectorRuntimeAdapter:
                     self.connector_name,
                     self.trading_pair,
                     self._last_mid_price,
-                    int(now - self._last_mid_price_ts) if self._last_mid_price_ts > 0 else -1,
+                    age_s,
                 )
             return self._last_mid_price
 
         logger.error("Mid price unavailable for %s/%s and no cached fallback", self.connector_name, self.trading_pair)
         return Decimal("0")
+
+    def get_mark_price(self) -> Decimal:
+        """Return the exchange mark price (spot index for perpetuals).
+
+        Falls back to mid_price when mark_price is unavailable (e.g. spot connector
+        or canonical reader disabled).
+        """
+        state = self._canonical_market_reader.get_market_state()
+        if state is not None and state.mark_price > _ZERO_D:
+            return state.mark_price
+        return self.get_mid_price()
+
+    def get_last_trade_price(self) -> Decimal:
+        """Return the last executed trade price reported by the exchange."""
+        state = self._canonical_market_reader.get_market_state()
+        if state is not None and state.last_trade_price > _ZERO_D:
+            return state.last_trade_price
+        return self.get_mid_price()
+
+    def get_price_for_buffer(self, source: str = "mid") -> Decimal:
+        """Return the appropriate price for the price buffer based on *source*.
+
+        source:
+            "mark"       – exchange mark price (spot index; best for perp indicators)
+            "last_trade" – last executed trade price
+            "mid"        – order-book mid price (default)
+        """
+        if source == "mark":
+            return self.get_mark_price()
+        if source == "last_trade":
+            return self.get_last_trade_price()
+        return self.get_mid_price()
 
     def get_top_of_book(self) -> MarketTopOfBook:
         canonical_top = self._canonical_market_reader.get_top_of_book()
@@ -204,10 +245,10 @@ class ConnectorRuntimeAdapter:
             best_ask_size=ask_sz,
         )
 
-    def get_canonical_market_state(self) -> Optional[CanonicalMarketState]:
+    def get_canonical_market_state(self) -> CanonicalMarketState | None:
         return self._canonical_market_reader.get_market_state()
 
-    def market_state_debug(self) -> Dict[str, Any]:
+    def market_state_debug(self) -> dict[str, Any]:
         debug = self._canonical_market_reader.market_state_debug()
         debug["connector_fallback_mid_price"] = (
             float(self._last_mid_price) if self._last_mid_price > _ZERO_D else None
@@ -247,10 +288,10 @@ class ConnectorRuntimeAdapter:
     def get_trade_flow_features(
         self,
         *,
-        connector_name: Optional[str] = None,
-        trading_pair: Optional[str] = None,
+        connector_name: str | None = None,
+        trading_pair: str | None = None,
         count: int = 120,
-        stale_after_ms: Optional[int] = None,
+        stale_after_ms: int | None = None,
     ) -> TradeFlowFeatures:
         reader = (
             self._canonical_market_reader
@@ -266,11 +307,12 @@ class ConnectorRuntimeAdapter:
         spot_trading_pair: str,
         futures_count: int = 120,
         spot_count: int = 120,
-        stale_after_ms: Optional[int] = None,
+        stale_after_ms: int | None = None,
         divergence_threshold_pct: Decimal = Decimal("0.15"),
         stacked_imbalance_min: int = 3,
         delta_spike_threshold: Decimal = Decimal("3.0"),
-        funding_rate: Optional[Decimal] = None,
+        delta_spike_min_baseline: int = 20,
+        funding_rate: Decimal | None = None,
         long_funding_max: Decimal = Decimal("0.0005"),
         short_funding_min: Decimal = Decimal("-0.0003"),
     ) -> DirectionalTradeFeatures:
@@ -283,12 +325,13 @@ class ConnectorRuntimeAdapter:
             divergence_threshold_pct=divergence_threshold_pct,
             stacked_imbalance_min=stacked_imbalance_min,
             delta_spike_threshold=delta_spike_threshold,
+            delta_spike_min_baseline=delta_spike_min_baseline,
             funding_rate=funding_rate,
             long_funding_max=long_funding_max,
             short_funding_min=short_funding_min,
         )
 
-    def get_balances(self) -> Tuple[Decimal, Decimal]:
+    def get_balances(self) -> tuple[Decimal, Decimal]:
         connector = self.get_connector()
         if connector is None:
             self.balance_read_failed = True
@@ -307,7 +350,7 @@ class ConnectorRuntimeAdapter:
     def get_position_amount(
         self,
         *,
-        position_action: Optional[PositionAction] = None,
+        position_action: PositionAction | None = None,
     ) -> Decimal:
         connector = self.get_connector()
         if connector is None:
@@ -362,11 +405,9 @@ class ConnectorRuntimeAdapter:
             return False
         if base_free > base_total + _EPS:
             return False
-        if quote_free > quote_total + _EPS:
-            return False
-        return True
+        return not quote_free > quote_total + _EPS
 
-    def status_dict(self) -> Dict[str, bool]:
+    def status_dict(self) -> dict[str, bool]:
         connector = self.get_connector()
         if connector is None:
             return {}
@@ -388,7 +429,7 @@ class ConnectorRuntimeAdapter:
             logger.warning("Connector ready check failed for %s", self.connector_name, exc_info=True)
             return False
 
-    def status_summary(self) -> Dict[str, bool]:
+    def status_summary(self) -> dict[str, bool]:
         """Return the connector's status_dict with a ready flag for observability."""
         result = self.status_dict()
         result["ready"] = self.ready()

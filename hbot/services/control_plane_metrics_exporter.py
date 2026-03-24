@@ -1,36 +1,41 @@
 from __future__ import annotations
 
 import csv
-import json
+import logging
 import os
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any
 
-
-from services.hb_bridge.redis_client import RedisStreamClient
-from services.common.log_namespace import iter_bot_log_files
-from services.common.utils import (
+from platform_lib.logging.log_namespace import iter_bot_log_files
+from platform_lib.core.utils import (
     env_int as _env_int,
+)
+from platform_lib.core.utils import (
     parse_iso_ts as _safe_parse_iso_ts,
+)
+from platform_lib.core.utils import (
     read_json as _read_json,
+)
+from platform_lib.core.utils import (
     safe_float as _safe_float,
 )
+from services.hb_bridge.redis_client import RedisStreamClient
 
 
 def _escape_label(value: str) -> str:
     return value.replace("\\", "\\\\").replace('"', '\\"').replace("\n", "\\n")
 
 
-def _fmt_labels(labels: Dict[str, str]) -> str:
+def _fmt_labels(labels: dict[str, str]) -> str:
     if not labels:
         return ""
     pairs = [f'{k}="{_escape_label(v)}"' for k, v in labels.items()]
     return "{" + ",".join(pairs) + "}"
 
 
-def _status_to_bool(status: str, good_values: Tuple[str, ...]) -> float:
+def _status_to_bool(status: str, good_values: tuple[str, ...]) -> float:
     return 1.0 if str(status).strip().lower() in good_values else 0.0
 
 
@@ -43,7 +48,7 @@ def _safe_int(value: object, default: int = 0) -> int:
         return default
 
 
-def _percentile(sorted_values: List[float], p: float) -> float:
+def _percentile(sorted_values: list[float], p: float) -> float:
     if not sorted_values:
         return 0.0
     idx = int(max(0, min(len(sorted_values) - 1, (len(sorted_values) - 1) * p)))
@@ -106,7 +111,7 @@ class ControlPlaneMetricsExporter:
             return candidates[-1]
         return event_store_root / "integrity_20260221.json"
 
-    def _report_targets(self) -> Dict[str, Path]:
+    def _report_targets(self) -> dict[str, Path]:
         return {
             "reconciliation": self._reports_root / "reconciliation" / "latest.json",
             "parity": self._reports_root / "parity" / "latest.json",
@@ -125,21 +130,21 @@ class ControlPlaneMetricsExporter:
             "readiness": self._reports_root / "readiness" / "final_decision_latest.json",
         }
 
-    def _read_last_csv_row(self, path: Path) -> Dict[str, str]:
+    def _read_last_csv_row(self, path: Path) -> dict[str, str]:
         if not path.exists():
             return {}
         try:
             with path.open("r", encoding="utf-8", errors="ignore", newline="") as fp:
                 reader = csv.DictReader(fp)
-                last: Optional[Dict[str, str]] = None
+                last: dict[str, str] | None = None
                 for row in reader:
                     last = {str(k): str(v) for k, v in row.items()}
                 return last or {}
         except Exception:
             return {}
 
-    def _bot_blotter_metrics(self, expected_bots: Optional[List[str]] = None) -> List[Dict[str, object]]:
-        out: List[Dict[str, object]] = []
+    def _bot_blotter_metrics(self, expected_bots: list[str] | None = None) -> list[dict[str, object]]:
+        out: list[dict[str, object]] = []
         seen_bots = set()
         for fills_file in iter_bot_log_files(self._data_root, "fills.csv"):
             try:
@@ -196,7 +201,7 @@ class ControlPlaneMetricsExporter:
         except Exception:
             return 0
 
-    def _paper_exchange_service_metrics(self, now: datetime) -> List[str]:
+    def _paper_exchange_service_metrics(self, now: datetime) -> list[str]:
         labels = {"stream": self._paper_exchange_heartbeat_stream}
         redis_up = 1.0 if self._redis_client.ping() else 0.0
         latest = self._redis_client.read_latest(self._paper_exchange_heartbeat_stream) if redis_up > 0 else None
@@ -210,7 +215,7 @@ class ControlPlaneMetricsExporter:
         stale_pairs = 0
         newest_snapshot_age_ms = 0
         oldest_snapshot_age_ms = 0
-        metadata: Dict[str, Any] = {}
+        metadata: dict[str, Any] = {}
 
         if latest is not None:
             entry_id, payload = latest
@@ -272,7 +277,7 @@ class ControlPlaneMetricsExporter:
         out.append(f"hbot_paper_exchange_heartbeat_status_info{_fmt_labels(status_labels)} 1")
         return out
 
-    def _paper_exchange_load_report_metrics(self, now: datetime) -> List[str]:
+    def _paper_exchange_load_report_metrics(self, now: datetime) -> list[str]:
         payload = _read_json(self._paper_exchange_load_report_path)
         present = 1.0 if self._paper_exchange_load_report_path.exists() else 0.0
         ts = _safe_parse_iso_ts(payload.get("ts_utc")) if payload else None
@@ -295,7 +300,7 @@ class ControlPlaneMetricsExporter:
             lines.append(f"{metric_name}{_fmt_labels(labels)} {_safe_float(metrics.get(src_key), 0.0)}")
         return lines
 
-    def _paper_exchange_threshold_metrics(self, now: datetime) -> List[str]:
+    def _paper_exchange_threshold_metrics(self, now: datetime) -> list[str]:
         payload = _read_json(self._paper_exchange_threshold_inputs_path)
         present = 1.0 if self._paper_exchange_threshold_inputs_path.exists() else 0.0
         ts = _safe_parse_iso_ts(payload.get("ts_utc")) if payload else None
@@ -317,7 +322,7 @@ class ControlPlaneMetricsExporter:
             lines.append(f"hbot_paper_exchange_threshold_metric{_fmt_labels(mlabels)} {_safe_float(value, 0.0)}")
         return lines
 
-    def _paper_exchange_command_journal_metrics(self, now: datetime) -> List[str]:
+    def _paper_exchange_command_journal_metrics(self, now: datetime) -> list[str]:
         payload = _read_json(self._paper_exchange_command_journal_path)
         present = 1.0 if self._paper_exchange_command_journal_path.exists() else 0.0
         ts = _safe_parse_iso_ts(payload.get("ts_utc")) if payload else None
@@ -330,8 +335,8 @@ class ControlPlaneMetricsExporter:
         ]
         commands = payload.get("commands", {}) if isinstance(payload.get("commands", {}), dict) else {}
         lines.append(f"hbot_paper_exchange_command_journal_entries_total {float(len(commands))}")
-        command_status_counts: Dict[Tuple[str, str], int] = {}
-        reject_reason_counts: Dict[str, int] = {}
+        command_status_counts: dict[tuple[str, str], int] = {}
+        reject_reason_counts: dict[str, int] = {}
         for _event_id, row in commands.items():
             if not isinstance(row, dict):
                 continue
@@ -351,8 +356,8 @@ class ControlPlaneMetricsExporter:
 
         state_snapshot = _read_json(self._paper_exchange_state_snapshot_path)
         orders = state_snapshot.get("orders", {}) if isinstance(state_snapshot.get("orders", {}), dict) else {}
-        state_counts: Dict[str, int] = {}
-        submit_to_first_fill_latencies_ms: List[float] = []
+        state_counts: dict[str, int] = {}
+        submit_to_first_fill_latencies_ms: list[float] = []
         for _order_id, row in orders.items():
             if not isinstance(row, dict):
                 continue
@@ -384,7 +389,7 @@ class ControlPlaneMetricsExporter:
         )
         return lines
 
-    def _paper_exchange_pair_snapshot_metrics(self, now: datetime) -> List[str]:
+    def _paper_exchange_pair_snapshot_metrics(self, now: datetime) -> list[str]:
         payload = _read_json(self._paper_exchange_pair_snapshot_path)
         present = 1.0 if self._paper_exchange_pair_snapshot_path.exists() else 0.0
         ts = _safe_parse_iso_ts(payload.get("ts_utc")) if payload else None
@@ -422,8 +427,8 @@ class ControlPlaneMetricsExporter:
         return lines
 
     def render_prometheus(self) -> str:
-        now = datetime.now(timezone.utc)
-        lines: List[str] = [
+        now = datetime.now(UTC)
+        lines: list[str] = [
             "# HELP hbot_control_plane_report_age_seconds Age in seconds for control-plane report artifacts.",
             "# TYPE hbot_control_plane_report_age_seconds gauge",
             "# HELP hbot_control_plane_report_fresh Whether control-plane report age is within freshness threshold.",
@@ -845,7 +850,7 @@ class ControlPlaneMetricsExporter:
                 probe_labels["status"] = status
                 lines.append(f"hbot_exchange_snapshot_probe_status{_fmt_labels(probe_labels)} 1")
 
-        expected_bots = [str(b) for b in bots.keys()] if isinstance(bots, dict) else []
+        expected_bots = [str(b) for b in bots] if isinstance(bots, dict) else []
         for blotter in self._bot_blotter_metrics(expected_bots=expected_bots):
             bot_labels = {"bot": str(blotter.get("bot", "")), "variant": str(blotter.get("variant", ""))}
             last_fill_ts = float(blotter.get("last_fill_ts_epoch", 0.0) or 0.0)
@@ -859,8 +864,33 @@ class ControlPlaneMetricsExporter:
         lines.extend(self._paper_exchange_threshold_metrics(now))
         lines.extend(self._paper_exchange_command_journal_metrics(now))
         lines.extend(self._paper_exchange_pair_snapshot_metrics(now))
+        lines.extend(self._kill_switch_metrics(now))
 
         return "\n".join(lines) + "\n"
+
+    def _kill_switch_metrics(self, now: datetime) -> list[str]:
+        """Emit hbot_bot_kill_switch_count from reports/kill_switch/latest.json."""
+        lines: list[str] = [
+            "# HELP hbot_bot_kill_switch_count Kill switch trigger count per bot.",
+            "# TYPE hbot_bot_kill_switch_count gauge",
+        ]
+        ks_path = self._reports_root / "kill_switch" / "latest.json"
+        payload = _read_json(ks_path)
+        if not payload:
+            return lines
+        bots = payload.get("bots", {})
+        if isinstance(bots, dict):
+            for bot, bot_data in bots.items():
+                if not isinstance(bot_data, dict):
+                    continue
+                count = float(_safe_int(bot_data.get("trigger_count", bot_data.get("count", 0)), 0))
+                labels = {"bot": str(bot)}
+                lines.append(f"hbot_bot_kill_switch_count{_fmt_labels(labels)} {count}")
+        elif isinstance(payload.get("trigger_count"), (int, float)):
+            lines.append(f"hbot_bot_kill_switch_count {float(payload['trigger_count'])}")
+        elif isinstance(payload.get("count"), (int, float)):
+            lines.append(f"hbot_bot_kill_switch_count {float(payload['count'])}")
+        return lines
 
 
 class MetricsHandler(BaseHTTPRequestHandler):
@@ -944,12 +974,15 @@ def main() -> None:
     MetricsHandler.exporter = exporter
     MetricsHandler.metrics_path = metrics_path
 
+    logging.basicConfig(level=logging.INFO, format="%(asctime)s %(name)s %(levelname)s %(message)s")
+    logger = logging.getLogger("control_plane_metrics_exporter")
+
     server = ThreadingHTTPServer(("0.0.0.0", port), MetricsHandler)
-    print(
-        f"control_plane_metrics_exporter listening on :{port}{metrics_path}, "
-        f"reports_root={reports_root}, data_root={data_root}, freshness_max_sec={freshness_max_sec}, "
-        f"redis_host={redis_host}, redis_port={redis_port}, stream={paper_exchange_heartbeat_stream}, "
-        f"heartbeat_max_age_sec={paper_exchange_heartbeat_max_age_sec}"
+    logger.info(
+        "listening on :%d%s, reports_root=%s, data_root=%s, freshness_max_sec=%d, "
+        "redis_host=%s, redis_port=%d, stream=%s, heartbeat_max_age_sec=%d",
+        port, metrics_path, reports_root, data_root, freshness_max_sec,
+        redis_host, redis_port, paper_exchange_heartbeat_stream, paper_exchange_heartbeat_max_age_sec
     )
     server.serve_forever()
 

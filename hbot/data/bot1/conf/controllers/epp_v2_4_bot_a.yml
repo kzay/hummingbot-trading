@@ -169,13 +169,6 @@ spread_floor_recalc_s: 30
 cancel_budget_per_min: 35
 
 # ── Paper simulation params (only active when BOT_MODE=paper) ─────
-# IMPORTANT: disable the paper edge-gate bypass so min_net_edge_bps is enforced.
-paper_edge_gate_bypass: false
-# Use PaperDesk mark-to-market equity in risk/PnL calculations so validation
-# behavior matches live accounting semantics more closely.
-paper_use_portfolio_equity_for_risk: true
-paper_state_reconcile_enabled: true
-paper_daily_baseline_auto_reset_on_startup: true
 paper_engine:
   paper_equity_quote: 1000
   paper_reset_state_on_startup: false
@@ -282,3 +275,6 @@ adverse_classifier_enabled: false
 adverse_classifier_model_path: ""
 adverse_threshold_widen: 0.70
 adverse_threshold_skip: 0.85
+
+# ── ICT shadow mode (log-only, no quoting impact) ────────────────
+ict_shadow_enabled: false

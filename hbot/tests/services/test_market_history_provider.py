@@ -2,9 +2,9 @@ from __future__ import annotations
 
 from decimal import Decimal
 
-from controllers.price_buffer import MidPriceBuffer
-from services.common.market_history_provider_impl import MarketHistoryProviderImpl
-from services.common.market_history_types import MarketBar, MarketBarKey
+from controllers.price_buffer import PriceBuffer
+from platform_lib.market_data.market_history_provider_impl import MarketHistoryProviderImpl
+from platform_lib.market_data.market_history_types import MarketBar, MarketBarKey
 
 
 def _bar(bucket_ms: int, open_: str, high: str, low: str, close: str, source: str = "quote_mid") -> MarketBar:
@@ -62,7 +62,7 @@ def test_provider_marks_rest_fallback_as_degraded() -> None:
     assert status.source_used == "rest_backfill"
 
 
-def test_seed_midprice_buffer_loads_bars_without_degrading_when_sample_reader_unset() -> None:
+def test_seed_price_buffer_loads_bars_without_degrading_when_sample_reader_unset() -> None:
     provider = MarketHistoryProviderImpl(
         db_reader=lambda *_args: [
             _bar(60_000, "100", "100", "100", "100"),
@@ -71,9 +71,9 @@ def test_seed_midprice_buffer_loads_bars_without_degrading_when_sample_reader_un
         ],
         now_ms_reader=lambda: 240_000,
     )
-    buffer = MidPriceBuffer()
+    buffer = PriceBuffer()
 
-    status = provider.seed_midprice_buffer(
+    status = provider.seed_price_buffer(
         buffer,
         MarketBarKey("bitget_perpetual", "BTC-USDT", "quote_mid"),
         bars_needed=3,
@@ -86,7 +86,7 @@ def test_seed_midprice_buffer_loads_bars_without_degrading_when_sample_reader_un
     assert status.degraded_reason == ""
 
 
-def test_seed_midprice_buffer_marks_missing_sample_tail_when_reader_configured() -> None:
+def test_seed_price_buffer_marks_missing_sample_tail_when_reader_configured() -> None:
     provider = MarketHistoryProviderImpl(
         db_reader=lambda *_args: [
             _bar(60_000, "100", "100", "100", "100"),
@@ -96,9 +96,9 @@ def test_seed_midprice_buffer_marks_missing_sample_tail_when_reader_configured()
         sample_reader=lambda *_args: [],
         now_ms_reader=lambda: 240_000,
     )
-    buffer = MidPriceBuffer()
+    buffer = PriceBuffer()
 
-    status = provider.seed_midprice_buffer(
+    status = provider.seed_price_buffer(
         buffer,
         MarketBarKey("bitget_perpetual", "BTC-USDT", "quote_mid"),
         bars_needed=3,
@@ -179,14 +179,14 @@ def test_provider_uses_rest_fallback_to_repair_stale_history() -> None:
     assert status.status == "degraded"
 
 
-def test_seed_midprice_buffer_empty_is_noop() -> None:
+def test_seed_price_buffer_empty_is_noop() -> None:
     provider = MarketHistoryProviderImpl(
         db_reader=lambda *_args: [],
         now_ms_reader=lambda: 240_000,
     )
-    buffer = MidPriceBuffer()
+    buffer = PriceBuffer()
 
-    status = provider.seed_midprice_buffer(
+    status = provider.seed_price_buffer(
         buffer,
         MarketBarKey("bitget_perpetual", "BTC-USDT", "quote_mid"),
         bars_needed=3,

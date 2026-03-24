@@ -5,8 +5,6 @@ Provides stateless risk limit evaluation and stateful edge gate logic.
 from __future__ import annotations
 
 from decimal import Decimal
-from typing import List, Tuple
-
 
 
 class RiskPolicy:
@@ -44,9 +42,9 @@ class RiskPolicy:
         projected_total_quote: Decimal,
         daily_loss_pct: Decimal,
         drawdown_pct: Decimal,
-    ) -> Tuple[List[str], bool]:
+    ) -> tuple[list[str], bool]:
         """Return ``(reasons, hard_stop)`` — reasons list and whether hard stop is warranted."""
-        reasons: List[str] = []
+        reasons: list[str] = []
         hard = False
         if base_pct < self._min_base_pct:
             reasons.append("base_pct_below_min")
@@ -54,7 +52,7 @@ class RiskPolicy:
             reasons.append("base_pct_above_max")
         if self._max_total_notional_quote > 0 and projected_total_quote > self._max_total_notional_quote:
             reasons.append("projected_total_quote_above_cap")
-        if turnover_x > self._max_daily_turnover_x_hard:
+        if self._max_daily_turnover_x_hard > 0 and turnover_x > self._max_daily_turnover_x_hard:
             reasons.append("daily_turnover_hard_limit")
             hard = True
         if daily_loss_pct > self._max_daily_loss_pct_hard:
@@ -70,7 +68,7 @@ class RiskPolicy:
         equity_quote: Decimal,
         daily_equity_open: Decimal,
         daily_equity_peak: Decimal,
-    ) -> Tuple[Decimal, Decimal]:
+    ) -> tuple[Decimal, Decimal]:
         """Return ``(daily_loss_pct, drawdown_pct)``."""
         daily_loss_pct = Decimal("0")
         drawdown_pct = Decimal("0")

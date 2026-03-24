@@ -1,13 +1,10 @@
 from __future__ import annotations
 
-from typing import Dict, Set, Tuple
+ACTIVE_ORDER_STATES: set[str] = {"accepted", "working", "partially_filled"}
+TERMINAL_ORDER_STATES: set[str] = {"filled", "cancelled", "rejected", "expired"}
+ALL_ORDER_STATES: set[str] = set(ACTIVE_ORDER_STATES | TERMINAL_ORDER_STATES)
 
-
-ACTIVE_ORDER_STATES: Set[str] = {"accepted", "working", "partially_filled"}
-TERMINAL_ORDER_STATES: Set[str] = {"filled", "cancelled", "rejected", "expired"}
-ALL_ORDER_STATES: Set[str] = set(ACTIVE_ORDER_STATES | TERMINAL_ORDER_STATES)
-
-_ALLOWED_TRANSITIONS: Dict[str, Set[str]] = {
+_ALLOWED_TRANSITIONS: dict[str, set[str]] = {
     "accepted": {"working", "partially_filled", "filled", "cancelled", "rejected", "expired"},
     "working": {"partially_filled", "filled", "cancelled", "rejected", "expired"},
     "partially_filled": {"filled", "cancelled", "rejected", "expired"},
@@ -51,7 +48,7 @@ def resolve_crossing_limit_order_outcome(
     immediate_fill_amount: float,
     time_in_force: str,
     min_fill_epsilon: float = 1e-12,
-) -> Tuple[str, str, float]:
+) -> tuple[str, str, float]:
     """Resolve state/reason/fill for a crossing limit order.
 
     Returns: (new_state, reason, effective_fill_amount).

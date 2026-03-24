@@ -2,8 +2,7 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
-from typing import Any, Dict, Optional
-
+from typing import Any
 
 _DEFAULT_PROFILES = {
     "binance_demo_perp": {
@@ -30,7 +29,7 @@ _DEFAULT_PROFILES = {
 }
 
 
-def _load_profiles_file(profiles_file: Path) -> Dict[str, Any]:
+def _load_profiles_file(profiles_file: Path) -> dict[str, Any]:
     if not profiles_file.exists():
         return {"profiles": _DEFAULT_PROFILES}
     with profiles_file.open("r", encoding="utf-8") as f:
@@ -41,7 +40,7 @@ def _load_profiles_file(profiles_file: Path) -> Dict[str, Any]:
     return {"profiles": profiles if isinstance(profiles, dict) else _DEFAULT_PROFILES}
 
 
-def resolve_profile(connector_name: str, profiles_file: Optional[str] = None) -> Optional[Dict[str, Any]]:
+def resolve_profile(connector_name: str, profiles_file: str | None = None) -> dict[str, Any] | None:
     profiles_path = Path(profiles_file) if profiles_file else Path("/home/hummingbot/project_config/exchange_profiles.json")
     profiles = _load_profiles_file(profiles_path).get("profiles", {})
     if not isinstance(profiles, dict):

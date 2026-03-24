@@ -4,8 +4,7 @@ from __future__ import annotations
 import json
 import os
 import uuid
-from datetime import datetime, timezone
-from pathlib import Path
+from datetime import UTC, datetime
 from unittest.mock import patch
 
 from services.event_store.main import (
@@ -19,7 +18,6 @@ from services.event_store.main import (
     _trim_known_streams,
     _write_stats,
 )
-
 
 # ── helpers ──────────────────────────────────────────────────────────
 
@@ -53,20 +51,20 @@ class _FakeStreamClient:
         self.group_calls.append((_stream, _group, start_id))
         return None
 
-    def read_group(self, stream: str, group: str, consumer: str, count: int, block_ms: int):  # noqa: ARG002
+    def read_group(self, stream: str, group: str, consumer: str, count: int, block_ms: int):
         if stream == "hb.market_data.v1" and not self._emitted:
             self._emitted = True
             return [("1-0", {"event_id": "evt-1", "event_type": "market_snapshot", "timestamp_ms": 1700000000000})]
         return []
 
-    def read_group_multi(self, streams: list[str], group: str, consumer: str, count: int, block_ms: int):  # noqa: ARG002
+    def read_group_multi(self, streams: list[str], group: str, consumer: str, count: int, block_ms: int):
         self.read_group_multi_calls.append((list(streams), group, consumer, count, block_ms))
         if "hb.market_data.v1" in streams and not self._emitted:
             self._emitted = True
             return [("hb.market_data.v1", "1-0", {"event_id": "evt-1", "event_type": "market_snapshot", "timestamp_ms": 1700000000000})]
         return []
 
-    def claim_pending(  # noqa: ARG002
+    def claim_pending(
         self,
         stream: str,
         group: str,
@@ -78,7 +76,7 @@ class _FakeStreamClient:
     ):
         return []
 
-    def read_pending(self, stream: str, group: str, consumer: str, count: int, block_ms: int):  # noqa: ARG002
+    def read_pending(self, stream: str, group: str, consumer: str, count: int, block_ms: int):
         return []
 
     def ack(self, stream: str, group: str, entry_id: str) -> None:
@@ -507,10 +505,10 @@ def test_run_once_claims_and_acks_stale_pending_entries(monkeypatch, tmp_path):
             super().__init__()
             self._pending_emitted = False
 
-        def read_group_multi(self, streams: list[str], group: str, consumer: str, count: int, block_ms: int):  # noqa: ARG002
+        def read_group_multi(self, streams: list[str], group: str, consumer: str, count: int, block_ms: int):
             return []
 
-        def claim_pending(  # noqa: ARG002
+        def claim_pending(
             self,
             stream: str,
             group: str,
@@ -546,7 +544,7 @@ def test_batch_lag_metrics_reports_oldest_and_latest_event_age() -> None:
     ]
     metrics = _batch_lag_metrics(
         batch,
-        now_utc=datetime(2026, 3, 9, 12, 0, 3, tzinfo=timezone.utc),
+        now_utc=datetime(2026, 3, 9, 12, 0, 3, tzinfo=UTC),
     )
     assert metrics["oldest_event_lag_ms_last"] == 3000.0
     assert metrics["latest_event_lag_ms_last"] == 2000.0
@@ -557,7 +555,7 @@ def test_trim_known_streams_returns_aggregate_counts() -> None:
         def __init__(self) -> None:
             self.calls = []
 
-        def xtrim(self, stream: str, maxlen: int, approximate: bool = True):  # noqa: ANN001
+        def xtrim(self, stream: str, maxlen: int, approximate: bool = True):
             self.calls.append((stream, maxlen, approximate))
             if stream == "hb.fail.v1":
                 return None
@@ -583,7 +581,7 @@ def test_trim_known_streams_returns_aggregate_counts() -> None:
 
 def test_trim_known_streams_logs_nonfatal_trim_failures() -> None:
     class _TrimClient:
-        def xtrim(self, stream: str, maxlen: int, approximate: bool = True):  # noqa: ANN001
+        def xtrim(self, stream: str, maxlen: int, approximate: bool = True):
             raise RuntimeError(f"trim failure for {stream}")
 
     with patch("services.event_store.main.logger.warning") as warning_mock:

@@ -21,6 +21,7 @@ import os
 import subprocess
 import sys
 import time
+from datetime import UTC
 from pathlib import Path
 
 try:
@@ -51,9 +52,9 @@ def _risk_report_fresh(root: Path, max_age_min: float) -> bool:
         ts = data.get("ts_utc", "")
         if not ts:
             return False
-        from datetime import datetime, timezone
+        from datetime import datetime
         dt = datetime.fromisoformat(ts.replace("Z", "+00:00"))
-        age_min = (datetime.now(timezone.utc) - dt).total_seconds() / 60.0
+        age_min = (datetime.now(UTC) - dt).total_seconds() / 60.0
         return age_min <= max_age_min
     except Exception:
         return False

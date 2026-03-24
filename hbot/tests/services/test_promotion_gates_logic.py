@@ -4,42 +4,42 @@ import json
 import os
 from pathlib import Path
 
-from tests.services.conftest import _Proc
 from scripts.release.run_promotion_gates import (
+    _day2_freshness,
+    _day2_lag_within_tolerance,
     _enabled_policy_bots,
     _freshest_report,
     _history_backfill_gate_status,
     _history_read_rollout_enabled,
     _history_seed_rollout_status,
-    _run_event_store_once,
-    _day2_freshness,
-    _day2_lag_within_tolerance,
     _live_account_mode_bots,
-    _parity_active_scope,
-    _parity_drift_audit_status,
     _paper_exchange_threshold_inputs_readiness,
+    _parity_active_scope,
     _parity_core_insufficient_active_bots,
+    _parity_drift_audit_status,
     _performance_dossier_expectancy_diag,
     _portfolio_diversification_gate,
     _reconciliation_active_bot_coverage,
-    _run_performance_dossier,
-    _trading_validation_ladder_status,
+    _report_ts_utc,
+    _run_alerting_health_check,
     _run_canonical_plane_gate,
+    _run_event_store_once,
     _run_paper_exchange_golden_path_check,
     _run_paper_exchange_load_check,
-    _run_paper_exchange_sustained_qualification,
     _run_paper_exchange_perf_baseline_capture,
     _run_paper_exchange_perf_regression_check,
-    _run_paper_exchange_threshold_inputs_builder,
     _run_paper_exchange_preflight_check,
-    _run_replay_regression_multi_window,
-    _run_alerting_health_check,
-    _run_road9_allocation_rebalance,
+    _run_paper_exchange_sustained_qualification,
+    _run_paper_exchange_threshold_inputs_builder,
+    _run_performance_dossier,
     _run_realtime_l2_data_quality_check,
+    _run_replay_regression_multi_window,
+    _run_road9_allocation_rebalance,
     _run_runtime_performance_budgets_check,
-    _report_ts_utc,
     _run_testnet_multi_day_summary,
+    _trading_validation_ladder_status,
 )
+from tests.services.conftest import _Proc
 
 
 def test_history_read_rollout_enabled_detects_non_legacy_modes(monkeypatch) -> None:
@@ -586,7 +586,7 @@ def test_run_replay_regression_multi_window_forwards_portfolio_flag(monkeypatch,
 def test_run_testnet_multi_day_summary_forwards_window(monkeypatch, tmp_path: Path) -> None:
     captured = {}
 
-    def _fake_run(cmd, cwd, capture_output, text, check):  # noqa: ARG001
+    def _fake_run(cmd, cwd, capture_output, text, check):
         captured["cmd"] = cmd
         captured["cwd"] = cwd
         return _Proc(stdout="ok")
@@ -673,7 +673,7 @@ def test_performance_dossier_expectancy_diag_passes_when_gate_not_armed() -> Non
 def test_run_road9_allocation_rebalance_forwards_script(monkeypatch, tmp_path: Path) -> None:
     captured = {}
 
-    def _fake_run(cmd, cwd, capture_output, text, check):  # noqa: ARG001
+    def _fake_run(cmd, cwd, capture_output, text, check):
         captured["cmd"] = cmd
         captured["cwd"] = cwd
         return _Proc(stdout="ok")
@@ -962,7 +962,7 @@ def test_run_paper_exchange_golden_path_forwards_strict_and_pythonpath(monkeypat
 def test_run_alerting_health_check_forwards_strict(monkeypatch, tmp_path: Path) -> None:
     captured = {}
 
-    def _fake_run(cmd, cwd, capture_output, text, check):  # noqa: ARG001
+    def _fake_run(cmd, cwd, capture_output, text, check):
         captured["cmd"] = cmd
         captured["cwd"] = cwd
         return _Proc(stdout="ok")
@@ -1225,7 +1225,7 @@ def test_trading_validation_ladder_status_bypasses_when_not_enforced(tmp_path: P
 def test_run_event_store_once_falls_back_to_docker_when_host_client_disabled(monkeypatch, tmp_path: Path) -> None:
     calls = []
 
-    def _fake_run(cmd, cwd, capture_output, text, check, env=None):  # noqa: ARG001
+    def _fake_run(cmd, cwd, capture_output, text, check, env=None):
         calls.append(cmd)
         if len(calls) == 1:
             return _Proc(

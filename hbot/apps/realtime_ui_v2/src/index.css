@@ -1,10 +1,45 @@
 :root {
   color-scheme: dark;
-  --bg: #0b1017;
-  --text: #e8eef9;
-  --muted: #95a5bf;
-  --muted-strong: #b9c8df;
-  font-family: Inter, "Segoe UI", Arial, sans-serif;
+
+  /* Base palette to match design */
+  --bg:             #0f141e;
+  --bg-panel:       #151b28;
+  --bg-card:        #151b28;
+  --bg-input:       #1e2532;
+  --bg-overlay:     rgba(15, 20, 30, 0.97);
+  --bg-sidebar:     #111622;
+
+  /* Text */
+  --text:           #f8fafc;
+  --text-dim:       #cbd5e1;
+  --muted:          #94a3b8;
+  --muted-strong:   #cbd5e1;
+
+  /* Borders */
+  --border:         #1e293b;
+  --border-strong:  #334155;
+  --border-accent:  #3b82f6;
+
+  /* Semantic colours */
+  --green:          #2ecc71;
+  --green-dim:      rgba(46, 204, 113, 0.15);
+  --red:            #ef4444;
+  --red-dim:        rgba(239, 68, 68, 0.15);
+  --yellow:         #f59e0b;
+  --yellow-dim:     rgba(245, 158, 11, 0.15);
+  --blue:           #3b82f6;
+  --blue-dim:       rgba(59, 130, 246, 0.15);
+
+  /* Typography */
+  --font-mono: 'JetBrains Mono', 'Fira Code', Consolas, 'Courier New', monospace;
+  --font-ui:   'Inter', system-ui, 'Segoe UI', Roboto, Arial, sans-serif;
+
+  /* Geometry */
+  --radius-panel: 8px;
+  --radius-pill:  999px;
+  --gap-grid:     12px;
+
+  font-family: var(--font-ui);
   line-height: 1.5;
   font-weight: 400;
   font-synthesis: none;
@@ -17,12 +52,63 @@
   box-sizing: border-box;
 }
 
+/* Custom scrollbars */
+::-webkit-scrollbar {
+  width: 5px;
+  height: 5px;
+}
+
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+::-webkit-scrollbar-thumb {
+  background: rgba(148, 163, 184, 0.2);
+  border-radius: 999px;
+}
+
+::-webkit-scrollbar-thumb:hover {
+  background: rgba(148, 163, 184, 0.4);
+}
+
 body {
   margin: 0;
   min-width: 320px;
   min-height: 100vh;
   color: var(--text);
-  background:
-    radial-gradient(circle at top right, rgba(57, 125, 255, 0.12), transparent 30%),
-    linear-gradient(180deg, #091019 0%, #0b1017 100%);
+  background: var(--bg);
+  font-size: 14px;
+}
+
+/* Tabular numerics on all data cells */
+td, dd,
+.metric-value, .kv-value, .summary-value,
+.instance-preview-value, .depth-cell-value,
+.mid-price-hero {
+  font-variant-numeric: tabular-nums;
+  font-family: var(--font-mono);
+}
+
+::selection {
+  background: rgba(59, 130, 246, 0.3);
+  color: #fff;
+}
+
+*:focus-visible {
+  outline: 1.5px solid var(--blue);
+  outline-offset: 2px;
+}
+
+kbd {
+  display: inline-block;
+  padding: 1px 5px;
+  font-size: 10px;
+  font-family: var(--font-mono);
+  color: var(--muted);
+  background: rgba(30, 41, 59, 0.55);
+  border: 1px solid var(--border-strong);
+  border-radius: 3px;
+  line-height: 1.4;
+  vertical-align: middle;
+  margin-left: 6px;
 }

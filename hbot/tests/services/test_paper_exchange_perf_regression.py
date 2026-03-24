@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import json
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
 from scripts.release.check_paper_exchange_perf_regression import build_report
@@ -14,7 +14,7 @@ def _write_json(path: Path, payload: dict) -> None:
 
 def _load_payload(*, status: str, throughput: float, p95: float, p99: float, backlog: float, restart: float) -> dict:
     return {
-        "ts_utc": datetime.now(timezone.utc).isoformat(),
+        "ts_utc": datetime.now(UTC).isoformat(),
         "status": status,
         "metrics": {
             "p1_19_sustained_command_throughput_cmds_per_sec": throughput,
@@ -72,7 +72,7 @@ def test_build_report_applies_valid_time_bounded_waiver(tmp_path: Path) -> None:
         tmp_path / "reports" / "verification" / "paper_exchange_load_baseline_latest.json",
         _load_payload(status="pass", throughput=60.0, p95=100.0, p99=200.0, backlog=0.50, restart=0.0),
     )
-    now = datetime.now(timezone.utc)
+    now = datetime.now(UTC)
     _write_json(
         tmp_path / "reports" / "verification" / "paper_exchange_perf_regression_waiver_latest.json",
         {

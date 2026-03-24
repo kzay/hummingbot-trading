@@ -5,18 +5,17 @@ import csv
 import json
 import time
 from collections import Counter
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
-from typing import Dict, List, Optional, Tuple
 
 import redis  # type: ignore
 
 
 def _utc_now() -> str:
-    return datetime.now(timezone.utc).isoformat()
+    return datetime.now(UTC).isoformat()
 
 
-def _read_json(path: Path) -> Dict[str, object]:
+def _read_json(path: Path) -> dict[str, object]:
     if not path.exists():
         return {}
     try:
@@ -44,13 +43,13 @@ def _safe_int(value: object, default: int = 0) -> int:
         return default
 
 
-def _read_last_csv_row(path: Path) -> Dict[str, str]:
+def _read_last_csv_row(path: Path) -> dict[str, str]:
     if not path.exists():
         return {}
     try:
         with path.open("r", encoding="utf-8", newline="") as f:
             reader = csv.DictReader(f)
-            last: Dict[str, str] = {}
+            last: dict[str, str] = {}
             for row in reader:
                 last = row
             return last
@@ -62,8 +61,8 @@ def _fmt_error(exc: Exception) -> str:
     return f"{type(exc).__name__}: {exc}"
 
 
-def _read_group_lag(r: redis.Redis) -> Dict[str, Dict[str, object]]:
-    out: Dict[str, Dict[str, object]] = {}
+def _read_group_lag(r: redis.Redis) -> dict[str, dict[str, object]]:
+    out: dict[str, dict[str, object]] = {}
     try:
         raw = r.execute_command("XINFO", "GROUPS", "hb.execution_intent.v1")
     except Exception as e:
@@ -83,10 +82,10 @@ def _read_group_lag(r: redis.Redis) -> Dict[str, Dict[str, object]]:
 
 def _latest_daily_intents(
     r: redis.Redis, lookback_sec: int
-) -> Tuple[List[Dict[str, object]], List[Dict[str, object]]]:
+) -> tuple[list[dict[str, object]], list[dict[str, object]]]:
     now_ms = int(time.time() * 1000)
     cutoff_ms = now_ms - max(1, int(lookback_sec)) * 1000
-    intents: List[Dict[str, object]] = []
+    intents: list[dict[str, object]] = []
     try:
         rows = r.xrevrange("hb.execution_intent.v1", "+", "-", count=300)
     except Exception:
@@ -121,7 +120,7 @@ def _latest_daily_intents(
     max_ts = max(_safe_int(x.get("timestamp_ms"), 0) for x in intents)
     latest = [x for x in intents if _safe_int(x.get("timestamp_ms"), 0) >= (max_ts - 1)]
     latest_ids = {str(x.get("event_id", "")) for x in latest if str(x.get("event_id", ""))}
-    dead_matches: List[Dict[str, object]] = []
+    dead_matches: list[dict[str, object]] = []
     if latest_ids:
         try:
             dead_rows = r.xrevrange("hb.dead_letter.v1", "+", "-", count=5000)
@@ -147,7 +146,7 @@ def _latest_daily_intents(
     return latest, dead_matches
 
 
-def _bot_minute_snapshot(path: Path, now_ts: float) -> Dict[str, object]:
+def _bot_minute_snapshot(path: Path, now_ts: float) -> dict[str, object]:
     row = _read_last_csv_row(path)
     if not row:
         return {"present": False, "path": str(path)}
@@ -169,8 +168,8 @@ def _bot_minute_snapshot(path: Path, now_ts: float) -> Dict[str, object]:
 
 def _target_source_matches_runtime(
     bot_name: str,
-    snap_row: Dict[str, object],
-    goal_row: Dict[str, object],
+    snap_row: dict[str, object],
+    goal_row: dict[str, object],
 ) -> bool:
     expected_source = "execution_intent_daily_pnl_target_pct"
     source = str(snap_row.get("pnl_governor_target_source", "")).strip().lower()
@@ -201,7 +200,7 @@ def _sample_once(
     minute_freshness_s: int,
     intent_lookback_s: int,
     max_group_lag: int,
-) -> Dict[str, object]:
+) -> dict[str, object]:
     now_ts = time.time()
     policy = _read_json(root / "config" / "multi_bot_policy_v1.json")
     alloc = _read_json(root / "reports" / "policy" / "portfolio_allocator_latest.json")
@@ -222,7 +221,7 @@ def _sample_once(
     bot3 = _bot_minute_snapshot(root / "data" / "bot3" / "logs" / "epp_v24" / "bot3_a" / "minute.csv", now_ts)
     bot4 = _bot_minute_snapshot(root / "data" / "bot4" / "logs" / "epp_v24" / "bot4_a" / "minute.csv", now_ts)
 
-    checks: Dict[str, bool] = {}
+    checks: dict[str, bool] = {}
     checks["allocator_status_pass"] = str(alloc.get("status", "")).lower() == "pass"
     checks["allocator_emit_intents_true"] = bool(alloc.get("emit_intents", False))
     checks["daily_goal_status_pass"] = str(daily_goal.get("status", "")).lower() == "pass"
@@ -279,8 +278,8 @@ def _sample_once(
         for item in latest_intents
         if isinstance(item, dict) and str(item.get("event_id", ""))
     }
-    warnings: List[str] = []
-    critical_dead_matches: List[Dict[str, object]] = []
+    warnings: list[str] = []
+    critical_dead_matches: list[dict[str, object]] = []
     for dead in dead_matches:
         event_id = str(dead.get("event_id", ""))
         reason = str(dead.get("reason", "")).strip().lower()
@@ -349,7 +348,7 @@ def run(
     redis_port: int,
     redis_db: int,
     redis_password: str,
-) -> Dict[str, object]:
+) -> dict[str, object]:
     root = Path(__file__).resolve().parents[2]
     end_ts = time.time() + max(1.0, duration_min) * 60.0
     r = redis.Redis(
@@ -360,7 +359,7 @@ def run(
         decode_responses=True,
         socket_timeout=3,
     )
-    samples: List[Dict[str, object]] = []
+    samples: list[dict[str, object]] = []
     while True:
         sample = _sample_once(
             root,
@@ -402,7 +401,7 @@ def run(
     }
     out_dir = root / "reports" / "verification"
     out_dir.mkdir(parents=True, exist_ok=True)
-    stamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
+    stamp = datetime.now(UTC).strftime("%Y%m%dT%H%M%SZ")
     out_path = out_dir / f"centralized_soak_{stamp}.json"
     out_path.write_text(json.dumps(report, indent=2), encoding="utf-8")
     (out_dir / "centralized_soak_latest.json").write_text(json.dumps(report, indent=2), encoding="utf-8")

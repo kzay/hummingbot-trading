@@ -1,11 +1,11 @@
 from __future__ import annotations
 
-from typing import List, Optional, Protocol, Tuple, TYPE_CHECKING
+from typing import TYPE_CHECKING, Protocol
 
-from services.common.market_history_types import MarketBar, MarketBarKey, MarketHistoryStatus
+from platform_lib.market_data.market_history_types import MarketBar, MarketBarKey, MarketHistoryStatus
 
 if TYPE_CHECKING:
-    from controllers.price_buffer import MidPriceBuffer
+    from controllers.price_buffer import PriceBuffer
 
 
 class MarketHistoryProvider(Protocol):
@@ -14,9 +14,9 @@ class MarketHistoryProvider(Protocol):
         key: MarketBarKey,
         bar_interval_s: int = 60,
         limit: int = 300,
-        end_time_ms: Optional[int] = None,
+        end_time_ms: int | None = None,
         require_closed: bool = True,
-    ) -> Tuple[List[MarketBar], MarketHistoryStatus]:
+    ) -> tuple[list[MarketBar], MarketHistoryStatus]:
         ...
 
     def get_status(
@@ -26,9 +26,9 @@ class MarketHistoryProvider(Protocol):
     ) -> MarketHistoryStatus:
         ...
 
-    def seed_midprice_buffer(
+    def seed_price_buffer(
         self,
-        buffer: "MidPriceBuffer",
+        buffer: PriceBuffer,
         key: MarketBarKey,
         bars_needed: int,
         now_ms: int,

@@ -2,15 +2,14 @@ from __future__ import annotations
 
 import argparse
 import json
-import os
 import re
-from datetime import datetime, timezone
+from collections.abc import Iterable
+from datetime import UTC, datetime
 from pathlib import Path
-from typing import Dict, Iterable, List
 
 
 def _utc_now() -> str:
-    return datetime.now(timezone.utc).isoformat()
+    return datetime.now(UTC).isoformat()
 
 
 def _iter_candidate_files(root: Path, include_logs: bool) -> Iterable[Path]:
@@ -30,9 +29,9 @@ def _iter_candidate_files(root: Path, include_logs: bool) -> Iterable[Path]:
                     yield path
 
 
-def _load_env_secret_values(root: Path) -> List[str]:
+def _load_env_secret_values(root: Path) -> list[str]:
     env_path = root / "env" / ".env"
-    values: List[str] = []
+    values: list[str] = []
     if not env_path.exists():
         return values
 
@@ -65,8 +64,8 @@ def _is_probable_text(path: Path) -> bool:
     return path.suffix.lower() in text_ext
 
 
-def _scan_file(path: Path, regexes: List[re.Pattern[str]], secret_values: List[str], max_file_bytes: int) -> List[Dict[str, object]]:
-    findings: List[Dict[str, object]] = []
+def _scan_file(path: Path, regexes: list[re.Pattern[str]], secret_values: list[str], max_file_bytes: int) -> list[dict[str, object]]:
+    findings: list[dict[str, object]] = []
     try:
         if path.stat().st_size > max_file_bytes:
             return findings
@@ -117,7 +116,7 @@ def main() -> int:
     env_secret_values = _load_env_secret_values(root)
 
     scanned_files = 0
-    findings: List[Dict[str, object]] = []
+    findings: list[dict[str, object]] = []
     for path in _iter_candidate_files(root, include_logs=bool(args.include_logs)):
         if not _is_probable_text(path):
             continue
@@ -134,7 +133,7 @@ def main() -> int:
         "findings": findings[:200],
     }
 
-    stamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
+    stamp = datetime.now(UTC).strftime("%Y%m%dT%H%M%SZ")
     out_file = reports_root / f"secrets_hygiene_{stamp}.json"
     out_file.write_text(json.dumps(payload, indent=2), encoding="utf-8")
     (reports_root / "latest.json").write_text(json.dumps(payload, indent=2), encoding="utf-8")

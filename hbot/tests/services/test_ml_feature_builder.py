@@ -1,4 +1,4 @@
-from services.contracts.event_schemas import MarketSnapshotEvent
+from platform_lib.contracts.event_schemas import MarketSnapshotEvent
 from services.signal_service.feature_builder import build_features
 
 

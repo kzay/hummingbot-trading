@@ -1,23 +1,23 @@
 """Shared test scaffolding for hbot/tests/services/."""
 from __future__ import annotations
 
-from typing import Any, Dict, List, Optional
+from typing import Any
 
 
 class _CaptureCursor:
     """Minimal DB cursor fake that records execute() calls and the last SQL."""
 
     def __init__(self) -> None:
-        self.calls: List[Dict[str, Any]] = []
+        self.calls: list[dict[str, Any]] = []
         self.last_sql: str = ""
 
-    def __enter__(self) -> "_CaptureCursor":
+    def __enter__(self) -> _CaptureCursor:
         return self
 
-    def __exit__(self, exc_type, exc, tb) -> bool:  # noqa: ANN001
+    def __exit__(self, exc_type, exc, tb) -> bool:
         return False
 
-    def execute(self, sql: str, params: Optional[Dict[str, Any]] = None) -> None:
+    def execute(self, sql: str, params: dict[str, Any] | None = None) -> None:
         self.last_sql = sql
         self.calls.append(params or {})
 

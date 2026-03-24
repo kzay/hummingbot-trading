@@ -3,20 +3,19 @@ from __future__ import annotations
 import argparse
 import json
 import uuid
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
-from typing import Dict, List
 
 
 def _utc_now() -> str:
-    return datetime.now(timezone.utc).isoformat()
+    return datetime.now(UTC).isoformat()
 
 
 def _root() -> Path:
     return Path("/workspace/hbot") if Path("/.dockerenv").exists() else Path(__file__).resolve().parents[2]
 
 
-def _audit_event(action: str, status: str, details: Dict[str, object]) -> Dict[str, object]:
+def _audit_event(action: str, status: str, details: dict[str, object]) -> dict[str, object]:
     return {
         "event_id": str(uuid.uuid4()),
         "ts_utc": _utc_now(),
@@ -26,7 +25,7 @@ def _audit_event(action: str, status: str, details: Dict[str, object]) -> Dict[s
     }
 
 
-def _load_sample_intents() -> List[Dict[str, object]]:
+def _load_sample_intents() -> list[dict[str, object]]:
     return [
         {
             "intent_id": "intent-allow-1",
@@ -61,8 +60,8 @@ def _load_sample_intents() -> List[Dict[str, object]]:
     ]
 
 
-def _simulate_paper_adapter(intents: List[Dict[str, object]]) -> Dict[str, object]:
-    audit: List[Dict[str, object]] = []
+def _simulate_paper_adapter(intents: list[dict[str, object]]) -> dict[str, object]:
+    audit: list[dict[str, object]] = []
     executed = 0
     vetoed = 0
     lifecycle_ok = 0
@@ -127,7 +126,7 @@ def main() -> int:
 
     out_dir = root / args.out_dir
     out_dir.mkdir(parents=True, exist_ok=True)
-    stamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
+    stamp = datetime.now(UTC).strftime("%Y%m%dT%H%M%SZ")
     out_json = out_dir / f"execution_adapter_spike_{stamp}.json"
     out_audit = out_dir / f"execution_adapter_audit_{stamp}.jsonl"
 

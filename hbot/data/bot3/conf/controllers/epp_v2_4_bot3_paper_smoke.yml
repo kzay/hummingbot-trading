@@ -48,10 +48,6 @@ max_drawdown_pct_hard: 0.035
 min_net_edge_bps: 6.0
 edge_resume_bps: 6.5
 edge_state_hold_s: 120
-paper_edge_gate_bypass: false
-paper_use_portfolio_equity_for_risk: true
-paper_state_reconcile_enabled: true
-paper_daily_baseline_auto_reset_on_startup: true
 max_quote_to_market_spread_mult: 0.00
 min_side_spread_bps: 0.30
 reconnect_cooldown_s: 3.0

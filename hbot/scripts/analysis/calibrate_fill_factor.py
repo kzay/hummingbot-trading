@@ -15,28 +15,26 @@ from __future__ import annotations
 import argparse
 import csv
 import sys
-from decimal import Decimal
 from pathlib import Path
-from typing import Dict, List, Optional
 
 _SCRIPT_DIR = Path(__file__).resolve().parent
 _PROJECT_ROOT = _SCRIPT_DIR.parents[1]
 sys.path.insert(0, str(_PROJECT_ROOT))
 
-from services.common.utils import safe_float, utc_now, write_json
+from platform_lib.core.utils import safe_float, utc_now, write_json
 
 
-def _read_fills(path: Path) -> List[Dict[str, str]]:
+def _read_fills(path: Path) -> list[dict[str, str]]:
     if not path.exists():
         return []
     with path.open("r", encoding="utf-8", newline="") as f:
         return list(csv.DictReader(f))
 
 
-def calibrate(fills: List[Dict[str, str]]) -> Dict[str, object]:
+def calibrate(fills: list[dict[str, str]]) -> dict[str, object]:
     """Compute realized fill factor from fills data."""
-    spread_captures: List[float] = []
-    expected_spreads: List[float] = []
+    spread_captures: list[float] = []
+    expected_spreads: list[float] = []
     maker_count = 0
     taker_count = 0
 
@@ -53,9 +51,7 @@ def calibrate(fills: List[Dict[str, str]]) -> Dict[str, object]:
         spread_captures.append(realized_capture)
         expected_spreads.append(expected_spread)
 
-        if side == "buy" and fill_price < mid_ref:
-            maker_count += 1
-        elif side == "sell" and fill_price > mid_ref:
+        if (side == "buy" and fill_price < mid_ref) or (side == "sell" and fill_price > mid_ref):
             maker_count += 1
         else:
             taker_count += 1

@@ -8,7 +8,7 @@
 #   bash backup.sh bot1     # backup only bot1
 #
 # Recommended: add to crontab for daily backups
-#   0 4 * * * /path/to/hbot/scripts/backup.sh >> /var/log/kzay-capital-backup.log 2>&1
+#   0 4 * * * /path/to/hbot/scripts/ops/backup.sh >> /var/log/kzay-capital-backup.log 2>&1
 # ============================================
 set -euo pipefail
 

@@ -1,7 +1,7 @@
 from __future__ import annotations
 
+from collections.abc import Iterable, Iterator, Sequence
 from pathlib import Path
-from typing import Iterable, Iterator, Sequence
 
 # Prefer neutral namespace first while still supporting legacy logs.
 DEFAULT_LOG_NAMESPACES: tuple[str, ...] = ("runtime_v24", "epp_v24")

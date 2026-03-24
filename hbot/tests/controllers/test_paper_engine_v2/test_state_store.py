@@ -1,9 +1,6 @@
 """Tests for DeskStateStore."""
-from pathlib import Path
-from decimal import Decimal
-import pytest
 
-from controllers.paper_engine_v2.state_store import DeskStateStore
+from simulation.state_store import DeskStateStore
 
 
 class TestDeskStateStore:

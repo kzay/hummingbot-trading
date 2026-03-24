@@ -4,9 +4,9 @@ import os
 import time
 from dataclasses import dataclass
 from decimal import Decimal
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any
 
-from services.common.canonical_market_state import (
+from platform_lib.market_data.canonical_market_state import (
     CanonicalMarketState,
     canonical_market_state_age_ms,
     canonical_market_state_is_stale,
@@ -14,8 +14,7 @@ from services.common.canonical_market_state import (
     market_payload_is_fresh,
     parse_canonical_market_state,
 )
-from services.contracts.stream_names import MARKET_DEPTH_STREAM, MARKET_QUOTE_STREAM, MARKET_TRADE_STREAM
-from services.hb_bridge.redis_client import RedisStreamClient
+from platform_lib.contracts.stream_names import MARKET_DEPTH_STREAM, MARKET_QUOTE_STREAM, MARKET_TRADE_STREAM
 
 _ZERO_D = Decimal("0")
 
@@ -101,9 +100,9 @@ class CanonicalMarketDataReader:
         connector_name: str,
         trading_pair: str,
         *,
-        enabled: Optional[bool] = None,
-        stream_scan_count: Optional[int] = None,
-        stale_after_ms: Optional[int] = None,
+        enabled: bool | None = None,
+        stream_scan_count: int | None = None,
+        stale_after_ms: int | None = None,
     ) -> None:
         self._connector_name = _normalize_connector(connector_name)
         self._trading_pair = _normalize_pair(trading_pair)
@@ -120,6 +119,8 @@ class CanonicalMarketDataReader:
             250,
             int(stale_after_ms or os.getenv("HB_CANONICAL_MARKET_STALE_AFTER_MS", "15000")),
         )
+        from services.hb_bridge.redis_client import RedisStreamClient  # lazy: avoid layer dep
+
         self._client = RedisStreamClient(
             host=os.getenv("REDIS_HOST", "redis"),
             port=int(os.getenv("REDIS_PORT", "6379")),
@@ -127,17 +128,17 @@ class CanonicalMarketDataReader:
             password=os.getenv("REDIS_PASSWORD", "") or None,
             enabled=self._enabled,
         )
-        self._last_quote_payload: Dict[str, Any] = {}
-        self._last_depth_payload: Dict[str, Any] = {}
+        self._last_quote_payload: dict[str, Any] = {}
+        self._last_depth_payload: dict[str, Any] = {}
         self._last_quote_freshness_ts_ms: int = 0
         self._last_depth_freshness_ts_ms: int = 0
-        self._last_trade_payloads: List[Dict[str, Any]] = []
+        self._last_trade_payloads: list[dict[str, Any]] = []
 
     @property
     def enabled(self) -> bool:
         return bool(self._enabled and self._client.enabled)
 
-    def _matches(self, payload: Dict[str, Any]) -> bool:
+    def _matches(self, payload: dict[str, Any]) -> bool:
         if not isinstance(payload, dict):
             return False
         return (
@@ -145,7 +146,7 @@ class CanonicalMarketDataReader:
             and _normalize_pair(payload.get("trading_pair")) == self._trading_pair
         )
 
-    def _fresh(self, payload: Dict[str, Any], entry_id: str) -> bool:
+    def _fresh(self, payload: dict[str, Any], entry_id: str) -> bool:
         return market_payload_is_fresh(
             payload,
             now_ms=int(time.time() * 1000),
@@ -153,7 +154,7 @@ class CanonicalMarketDataReader:
             entry_id=entry_id,
         )
 
-    def _read_matching(self, stream: str) -> Tuple[Optional[str], Dict[str, Any]]:
+    def _read_matching(self, stream: str) -> tuple[str | None, dict[str, Any]]:
         if not self.enabled:
             return None, {}
         records = self._client.read_recent(stream, count=self._stream_scan_count)
@@ -162,7 +163,7 @@ class CanonicalMarketDataReader:
                 return entry_id, payload
         return None, {}
 
-    def _cached_payload_if_fresh(self, payload: Dict[str, Any], freshness_ts_ms: int) -> Dict[str, Any]:
+    def _cached_payload_if_fresh(self, payload: dict[str, Any], freshness_ts_ms: int) -> dict[str, Any]:
         if not payload or freshness_ts_ms <= 0:
             return {}
         now_ms = int(time.time() * 1000)
@@ -170,29 +171,29 @@ class CanonicalMarketDataReader:
             return {}
         return dict(payload)
 
-    def latest_quote(self) -> Dict[str, Any]:
+    def latest_quote(self) -> dict[str, Any]:
         entry_id, payload = self._read_matching(MARKET_QUOTE_STREAM)
         if payload:
             self._last_quote_payload = payload
             self._last_quote_freshness_ts_ms = market_payload_freshness_ts_ms(payload, entry_id=str(entry_id or ""))
         return self._cached_payload_if_fresh(self._last_quote_payload, self._last_quote_freshness_ts_ms)
 
-    def latest_depth(self) -> Dict[str, Any]:
+    def latest_depth(self) -> dict[str, Any]:
         entry_id, payload = self._read_matching(MARKET_DEPTH_STREAM)
         if payload:
             self._last_depth_payload = payload
             self._last_depth_freshness_ts_ms = market_payload_freshness_ts_ms(payload, entry_id=str(entry_id or ""))
         return self._cached_payload_if_fresh(self._last_depth_payload, self._last_depth_freshness_ts_ms)
 
-    def latest_quote_state(self) -> Optional[CanonicalMarketState]:
+    def latest_quote_state(self) -> CanonicalMarketState | None:
         payload = self.latest_quote()
         return parse_canonical_market_state(payload) if payload else None
 
-    def latest_depth_state(self) -> Optional[CanonicalMarketState]:
+    def latest_depth_state(self) -> CanonicalMarketState | None:
         payload = self.latest_depth()
         return parse_canonical_market_state(payload) if payload else None
 
-    def get_market_state(self) -> Optional[CanonicalMarketState]:
+    def get_market_state(self) -> CanonicalMarketState | None:
         depth_state = self.latest_depth_state()
         if depth_state is not None and depth_state.has_top_of_book:
             return depth_state
@@ -201,7 +202,7 @@ class CanonicalMarketDataReader:
             return quote_state
         return depth_state or quote_state
 
-    def market_state_debug(self) -> Dict[str, Any]:
+    def market_state_debug(self) -> dict[str, Any]:
         now_ms = int(time.time() * 1000)
         state = self.get_market_state()
         if state is None:
@@ -251,7 +252,7 @@ class CanonicalMarketDataReader:
             return (bid + ask) / Decimal("2")
         return _ZERO_D
 
-    def get_top_of_book(self) -> Optional[MarketTopOfBook]:
+    def get_top_of_book(self) -> MarketTopOfBook | None:
         state = self.get_market_state()
         if state is not None and state.has_top_of_book:
             return MarketTopOfBook(
@@ -305,14 +306,14 @@ class CanonicalMarketDataReader:
             return _ZERO_D
         return (bid_depth - ask_depth) / total
 
-    def latest_payloads(self) -> Tuple[Dict[str, Any], Dict[str, Any]]:
+    def latest_payloads(self) -> tuple[dict[str, Any], dict[str, Any]]:
         return self.latest_quote(), self.latest_depth()
 
-    def recent_trade_payloads(self, count: int = 100) -> List[Dict[str, Any]]:
+    def recent_trade_payloads(self, count: int = 100) -> list[dict[str, Any]]:
         if not self.enabled:
             return list(self._last_trade_payloads)
         records = self._client.read_recent(MARKET_TRADE_STREAM, count=max(1, int(count)))
-        matched: List[Dict[str, Any]] = []
+        matched: list[dict[str, Any]] = []
         for entry_id, payload in records:
             if not self._matches(payload) or not self._fresh(payload, entry_id):
                 continue
@@ -322,8 +323,8 @@ class CanonicalMarketDataReader:
             self._last_trade_payloads = list(reversed(matched))
         return list(self._last_trade_payloads)
 
-    def recent_trades(self, count: int = 100) -> List[MarketTrade]:
-        trades: List[MarketTrade] = []
+    def recent_trades(self, count: int = 100) -> list[MarketTrade]:
+        trades: list[MarketTrade] = []
         for payload in self.recent_trade_payloads(count=count):
             price = _to_decimal(payload.get("price"))
             size = _to_decimal(payload.get("size"))
@@ -349,7 +350,7 @@ class CanonicalMarketDataReader:
             )
         return trades
 
-    def _price_change_pct(self, trades: List[MarketTrade]) -> Decimal:
+    def _price_change_pct(self, trades: list[MarketTrade]) -> Decimal:
         if len(trades) < 2:
             return _ZERO_D
         first_price = _to_decimal(trades[0].price)
@@ -362,8 +363,9 @@ class CanonicalMarketDataReader:
         self,
         *,
         count: int = 120,
-        stale_after_ms: Optional[int] = None,
+        stale_after_ms: int | None = None,
         imbalance_threshold: Decimal = Decimal("2.0"),
+        delta_spike_min_baseline: int = 20,
     ) -> TradeFlowFeatures:
         trades = self.recent_trades(count=count)
         if not trades:
@@ -374,7 +376,7 @@ class CanonicalMarketDataReader:
         cvd = _ZERO_D
         latest_ts_ms = 0
         last_price = _ZERO_D
-        deltas: List[Decimal] = []
+        deltas: list[Decimal] = []
         stacked_buy_count = 0
         stacked_sell_count = 0
         current_buy_stack = 0
@@ -409,12 +411,17 @@ class CanonicalMarketDataReader:
         imbalance_ratio = (delta_volume / total_volume) if total_volume > _ZERO_D else _ZERO_D
 
         spike_ratio = _ZERO_D
-        if len(deltas) >= 2:
-            last_delta_abs = abs(deltas[-1])
-            history = deltas[-6:-1]
-            baseline = sum((abs(delta) for delta in history), _ZERO_D) / Decimal(str(len(history)))
-            if baseline > _ZERO_D:
-                spike_ratio = last_delta_abs / baseline
+        _min_baseline = max(5, delta_spike_min_baseline)
+        if len(deltas) >= _min_baseline + 1:
+            baseline_start = -(_min_baseline + 1)
+            first_ts = trades[baseline_start].exchange_ts_ms or trades[baseline_start].ingest_ts_ms or 0
+            last_ts = trades[-1].exchange_ts_ms or trades[-1].ingest_ts_ms or 0
+            if last_ts - first_ts >= 30_000:
+                last_delta_abs = abs(deltas[-1])
+                history = deltas[baseline_start:-1]
+                baseline = sum((abs(delta) for delta in history), _ZERO_D) / Decimal(str(len(history)))
+                if baseline > _ZERO_D:
+                    spike_ratio = last_delta_abs / baseline
 
         now_ms = int(time.time() * 1000)
         stale_limit = int(stale_after_ms or self._stale_after_ms)
@@ -441,15 +448,19 @@ class CanonicalMarketDataReader:
         spot_trading_pair: str,
         futures_count: int = 120,
         spot_count: int = 120,
-        stale_after_ms: Optional[int] = None,
+        stale_after_ms: int | None = None,
         divergence_threshold_pct: Decimal = Decimal("0.15"),
         stacked_imbalance_min: int = 3,
         delta_spike_threshold: Decimal = Decimal("3.0"),
-        funding_rate: Optional[Decimal] = None,
+        delta_spike_min_baseline: int = 20,
+        funding_rate: Decimal | None = None,
         long_funding_max: Decimal = Decimal("0.0005"),
         short_funding_min: Decimal = Decimal("-0.0003"),
     ) -> DirectionalTradeFeatures:
-        futures_features = self.get_trade_flow_features(count=futures_count, stale_after_ms=stale_after_ms)
+        futures_features = self.get_trade_flow_features(
+            count=futures_count, stale_after_ms=stale_after_ms,
+            delta_spike_min_baseline=delta_spike_min_baseline,
+        )
         spot_reader = CanonicalMarketDataReader(
             connector_name=spot_connector_name,
             trading_pair=spot_trading_pair,
@@ -462,14 +473,11 @@ class CanonicalMarketDataReader:
         spot_trades = spot_reader.recent_trades(count=spot_count)
         futures_price_change_pct = self._price_change_pct(futures_trades)
         spot_price_change_pct = spot_reader._price_change_pct(spot_trades)
-        divergence_denominator = max(
-            abs(futures_features.cvd),
-            abs(spot_features.cvd),
-            futures_features.buy_volume + futures_features.sell_volume,
-            spot_features.buy_volume + spot_features.sell_volume,
-            Decimal("1"),
-        )
-        cvd_divergence_ratio = (spot_features.cvd - futures_features.cvd) / divergence_denominator
+        divergence_denominator = max(abs(futures_features.cvd), abs(spot_features.cvd))
+        if divergence_denominator <= _ZERO_D:
+            cvd_divergence_ratio = _ZERO_D
+        else:
+            cvd_divergence_ratio = (spot_features.cvd - futures_features.cvd) / divergence_denominator
         bullish_divergence = (
             (futures_price_change_pct < _ZERO_D and futures_features.cvd > _ZERO_D)
             or cvd_divergence_ratio >= abs(divergence_threshold_pct)

@@ -6,15 +6,17 @@ import logging
 import os
 import threading
 import time
+from collections.abc import Callable
 from dataclasses import dataclass, field
-from datetime import datetime, timezone, timedelta
+from datetime import UTC, datetime, timedelta
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
-from typing import Any, Callable, Dict, List, Optional, Tuple
+from typing import Any
 
-
-from services.common.log_namespace import iter_bot_log_files
-from services.common.utils import env_int as _env_int, safe_float as _safe_float, parse_iso_ts
+from platform_lib.logging.log_namespace import iter_bot_log_files
+from platform_lib.core.utils import env_int as _env_int
+from platform_lib.core.utils import parse_iso_ts
+from platform_lib.core.utils import safe_float as _safe_float
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -45,7 +47,7 @@ _DERISK_WATCHDOG_REASONS = {
 }
 
 
-def _safe_iso_ts_to_epoch(value: str) -> Optional[float]:
+def _safe_iso_ts_to_epoch(value: str) -> float | None:
     dt = parse_iso_ts(value)
     return dt.timestamp() if dt else None
 
@@ -54,7 +56,7 @@ def _escape_label(value: str) -> str:
     return value.replace("\\", "\\\\").replace('"', '\\"').replace("\n", "\\n")
 
 
-def _fmt_labels(labels: Dict[str, str]) -> str:
+def _fmt_labels(labels: dict[str, str]) -> str:
     if not labels:
         return ""
     pairs = [f'{k}="{_escape_label(v)}"' for k, v in labels.items()]
@@ -72,7 +74,7 @@ def _median(lst: list) -> float:
     return (s[n // 2 - 1] + s[n // 2]) / 2
 
 
-def _percentile(values: List[float], q: float) -> float:
+def _percentile(values: list[float], q: float) -> float:
     if not values:
         return 0.0
     ordered = sorted(values)
@@ -88,7 +90,7 @@ def _percentile(values: List[float], q: float) -> float:
     return float(ordered[low] * (1.0 - weight) + ordered[high] * weight)
 
 
-def _split_reasons(raw: str) -> List[str]:
+def _split_reasons(raw: str) -> list[str]:
     if not raw:
         return []
     parts = [p.strip() for p in raw.split("|")]
@@ -115,7 +117,7 @@ class FillStats:
     sell_notional: float = 0.0
     total_fees: float = 0.0
     total_realized_pnl: float = 0.0
-    # Cumulative sums (for delta()/windowed averages in Grafana)
+    # Cumulative sums (for delta()/windowed averages in Prometheus)
     fill_slippage_bps_sum: float = 0.0
     fill_slippage_bps_count: int = 0
     expected_spread_bps_sum: float = 0.0
@@ -166,7 +168,7 @@ class PositionSnapshot:
 class PortfolioSnapshot:
     """Aggregated portfolio data from paper_desk_v2.json."""
     open_pnl_quote: float = 0.0
-    positions: List[PositionSnapshot] = field(default_factory=list)
+    positions: list[PositionSnapshot] = field(default_factory=list)
     paper_margin_call_events_total: float = 0.0
     paper_liquidation_events_total: float = 0.0
     paper_liquidation_actions_total: float = 0.0
@@ -186,7 +188,7 @@ class MinuteHistoryStats:
 @dataclass
 class MinuteFileScan:
     """Cheap single-pass minute.csv summary used on the scrape path."""
-    last_row: Optional[Dict[str, str]] = None
+    last_row: dict[str, str] | None = None
     row_count: int = 0
 
 
@@ -195,7 +197,7 @@ class FillsFileSummary:
     """Single-pass fills.csv summary for the default scrape path."""
     row_count: int = 0
     fill_stats: FillStats = field(default_factory=FillStats)
-    recent_fills: List[Dict[str, object]] = field(default_factory=list)
+    recent_fills: list[dict[str, object]] = field(default_factory=list)
 
 
 @dataclass
@@ -299,9 +301,9 @@ class BotSnapshot:
     best_bid_size: float = 0.0
     best_ask_size: float = 0.0
     book_imbalance: float = 0.0
-    fill_stats: Optional[FillStats] = None
-    portfolio: Optional[PortfolioSnapshot] = None
-    minute_history: Optional[MinuteHistoryStats] = None
+    fill_stats: FillStats | None = None
+    portfolio: PortfolioSnapshot | None = None
+    minute_history: MinuteHistoryStats | None = None
     derisk_stall_seconds: float = 0.0
     derisk_stall_active: float = 0.0
     minute_rows_total: float = 0.0
@@ -312,8 +314,9 @@ class BotSnapshot:
     open_orders_total: float = 0.0
     open_orders_buy: float = 0.0
     open_orders_sell: float = 0.0
-    open_orders: List[OpenOrderSnapshot] = field(default_factory=list)
-    recent_fills: List[Dict[str, object]] = field(default_factory=list)
+    open_orders: list[OpenOrderSnapshot] = field(default_factory=list)
+    recent_fills: list[dict[str, object]] = field(default_factory=list)
+    order_failure_total: float = 0.0
 
 
 class BotMetricsExporter:
@@ -329,14 +332,30 @@ class BotMetricsExporter:
         self._render_lock = threading.Lock()
         self._last_render_cache = ""
         self._last_render_monotonic = 0.0
-        self._file_result_cache: Dict[Tuple[str, str], Tuple[int, int, Any]] = {}
+        self._file_result_cache: dict[tuple[str, str], tuple[int, int, Any]] = {}
         self._render_requests_total = 0
         self._render_cache_hits_total = 0
         self._stale_cache_fallback_total = 0
         self._render_failures_total = 0
         self._render_duration_last_ms = 0.0
-        self._render_duration_samples_ms: List[float] = []
-        self._source_read_failures_total: Dict[str, int] = {}
+        self._render_duration_samples_ms: list[float] = []
+        self._source_read_failures_total: dict[str, int] = {}
+        self._redis_clients: dict[str, object] = {}
+
+    def register_redis_client(self, name: str, client: object) -> None:
+        """Register a RedisStreamClient (or any object with a .health() method) for metrics collection."""
+        self._redis_clients[name] = client
+
+    def _collect_redis_health(self) -> dict[str, dict]:
+        results: dict[str, dict] = {}
+        for name, client in self._redis_clients.items():
+            health_fn = getattr(client, "health", None)
+            if callable(health_fn):
+                try:
+                    results[name] = health_fn()
+                except Exception:
+                    pass
+        return results
 
     def _record_source_read_failure(self, source: str) -> None:
         key = str(source or "unknown").strip() or "unknown"
@@ -365,7 +384,7 @@ class BotMetricsExporter:
     def _cached_fill_stats(self, fills_path: Path) -> FillStats:
         return self._cached_file_result("fill_stats", fills_path, lambda: self._compute_fill_stats(fills_path))
 
-    def _cached_minute_history(self, minute_file: Path) -> Optional[MinuteHistoryStats]:
+    def _cached_minute_history(self, minute_file: Path) -> MinuteHistoryStats | None:
         return self._cached_file_result("minute_history", minute_file, lambda: self._compute_minute_history(minute_file))
 
     def _cached_minute_file_scan(self, minute_file: Path) -> MinuteFileScan:
@@ -379,7 +398,7 @@ class BotMetricsExporter:
             lambda: self._scan_fills_file(fills_path, recent_limit=safe_limit),
         )
 
-    def _exporter_self_metric_value_lines(self) -> List[str]:
+    def _exporter_self_metric_value_lines(self) -> list[str]:
         cache_hit_ratio = (
             float(self._render_cache_hits_total) / float(self._render_requests_total)
             if self._render_requests_total > 0
@@ -421,8 +440,8 @@ class BotMetricsExporter:
         ]
         return "\n".join(self._exporter_self_metric_value_lines() + filtered) + "\n"
 
-    def collect(self) -> List[BotSnapshot]:
-        snapshots: List[BotSnapshot] = []
+    def collect(self) -> list[BotSnapshot]:
+        snapshots: list[BotSnapshot] = []
         try:
             minute_files = list(iter_bot_log_files(self._data_root, "minute.csv"))
         except OSError:
@@ -434,7 +453,7 @@ class BotMetricsExporter:
                 snapshots.append(snapshot)
         return snapshots
 
-    def _collect_snapshot(self, minute_file: Path) -> Optional[BotSnapshot]:
+    def _collect_snapshot(self, minute_file: Path) -> BotSnapshot | None:
         bot_name = minute_file.parts[-5]
         minute_scan = self._cached_minute_file_scan(minute_file)
         latest_minute = minute_scan.last_row
@@ -588,10 +607,10 @@ class BotMetricsExporter:
             derisk_stall_active=minute_history.derisk_stall_active if minute_history else 0.0,
             minute_rows_total=float(minute_scan.row_count),
             minute_last_timestamp_seconds=ts_epoch,
-            minute_last_age_seconds=max(0.0, datetime.now(timezone.utc).timestamp() - ts_epoch) if ts_epoch > 0 else 1e9,
+            minute_last_age_seconds=max(0.0, datetime.now(UTC).timestamp() - ts_epoch) if ts_epoch > 0 else 1e9,
             fills_last_timestamp_seconds=fill_stats.last_fill_timestamp_seconds if fill_stats else 0.0,
             fills_last_age_seconds=(
-                max(0.0, datetime.now(timezone.utc).timestamp() - fill_stats.last_fill_timestamp_seconds)
+                max(0.0, datetime.now(UTC).timestamp() - fill_stats.last_fill_timestamp_seconds)
                 if fill_stats and fill_stats.last_fill_timestamp_seconds > 0
                 else 1e9
             ),
@@ -600,6 +619,7 @@ class BotMetricsExporter:
             open_orders_sell=float(sum(1 for o in open_orders if o.side == "SELL")),
             open_orders=open_orders,
             recent_fills=recent_fills,
+            order_failure_total=_safe_float(latest_minute.get("paper_reject_count")),
         )
 
     def render_prometheus(self) -> str:
@@ -653,10 +673,10 @@ class BotMetricsExporter:
             return self._with_live_exporter_metrics(self._last_render_cache or "# hbot_exporter_error 1\n")
 
     def _render_prometheus_impl(self) -> str:
-        now = datetime.now(timezone.utc).timestamp()
+        now = datetime.now(UTC).timestamp()
         cluster_label = os.getenv("HB_CLUSTER", os.getenv("CLUSTER", "local"))
         environment_label = os.getenv("HB_ENVIRONMENT", os.getenv("ENVIRONMENT", "dev"))
-        lines: List[str] = []
+        lines: list[str] = []
         lines.extend(
             [
                 "# HELP hbot_exporter_render_requests_total Total exporter render requests.",
@@ -751,6 +771,8 @@ class BotMetricsExporter:
                 "# TYPE hbot_bot_gate_threshold_value gauge",
                 "# HELP hbot_bot_gate_headroom_ratio Normalized gate headroom ratio by gate label; negative means breached.",
                 "# TYPE hbot_bot_gate_headroom_ratio gauge",
+                "# HELP hbot_bot_order_failure_total Paper engine order rejections since startup.",
+                "# TYPE hbot_bot_order_failure_total gauge",
                 "# HELP hbot_bot_fills_total Total fills rows observed in fills.csv.",
                 "# TYPE hbot_bot_fills_total gauge",
                 "# HELP hbot_bot_recent_error_lines Number of ERROR lines in recent bot log tail.",
@@ -931,6 +953,24 @@ class BotMetricsExporter:
                 "# TYPE hbot_bot_closed_trade_duration_seconds gauge",
                 "# HELP hbot_bot_closed_trade_info Recent closed trade info marker with trade labels.",
                 "# TYPE hbot_bot_closed_trade_info gauge",
+                "# HELP hbot_csv_file_size_bytes Size of CSV log file in bytes.",
+                "# TYPE hbot_csv_file_size_bytes gauge",
+                "# HELP hbot_redis_client_connected Whether the Redis client is currently connected.",
+                "# TYPE hbot_redis_client_connected gauge",
+                "# HELP hbot_redis_client_reconnect_attempts_total Total reconnect attempts.",
+                "# TYPE hbot_redis_client_reconnect_attempts_total counter",
+                "# HELP hbot_redis_client_reconnect_successes_total Total successful reconnects.",
+                "# TYPE hbot_redis_client_reconnect_successes_total counter",
+                "# HELP hbot_redis_client_connection_errors_total Total connection errors.",
+                "# TYPE hbot_redis_client_connection_errors_total counter",
+                "# HELP hbot_redis_client_uptime_seconds Seconds since current connection was established.",
+                "# TYPE hbot_redis_client_uptime_seconds gauge",
+                "# HELP hbot_redis_io_latency_p50_ms Redis I/O latency p50 in milliseconds.",
+                "# TYPE hbot_redis_io_latency_p50_ms gauge",
+                "# HELP hbot_redis_io_latency_p99_ms Redis I/O latency p99 in milliseconds.",
+                "# TYPE hbot_redis_io_latency_p99_ms gauge",
+                "# HELP hbot_redis_io_timeout_count Total I/O timeouts.",
+                "# TYPE hbot_redis_io_timeout_count counter",
             ]
         )
         self._append_exporter_self_metrics(lines)
@@ -977,6 +1017,7 @@ class BotMetricsExporter:
             lines.append(f"hbot_bot_daily_loss_pct{_fmt_labels(base_labels)} {snapshot.daily_loss_pct}")
             lines.append(f"hbot_bot_drawdown_pct{_fmt_labels(base_labels)} {snapshot.drawdown_pct}")
             lines.append(f"hbot_bot_cancel_per_min{_fmt_labels(base_labels)} {snapshot.cancel_per_min}")
+            lines.append(f"hbot_bot_order_failure_total{_fmt_labels(base_labels)} {snapshot.order_failure_total}")
             lines.append(f"hbot_bot_fills_total{_fmt_labels(base_labels)} {snapshot.fills_total}")
             lines.append(f"hbot_bot_minute_rows_total{_fmt_labels(base_labels)} {snapshot.minute_rows_total}")
             lines.append(
@@ -995,7 +1036,7 @@ class BotMetricsExporter:
             risk_labels["reasons"] = snapshot.risk_reasons or "none"
             lines.append(f"hbot_bot_risk_reasons_info{_fmt_labels(risk_labels)} 1")
 
-            # Gate diagnostics exported as first-class metrics so Grafana can stay simple.
+            # Gate diagnostics exported as first-class Prometheus metrics.
             active_reasons = _split_reasons(snapshot.risk_reasons)
             if snapshot.soft_pause_edge >= 0.5 and "edge_gate_blocked" not in active_reasons:
                 active_reasons.append("edge_gate_blocked")
@@ -1294,21 +1335,56 @@ class BotMetricsExporter:
         except Exception:
             lines.append("hbot_data_plane_consistency 0")
 
+        try:
+            for bot_dir in sorted(self._data_root.glob("bot*")):
+                logs_dir = bot_dir / "logs"
+                if not logs_dir.is_dir():
+                    continue
+                for csv_name in ("minute.csv", "fills.csv", "daily.csv"):
+                    for csv_path in logs_dir.rglob(csv_name):
+                        if csv_path.is_file():
+                            size_bytes = csv_path.stat().st_size
+                            csv_labels = {
+                                "bot": bot_dir.name,
+                                "file": csv_name,
+                                "cluster": cluster_label,
+                                "environment": environment_label,
+                            }
+                            lines.append(f"hbot_csv_file_size_bytes{_fmt_labels(csv_labels)} {size_bytes}")
+        except Exception:
+            pass
+
+        try:
+            redis_clients = self._collect_redis_health()
+            for svc_name, h in redis_clients.items():
+                rlabels = {"service": svc_name, "cluster": cluster_label, "environment": environment_label}
+                rl = _fmt_labels(rlabels)
+                lines.append(f"hbot_redis_client_connected{rl} {1 if h.get('connected') else 0}")
+                lines.append(f"hbot_redis_client_reconnect_attempts_total{rl} {h.get('reconnect_attempts_total', 0)}")
+                lines.append(f"hbot_redis_client_reconnect_successes_total{rl} {h.get('reconnect_successes_total', 0)}")
+                lines.append(f"hbot_redis_client_connection_errors_total{rl} {h.get('connection_errors_total', 0)}")
+                lines.append(f"hbot_redis_client_uptime_seconds{rl} {h.get('uptime_s', 0.0)}")
+                lines.append(f"hbot_redis_io_latency_p50_ms{rl} {h.get('io_latency_p50_ms', 0.0)}")
+                lines.append(f"hbot_redis_io_latency_p99_ms{rl} {h.get('io_latency_p99_ms', 0.0)}")
+                lines.append(f"hbot_redis_io_timeout_count{rl} {h.get('io_timeout_count', 0)}")
+        except Exception:
+            pass
+
         return "\n".join(lines) + "\n"
 
-    def _append_exporter_self_metrics(self, lines: List[str]) -> None:
+    def _append_exporter_self_metrics(self, lines: list[str]) -> None:
         lines.extend(self._exporter_self_metric_value_lines())
 
-    def _read_open_orders(self, snapshot_path: Path) -> List[OpenOrderSnapshot]:
+    def _read_open_orders(self, snapshot_path: Path) -> list[OpenOrderSnapshot]:
         if not snapshot_path.exists():
             return []
-        def _load() -> List[OpenOrderSnapshot]:
+        def _load() -> list[OpenOrderSnapshot]:
             try:
                 payload = json.loads(snapshot_path.read_text(encoding="utf-8"))
                 orders_raw = payload.get("orders", [])
                 if not isinstance(orders_raw, list):
                     return []
-                out: List[OpenOrderSnapshot] = []
+                out: list[OpenOrderSnapshot] = []
                 for row in orders_raw:
                     if not isinstance(row, dict):
                         continue
@@ -1331,17 +1407,17 @@ class BotMetricsExporter:
                 return []
         return self._cached_file_result("open_orders", snapshot_path, _load)
 
-    def _read_portfolio(self, portfolio_path: Path) -> Optional[PortfolioSnapshot]:
+    def _read_portfolio(self, portfolio_path: Path) -> PortfolioSnapshot | None:
         """Read paper_desk_v2.json and return open position metrics."""
         if not portfolio_path.exists():
             return None
-        def _load() -> Optional[PortfolioSnapshot]:
+        def _load() -> PortfolioSnapshot | None:
             try:
                 data = json.loads(portfolio_path.read_text(encoding="utf-8"))
                 positions_raw = data.get("portfolio", {}).get("positions", {})
                 risk_counters = data.get("risk_counters", {}) if isinstance(data.get("risk_counters"), dict) else {}
                 total_unrealized = 0.0
-                positions: List[PositionSnapshot] = []
+                positions: list[PositionSnapshot] = []
                 for key, pos in positions_raw.items():
                     if not isinstance(pos, dict):
                         continue
@@ -1376,7 +1452,7 @@ class BotMetricsExporter:
                 return None
         return self._cached_file_result("portfolio", portfolio_path, _load)
 
-    def _compute_minute_history(self, minute_file: Path) -> Optional[MinuteHistoryStats]:
+    def _compute_minute_history(self, minute_file: Path) -> MinuteHistoryStats | None:
         """
         Scan all rows in minute.csv to compute:
         - equity_start_quote: equity_quote of the first row
@@ -1387,7 +1463,7 @@ class BotMetricsExporter:
         if not minute_file.exists():
             return None
         try:
-            rows: List[Dict[str, str]] = []
+            rows: list[dict[str, str]] = []
             with minute_file.open("r", encoding="utf-8", newline="") as fp:
                 reader = csv.DictReader(fp)
                 for row in reader:
@@ -1396,7 +1472,7 @@ class BotMetricsExporter:
                 return None
 
             equity_start = _safe_float(rows[0].get("equity_quote"))
-            now_utc = datetime.now(timezone.utc)
+            now_utc = datetime.now(UTC)
 
             def _pnl_since(days: int) -> float:
                 cutoff = now_utc - timedelta(days=days)
@@ -1483,7 +1559,7 @@ class BotMetricsExporter:
             self._record_source_read_failure("minute_file_scan")
         return scan
 
-    def _read_daily_state_any(self, log_dir: Path) -> Optional[Dict[str, str]]:
+    def _read_daily_state_any(self, log_dir: Path) -> dict[str, str] | None:
         """Read any daily_state*.json file (v1 or v2 naming convention)."""
         import json
         candidates = sorted(log_dir.glob("daily_state*.json"), key=lambda p: p.stat().st_mtime, reverse=True)
@@ -1498,12 +1574,12 @@ class BotMetricsExporter:
         return None
 
 
-    def _read_last_csv_row(self, path: Path) -> Optional[Dict[str, str]]:
+    def _read_last_csv_row(self, path: Path) -> dict[str, str] | None:
         if not path.exists():
             return None
         if path.name == "minute.csv":
             return self._cached_minute_file_scan(path).last_row
-        def _load() -> Optional[Dict[str, str]]:
+        def _load() -> dict[str, str] | None:
             try:
                 with path.open("r", encoding="utf-8", newline="") as fp:
                     reader = csv.DictReader(fp)
@@ -1522,13 +1598,13 @@ class BotMetricsExporter:
             return summary
         try:
             buy_prices, sell_prices = [], []
-            pnl_values: List[float] = []
-            recent_rows: List[Dict[str, str]] = []
+            pnl_values: list[float] = []
+            recent_rows: list[dict[str, str]] = []
             first_ts_epoch: float = 0.0
             last_ts_epoch: float = 0.0
-            cutoff_5m = datetime.now(timezone.utc).timestamp() - (5 * 60)
-            cutoff_1h = datetime.now(timezone.utc).timestamp() - (60 * 60)
-            cutoff_24h = datetime.now(timezone.utc).timestamp() - (24 * 3600)
+            cutoff_5m = datetime.now(UTC).timestamp() - (5 * 60)
+            cutoff_1h = datetime.now(UTC).timestamp() - (60 * 60)
+            cutoff_24h = datetime.now(UTC).timestamp() - (24 * 3600)
             safe_recent_limit = max(1, int(recent_limit))
             with fills_path.open("r", encoding="utf-8", newline="") as fp:
                 reader = csv.DictReader(fp)
@@ -1661,16 +1737,16 @@ class BotMetricsExporter:
     def _compute_fill_stats(self, fills_path: Path) -> FillStats:
         return self._scan_fills_file(fills_path, recent_limit=1).fill_stats
 
-    def _read_recent_fills(self, fills_path: Path, limit: int = 50) -> List[Dict[str, object]]:
+    def _read_recent_fills(self, fills_path: Path, limit: int = 50) -> list[dict[str, object]]:
         if not fills_path.exists():
             return []
         safe_limit = max(1, int(limit))
         if safe_limit == 50:
             return list(self._cached_fills_summary(fills_path, limit=safe_limit).recent_fills)
         cache_key = f"recent_fills_{int(limit)}"
-        def _load() -> List[Dict[str, object]]:
+        def _load() -> list[dict[str, object]]:
             try:
-                rows: List[Dict[str, str]] = []
+                rows: list[dict[str, str]] = []
                 with fills_path.open("r", encoding="utf-8", newline="") as fp:
                     reader = csv.DictReader(fp)
                     for row in reader:
@@ -1815,7 +1891,9 @@ def main() -> None:
     MetricsHandler.metrics_path = metrics_path
 
     server = ThreadingHTTPServer(("0.0.0.0", port), MetricsHandler)
-    print(f"bot_metrics_exporter listening on :{port}{metrics_path}, data_root={data_root}")
+    logging.basicConfig(level=logging.INFO, format="%(asctime)s %(name)s %(levelname)s %(message)s")
+    logger = logging.getLogger("bot_metrics_exporter")
+    logger.info("listening on :%d%s, data_root=%s", port, metrics_path, data_root)
     server.serve_forever()
 
 

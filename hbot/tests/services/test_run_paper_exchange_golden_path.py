@@ -4,7 +4,7 @@ from scripts.release import run_paper_exchange_golden_path as golden_path
 
 
 def test_build_report_passes_when_all_scenarios_pass(monkeypatch, tmp_path) -> None:
-    def _fake_run(root, node_ids, *, strict):  # noqa: ARG001
+    def _fake_run(root, node_ids, *, strict):
         return 0, "ok", 0.01
 
     monkeypatch.setattr(golden_path, "_run_pytest_scenario", _fake_run)
@@ -24,7 +24,7 @@ def test_build_report_passes_when_all_scenarios_pass(monkeypatch, tmp_path) -> N
 
 
 def test_build_report_collects_failure_categories_and_scenarios(monkeypatch, tmp_path) -> None:
-    def _fake_run(root, node_ids, *, strict):  # noqa: ARG001
+    def _fake_run(root, node_ids, *, strict):
         joined = " ".join(node_ids)
         if "test_active_buy_rejects_while_sync_pending" in joined:
             return 2, "sync failure", 0.02

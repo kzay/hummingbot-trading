@@ -1,8 +1,7 @@
 """Compatibility wrappers for legacy bot5 EPP lane names.
 
-Preferred implementation lives at `controllers.bots.bot5.ift_jota_v1`.
+Preferred implementation lives at ``controllers.bots.bot5.ift_jota_v1``.
 """
-
 from controllers.bots.bot5.ift_jota_v1 import Bot5IftJotaV1Config, Bot5IftJotaV1Controller
 
 

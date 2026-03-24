@@ -2,10 +2,8 @@ from __future__ import annotations
 
 import argparse
 import json
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
-from typing import Dict, List
-
 
 REQUIRED_FIELDS = [
     "bot",
@@ -24,10 +22,10 @@ REQUIRED_FIELDS = [
 
 
 def _utc_now() -> str:
-    return datetime.now(timezone.utc).isoformat()
+    return datetime.now(UTC).isoformat()
 
 
-def _read_json(path: Path) -> Dict[str, object]:
+def _read_json(path: Path) -> dict[str, object]:
     if not path.exists():
         return {}
     try:
@@ -40,12 +38,12 @@ def _read_json(path: Path) -> Dict[str, object]:
 def _minutes_since(ts: str) -> float:
     try:
         dt = datetime.fromisoformat(ts.replace("Z", "+00:00"))
-        return (datetime.now(timezone.utc) - dt).total_seconds() / 60.0
+        return (datetime.now(UTC) - dt).total_seconds() / 60.0
     except Exception:
         return 1e9
 
 
-def _write(path: Path, payload: Dict[str, object]) -> None:
+def _write(path: Path, payload: dict[str, object]) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(json.dumps(payload, indent=2), encoding="utf-8")
 
@@ -65,7 +63,7 @@ def main() -> int:
 
     snapshots = recon.get("accounting_snapshots", [])
     snapshots = snapshots if isinstance(snapshots, list) else []
-    missing_field_rows: List[Dict[str, object]] = []
+    missing_field_rows: list[dict[str, object]] = []
     for idx, row in enumerate(snapshots):
         if not isinstance(row, dict):
             missing_field_rows.append({"index": idx, "missing": ["<row_not_object>"]})
@@ -118,7 +116,7 @@ def main() -> int:
     }
 
     out_dir = root / "reports" / "accounting"
-    stamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
+    stamp = datetime.now(UTC).strftime("%Y%m%dT%H%M%SZ")
     out = out_dir / f"accounting_integrity_{stamp}.json"
     _write(out, payload)
     _write(out_dir / "latest.json", payload)

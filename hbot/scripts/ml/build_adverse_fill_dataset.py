@@ -7,8 +7,8 @@ Requirements:
     pip install pandas pyarrow
 
 Usage:
-    python hbot/scripts/ml/build_adverse_fill_dataset.py
-    python hbot/scripts/ml/build_adverse_fill_dataset.py --root hbot/data/bot1/logs/epp_v24/bot1_a
+    PYTHONPATH=hbot python -m scripts.ml.build_adverse_fill_dataset
+    PYTHONPATH=hbot python -m scripts.ml.build_adverse_fill_dataset --root data/bot1/logs/epp_v24/bot1_a
 
 Gate: Run after collecting >= 5,000 fills (~20 days at current fill rate).
 """
@@ -17,9 +17,8 @@ from __future__ import annotations
 import argparse
 import csv
 import sys
-from datetime import datetime, timezone
+from datetime import datetime
 from pathlib import Path
-from typing import Dict, List, Optional, Tuple
 
 ADVERSE_THRESHOLD_BPS = -2.0
 
@@ -52,7 +51,7 @@ def _safe_float(x, default: float = 0.0) -> float:
         return default
 
 
-def _parse_ts(s: str) -> Optional[datetime]:
+def _parse_ts(s: str) -> datetime | None:
     s = (s or "").strip()
     if s.endswith("Z"):
         s = s[:-1] + "+00:00"
@@ -62,7 +61,7 @@ def _parse_ts(s: str) -> Optional[datetime]:
         return None
 
 
-def _load_csv(path: Path) -> List[Dict]:
+def _load_csv(path: Path) -> list[dict]:
     if not path.exists():
         return []
     rows = []
@@ -77,7 +76,7 @@ def _load_csv(path: Path) -> List[Dict]:
     return rows
 
 
-def _find_nearest_minute(minute_rows: List[Dict], ts: datetime) -> Optional[Dict]:
+def _find_nearest_minute(minute_rows: list[dict], ts: datetime) -> dict | None:
     """Binary search for nearest minute row by timestamp."""
     if not minute_rows:
         return None
@@ -96,7 +95,7 @@ def _find_nearest_minute(minute_rows: List[Dict], ts: datetime) -> Optional[Dict
     return minute_rows[lo]
 
 
-def _compute_pnl_vs_mid_bps(row: Dict) -> float:
+def _compute_pnl_vs_mid_bps(row: dict) -> float:
     price = _safe_float(row.get("price", 0))
     mid_ref = _safe_float(row.get("mid_ref", 0))
     side = str(row.get("side", "")).lower().strip()
@@ -108,10 +107,10 @@ def _compute_pnl_vs_mid_bps(row: Dict) -> float:
         return (price - mid_ref) / mid_ref * 10000
 
 
-def build_feature_vector(fill_row: Dict, minute_row: Optional[Dict]) -> Dict[str, float]:
+def build_feature_vector(fill_row: dict, minute_row: dict | None) -> dict[str, float]:
     import math
 
-    feats: Dict[str, float] = {}
+    feats: dict[str, float] = {}
 
     side = str(fill_row.get("side", "")).lower().strip()
     feats["side_buy"] = 1.0 if side == "buy" else 0.0
@@ -167,9 +166,9 @@ def build_dataset(fills_path: Path, minute_path: Path, output_dir: Path) -> Path
 
     print(f"Loaded {len(fills)} fills, {len(minute_rows)} minute rows", file=sys.stderr)
 
-    feature_dicts: List[Dict[str, float]] = []
-    labels: List[int] = []
-    pnl_bps_list: List[float] = []
+    feature_dicts: list[dict[str, float]] = []
+    labels: list[int] = []
+    pnl_bps_list: list[float] = []
 
     for fill in fills:
         nearest_min = _find_nearest_minute(minute_rows, fill["_ts"])
@@ -205,8 +204,8 @@ def build_dataset(fills_path: Path, minute_path: Path, output_dir: Path) -> Path
 
 if __name__ == "__main__":
     ap = argparse.ArgumentParser(description="Build adverse fill classification dataset")
-    ap.add_argument("--root", default="hbot/data/bot1/logs/epp_v24/bot1_a")
-    ap.add_argument("--output", default="hbot/data/ml")
+    ap.add_argument("--root", default="data/bot1/logs/epp_v24/bot1_a")
+    ap.add_argument("--output", default="data/ml")
     args = ap.parse_args()
 
     root = Path(args.root)

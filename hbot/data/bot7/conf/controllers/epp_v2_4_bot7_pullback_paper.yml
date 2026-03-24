@@ -25,6 +25,7 @@ time_limit: 2400
 take_profit_order_type: LIMIT
 skip_rebalance: true
 position_rebalance_min_base_mult: 5.0
+ghost_position_guard_enabled: true
 
 variant: a
 enabled: true
@@ -63,9 +64,9 @@ pb_rsi_probe_long_max: 58
 pb_rsi_probe_short_min: 42
 pb_rsi_probe_short_max: 62
 
-# ── ADX range gate (22-40: directional but not chaotic) ──────────────
-pb_adx_min: 22
-pb_adx_max: 40
+# ── ADX range gate (18-45: wider window for directional trend) ────────
+pb_adx_min: 18
+pb_adx_max: 45
 
 # ── Pullback zone (near BB basis, above lower band) ──────────────────
 # Static floor; widens to max(zone_pct, atr/mid * zone_atr_mult) in high vol.
@@ -149,7 +150,7 @@ pb_max_entry_imbalance: 0.5
 
 # ── Z-score absorption ──────────────────────────────────────────────
 pb_absorption_zscore_enabled: true
-pb_absorption_zscore_threshold: 2.0
+pb_absorption_zscore_threshold: 1.5
 
 # ── Probe SL tightening ────────────────────────────────────────────
 pb_probe_sl_mult: 0.75
@@ -188,6 +189,9 @@ pb_cooldown_max_s: 360
 # ── Signal diagnostics ───────────────────────────────────────────────
 pb_signal_diagnostics_enabled: true
 pb_min_signals_warn: 3
+
+# ── ICT shadow mode (log-only, no quoting impact) ────────────────────
+ict_shadow_enabled: false
 
 regime_specs_override:
   up:

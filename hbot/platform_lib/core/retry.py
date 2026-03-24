@@ -8,7 +8,10 @@ import asyncio
 import logging
 import random
 import time
-from typing import Awaitable, Callable, TypeVar
+from collections.abc import Awaitable, Callable
+from typing import TypeVar
+
+from platform_lib.exceptions import RetryExhaustedError
 
 logger = logging.getLogger(__name__)
 
@@ -58,7 +61,8 @@ def with_retry(
             delay *= 1.0 + random.uniform(0, 0.5)
             logger.warning("Retry %d/%d after %s: %s — sleeping %.1fs", attempt + 1, max_attempts, type(e).__name__, e, delay)
             time.sleep(delay)
-    assert last_exc is not None
+    if last_exc is None:
+        raise RetryExhaustedError("with_retry: all attempts exhausted with no exception")
     raise last_exc
 
 
@@ -97,5 +101,6 @@ async def async_with_retry(
             delay *= 1.0 + random.uniform(0, 0.5)
             logger.warning("Retry %d/%d after %s: %s — sleeping %.1fs", attempt + 1, max_attempts, type(e).__name__, e, delay)
             await asyncio.sleep(delay)
-    assert last_exc is not None
+    if last_exc is None:
+        raise RetryExhaustedError("async_with_retry: all attempts exhausted with no exception")
     raise last_exc

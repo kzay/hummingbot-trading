@@ -6,7 +6,7 @@ Files are COPIED (not moved) so the bot continues to append to the originals.
 Usage::
 
     python scripts/ops/artifact_retention.py --date 2026-02-26
-    python scripts/ops/artifact_retention.py              # defaults to today UTC
+    python scripts/ops/artifact_retention.py              # defaults to today timezone.utc
 """
 from __future__ import annotations
 
@@ -14,7 +14,7 @@ import argparse
 import logging
 import shutil
 import sys
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
@@ -53,8 +53,8 @@ def main() -> None:
     parser = argparse.ArgumentParser(description="Back up paper-state files to date-keyed archive")
     parser.add_argument(
         "--date",
-        default=datetime.now(timezone.utc).strftime("%Y%m%d"),
-        help="Archive date key (default: today UTC, format YYYYMMDD)",
+        default=datetime.now(UTC).strftime("%Y%m%d"),
+        help="Archive date key (default: today timezone.utc, format YYYYMMDD)",
     )
     parser.add_argument(
         "--root",

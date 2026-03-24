@@ -13,9 +13,8 @@ import hashlib
 import json
 import math
 import time
-from typing import Dict, List, Tuple
 
-from services.contracts.event_schemas import MarketSnapshotEvent
+from platform_lib.contracts.event_schemas import MarketSnapshotEvent
 
 
 def _safe_float(x, default: float = 0.0) -> float:
@@ -25,7 +24,7 @@ def _safe_float(x, default: float = 0.0) -> float:
         return default
 
 
-def _time_encoding(timestamp_ms: int) -> Tuple[float, float]:
+def _time_encoding(timestamp_ms: int) -> tuple[float, float]:
     """Sine/cosine encoding of hour-of-day from timestamp_ms."""
     hour = (timestamp_ms // 3_600_000) % 24
     angle = 2 * math.pi * hour / 24.0
@@ -35,7 +34,7 @@ def _time_encoding(timestamp_ms: int) -> Tuple[float, float]:
 def build_features(
     market: MarketSnapshotEvent,
     feature_set: str = "v1",
-) -> Tuple[List[float], Dict[str, float], str]:
+) -> tuple[list[float], dict[str, float], str]:
     """Build a feature vector from a MarketSnapshotEvent.
 
     Returns: (feature_vector, feature_map, feature_hash)
@@ -50,9 +49,9 @@ def build_features(
     raise ValueError(f"Unsupported feature_set={feature_set!r}. Use 'v1', 'v2', or 'v3'.")
 
 
-def _build_v1(market: MarketSnapshotEvent) -> Tuple[List[float], Dict[str, float], str]:
+def _build_v1(market: MarketSnapshotEvent) -> tuple[list[float], dict[str, float], str]:
     """Original 8-feature set (backward compatible)."""
-    feature_map: Dict[str, float] = {
+    feature_map: dict[str, float] = {
         "mid_price": _safe_float(market.mid_price),
         "equity_quote": _safe_float(market.equity_quote),
         "base_pct": _safe_float(market.base_pct),
@@ -71,7 +70,7 @@ def _build_v1(market: MarketSnapshotEvent) -> Tuple[List[float], Dict[str, float
 def _build_v2(
     market: MarketSnapshotEvent,
     include_time: bool = False,
-) -> Tuple[List[float], Dict[str, float], str]:
+) -> tuple[list[float], dict[str, float], str]:
     """Enriched feature set (v2/v3) for regime classification and adverse fill prediction.
 
     Reads additional fields from market.extra dict populated by v2_with_controllers.py.
@@ -95,7 +94,7 @@ def _build_v2(
     fill_edge_ewma_bps = _safe_float(extra.get("fill_edge_ewma_bps", 0))
     drawdown_pct = _safe_float(extra.get("drawdown_pct", 0))
 
-    feature_map: Dict[str, float] = {
+    feature_map: dict[str, float] = {
         "mid_price": mid,
         "equity_quote": eq,
         "base_pct": base,
@@ -126,7 +125,7 @@ def _build_v2(
     return feature_vector, feature_map, feature_hash
 
 
-def get_feature_names(feature_set: str = "v1") -> List[str]:
+def get_feature_names(feature_set: str = "v1") -> list[str]:
     """Return ordered feature names for a given feature set."""
     if feature_set == "v1":
         return sorted([

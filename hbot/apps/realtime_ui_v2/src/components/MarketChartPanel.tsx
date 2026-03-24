@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef } from "react";
+import { memo, useEffect, useMemo, useRef, useState } from "react";
 import {
   CandlestickSeries,
   ColorType,
@@ -17,12 +17,13 @@ import { useDashboardStore } from "../store/useDashboardStore";
 import type { UiCandle } from "../types/realtime";
 import { formatNumber, toNum } from "../utils/format";
 import { getDepthStats } from "../utils/metrics";
+import { useFlashClass } from "../hooks/useFlashClass";
 import { Panel } from "./Panel";
 
 const EMPTY_DEPTH_LEVELS: [] = [];
-const LATEST_CANDLE_UPDATE_MS = 750;
+const LATEST_CANDLE_UPDATE_MS = 250;
 
-export function MarketChartPanel() {
+export const MarketChartPanel = memo(function MarketChartPanel() {
   const {
     candles,
     latestCandle,
@@ -37,6 +38,7 @@ export function MarketChartPanel() {
     depthBids,
     depthAsks,
     latestMid,
+    marketTsMs,
   } = useDashboardStore(
     useShallow((state) => ({
       candles: state.candles,
@@ -52,6 +54,7 @@ export function MarketChartPanel() {
       depthBids: state.depth.bids,
       depthAsks: state.depth.asks,
       latestMid: state.latestMid,
+      marketTsMs: state.freshness.marketTsMs,
     })),
   );
   const timeframeS = useDashboardStore((state) => state.settings.timeframeS);
@@ -65,6 +68,11 @@ export function MarketChartPanel() {
   const latestAppliedCandleRef = useRef("");
   const queuedLatestCandleRef = useRef<UiCandle | null>(null);
   const latestCandleTimerRef = useRef<number | null>(null);
+
+  const displayMid = toNum(marketMidPrice) ?? toNum(latestMid);
+  const priceDirectionClass = midPriceDirection === "up" ? "value-positive" : midPriceDirection === "down" ? "value-negative" : "value-neutral";
+  const [hoverOHLC, setHoverOHLC] = useState<{ open: number; high: number; low: number; close: number } | null>(null);
+  const midFlash = useFlashClass(displayMid);
 
   const stats = useMemo(
     () =>
@@ -87,8 +95,6 @@ export function MarketChartPanel() {
       })),
     [candles],
   );
-  const displayMid = toNum(marketMidPrice) ?? toNum(latestMid);
-  const priceDirectionClass = midPriceDirection === "up" ? "value-positive" : midPriceDirection === "down" ? "value-negative" : "value-neutral";
   const fillMarkers = useMemo(
     () =>
       fills
@@ -117,58 +123,91 @@ export function MarketChartPanel() {
     if (!root) {
       return;
     }
-    const chart = createChart(root, {
-      layout: {
-        background: { type: ColorType.Solid, color: "#121a28" },
-        textColor: "#dce3f0",
-      },
-      grid: {
-        vertLines: { color: "#273244" },
-        horzLines: { color: "#273244" },
-      },
-      timeScale: {
-        timeVisible: true,
-        secondsVisible: true,
-        borderColor: "#3c4555",
-      },
-      rightPriceScale: {
-        borderColor: "#3c4555",
-      },
-      crosshair: {
-        mode: 0,
-      },
-      width: Math.max(320, root.clientWidth),
-      height: Math.max(260, root.clientHeight || 360),
-    });
-    const series = chart.addSeries(CandlestickSeries, {
-      upColor: "#1f9d55",
-      downColor: "#d64545",
-      borderVisible: false,
-      wickUpColor: "#1f9d55",
-      wickDownColor: "#d64545",
-    });
-    chartRef.current = chart;
-    candleSeriesRef.current = series;
-    fillMarkersRef.current = createSeriesMarkers(series, []);
+    let chart: IChartApi | null = null;
+    let resizeObserver: ResizeObserver | null = null;
+    let disposed = false;
 
-    const resize = () => {
-      const width = Math.max(320, root.clientWidth);
-      const height = Math.max(260, root.clientHeight || 360);
-      chart.applyOptions({ width, height });
-    };
-    resize();
-    const resizeObserver = new ResizeObserver(() => {
+    try {
+      chart = createChart(root, {
+        layout: {
+          background: { type: ColorType.Solid, color: "#121a28" },
+          textColor: "#dce3f0",
+        },
+        grid: {
+          vertLines: { color: "#273244" },
+          horzLines: { color: "#273244" },
+        },
+        timeScale: {
+          timeVisible: true,
+          secondsVisible: true,
+          borderColor: "#3c4555",
+        },
+        rightPriceScale: {
+          borderColor: "#3c4555",
+        },
+        crosshair: {
+          mode: 0,
+        },
+        width: Math.max(320, root.clientWidth || 640),
+        height: Math.max(260, root.clientHeight || 360),
+      });
+      const series = chart.addSeries(CandlestickSeries, {
+        upColor: "#1f9d55",
+        downColor: "#d64545",
+        borderVisible: false,
+        wickUpColor: "#1f9d55",
+        wickDownColor: "#d64545",
+      });
+      chartRef.current = chart;
+      candleSeriesRef.current = series;
+      fillMarkersRef.current = createSeriesMarkers(series, []);
+
+      chart.subscribeCrosshairMove((param) => {
+        if (!param.seriesData || param.seriesData.size === 0) {
+          setHoverOHLC(null);
+          return;
+        }
+        const data = param.seriesData.get(series) as CandlestickData | undefined;
+        if (data && "open" in data) {
+          setHoverOHLC({ open: data.open, high: data.high, low: data.low, close: data.close });
+        }
+      });
+
+      const resize = () => {
+        if (disposed || !chart) {
+          return;
+        }
+        try {
+          const width = Math.max(320, root.clientWidth || 640);
+          const height = Math.max(260, root.clientHeight || 360);
+          chart.applyOptions({ width, height });
+        } catch {
+          // chart may have been disposed during layout
+        }
+      };
       resize();
-    });
-    resizeObserver.observe(root);
+      resizeObserver = new ResizeObserver(() => {
+        resize();
+      });
+      resizeObserver.observe(root);
+    } catch {
+      // chart init can fail on rapid refresh when the DOM is not ready
+      chartRef.current = null;
+      candleSeriesRef.current = null;
+    }
 
     return () => {
-      resizeObserver.disconnect();
+      disposed = true;
+      resizeObserver?.disconnect();
       if (latestCandleTimerRef.current !== null) {
         window.clearTimeout(latestCandleTimerRef.current);
         latestCandleTimerRef.current = null;
       }
-      chart.remove();
+      try {
+        chart?.remove();
+      } catch {
+        // no-op on double-dispose
+      }
       chartRef.current = null;
       candleSeriesRef.current = null;
       priceLinesRef.current = [];
@@ -183,7 +222,11 @@ export function MarketChartPanel() {
     if (!candleSeriesRef.current) {
       return;
     }
-    candleSeriesRef.current.setData(chartCandles as CandlestickData[]);
+    try {
+      candleSeriesRef.current.setData(chartCandles as CandlestickData[]);
+    } catch {
+      return;
+    }
     const lastChartCandle = chartCandles[chartCandles.length - 1] ?? null;
     latestAppliedCandleRef.current = lastChartCandle
       ? `${lastChartCandle.time}-${lastChartCandle.close}-${lastChartCandle.high}-${lastChartCandle.low}`
@@ -208,19 +251,27 @@ export function MarketChartPanel() {
       if (latestAppliedCandleRef.current === nextKey) {
         return;
       }
-      candleSeriesRef.current.update({
-        time: queuedLatestCandle.time as Time,
-        open: queuedLatestCandle.open,
-        high: queuedLatestCandle.high,
-        low: queuedLatestCandle.low,
-        close: queuedLatestCandle.close,
-      });
-      latestAppliedCandleRef.current = nextKey;
+      try {
+        candleSeriesRef.current.update({
+          time: queuedLatestCandle.time as Time,
+          open: queuedLatestCandle.open,
+          high: queuedLatestCandle.high,
+          low: queuedLatestCandle.low,
+          close: queuedLatestCandle.close,
+        });
+        latestAppliedCandleRef.current = nextKey;
+      } catch {
+        // chart disposed during timer
+      }
     }, LATEST_CANDLE_UPDATE_MS);
   }, [latestCandle]);
 
   useEffect(() => {
-    fillMarkersRef.current?.setMarkers(fillMarkers);
+    try {
+      fillMarkersRef.current?.setMarkers(fillMarkers);
+    } catch {
+      // chart disposed
+    }
   }, [fillMarkers]);
 
   useEffect(() => {
@@ -276,7 +327,8 @@ export function MarketChartPanel() {
 
     const avgEntry = toNum(position.avg_entry_price);
     const qty = toNum(position.quantity);
-    if (avgEntry !== null && avgEntry > 0 && qty !== null && Math.abs(qty) > 0) {
+    const positionSide = String(position.side || "").toLowerCase();
+    if (avgEntry !== null && avgEntry > 0 && qty !== null && Math.abs(qty) > 1e-12 && positionSide !== "flat") {
       const side = String(position.side || (qty > 0 ? "long" : "short")).toLowerCase();
       const color = side === "short" ? "#ff8f8f" : "#7ec8ff";
       const line = series.createPriceLine({
@@ -295,7 +347,8 @@ export function MarketChartPanel() {
     <Panel
       title="Price Chart"
       subtitle="Realtime candles with open-order and position overlays."
-      className="panel-span-8 chart-panel"
+      className="panel-span-12 chart-panel"
+      freshnessTsMs={marketTsMs}
       actions={
         <label className="chart-control">
           <span>Timeframe</span>
@@ -313,15 +366,25 @@ export function MarketChartPanel() {
         </label>
       }
     >
-      <div className="panel-meta-row">
-        <span className={`meta-pill ${priceDirectionClass}`.trim()}>Mid {formatNumber(displayMid, 4)}</span>
-        <span className="meta-pill">Bid {formatNumber(stats.bestBid, 4)}</span>
-        <span className="meta-pill">Ask {formatNumber(stats.bestAsk, 4)}</span>
-        <span className="meta-pill">Spread {formatNumber(stats.spreadPct, 3)}%</span>
-        <span className="meta-pill">Candles {candles.length}</span>
-        <span className="meta-pill">Last {formatNumber(latestCandle?.close, 4)}</span>
+      <div className="panel-meta-row" style={{ alignItems: "center" }}>
+        <span className={`mid-price-hero ${midFlash || priceDirectionClass}`.trim()}>
+          {formatNumber(displayMid, 2)}
+        </span>
+        <span className="meta-pill">Bid {formatNumber(stats.bestBid, 2)}</span>
+        <span className="meta-pill">Ask {formatNumber(stats.bestAsk, 2)}</span>
+        <span className="meta-pill">Sprd {formatNumber(stats.spreadPct, 4)}%</span>
+        {hoverOHLC ? (
+          <>
+            <span className="meta-pill">O {formatNumber(hoverOHLC.open, 2)}</span>
+            <span className="meta-pill">H {formatNumber(hoverOHLC.high, 2)}</span>
+            <span className="meta-pill">L {formatNumber(hoverOHLC.low, 2)}</span>
+            <span className="meta-pill">C {formatNumber(hoverOHLC.close, 2)}</span>
+          </>
+        ) : (
+          <span className="meta-pill">{candles.length} candles</span>
+        )}
       </div>
       <div ref={chartRootRef} className="chart-root" />
     </Panel>
   );
-}
+});

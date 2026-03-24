@@ -15,21 +15,19 @@ Layout mirrors FreqTrade's ftui:
   └─────────────────────────────────────────────────────────┘
 
 Usage:
-    python hbot/scripts/analysis/ftui_dashboard.py
-    python hbot/scripts/analysis/ftui_dashboard.py --watch      # live refresh every 15s
-    python hbot/scripts/analysis/ftui_dashboard.py --data-dir hbot/data/bot1/logs/epp_v24/bot1_a
+    PYTHONPATH=hbot python -m scripts.analysis.ftui_dashboard
+    PYTHONPATH=hbot python -m scripts.analysis.ftui_dashboard --watch      # live refresh every 15s
+    PYTHONPATH=hbot python -m scripts.analysis.ftui_dashboard --data-dir data/bot1/logs/epp_v24/bot1_a
 """
 
 import argparse
 import csv
 import io
 import json
-import os
 import sys
 import time
-from datetime import datetime, timezone, timedelta
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
-from typing import Optional
 
 # Force UTF-8 output on Windows to support unicode box-drawing characters
 if sys.stdout.encoding and sys.stdout.encoding.lower() not in ("utf-8", "utf8"):
@@ -39,14 +37,12 @@ if sys.stdout.encoding and sys.stdout.encoding.lower() not in ("utf-8", "utf8"):
     except AttributeError:
         pass
 
+from rich import box
+from rich.columns import Columns
 from rich.console import Console
-from rich.layout import Layout
-from rich.live import Live
 from rich.panel import Panel
 from rich.table import Table
-from rich import box
 from rich.text import Text
-from rich.columns import Columns
 
 # ──────────────────────────────────────────────────────────────────────────────
 # Defaults
@@ -76,11 +72,11 @@ def _load_portfolio(path: Path) -> dict:
 
 
 def _parse_ts(ts_str: str) -> datetime:
-    """Parse ISO timestamp, returns UTC-aware datetime."""
+    """Parse ISO timestamp, returns timezone.utc-aware datetime."""
     try:
         return datetime.fromisoformat(ts_str.replace("Z", "+00:00"))
     except Exception:
-        return datetime.min.replace(tzinfo=timezone.utc)
+        return datetime.min.replace(tzinfo=UTC)
 
 
 def _float(v, default=0.0) -> float:
@@ -100,14 +96,14 @@ class DashboardData:
         self.fills: list[dict] = []
         self.minutes: list[dict] = []
         self.portfolio: dict = {}
-        self.now_utc = datetime.now(timezone.utc)
+        self.now_utc = datetime.now(UTC)
         self.refresh()
 
     def refresh(self):
         self.fills = _read_csv(self.data_dir / "fills.csv")
         self.minutes = _read_csv(self.data_dir / "minute.csv")
         self.portfolio = _load_portfolio(self.data_dir / "paper_desk_v2.json")
-        self.now_utc = datetime.now(timezone.utc)
+        self.now_utc = datetime.now(UTC)
 
     # ── Header stats ──────────────────────────────────────────────────────────
 
@@ -249,7 +245,7 @@ class DashboardData:
             # Duration from opened_at_ns
             opened_ns = _float(pos.get("opened_at_ns", 0))
             if opened_ns > 0:
-                opened_dt = datetime.fromtimestamp(opened_ns / 1e9, tz=timezone.utc)
+                opened_dt = datetime.fromtimestamp(opened_ns / 1e9, tz=UTC)
                 dur = self.now_utc - opened_dt
                 dur_str = _fmt_dur(dur)
             else:
@@ -588,7 +584,7 @@ def build_chart_panel(data: DashboardData, console_width: int = 100) -> Panel:
 
 
 def build_timestamp(data: DashboardData) -> Text:
-    ts_str = data.now_utc.strftime("%H:%M:%S UTC")
+    ts_str = data.now_utc.strftime("%H:%M:%S timezone.utc")
     # Latest minute row state
     state = "—"
     regime = "—"
@@ -596,12 +592,12 @@ def build_timestamp(data: DashboardData) -> Text:
         last = data.minutes[-1]
         state = last.get("state", "—")
         regime = last.get("regime", "—")
-        ts_str = f"{ts_str}   last minute: {_parse_ts(last.get('ts','')).strftime('%Y-%m-%d %H:%M')} UTC"
+        ts_str = f"{ts_str}   last minute: {_parse_ts(last.get('ts','')).strftime('%Y-%m-%d %H:%M')} timezone.utc"
     color = {"running": "green", "soft_pause": "yellow", "hard_stop": "red"}.get(state, "white")
     t = Text()
     t.append(" FreqText ", style="bold white on blue")
     t.append(f"  {ts_str}   ", style="dim")
-    t.append(f"State: ", style="bold")
+    t.append("State: ", style="bold")
     t.append(f"{state.upper()} ", style=f"bold {color}")
     t.append(f"  Regime: {regime}", style="dim")
     return t

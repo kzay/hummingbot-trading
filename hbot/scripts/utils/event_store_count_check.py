@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import json
 import os
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
 
 try:
@@ -10,7 +10,7 @@ try:
 except Exception as exc:  # pragma: no cover
     raise RuntimeError("redis package is required. Install with `python -m pip install redis`.") from exc
 
-from services.contracts.stream_names import (
+from platform_lib.contracts.stream_names import (
     AUDIT_STREAM,
     BOT_TELEMETRY_STREAM,
     EXECUTION_INTENT_STREAM,
@@ -21,7 +21,6 @@ from services.contracts.stream_names import (
     RISK_DECISION_STREAM,
     SIGNAL_STREAM,
 )
-
 
 STREAMS = (
     MARKET_DATA_STREAM,
@@ -44,7 +43,7 @@ def _safe_int(value: object, default: int = 0) -> int:
 
 
 def _utc_now() -> str:
-    return datetime.now(timezone.utc).isoformat()
+    return datetime.now(UTC).isoformat()
 
 
 def _load_json(path: Path, default: dict) -> dict:
@@ -95,7 +94,7 @@ def main() -> None:
     root = Path(__file__).resolve().parents[2]
     reports_dir = root / "reports" / "event_store"
     integrity_path = _latest_integrity_file(reports_dir)
-    out_path = root / "reports" / "event_store" / f"source_compare_{datetime.now(timezone.utc).strftime('%Y%m%dT%H%M%SZ')}.json"
+    out_path = root / "reports" / "event_store" / f"source_compare_{datetime.now(UTC).strftime('%Y%m%dT%H%M%SZ')}.json"
     baseline_path = root / "reports" / "event_store" / "baseline_counts.json"
     out_path.parent.mkdir(parents=True, exist_ok=True)
 

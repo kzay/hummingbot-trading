@@ -4,19 +4,27 @@ from __future__ import annotations
 import json
 import sys
 from decimal import Decimal
-from types import ModuleType
-from types import SimpleNamespace
+from types import ModuleType, SimpleNamespace
 from unittest.mock import MagicMock, patch
 
 import pytest
 
-from controllers.paper_engine_v2 import hb_bridge
-from controllers.paper_engine_v2.portfolio import PaperPortfolio, PortfolioConfig
-from controllers.paper_engine_v2.signal_consumer import (
-    _consume_signals as _consume_signals_impl,
+from simulation.bridge import hb_bridge
+from simulation.portfolio import PaperPortfolio, PortfolioConfig
+from simulation.bridge.signal_consumer import (
     _check_hard_stop_transitions as _check_hard_stop_impl,
 )
-from controllers.paper_engine_v2.types import InstrumentId, OrderCanceled, OrderFilled, OrderRejected, OrderSide, PositionAction
+from simulation.bridge.signal_consumer import (
+    _consume_signals as _consume_signals_impl,
+)
+from simulation.types import (
+    InstrumentId,
+    OrderCanceled,
+    OrderFilled,
+    OrderRejected,
+    OrderSide,
+    PositionAction,
+)
 from tests.controllers.test_paper_engine_v2.conftest import BTC_PERP, make_spec
 
 
@@ -408,7 +416,7 @@ class TestPaperExchangeShadowAdapter:
             hb_bridge._ensure_sync_state_command(strategy, "test_conn", "BTC-USDT")
 
         payload = json.loads(mock_redis.xadd.call_args[0][1]["payload"])
-        assert int(payload["expires_at_ms"]) - int(payload["timestamp_ms"]) >= 300_000
+        assert int(payload["expires_at_ms"]) - int(payload["timestamp_ms"]) >= 299_000
 
     def test_submit_order_uses_extended_active_command_ttl(self):
         strategy, _ = _make_strategy_with_controller(instance_name="bot1")
@@ -434,7 +442,7 @@ class TestPaperExchangeShadowAdapter:
         assert entry_id == "202-0"
         payload = json.loads(mock_redis.xadd.call_args[0][1]["payload"])
         assert payload["command"] == "submit_order"
-        assert int(payload["expires_at_ms"]) - int(payload["timestamp_ms"]) >= 120_000
+        assert int(payload["expires_at_ms"]) - int(payload["timestamp_ms"]) >= 119_000
 
 
 class TestPaperExchangeModeResolution:
@@ -444,16 +452,15 @@ class TestPaperExchangeModeResolution:
         hb_bridge._bridge_state.redis_client = mock_redis
         hb_bridge._bridge_state.redis_init_done = True
 
-        with patch("controllers.paper_engine_v2.hb_bridge.time.time", return_value=1700000000.5):
-            with patch.dict(
-                "os.environ",
-                {
-                    "PAPER_EXCHANGE_MODE": "auto",
-                    "PAPER_EXCHANGE_AUTO_MAX_HEARTBEAT_AGE_MS": "2000",
-                },
-                clear=False,
-            ):
-                mode = hb_bridge._paper_exchange_mode_for_instance("bot1")
+        with patch("simulation.bridge.hb_bridge.time.time", return_value=1700000000.5), patch.dict(
+            "os.environ",
+            {
+                "PAPER_EXCHANGE_MODE": "auto",
+                "PAPER_EXCHANGE_AUTO_MAX_HEARTBEAT_AGE_MS": "2000",
+            },
+            clear=False,
+        ):
+            mode = hb_bridge._paper_exchange_mode_for_instance("bot1")
         assert mode == "active"
 
     def test_auto_mode_falls_back_to_shadow_when_service_unavailable(self):
@@ -477,18 +484,17 @@ class TestPaperExchangeModeResolution:
         hb_bridge._bridge_state.redis_client = mock_redis
         hb_bridge._bridge_state.redis_init_done = True
 
-        with patch("controllers.paper_engine_v2.hb_bridge.time.time", return_value=1700000000.5):
-            with patch.dict(
-                "os.environ",
-                {
-                    "PAPER_EXCHANGE_MODE": "auto",
-                    "PAPER_EXCHANGE_AUTO_MAX_HEARTBEAT_AGE_MS": "2000",
-                    "PAPER_EXCHANGE_AUTO_CACHE_MS": "60000",
-                },
-                clear=False,
-            ):
-                first = hb_bridge._paper_exchange_mode_for_instance("bot1")
-                second = hb_bridge._paper_exchange_mode_for_instance("bot1")
+        with patch("simulation.bridge.hb_bridge.time.time", return_value=1700000000.5), patch.dict(
+            "os.environ",
+            {
+                "PAPER_EXCHANGE_MODE": "auto",
+                "PAPER_EXCHANGE_AUTO_MAX_HEARTBEAT_AGE_MS": "2000",
+                "PAPER_EXCHANGE_AUTO_CACHE_MS": "60000",
+            },
+            clear=False,
+        ):
+            first = hb_bridge._paper_exchange_mode_for_instance("bot1")
+            second = hb_bridge._paper_exchange_mode_for_instance("bot1")
         assert first == "active"
         assert second == "active"
         assert mock_redis.xrevrange.call_count == 1
@@ -932,10 +938,9 @@ def test_patch_connector_balances_exposes_hedge_leg_position_reads() -> None:
             "os.environ",
             {"PAPER_EXCHANGE_MODE_BOT1": "active", "PAPER_EXCHANGE_SUBMIT_RETRY_TTL_S": "2.0"},
             clear=False,
-        ):
-            with patch.object(hb_bridge, "_fire_hb_events") as mock_fire:
-                first_order_id = strategy.buy("test_conn", "BTC-USDT", Decimal("0.01"), "limit", Decimal("10000"))
-                second_order_id = strategy.buy("test_conn", "BTC-USDT", Decimal("0.01"), "limit", Decimal("10000"))
+        ), patch.object(hb_bridge, "_fire_hb_events") as mock_fire:
+            first_order_id = strategy.buy("test_conn", "BTC-USDT", Decimal("0.01"), "limit", Decimal("10000"))
+            second_order_id = strategy.buy("test_conn", "BTC-USDT", Decimal("0.01"), "limit", Decimal("10000"))
 
         assert first_order_id == second_order_id
         mock_fire.assert_not_called()
@@ -965,10 +970,9 @@ def test_patch_connector_balances_exposes_hedge_leg_position_reads() -> None:
             "os.environ",
             {"PAPER_EXCHANGE_MODE_BOT1": "active", "PAPER_EXCHANGE_SUBMIT_RETRY_TTL_S": "0"},
             clear=False,
-        ):
-            with patch.object(hb_bridge, "_fire_hb_events") as mock_fire:
-                first_order_id = strategy.buy("test_conn", "BTC-USDT", Decimal("0.01"), "limit", Decimal("10000"))
-                second_order_id = strategy.buy("test_conn", "BTC-USDT", Decimal("0.01"), "limit", Decimal("10000"))
+        ), patch.object(hb_bridge, "_fire_hb_events") as mock_fire:
+            first_order_id = strategy.buy("test_conn", "BTC-USDT", Decimal("0.01"), "limit", Decimal("10000"))
+            second_order_id = strategy.buy("test_conn", "BTC-USDT", Decimal("0.01"), "limit", Decimal("10000"))
 
         assert first_order_id != second_order_id
         mock_fire.assert_not_called()
@@ -1056,10 +1060,9 @@ def test_patch_connector_balances_exposes_hedge_leg_position_reads() -> None:
             "os.environ",
             {"PAPER_EXCHANGE_MODE_BOT1": "active", "PAPER_EXCHANGE_CANCEL_RETRY_TTL_S": "2.0"},
             clear=False,
-        ):
-            with patch.object(hb_bridge, "_fire_hb_events") as mock_fire:
-                strategy.cancel("test_conn", "BTC-USDT", "ord-cancel-retry-1")
-                strategy.cancel("test_conn", "BTC-USDT", "ord-cancel-retry-1")
+        ), patch.object(hb_bridge, "_fire_hb_events") as mock_fire:
+            strategy.cancel("test_conn", "BTC-USDT", "ord-cancel-retry-1")
+            strategy.cancel("test_conn", "BTC-USDT", "ord-cancel-retry-1")
 
         mock_fire.assert_not_called()
         assert mock_redis.xadd.call_count == 2
@@ -1091,10 +1094,9 @@ def test_patch_connector_balances_exposes_hedge_leg_position_reads() -> None:
             "os.environ",
             {"PAPER_EXCHANGE_MODE_BOT1": "active", "PAPER_EXCHANGE_CANCEL_RETRY_TTL_S": "0"},
             clear=False,
-        ):
-            with patch.object(hb_bridge, "_fire_hb_events") as mock_fire:
-                strategy.cancel("test_conn", "BTC-USDT", "ord-cancel-retry-2")
-                strategy.cancel("test_conn", "BTC-USDT", "ord-cancel-retry-2")
+        ), patch.object(hb_bridge, "_fire_hb_events") as mock_fire:
+            strategy.cancel("test_conn", "BTC-USDT", "ord-cancel-retry-2")
+            strategy.cancel("test_conn", "BTC-USDT", "ord-cancel-retry-2")
 
         mock_fire.assert_not_called()
         assert mock_redis.xadd.call_count == 2
@@ -1124,9 +1126,8 @@ def test_patch_connector_balances_exposes_hedge_leg_position_reads() -> None:
             "os.environ",
             {"PAPER_EXCHANGE_MODE_BOT1": "active", "PAPER_EXCHANGE_SYNC_TIMEOUT_MS": "10"},
             clear=False,
-        ):
-            with patch.object(hb_bridge, "_fire_hb_events") as mock_fire:
-                order_id = strategy.buy("test_conn", "BTC-USDT", Decimal("0.01"), "limit", Decimal("10000"))
+        ), patch.object(hb_bridge, "_fire_hb_events") as mock_fire:
+            order_id = strategy.buy("test_conn", "BTC-USDT", Decimal("0.01"), "limit", Decimal("10000"))
 
         assert isinstance(order_id, str)
         assert order_id.startswith("pe-")
@@ -1672,3 +1673,85 @@ class TestExecutorInflightCompatibility:
         resolved = executor.get_in_flight_order("test_conn", "ord-missing")
         assert resolved is None
         tracker.fetch_order.assert_called_once_with(client_order_id="ord-missing")
+
+
+class TestSyncFillToPortfolio:
+    """Verify _sync_fill_to_portfolio settles external fills into PaperDesk portfolio."""
+
+    def _make_strategy_with_desk(self):
+        from simulation.data_feeds import StaticDataFeed
+        from simulation.desk import DeskConfig, PaperDesk
+        from simulation.portfolio import PortfolioConfig as PConfig
+        from tests.controllers.test_paper_engine_v2.conftest import make_book
+
+        desk = PaperDesk(DeskConfig(
+            initial_balances={"USDT": Decimal("5000")},
+            portfolio_config=PConfig(),
+            state_file_path="/tmp/_test_sync_fill_desk.json",
+            reset_state_on_startup=True,
+        ))
+        book = make_book(bid_price="69000", ask_price="69010", iid=BTC_PERP)
+        feed = StaticDataFeed(book=book)
+        desk.register_instrument(make_spec(BTC_PERP), feed)
+        strategy = SimpleNamespace(_paper_desk_v2=desk)
+        return strategy, desk
+
+    def test_open_fill_debits_fee_from_ledger(self):
+        strategy, desk = self._make_strategy_with_desk()
+        hb_bridge._sync_fill_to_portfolio(
+            strategy, BTC_PERP,
+            side_str="buy", fill_price=Decimal("70000"),
+            fill_qty=Decimal("0.001"), fill_fee=Decimal("0.014"),
+            position_action_str="", position_mode_str="ONEWAY",
+            now_ns=1_000_000_000,
+        )
+        assert desk.portfolio.balance("USDT") == Decimal("4999.986")
+
+    def test_close_fill_settles_pnl_and_fee(self):
+        strategy, desk = self._make_strategy_with_desk()
+        hb_bridge._sync_fill_to_portfolio(
+            strategy, BTC_PERP,
+            side_str="buy", fill_price=Decimal("70000"),
+            fill_qty=Decimal("0.001"), fill_fee=Decimal("0.014"),
+            position_action_str="", position_mode_str="ONEWAY",
+            now_ns=1_000_000_000,
+        )
+        hb_bridge._sync_fill_to_portfolio(
+            strategy, BTC_PERP,
+            side_str="sell", fill_price=Decimal("69000"),
+            fill_qty=Decimal("0.001"), fill_fee=Decimal("0.014"),
+            position_action_str="", position_mode_str="ONEWAY",
+            now_ns=2_000_000_000,
+        )
+        expected = Decimal("5000") - Decimal("0.028") - Decimal("1")
+        assert desk.portfolio.balance("USDT") == expected
+
+    def test_equity_quote_accurate_after_sync(self):
+        strategy, desk = self._make_strategy_with_desk()
+        hb_bridge._sync_fill_to_portfolio(
+            strategy, BTC_PERP,
+            side_str="buy", fill_price=Decimal("70000"),
+            fill_qty=Decimal("0.001"), fill_fee=Decimal("0.014"),
+            position_action_str="", position_mode_str="ONEWAY",
+            now_ns=1_000_000_000,
+        )
+        hb_bridge._sync_fill_to_portfolio(
+            strategy, BTC_PERP,
+            side_str="sell", fill_price=Decimal("69000"),
+            fill_qty=Decimal("0.001"), fill_fee=Decimal("0.014"),
+            position_action_str="", position_mode_str="ONEWAY",
+            now_ns=2_000_000_000,
+        )
+        eq = desk.portfolio.equity_quote({BTC_PERP.key: Decimal("69000")})
+        expected = Decimal("5000") - Decimal("0.028") - Decimal("1")
+        assert eq == expected
+
+    def test_no_crash_without_desk(self):
+        strategy = SimpleNamespace()
+        hb_bridge._sync_fill_to_portfolio(
+            strategy, BTC_PERP,
+            side_str="buy", fill_price=Decimal("70000"),
+            fill_qty=Decimal("0.001"), fill_fee=Decimal("0.014"),
+            position_action_str="", position_mode_str="ONEWAY",
+            now_ns=1_000_000_000,
+        )

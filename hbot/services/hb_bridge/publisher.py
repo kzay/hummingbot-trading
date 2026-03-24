@@ -1,10 +1,9 @@
 from __future__ import annotations
 
 import logging
-from typing import Optional
 
-from services.contracts.event_identity import validate_event_identity
-from services.contracts.event_schemas import (
+from platform_lib.contracts.event_identity import validate_event_identity
+from platform_lib.contracts.event_schemas import (
     AuditEvent,
     BotFillEvent,
     MarketDepthSnapshotEvent,
@@ -12,11 +11,11 @@ from services.contracts.event_schemas import (
     MarketSnapshotEvent,
     MarketTradeEvent,
 )
-from services.contracts.stream_names import (
+from platform_lib.contracts.stream_names import (
     AUDIT_STREAM,
     BOT_TELEMETRY_STREAM,
-    MARKET_DEPTH_STREAM,
     MARKET_DATA_STREAM,
+    MARKET_DEPTH_STREAM,
     MARKET_QUOTE_STREAM,
     MARKET_TRADE_STREAM,
     STREAM_RETENTION_MAXLEN,
@@ -35,7 +34,7 @@ class HBEventPublisher:
     def available(self) -> bool:
         return self._redis.enabled and self._redis.ping()
 
-    def _publish(self, stream: str, payload: dict) -> Optional[str]:
+    def _publish(self, stream: str, payload: dict) -> str | None:
         valid, reason = validate_event_identity(payload)
         if not valid:
             logger.warning(
@@ -51,27 +50,27 @@ class HBEventPublisher:
             maxlen=STREAM_RETENTION_MAXLEN.get(stream),
         )
 
-    def publish_market_snapshot(self, event: MarketSnapshotEvent) -> Optional[str]:
+    def publish_market_snapshot(self, event: MarketSnapshotEvent) -> str | None:
         event.producer = self._producer
         return self._publish(MARKET_DATA_STREAM, event.model_dump())
 
-    def publish_market_depth(self, event: MarketDepthSnapshotEvent) -> Optional[str]:
+    def publish_market_depth(self, event: MarketDepthSnapshotEvent) -> str | None:
         event.producer = self._producer
         return self._publish(MARKET_DEPTH_STREAM, event.model_dump())
 
-    def publish_market_quote(self, event: MarketQuoteEvent) -> Optional[str]:
+    def publish_market_quote(self, event: MarketQuoteEvent) -> str | None:
         event.producer = self._producer
         return self._publish(MARKET_QUOTE_STREAM, event.model_dump())
 
-    def publish_market_trade(self, event: MarketTradeEvent) -> Optional[str]:
+    def publish_market_trade(self, event: MarketTradeEvent) -> str | None:
         event.producer = self._producer
         return self._publish(MARKET_TRADE_STREAM, event.model_dump())
 
-    def publish_audit(self, event: AuditEvent) -> Optional[str]:
+    def publish_audit(self, event: AuditEvent) -> str | None:
         event.producer = self._producer
         return self._publish(AUDIT_STREAM, event.model_dump())
 
-    def publish_fill(self, event: BotFillEvent) -> Optional[str]:
+    def publish_fill(self, event: BotFillEvent) -> str | None:
         """Publish a fill event to BOT_TELEMETRY_STREAM.
 
         Works for both paper (accounting_source='paper_desk_v2') and live

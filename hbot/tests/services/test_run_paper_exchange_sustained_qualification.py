@@ -1,13 +1,13 @@
 from __future__ import annotations
 
 from scripts.release.run_paper_exchange_sustained_qualification import (
-    build_report,
     _expected_command_count,
     _resolve_command_maxlen,
     _resolve_lookback_sec,
     _resolve_min_commands,
     _resolve_sample_count,
     _resolve_sustained_window_sec,
+    build_report,
 )
 
 

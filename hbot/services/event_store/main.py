@@ -3,28 +3,32 @@ from __future__ import annotations
 import argparse
 import json
 import logging
+
+try:
+    import orjson as _orjson
+except ImportError:  # pragma: no cover
+    _orjson = None  # type: ignore[assignment]
 import os
+import tempfile
 import time
 import uuid
-import tempfile
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
-from typing import Dict, List, Tuple, Any, Optional
+from typing import Any
 
-from services.common.models import RedisSettings, ServiceSettings
-from services.contracts.event_identity import validate_event_identity
-from services.contracts.stream_names import (
+from platform_lib.core.models import RedisSettings, ServiceSettings
+from platform_lib.contracts.event_identity import validate_event_identity
+from platform_lib.contracts.stream_names import (
     AUDIT_STREAM,
     BOT_TELEMETRY_STREAM,
     EXECUTION_INTENT_STREAM,
-    MARKET_DEPTH_STREAM,
     MARKET_DATA_STREAM,
+    MARKET_DEPTH_STREAM,
     MARKET_QUOTE_STREAM,
     MARKET_TRADE_STREAM,
     ML_SIGNAL_STREAM,
     RISK_DECISION_STREAM,
     SIGNAL_STREAM,
-    DEFAULT_CONSUMER_GROUP,
     STREAM_RETENTION_MAXLEN,
 )
 from services.hb_bridge.redis_client import RedisStreamClient
@@ -37,7 +41,7 @@ except Exception:  # pragma: no cover - optional dependency in some environments
     psycopg = None  # type: ignore[assignment]
 
 
-STREAMS: Tuple[str, ...] = (
+STREAMS: tuple[str, ...] = (
     MARKET_DATA_STREAM,
     MARKET_QUOTE_STREAM,
     MARKET_TRADE_STREAM,
@@ -50,7 +54,7 @@ STREAMS: Tuple[str, ...] = (
     BOT_TELEMETRY_STREAM,   # paper + live fills, minute snapshots
 )
 
-STREAM_TO_EVENT_TYPE: Dict[str, str] = {
+STREAM_TO_EVENT_TYPE: dict[str, str] = {
     MARKET_DATA_STREAM: "market_snapshot",
     MARKET_QUOTE_STREAM: "market_quote",
     MARKET_TRADE_STREAM: "market_trade",
@@ -65,7 +69,7 @@ STREAM_TO_EVENT_TYPE: Dict[str, str] = {
 
 
 def _now_iso() -> str:
-    return datetime.now(timezone.utc).isoformat()
+    return datetime.now(UTC).isoformat()
 
 
 def _coerce_ts_utc(value: object) -> str:
@@ -82,7 +86,7 @@ def _coerce_ts_utc(value: object) -> str:
             seconds = epoch_like / 1_000_000.0
         elif mag >= 1e12:    # milliseconds
             seconds = epoch_like / 1_000.0
-        return datetime.fromtimestamp(seconds, tz=timezone.utc).isoformat()
+        return datetime.fromtimestamp(seconds, tz=UTC).isoformat()
 
     try:
         if isinstance(value, (int, float)):
@@ -90,12 +94,12 @@ def _coerce_ts_utc(value: object) -> str:
         raw = str(value).strip()
         if raw and raw.lstrip("-").isdigit():
             return _epoch_like_to_iso(float(raw))
-        return datetime.fromisoformat(raw.replace("Z", "+00:00")).astimezone(timezone.utc).isoformat()
+        return datetime.fromisoformat(raw.replace("Z", "+00:00")).astimezone(UTC).isoformat()
     except Exception:
         return _now_iso()
 
 
-def _stream_entry_id_to_iso(entry_id: str) -> Optional[str]:
+def _stream_entry_id_to_iso(entry_id: str) -> str | None:
     raw = str(entry_id or "").strip()
     if not raw:
         return None
@@ -103,12 +107,12 @@ def _stream_entry_id_to_iso(entry_id: str) -> Optional[str]:
     if not ms_part or not ms_part.lstrip("-").isdigit():
         return None
     try:
-        return datetime.fromtimestamp(int(ms_part) / 1000.0, tz=timezone.utc).isoformat()
+        return datetime.fromtimestamp(int(ms_part) / 1000.0, tz=UTC).isoformat()
     except Exception:
         return None
 
 
-def _normalize(payload: Dict[str, object], stream: str, entry_id: str, producer: str) -> Dict[str, object]:
+def _normalize(payload: dict[str, object], stream: str, entry_id: str, producer: str) -> dict[str, object]:
     event_id = str(payload.get("event_id") or uuid.uuid4())
     correlation_id = str(payload.get("correlation_id") or event_id)
     event_type = str(payload.get("event_type") or STREAM_TO_EVENT_TYPE.get(stream, "unknown"))
@@ -135,27 +139,27 @@ def _normalize(payload: Dict[str, object], stream: str, entry_id: str, producer:
     return envelope
 
 
-def _accept_envelope(envelope: Dict[str, object]) -> Tuple[bool, str]:
+def _accept_envelope(envelope: dict[str, object]) -> tuple[bool, str]:
     """Enforce minimum identity contract to prevent cross-bot contamination."""
     return validate_event_identity(envelope, allow_nested_payload=True)
 
 
 def _store_path(root: Path) -> Path:
-    today = datetime.now(timezone.utc).strftime("%Y%m%d")
+    today = datetime.now(UTC).strftime("%Y%m%d")
     path = root / "reports" / "event_store" / f"events_{today}.jsonl"
     path.parent.mkdir(parents=True, exist_ok=True)
     return path
 
 
 def _stats_path(root: Path) -> Path:
-    today = datetime.now(timezone.utc).strftime("%Y%m%d")
+    today = datetime.now(UTC).strftime("%Y%m%d")
     path = root / "reports" / "event_store" / f"integrity_{today}.json"
     path.parent.mkdir(parents=True, exist_ok=True)
     return path
 
 
 def _bootstrap_report_path(root: Path) -> Path:
-    stamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
+    stamp = datetime.now(UTC).strftime("%Y%m%dT%H%M%SZ")
     return root / "reports" / "event_store" / f"bootstrap_{stamp}.json"
 
 
@@ -168,7 +172,7 @@ def _resolve_root() -> Path:
     return Path(__file__).resolve().parents[2]
 
 
-def _append_events(path: Path, events: List[Dict[str, object]]) -> bool:
+def _append_events(path: Path, events: list[dict[str, object]]) -> bool:
     if not events:
         return True
     retries = max(1, int(os.getenv("EVENT_STORE_APPEND_RETRIES", "3")))
@@ -176,7 +180,7 @@ def _append_events(path: Path, events: List[Dict[str, object]]) -> bool:
         try:
             with path.open("a", encoding="utf-8") as f:
                 for event in events:
-                    f.write(json.dumps(event, ensure_ascii=True) + "\n")
+                    f.write((_orjson.dumps(event, default=str).decode() if _orjson else json.dumps(event, ensure_ascii=True)) + "\n")
                 f.flush()
                 os.fsync(f.fileno())
             return True
@@ -201,7 +205,7 @@ def _append_events(path: Path, events: List[Dict[str, object]]) -> bool:
     return False
 
 
-def _default_stats_payload() -> Dict[str, object]:
+def _default_stats_payload() -> dict[str, object]:
     return {
         "total_events": 0,
         "events_by_stream": {},
@@ -221,14 +225,16 @@ def _default_stats_payload() -> Dict[str, object]:
         "latest_event_lag_ms_last": 0.0,
         "oldest_event_lag_ms_recent": [],
         "last_batch_stream_counts": {},
+        "db_mirror_alive": False,
     }
 
 
-def _read_stats(path: Path) -> Dict[str, object]:
+def _read_stats(path: Path) -> dict[str, object]:
     try:
         if not path.exists():
             return _default_stats_payload()
-        payload = json.loads(path.read_text(encoding="utf-8"))
+        _text = path.read_text(encoding="utf-8")
+        payload = _orjson.loads(_text) if _orjson else json.loads(_text)
         if isinstance(payload, dict):
             defaults = _default_stats_payload()
             for key, value in defaults.items():
@@ -245,10 +251,10 @@ def _read_stats(path: Path) -> Dict[str, object]:
 
 def _write_stats(
     path: Path,
-    batch: List[Dict[str, object]],
+    batch: list[dict[str, object]],
     batch_duration_ms: float | None = None,
     *,
-    cycle_metrics: Optional[Dict[str, object]] = None,
+    cycle_metrics: dict[str, object] | None = None,
 ) -> bool:
     stats = _read_stats(path)
     events_by_stream = dict(stats.get("events_by_stream", {}))
@@ -271,7 +277,7 @@ def _write_stats(
         recent_durations = recent_durations[-50:]
         stats["ingest_duration_ms_last"] = round(max(0.0, float(batch_duration_ms)), 3)
     stats["ingest_duration_ms_recent"] = recent_durations
-    stats["last_batch_size"] = int(len(batch))
+    stats["last_batch_size"] = len(batch)
     metrics = cycle_metrics if isinstance(cycle_metrics, dict) else {}
     stats["accepted_events_last"] = int(metrics.get("accepted_events_last", len(batch)) or 0)
     stats["dropped_events_last"] = int(metrics.get("dropped_events_last", 0) or 0)
@@ -288,6 +294,7 @@ def _write_stats(
     stats["oldest_event_lag_ms_recent"] = lag_recent[-50:]
     stream_counts = metrics.get("last_batch_stream_counts", {})
     stats["last_batch_stream_counts"] = dict(stream_counts) if isinstance(stream_counts, dict) else {}
+    stats["db_mirror_alive"] = bool(metrics.get("db_mirror_alive", False))
     now_iso = _now_iso()
     stats["last_update_utc"] = now_iso
     stats["ts_utc"] = now_iso
@@ -337,30 +344,30 @@ def _write_stats(
     return False
 
 
-def _count_entries_by_stream(entries: List[Tuple[str, str]]) -> Dict[str, int]:
-    counts: Dict[str, int] = {}
+def _count_entries_by_stream(entries: list[tuple[str, str]]) -> dict[str, int]:
+    counts: dict[str, int] = {}
     for stream, _entry_id in entries:
         counts[stream] = int(counts.get(stream, 0)) + 1
     return counts
 
 
-def _batch_stream_counts(batch: List[Dict[str, object]]) -> Dict[str, int]:
-    counts: Dict[str, int] = {}
+def _batch_stream_counts(batch: list[dict[str, object]]) -> dict[str, int]:
+    counts: dict[str, int] = {}
     for event in batch:
         stream = str(event.get("stream", "unknown") or "unknown")
         counts[stream] = int(counts.get(stream, 0)) + 1
     return counts
 
 
-def _batch_lag_metrics(batch: List[Dict[str, object]], *, now_utc: Optional[datetime] = None) -> Dict[str, float]:
-    reference = now_utc or datetime.now(timezone.utc)
-    lags_ms: List[float] = []
+def _batch_lag_metrics(batch: list[dict[str, object]], *, now_utc: datetime | None = None) -> dict[str, float]:
+    reference = now_utc or datetime.now(UTC)
+    lags_ms: list[float] = []
     for event in batch:
         raw_ts = str(event.get("ts_utc", "") or "").strip()
         if not raw_ts:
             continue
         try:
-            event_dt = datetime.fromisoformat(raw_ts.replace("Z", "+00:00")).astimezone(timezone.utc)
+            event_dt = datetime.fromisoformat(raw_ts.replace("Z", "+00:00")).astimezone(UTC)
         except Exception:
             continue
         lag_ms = max(0.0, (reference - event_dt).total_seconds() * 1000.0)
@@ -373,12 +380,12 @@ def _batch_lag_metrics(batch: List[Dict[str, object]], *, now_utc: Optional[date
     }
 
 
-def _ack_entries(client: RedisStreamClient, group: str, ack_keys: List[Tuple[str, str]]) -> None:
+def _ack_entries(client: RedisStreamClient, group: str, ack_keys: list[tuple[str, str]]) -> None:
     if not ack_keys:
         return
     ack_many_fn = getattr(client, "ack_many", None)
     ack_fn = getattr(client, "ack", None)
-    by_stream: Dict[str, List[str]] = {}
+    by_stream: dict[str, list[str]] = {}
     for stream, entry_id in ack_keys:
         stream_name = str(stream or "").strip()
         entry_name = str(entry_id or "").strip()
@@ -394,7 +401,7 @@ def _ack_entries(client: RedisStreamClient, group: str, ack_keys: List[Tuple[str
                 ack_fn(stream, group, entry_id)
 
 
-def _connect_db() -> Optional["psycopg.Connection"]:
+def _connect_db() -> psycopg.Connection | None:
     if psycopg is None:
         return None
     return psycopg.connect(
@@ -406,7 +413,38 @@ def _connect_db() -> Optional["psycopg.Connection"]:
     )
 
 
-def _ensure_db_schema(conn: "psycopg.Connection") -> None:
+def _reconnect_db(current_conn: psycopg.Connection | None) -> psycopg.Connection | None:
+    """Validate existing connection or reconnect with backoff."""
+    if current_conn is not None:
+        try:
+            with current_conn.cursor() as cur:
+                cur.execute("SELECT 1")
+            return current_conn
+        except Exception:
+            try:
+                current_conn.close()
+            except Exception:
+                pass
+    # Reconnect
+    max_attempts = 3
+    for attempt in range(1, max_attempts + 1):
+        try:
+            conn = _connect_db()
+            if conn is not None:
+                _ensure_db_schema(conn)
+                logger.info("event_store db mirror reconnected (attempt %d)", attempt)
+                return conn
+        except Exception as exc:
+            if attempt >= max_attempts:
+                logger.error("event_store db reconnect failed after %d attempts: %s", max_attempts, exc)
+            else:
+                backoff_s = min(2 ** (attempt - 1), 10)
+                logger.warning("event_store db reconnect attempt %d/%d failed: %s (retry in %ds)", attempt, max_attempts, exc, backoff_s)
+                time.sleep(backoff_s)
+    return None
+
+
+def _ensure_db_schema(conn: psycopg.Connection) -> None:
     sql = """
     CREATE TABLE IF NOT EXISTS event_envelope_raw (
       stream TEXT NOT NULL,
@@ -461,7 +499,7 @@ def _ensure_db_schema(conn: "psycopg.Connection") -> None:
     conn.commit()
 
 
-def _append_events_db(conn: "psycopg.Connection", events: List[Dict[str, object]]) -> bool:
+def _append_events_db(conn: psycopg.Connection, events: list[dict[str, object]]) -> bool:
     if not events:
         return True
     sql = """
@@ -500,7 +538,7 @@ def _append_events_db(conn: "psycopg.Connection", events: List[Dict[str, object]
                         "trading_pair": str(event.get("trading_pair", "")),
                         "correlation_id": str(event.get("correlation_id", "")),
                         "schema_validation_status": str(event.get("schema_validation_status", "ok")),
-                        "payload": json.dumps(event.get("payload", {}), ensure_ascii=True),
+                        "payload": (_orjson.dumps(event.get("payload", {}), default=str).decode() if _orjson else json.dumps(event.get("payload", {}), ensure_ascii=True)),
                         "ingest_ts_utc": str(event.get("ingest_ts_utc", _now_iso())),
                         "schema_version": 1,
                     }
@@ -535,8 +573,8 @@ def _env_bool(name: str, default: bool) -> bool:
 
 def _trim_known_streams(
     client: RedisStreamClient,
-    stream_maxlens: Dict[str, int],
-) -> Dict[str, int]:
+    stream_maxlens: dict[str, int],
+) -> dict[str, int]:
     trim_fn = getattr(client, "xtrim", None)
     summary = {
         "streams_checked": 0,
@@ -569,16 +607,16 @@ def _bootstrap_stream_coverage(
     event_path: Path,
     stats_path: Path,
     producer_name: str,
-) -> Dict[str, Any]:
+) -> dict[str, Any]:
     """Seed one latest event per missing stream to preserve coverage visibility."""
     stats = _read_stats(stats_path)
     events_by_stream = stats.get("events_by_stream", {})
     if not isinstance(events_by_stream, dict):
         events_by_stream = {}
 
-    seed_batch: List[Dict[str, object]] = []
-    seeded_streams: List[str] = []
-    missing_streams: List[str] = []
+    seed_batch: list[dict[str, object]] = []
+    seeded_streams: list[str] = []
+    missing_streams: list[str] = []
     for stream in STREAMS:
         existing = int(events_by_stream.get(stream, 0) or 0)
         if existing > 0:
@@ -597,7 +635,7 @@ def _bootstrap_stream_coverage(
         _append_events(event_path, seed_batch)
         _write_stats(stats_path, seed_batch)
 
-    report_payload: Dict[str, Any] = {
+    report_payload: dict[str, Any] = {
         "ts_utc": _now_iso(),
         "status": "pass",
         "seeded_count": len(seed_batch),
@@ -606,9 +644,10 @@ def _bootstrap_stream_coverage(
     }
     report_path = _bootstrap_report_path(root)
     report_path.parent.mkdir(parents=True, exist_ok=True)
-    report_path.write_text(json.dumps(report_payload, indent=2), encoding="utf-8")
+    _report_text = _orjson.dumps(report_payload, option=_orjson.OPT_INDENT_2).decode() if _orjson else json.dumps(report_payload, indent=2)
+    report_path.write_text(_report_text, encoding="utf-8")
     (root / "reports" / "event_store" / "bootstrap_latest.json").write_text(
-        json.dumps(report_payload, indent=2),
+        _report_text,
         encoding="utf-8",
     )
     return report_payload
@@ -622,7 +661,7 @@ def run(once: bool = False) -> None:
     stats_path = _stats_path(root)
     db_mirror_enabled = _env_bool("EVENT_STORE_DB_MIRROR_ENABLED", False)
     db_mirror_required = _env_bool("EVENT_STORE_DB_MIRROR_REQUIRED", False)
-    db_conn: Optional["psycopg.Connection"] = None
+    db_conn: psycopg.Connection | None = None
 
     client = RedisStreamClient(
         host=redis_cfg.host,
@@ -691,10 +730,10 @@ def run(once: bool = False) -> None:
                 )
             last_trim_at = now_monotonic
 
-        batch: List[Dict[str, object]] = []
-        batch_ack_keys: List[Tuple[str, str]] = []
-        dropped_ack_keys: List[Tuple[str, str]] = []
-        dropped_reasons: Dict[str, int] = {}
+        batch: list[dict[str, object]] = []
+        batch_ack_keys: list[tuple[str, str]] = []
+        dropped_ack_keys: list[tuple[str, str]] = []
+        dropped_reasons: dict[str, int] = {}
         pending_entries_read = 0
         claimed_entries_read = 0
         new_entries_read = 0
@@ -764,6 +803,9 @@ def run(once: bool = False) -> None:
 
         ingest_started = time.perf_counter()
         persisted_file = _append_events(event_path, batch)
+        # Reconnect DB if needed before attempting writes
+        if db_mirror_enabled and batch:
+            db_conn = _reconnect_db(db_conn)
         db_ok = _append_events_db(db_conn, batch) if (db_mirror_enabled and db_conn is not None) else True
         ingest_duration_ms = (time.perf_counter() - ingest_started) * 1000.0
         cycle_metrics = {
@@ -774,6 +816,7 @@ def run(once: bool = False) -> None:
             "new_entries_read_last": new_entries_read,
             "eligible_ack_entries_last": len(batch_ack_keys),
             "last_batch_stream_counts": _batch_stream_counts(batch),
+            "db_mirror_alive": db_mirror_enabled and db_conn is not None and db_ok,
             **_batch_lag_metrics(batch),
         }
         stats_ok = (

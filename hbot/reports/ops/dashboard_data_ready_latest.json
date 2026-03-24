@@ -1,9 +1,10 @@
 {
-  "ts_utc": "2026-03-05T21:27:31.351557+00:00",
+  "ts_utc": "2026-03-22T22:49:34.712418+00:00",
   "status": "fail",
   "grafana_ready": false,
   "failed_checks": [
-    "grafana_minute_fresh"
+    "grafana_minute_fresh",
+    "ops_db_writer_status_ok"
   ],
   "checks": {
     "grafana_minute_sources_discovered": true,
@@ -11,7 +12,7 @@
     "grafana_minute_rows_present": true,
     "grafana_minute_fresh": false,
     "ops_db_writer_report_present": true,
-    "ops_db_writer_status_ok": true,
+    "ops_db_writer_status_ok": false,
     "event_store_integrity_present": true,
     "event_store_integrity_fresh": true,
     "event_store_events_present": true,
@@ -34,31 +35,33 @@
         "bot3:d",
         "bot4:a",
         "bot4:d",
-        "bot5:a"
+        "bot5:a",
+        "bot6:a",
+        "bot7:a"
       ],
       "minute_analysis": {
         "bot1:a": {
           "path": "F:\\Environement\\git-repo\\hummingbot_custo\\hbot\\data\\bot1\\logs\\epp_v24\\bot1_a\\minute.csv",
           "has_rows": true,
-          "age_s": 8.64643406867981
+          "age_s": 4713.308064222336
         },
         "bot3:a": {
           "path": "F:\\Environement\\git-repo\\hummingbot_custo\\hbot\\data\\bot3\\logs\\epp_v24\\bot3_a\\minute.csv",
           "has_rows": true,
-          "age_s": 11649.87306714058
+          "age_s": 4709.746635437012
         },
         "bot4:a": {
           "path": "F:\\Environement\\git-repo\\hummingbot_custo\\hbot\\data\\bot4\\logs\\epp_v24\\bot4_a\\minute.csv",
           "has_rows": true,
-          "age_s": 31.23827815055847
+          "age_s": 813034.6219439507
         }
       },
       "ops_db_writer_report_path": "F:\\Environement\\git-repo\\hummingbot_custo\\hbot\\reports\\ops_db_writer\\latest.json",
-      "ops_db_writer_age_s": 746.7319676876068,
-      "ops_db_writer_status": "pass",
-      "event_store_integrity_path": "F:\\Environement\\git-repo\\hummingbot_custo\\hbot\\reports\\event_store\\integrity_20260305.json",
-      "event_store_integrity_total_events": 47344.0,
-      "event_store_integrity_age_s": 3.5399181842803955,
+      "ops_db_writer_age_s": 140.35004234313965,
+      "ops_db_writer_status": "fail",
+      "event_store_integrity_path": "F:\\Environement\\git-repo\\hummingbot_custo\\hbot\\reports\\event_store\\integrity_20260322.json",
+      "event_store_integrity_total_events": 5911.0,
+      "event_store_integrity_age_s": 48.452799797058105,
       "exporter_error": ""
     }
   }

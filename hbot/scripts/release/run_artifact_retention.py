@@ -3,20 +3,19 @@ from __future__ import annotations
 import argparse
 import json
 import os
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
-from typing import Dict, List
 
 
 def _utc_now() -> str:
-    return datetime.now(timezone.utc).isoformat()
+    return datetime.now(UTC).isoformat()
 
 
 def _root() -> Path:
     return Path("/workspace/hbot") if Path("/.dockerenv").exists() else Path(__file__).resolve().parents[2]
 
 
-def _read_json(path: Path, default: Dict[str, object]) -> Dict[str, object]:
+def _read_json(path: Path, default: dict[str, object]) -> dict[str, object]:
     if not path.exists():
         return default
     try:
@@ -27,8 +26,8 @@ def _read_json(path: Path, default: Dict[str, object]) -> Dict[str, object]:
 
 
 def _age_days(path: Path) -> float:
-    mtime = datetime.fromtimestamp(path.stat().st_mtime, tz=timezone.utc)
-    return max(0.0, (datetime.now(timezone.utc) - mtime).total_seconds() / 86400.0)
+    mtime = datetime.fromtimestamp(path.stat().st_mtime, tz=UTC)
+    return max(0.0, (datetime.now(UTC) - mtime).total_seconds() / 86400.0)
 
 
 def main() -> int:
@@ -62,9 +61,9 @@ def main() -> int:
     candidates = 0
     expired = 0
     deleted = 0
-    by_rule: List[Dict[str, object]] = []
-    deletions: List[str] = []
-    delete_errors: List[Dict[str, str]] = []
+    by_rule: list[dict[str, object]] = []
+    deletions: list[str] = []
+    delete_errors: list[dict[str, str]] = []
 
     for rule in rules:
         if not isinstance(rule, dict):
@@ -77,7 +76,7 @@ def main() -> int:
 
         matched = list(root.glob(glob_expr))
         matched_files = [p for p in matched if p.is_file()]
-        rule_expired: List[Path] = []
+        rule_expired: list[Path] = []
         for p in matched_files:
             candidates += 1
             if str(p.resolve()) in protected:
@@ -110,7 +109,7 @@ def main() -> int:
 
     out_dir = root / "reports" / "ops_retention"
     out_dir.mkdir(parents=True, exist_ok=True)
-    stamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
+    stamp = datetime.now(UTC).strftime("%Y%m%dT%H%M%SZ")
     payload = {
         "ts_utc": _utc_now(),
         "mode": "apply" if apply_mode else "dry_run",

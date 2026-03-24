@@ -3,13 +3,12 @@ from __future__ import annotations
 
 import argparse
 import json
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
-from typing import Dict, List, Tuple
 
 
 def _utc_now() -> str:
-    return datetime.now(timezone.utc).isoformat()
+    return datetime.now(UTC).isoformat()
 
 
 def _repo_root() -> Path:
@@ -25,7 +24,7 @@ def _safe_float(value: object, default: float = 0.0) -> float:
         return default
 
 
-def _read_json(path: Path) -> Dict[str, object]:
+def _read_json(path: Path) -> dict[str, object]:
     try:
         payload = json.loads(path.read_text(encoding="utf-8"))
         return payload if isinstance(payload, dict) else {}
@@ -33,7 +32,7 @@ def _read_json(path: Path) -> Dict[str, object]:
         return {}
 
 
-def _symbol_bucket(cfg: Dict[str, object]) -> str:
+def _symbol_bucket(cfg: dict[str, object]) -> str:
     symbols = cfg.get("allowed_symbols", [])
     if isinstance(symbols, list):
         upper = {str(s).strip().upper() for s in symbols}
@@ -49,15 +48,15 @@ def _symbol_bucket(cfg: Dict[str, object]) -> str:
     return "other"
 
 
-def _normalize_weights(weights: Dict[str, float]) -> Dict[str, float]:
+def _normalize_weights(weights: dict[str, float]) -> dict[str, float]:
     cleaned = {k: max(0.0, float(v)) for k, v in weights.items()}
     total = sum(cleaned.values())
     if total <= 0:
-        return {k: 0.0 for k in cleaned.keys()}
+        return {k: 0.0 for k in cleaned}
     return {k: v / total for k, v in cleaned.items()}
 
 
-def _bucket_allocations_from_report(report: Dict[str, object]) -> Dict[str, float]:
+def _bucket_allocations_from_report(report: dict[str, object]) -> dict[str, float]:
     rec = report.get("allocation_recommendation_inverse_variance", {})
     rec = rec if isinstance(rec, dict) else {}
     btc = _safe_float(rec.get("btc"), 0.0)
@@ -66,11 +65,11 @@ def _bucket_allocations_from_report(report: Dict[str, object]) -> Dict[str, floa
     return {"btc": normalized.get("btc", 0.0), "eth": normalized.get("eth", 0.0)}
 
 
-def _eligible_policy_bots(policy: Dict[str, object], included_modes: List[str]) -> Dict[str, Dict[str, object]]:
+def _eligible_policy_bots(policy: dict[str, object], included_modes: list[str]) -> dict[str, dict[str, object]]:
     included = {str(mode).strip().lower() for mode in included_modes}
     bots_raw = policy.get("bots", {})
     bots_raw = bots_raw if isinstance(bots_raw, dict) else {}
-    out: Dict[str, Dict[str, object]] = {}
+    out: dict[str, dict[str, object]] = {}
     for bot, cfg_raw in bots_raw.items():
         cfg = cfg_raw if isinstance(cfg_raw, dict) else {}
         if not bool(cfg.get("enabled", False)):
@@ -84,8 +83,8 @@ def _eligible_policy_bots(policy: Dict[str, object], included_modes: List[str]) 
 
 def _distribute_bucket_weight(
     bucket_weight: float,
-    bot_rows: List[Tuple[str, Dict[str, object]]],
-) -> Dict[str, float]:
+    bot_rows: list[tuple[str, dict[str, object]]],
+) -> dict[str, float]:
     if not bot_rows:
         return {}
     current = {bot: max(0.0, _safe_float(cfg.get("target_alloc_pct"), 0.0)) for bot, cfg in bot_rows}
@@ -98,13 +97,13 @@ def _distribute_bucket_weight(
 
 def build_rebalance_plan(
     *,
-    policy: Dict[str, object],
-    diversification_report: Dict[str, object],
-    included_modes: List[str],
+    policy: dict[str, object],
+    diversification_report: dict[str, object],
+    included_modes: list[str],
     update_max_alloc: bool,
-) -> Dict[str, object]:
+) -> dict[str, object]:
     eligible = _eligible_policy_bots(policy, included_modes=included_modes)
-    by_bucket: Dict[str, List[Tuple[str, Dict[str, object]]]] = {"btc": [], "eth": []}
+    by_bucket: dict[str, list[tuple[str, dict[str, object]]]] = {"btc": [], "eth": []}
     for bot, cfg in eligible.items():
         bucket = _symbol_bucket(cfg)
         if bucket in by_bucket:
@@ -116,8 +115,8 @@ def build_rebalance_plan(
     btc_var = _safe_float(metrics.get("btc_variance"), 0.0)
     eth_var = _safe_float(metrics.get("eth_variance"), 0.0)
 
-    updates: Dict[str, Dict[str, object]] = {}
-    target_alloc_map: Dict[str, float] = {}
+    updates: dict[str, dict[str, object]] = {}
+    target_alloc_map: dict[str, float] = {}
     target_alloc_map.update(_distribute_bucket_weight(bucket_alloc.get("btc", 0.0), by_bucket["btc"]))
     target_alloc_map.update(_distribute_bucket_weight(bucket_alloc.get("eth", 0.0), by_bucket["eth"]))
 
@@ -159,7 +158,7 @@ def build_rebalance_plan(
         and len(by_bucket["eth"]) > 0
         and sum(bucket_alloc.values()) > 0.0
     )
-    blocking_reasons: List[str] = []
+    blocking_reasons: list[str] = []
     if report_status != "pass":
         blocking_reasons.append(f"diversification_report_status={report_status or 'missing'}")
     if len(by_bucket["btc"]) == 0:
@@ -191,7 +190,7 @@ def build_rebalance_plan(
     }
 
 
-def apply_rebalance_to_policy(policy: Dict[str, object], plan: Dict[str, object]) -> Dict[str, object]:
+def apply_rebalance_to_policy(policy: dict[str, object], plan: dict[str, object]) -> dict[str, object]:
     bots = policy.get("bots", {})
     bots = bots if isinstance(bots, dict) else {}
     updates_raw = plan.get("updates", {})
@@ -252,7 +251,7 @@ def main() -> int:
         included_modes=included_modes,
         update_max_alloc=bool(args.update_max_alloc),
     )
-    payload: Dict[str, object] = {
+    payload: dict[str, object] = {
         "ts_utc": _utc_now(),
         "policy_path": str(policy_path),
         "diversification_report_path": str(report_path),

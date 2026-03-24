@@ -1,11 +1,11 @@
-import { useEffect, useMemo, useState } from "react";
+import { memo, useEffect, useMemo, useState } from "react";
 import { useShallow } from "zustand/react/shallow";
 
-import { useDashboardStore } from "../store/useDashboardStore";
+import { useDashboardStore, getRuntimeEvents, getRuntimeEventsVersion } from "../store/useDashboardStore";
 import { formatAgeMs, formatRelativeTs } from "../utils/format";
 import { Panel } from "./Panel";
 
-const NOW_REFRESH_MS = 5_000;
+const NOW_REFRESH_MS = 3_000;
 
 function countRecentEvents(events: { eventType: string; tsMs: number }[], windowMs: number, nowMs: number) {
   const cutoff = nowMs - windowMs;
@@ -62,9 +62,8 @@ function buildSparkline(events: { tsMs: number }[], nowMs: number): number[] {
   return output;
 }
 
-export function DataInPanel() {
+export const DataInPanel = memo(function DataInPanel() {
   const {
-    runtimeEvents,
     connectionStatus,
     wsSessionId,
     reconnectCount,
@@ -83,7 +82,6 @@ export function DataInPanel() {
     mode,
   } = useDashboardStore(
     useShallow((state) => ({
-      runtimeEvents: state.runtimeEvents,
       connectionStatus: state.connection.status,
       wsSessionId: state.connection.wsSessionId,
       reconnectCount: state.connection.reconnectCount,
@@ -103,21 +101,28 @@ export function DataInPanel() {
     })),
   );
   const [nowMs, setNowMs] = useState(() => Date.now());
+  const [eventsVersion, setEventsVersion] = useState(() => getRuntimeEventsVersion());
 
   useEffect(() => {
-    const timerId = window.setInterval(() => {
-      setNowMs(Date.now());
-    }, NOW_REFRESH_MS);
+    const tick = () => {
+      if (!document.hidden) {
+        setNowMs(Date.now());
+        setEventsVersion(getRuntimeEventsVersion());
+      }
+    };
+    const timerId = window.setInterval(tick, NOW_REFRESH_MS);
     return () => {
       window.clearInterval(timerId);
     };
   }, []);
 
+  const runtimeEvents = getRuntimeEvents();
   const metrics = useMemo(() => {
     const windowMs = 60 * 1_000;
     return countRecentEvents(runtimeEvents, windowMs, nowMs);
-  }, [runtimeEvents, nowMs]);
-  const sparkline = useMemo(() => buildSparkline(runtimeEvents, nowMs), [runtimeEvents, nowMs]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [eventsVersion, nowMs]);
+  const sparkline = useMemo(() => buildSparkline(runtimeEvents, nowMs), [eventsVersion, nowMs]); // eslint-disable-line react-hooks/exhaustive-deps
   const sparklineMax = Math.max(1, ...sparkline);
   const sparklinePoints = sparkline
     .map((value, index) => {
@@ -138,11 +143,13 @@ export function DataInPanel() {
       : null;
 
   return (
-    <Panel title="Data In" subtitle="Ingress health, throughput, and stream reliability." className="panel-span-12">
-      <div className="metric-grid">
+    <Panel title="Data In" className="panel-span-6">
+      <div className="metric-grid" style={{ gridTemplateColumns: "repeat(2, minmax(0, 1fr))" }}>
         <article className="metric-card">
           <h3>Flow</h3>
-          <div className="metric-value">{metrics.all} msg/min</div>
+          <div className="metric-value">
+            {metrics.all} <span style={{ fontSize: 11, color: "var(--muted)" }}>tracked evt/min</span>
+          </div>
           <svg className="sparkline" viewBox="0 0 100 28" preserveAspectRatio="none" aria-hidden="true">
             <polyline points={sparklinePoints} />
           </svg>
@@ -160,7 +167,11 @@ export function DataInPanel() {
 
         <article className="metric-card">
           <h3>Transport</h3>
-          <div className="metric-value">{connectionStatus}</div>
+          <div className="metric-value">
+            <span className={`pill ${connectionStatus === "connected" ? "ok" : connectionStatus === "connecting" ? "warn" : "fail"}`}>
+              {connectionStatus}
+            </span>
+          </div>
           <dl>
             <dt>Session</dt>
             <dd>#{wsSessionId}</dd>
@@ -179,14 +190,16 @@ export function DataInPanel() {
 
         <article className="metric-card">
           <h3>Freshness</h3>
-          <div className="metric-value">{formatAgeMs(lastMessageAgeMs)}</div>
+          <div className={`metric-value ${lastMessageAgeMs !== null && lastMessageAgeMs > 10000 ? "value-negative" : lastMessageAgeMs !== null && lastMessageAgeMs > 5000 ? "value-warn" : ""}`}>
+            {formatAgeMs(lastMessageAgeMs)}
+          </div>
           <dl>
             <dt>Last message</dt>
             <dd>{formatRelativeTs(lastMessageTsMs)}</dd>
             <dt>Last event</dt>
             <dd>{lastEventType || "n/a"}</dd>
             <dt>Stream age</dt>
-            <dd>{formatAgeMs(summaryStreamAgeMs ?? healthStreamAgeMs ?? null)}</dd>
+            <dd>{formatAgeMs(healthStreamAgeMs ?? summaryStreamAgeMs ?? null)}</dd>
             <dt>Fallback</dt>
             <dd>{fallbackActive ? "active" : "off"}</dd>
           </dl>
@@ -209,4 +222,4 @@ export function DataInPanel() {
       </div>
     </Panel>
   );
-}
+});

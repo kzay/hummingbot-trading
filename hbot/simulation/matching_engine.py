@@ -11,37 +11,38 @@ from __future__ import annotations
 
 import logging
 import os
-import time
+import uuid as _uuid_mod
 from dataclasses import dataclass
 from decimal import Decimal
-from typing import Any, Dict, List, Optional, Tuple
 
-from controllers.paper_engine_v2.fee_models import FeeModel
-from controllers.paper_engine_v2.fill_models import FillModel
-from controllers.paper_engine_v2.latency_model import LatencyModel, NO_LATENCY
-from controllers.paper_engine_v2.portfolio import PaperPortfolio
-from controllers.paper_engine_v2.types import (
+from simulation.fee_models import FeeModel
+from simulation.fill_models import FillModel
+from simulation.latency_model import LatencyModel
+from simulation.portfolio import MAX_FILL_HISTORY, PaperPortfolio
+from simulation.types import (
+    _EPS,
+    _ZERO,
+    CancelRejected,
     EngineError,
     EngineEvent,
     InstrumentId,
     InstrumentSpec,
     OrderAccepted,
+    OrderBookSnapshot,
     OrderCanceled,
+    OrderExpired,
     OrderRejected,
     OrderSide,
     OrderStatus,
     PaperOrder,
     PaperOrderType,
     PositionAction,
-    OrderBookSnapshot,
-    order_status_transition,
-    _EPS,
-    _ZERO,
     _uuid,
+    order_status_transition,
 )
 
 logger = logging.getLogger(__name__)
-_TRUE_VALUES = {"1", "true", "yes", "on"}
+_TRUE_VALUES = {"1", "true", "yes", "on"}  # CONCURRENCY: read-only after module load
 
 
 # ---------------------------------------------------------------------------
@@ -90,19 +91,20 @@ class OrderMatchingEngine:
         self._config = config
         self._leverage = max(1, leverage)
 
-        self._book: Optional[OrderBookSnapshot] = None
-        self._orders: Dict[str, PaperOrder] = {}
+        self._book: OrderBookSnapshot | None = None
+        self._orders: dict[str, PaperOrder] = {}
         # inflight queue: (due_at_ns, action: str, order: PaperOrder)
-        self._inflight: List[Tuple[int, str, PaperOrder]] = []
-        self._last_fill_ns: Dict[str, int] = {}
-        self._order_sides: Dict[str, str] = {}  # order_id → side value (kept after fill for event routing)
+        self._inflight: list[tuple[int, str, PaperOrder]] = []
+        self._last_fill_ns: dict[str, int] = {}
+        self._order_sides: dict[str, str] = {}  # order_id → side value (kept after fill for event routing)
         # liquidity consumption tracking
-        self._consumed: Dict[Decimal, Decimal] = {}
+        self._consumed: dict[Decimal, Decimal] = {}
         # cancel intents waiting for cancel-latency confirmation
         self._pending_cancel_ids: set[str] = set()
         # contingent children parked until parent fill condition is met
-        self._parked_contingent: Dict[str, PaperOrder] = {}
-        self._contingent_children: Dict[str, List[str]] = {}
+        self._parked_contingent: dict[str, PaperOrder] = {}
+        self._contingent_children: dict[str, list[str]] = {}
+        self._order_sides_trim_warned: bool = False
         self._match_trace_enabled = str(os.getenv("HB_PAPER_FILL_TRACE_ENABLED", "")).strip().lower() in _TRUE_VALUES
         self._match_trace_max_lines = max(1, int(os.getenv("HB_PAPER_MATCH_TRACE_MAX_LINES", "300")))
         self._match_trace_emitted = 0
@@ -127,8 +129,8 @@ class OrderMatchingEngine:
                 error_type=type(exc).__name__, message=str(exc),
             )
 
-    def cancel_order(self, order_id: str, now_ns: int) -> Optional[EngineEvent]:
-        """Cancel an open order. Returns OrderCanceled or None if not found. Never raises."""
+    def cancel_order(self, order_id: str, now_ns: int) -> EngineEvent:
+        """Cancel an open order. Returns OrderCanceled, CancelRejected, or EngineError. Never raises."""
         try:
             return self._cancel_order_impl(order_id, now_ns)
         except Exception as exc:
@@ -138,12 +140,12 @@ class OrderMatchingEngine:
                 error_type=type(exc).__name__, message=str(exc),
             )
 
-    def cancel_all(self, now_ns: int) -> List[EngineEvent]:
+    def cancel_all(self, now_ns: int) -> list[EngineEvent]:
         """Cancel all open orders. Never raises."""
-        events: List[EngineEvent] = []
+        events: list[EngineEvent] = []
         for oid in list(self._orders.keys()):
             ev = self.cancel_order(oid, now_ns)
-            if ev is not None:
+            if not isinstance(ev, CancelRejected):
                 events.append(ev)
         for oid in list(self._parked_contingent.keys()):
             parked = self._parked_contingent.pop(oid)
@@ -170,11 +172,12 @@ class OrderMatchingEngine:
                 self._consumed.clear()
         self._book = snapshot
 
-    def tick(self, now_ns: int) -> List[EngineEvent]:
-        """Drive one tick: process inflight, match orders. Never raises."""
-        events: List[EngineEvent] = []
+    def tick(self, now_ns: int) -> list[EngineEvent]:
+        """Drive one tick: process inflight, expire, match orders. Never raises."""
+        events: list[EngineEvent] = []
         try:
             events.extend(self._process_inflight(now_ns))
+            events.extend(self._expire_orders(now_ns))
             events.extend(self._match_orders(now_ns))
             self._prune_terminal(now_ns)
         except Exception as exc:
@@ -185,23 +188,23 @@ class OrderMatchingEngine:
             ))
         return events
 
-    def open_orders(self) -> List[PaperOrder]:
+    def open_orders(self) -> list[PaperOrder]:
         return [o for o in self._orders.values() if o.is_open]
 
-    def get_order(self, order_id: str) -> Optional[PaperOrder]:
+    def get_order(self, order_id: str) -> PaperOrder | None:
         return self._orders.get(order_id)
 
-    def get_order_side(self, order_id: str) -> Optional[str]:
+    def get_order_side(self, order_id: str) -> str | None:
         """Return the side ('buy'/'sell') of an order, even after it was filled and removed."""
         return self._order_sides.get(order_id)
 
-    def force_reduce(self, side: OrderSide, quantity: Decimal, now_ns: int, source_bot: str = "risk_engine") -> List[EngineEvent]:
+    def force_reduce(self, side: OrderSide, quantity: Decimal, now_ns: int, source_bot: str = "risk_engine") -> list[EngineEvent]:
         """Force a taker reduction fill outside normal order checks.
 
         Used by liquidation logic when risk engine requests immediate size
         reduction. This bypasses order admission checks and reserves.
         """
-        events: List[EngineEvent] = []
+        events: list[EngineEvent] = []
         if self._book is None or quantity <= _ZERO:
             return events
         top = self._book.best_ask if side == OrderSide.BUY else self._book.best_bid
@@ -223,12 +226,13 @@ class OrderMatchingEngine:
             spec=self._spec,
             leverage=self._leverage,
         )
-        synthetic_id = f"forced_liq_{now_ns}_{len(self._order_sides)}"
+        synthetic_id = f"liq_{_uuid_mod.uuid4().hex[:16]}"
         self._order_sides[synthetic_id] = side.value
-        from controllers.paper_engine_v2.types import OrderFilled
+        from simulation.types import OrderFilled
         events.append(OrderFilled(
             event_id=_uuid(), timestamp_ns=now_ns, instrument_id=self._iid,
             order_id=synthetic_id,
+            side=side.value,
             fill_price=top.price,
             fill_quantity=fill_qty,
             fee=fee, is_maker=False,
@@ -368,7 +372,7 @@ class OrderMatchingEngine:
             position_action=order.position_action.value,
         )
 
-    def _cancel_order_impl(self, order_id: str, now_ns: int) -> Optional[EngineEvent]:
+    def _cancel_order_impl(self, order_id: str, now_ns: int) -> EngineEvent:
         # Handle cancel request while still in insert latency queue.
         for _, action, inflight_order in self._inflight:
             if action == "accept" and inflight_order.order_id == order_id:
@@ -380,6 +384,7 @@ class OrderMatchingEngine:
                 if inflight_order._reserved_amount > _ZERO:
                     self._portfolio.release(inflight_order._reserved_asset, inflight_order._reserved_amount)
                     inflight_order._reserved_amount = _ZERO
+                self._cleanup_contingent_children(order_id)
                 return OrderCanceled(
                     event_id=_uuid(), timestamp_ns=now_ns, instrument_id=self._iid,
                     order_id=order_id, source_bot=inflight_order.source_bot,
@@ -389,17 +394,29 @@ class OrderMatchingEngine:
         if order is None:
             parked = self._parked_contingent.pop(order_id, None)
             if parked is None:
-                return None
+                return CancelRejected(
+                    event_id=_uuid(), timestamp_ns=now_ns, instrument_id=self._iid,
+                    order_id=order_id, reason="not_found",
+                )
             parked.status = OrderStatus.CANCELED
             parked.updated_at_ns = now_ns
+            self._cleanup_contingent_children(order_id)
             return OrderCanceled(
                 event_id=_uuid(), timestamp_ns=now_ns, instrument_id=self._iid,
                 order_id=order_id, source_bot=parked.source_bot,
             )
         if order.is_terminal:
-            return None
+            return CancelRejected(
+                event_id=_uuid(), timestamp_ns=now_ns, instrument_id=self._iid,
+                order_id=order_id, reason="already_terminal",
+                source_bot=order.source_bot,
+            )
         if order_id in self._pending_cancel_ids:
-            return None
+            return CancelRejected(
+                event_id=_uuid(), timestamp_ns=now_ns, instrument_id=self._iid,
+                order_id=order_id, reason="cancel_pending",
+                source_bot=order.source_bot,
+            )
 
         # When cancel latency is enabled, cancellation is acknowledged later.
         # This allows realistic cancel/fill race behavior.
@@ -407,13 +424,22 @@ class OrderMatchingEngine:
             due_ns = now_ns + self._latency_model.total_cancel_ns
             self._inflight.append((due_ns, "cancel", order))
             self._pending_cancel_ids.add(order_id)
-            return None
+            # Return CancelRejected with "cancel_pending" — the actual OrderCanceled
+            # will be emitted when the cancel latency elapses.
+            return CancelRejected(
+                event_id=_uuid(), timestamp_ns=now_ns, instrument_id=self._iid,
+                order_id=order_id, reason="cancel_pending",
+                source_bot=order.source_bot,
+            )
 
         try:
             order.status = order_status_transition(order.status, OrderStatus.CANCELED)
         except ValueError:
-            # Non-cancellable terminal state — return None silently.
-            return None
+            return CancelRejected(
+                event_id=_uuid(), timestamp_ns=now_ns, instrument_id=self._iid,
+                order_id=order_id, reason="already_terminal",
+                source_bot=order.source_bot,
+            )
         order.updated_at_ns = now_ns
 
         # Reserve release — safety check to avoid double-release
@@ -423,14 +449,21 @@ class OrderMatchingEngine:
 
         del self._orders[order_id]
         self._last_fill_ns.pop(order_id, None)
+        self._cleanup_contingent_children(order_id)
 
         return OrderCanceled(
             event_id=_uuid(), timestamp_ns=now_ns, instrument_id=self._iid,
             order_id=order_id, source_bot=order.source_bot,
         )
 
-    def _process_inflight(self, now_ns: int) -> List[EngineEvent]:
-        events: List[EngineEvent] = []
+    def _cleanup_contingent_children(self, parent_order_id: str) -> None:
+        """Remove orphaned contingent children when a parent order is canceled."""
+        child_ids = self._contingent_children.pop(parent_order_id, [])
+        for child_id in child_ids:
+            self._parked_contingent.pop(child_id, None)
+
+    def _process_inflight(self, now_ns: int) -> list[EngineEvent]:
+        events: list[EngineEvent] = []
         still_inflight = []
         for (due_ns, action, order) in self._inflight:
             if due_ns <= now_ns:
@@ -477,8 +510,32 @@ class OrderMatchingEngine:
         self._inflight = still_inflight
         return events
 
-    def _match_orders(self, now_ns: int) -> List[EngineEvent]:
-        events: List[EngineEvent] = []
+    def _expire_orders(self, now_ns: int) -> list[EngineEvent]:
+        """Expire orders whose time_in_force_ns has elapsed. Runs before matching."""
+        events: list[EngineEvent] = []
+        for order in list(self._orders.values()):
+            if order.is_terminal or order.time_in_force_ns <= 0:
+                continue
+            if now_ns < order.time_in_force_ns:
+                continue
+            try:
+                order.status = order_status_transition(order.status, OrderStatus.EXPIRED)
+            except ValueError:
+                continue
+            order.updated_at_ns = now_ns
+            if order._reserved_amount > _ZERO:
+                self._portfolio.release(order._reserved_asset, order._reserved_amount)
+                order._reserved_amount = _ZERO
+            del self._orders[order.order_id]
+            self._last_fill_ns.pop(order.order_id, None)
+            events.append(OrderExpired(
+                event_id=_uuid(), timestamp_ns=now_ns, instrument_id=self._iid,
+                order_id=order.order_id, source_bot=order.source_bot,
+            ))
+        return events
+
+    def _match_orders(self, now_ns: int) -> list[EngineEvent]:
+        events: list[EngineEvent] = []
         if self._book is None:
             return events
 
@@ -534,6 +591,38 @@ class OrderMatchingEngine:
                 continue
 
             fill_qty = decision.fill_quantity
+
+            # Fill-time reduce-only check: position may have changed since submission.
+            # Matches real exchange behavior (Binance/Bybit) where reduce-only orders
+            # are rejected or clamped at fill time if position is flat or same-side.
+            if order.reduce_only:
+                pos = self._portfolio.get_position(self._iid)
+                pos_qty = pos.quantity if pos is not None else _ZERO
+                if order.side == OrderSide.BUY:
+                    # Reduce-only BUY closes a short position
+                    available_to_close = abs(min(_ZERO, pos_qty))
+                else:
+                    # Reduce-only SELL closes a long position
+                    available_to_close = max(_ZERO, pos_qty)
+                if available_to_close <= _EPS:
+                    # Position is flat or same-side — cancel the reduce-only order.
+                    try:
+                        order.status = order_status_transition(order.status, OrderStatus.CANCELED)
+                    except ValueError:
+                        pass
+                    order.updated_at_ns = now_ns
+                    if order._reserved_amount > _ZERO:
+                        self._portfolio.release(order._reserved_asset, order._reserved_amount)
+                        order._reserved_amount = _ZERO
+                    del self._orders[order.order_id]
+                    events.append(OrderCanceled(
+                        event_id=_uuid(), timestamp_ns=now_ns, instrument_id=self._iid,
+                        order_id=order.order_id, source_bot=order.source_bot,
+                    ))
+                    continue
+                # Clamp fill to remaining position size (prevent flip-through).
+                fill_qty = min(fill_qty, available_to_close)
+
             # Keep price protection for passive/quoted orders, but do not block
             # market orders. Taker flows (e.g., position_rebalance flattening)
             # must remain executable under normal slippage.
@@ -641,19 +730,40 @@ class OrderMatchingEngine:
                         self._portfolio.release(new_asset, curr - new_amt)
                     order._reserved_amount = new_amt
                 # If asset mismatches (shouldn't happen), keep existing reserve.
-            except Exception:
-                pass
+            except Exception as exc:
+                logger.warning(
+                    "reserve_resize failed for order %s: %s", order.order_id, exc, exc_info=True,
+                )
 
-            from controllers.paper_engine_v2.types import OrderFilled
+            # Compute execution quality metrics.
+            slippage_bps = _ZERO
+            mid_slippage_bps = _ZERO
+            if order.price > _ZERO:
+                # Slippage vs order limit price (negative = improvement, positive = adverse)
+                if order.side == OrderSide.BUY:
+                    slippage_bps = (decision.fill_price - order.price) / order.price * Decimal("10000")
+                else:
+                    slippage_bps = (order.price - decision.fill_price) / order.price * Decimal("10000")
+            mid = self._book.mid_price if self._book else None
+            if mid and mid > _ZERO:
+                if order.side == OrderSide.BUY:
+                    mid_slippage_bps = (decision.fill_price - mid) / mid * Decimal("10000")
+                else:
+                    mid_slippage_bps = (mid - decision.fill_price) / mid * Decimal("10000")
+
+            from simulation.types import OrderFilled
             events.append(OrderFilled(
                 event_id=_uuid(), timestamp_ns=now_ns, instrument_id=self._iid,
                 order_id=order.order_id,
+                side=order.side.value,
                 fill_price=decision.fill_price,
                 fill_quantity=fill_qty,
                 fee=fee, is_maker=decision.is_maker,
                 remaining_quantity=order.remaining_quantity,
                 source_bot=order.source_bot,
                 position_action=order.position_action.value,
+                slippage_bps=slippage_bps,
+                mid_slippage_bps=mid_slippage_bps,
             ))
             if order.order_type == PaperOrderType.MARKET:
                 logger.warning(
@@ -699,7 +809,30 @@ class OrderMatchingEngine:
             del self._orders[oid]
             self._last_fill_ns.pop(oid, None)
 
-    def _compute_reserve(self, order: PaperOrder) -> Tuple[str, Decimal]:
+        # Bound _order_sides to prevent unbounded memory growth.
+        # Entries are kept after fill for hb_event_fire routing but accumulate
+        # indefinitely. Trim oldest when exceeding MAX_FILL_HISTORY.
+        excess = len(self._order_sides) - MAX_FILL_HISTORY
+        if excess > 0:
+            if not self._order_sides_trim_warned:
+                logger.warning(
+                    "OrderMatchingEngine[%s]: trimming _order_sides (%d > %d)",
+                    self._iid.key, len(self._order_sides), MAX_FILL_HISTORY,
+                )
+                self._order_sides_trim_warned = True
+            active_ids = set(self._orders.keys()) | {
+                o.order_id for _, _, o in self._inflight
+            } | set(self._parked_contingent.keys())
+            keys = list(self._order_sides.keys())
+            removed = 0
+            for k in keys:
+                if removed >= excess:
+                    break
+                if k not in active_ids:
+                    del self._order_sides[k]
+                    removed += 1
+
+    def _compute_reserve(self, order: PaperOrder) -> tuple[str, Decimal]:
         """Compute reserve asset and amount.
 
         Spot BUY: reserve full notional in quote.
@@ -781,15 +914,15 @@ class OrderMatchingEngine:
             return False
         return fill_price < (top.price - band - _EPS)
 
-    def _activate_contingent_children(self, parent_order_id: str, now_ns: int) -> List[EngineEvent]:
-        out: List[EngineEvent] = []
+    def _activate_contingent_children(self, parent_order_id: str, now_ns: int) -> list[EngineEvent]:
+        out: list[EngineEvent] = []
         child_ids = list(self._contingent_children.get(parent_order_id, []))
         if not child_ids:
             return out
         parent = self._orders.get(parent_order_id)
         parent_is_filled = parent is None
         parent_partially_filled = parent is not None and parent.filled_quantity > _ZERO
-        keep_ids: List[str] = []
+        keep_ids: list[str] = []
         for child_id in child_ids:
             child = self._parked_contingent.get(child_id)
             if child is None:

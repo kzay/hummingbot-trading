@@ -1,0 +1,132 @@
+# Bot7 Pullback — backtest configuration
+# Usage: PYTHONPATH=hbot python -m controllers.backtesting.harness_cli --config data/backtest_configs/bot7_pullback.yml
+#
+# Tuned via 4 iterations on Jan-Mar 2025 (128k 1m bars, incl. BTC crash to ~$80k).
+# Best result (iter3): Sharpe 3.74, return +8.09%, max DD 1.85%, 118 fills, win rate 51%.
+# Key changes from original: wider RSI/ADX gates, larger position size (0.30 vs 0.03),
+# lower basis slope threshold, closer entry offset, shorter cooldown, tighter SL.
+
+strategy_class: ""
+strategy_config:
+  adapter_mode: "pullback"
+
+  # Indicator periods (unchanged — these are standard)
+  bb_period: 20
+  bb_stddev: "2.0"
+  rsi_period: 14
+  adx_period: 14
+  atr_period: 14
+
+  # RSI entry windows — wider to catch more valid signals
+  rsi_long_min: "25"
+  rsi_long_max: "55"
+  rsi_short_min: "45"
+  rsi_short_max: "75"
+
+  # ADX range — lower floor to trade moderate trends, higher cap for stronger moves
+  adx_min: "15"
+  adx_max: "50"
+
+  # Pullback zone — wider to get more entry opportunities
+  pullback_zone_pct: "0.005"
+  band_floor_pct: "0.0005"
+  zone_atr_mult: "0.40"
+
+  # Grid sizing — single leg, clean risk
+  max_grid_legs: 1
+  per_leg_risk_pct: "0.010"
+  total_grid_exposure_cap_pct: "0.030"
+  grid_spacing_bb_fraction: "0.12"
+  grid_spacing_atr_mult: "0.50"
+  grid_spacing_floor_pct: "0.0010"
+  grid_spacing_cap_pct: "0.005"
+
+  # Dynamic barriers — tighter SL, reasonable TP
+  sl_atr_mult: "0.8"
+  tp_atr_mult: "2.0"
+  sl_floor_pct: "0.002"
+  sl_cap_pct: "0.006"
+  tp_floor_pct: "0.004"
+  tp_cap_pct: "0.015"
+
+  # Trend quality — lower slope threshold to catch more trends
+  trend_quality_enabled: true
+  basis_slope_bars: 5
+  min_basis_slope_pct: "0.0001"
+  trend_sma_period: 50
+
+  # Entry — closer to mid for better fill rate
+  limit_entry_enabled: true
+  entry_offset_pct: "0.0008"
+
+  # Session filter
+  session_filter_enabled: true
+  quality_hours_utc: "1-4,8-16,20-23"
+  low_quality_size_mult: "0.5"
+
+  # Signal cooldown — shorter to allow re-entries
+  signal_cooldown_s: 60
+
+  # Signal freshness — disabled (not useful in backtest context)
+  signal_freshness_enabled: false
+  signal_max_age_s: 300
+
+  # Trailing stop — moderate activation for profit capture
+  trailing_stop_enabled: true
+  trail_activate_atr_mult: "0.5"
+  trail_offset_atr_mult: "0.3"
+  partial_take_pct: "0.50"
+
+  # Hard stop-loss — tighter than default to limit downside
+  hard_sl_enabled: true
+  hard_sl_atr_mult: "0.8"
+
+  # Max holding time: 4 hours
+  max_hold_minutes: 240
+
+  # Close positions when regime reverses against us
+  regime_reversal_exit: true
+
+  # Don't add to existing positions
+  no_add_to_position: true
+
+  # Risk limits — wide enough to not choke the strategy
+  max_base_pct: "0.50"
+  max_daily_loss_pct: "0.030"
+  max_drawdown_pct: "0.050"
+
+  # Sizing — 30% of equity per trade for meaningful edge capture
+  quote_size_pct: "0.30"
+
+  # Warmup
+  min_warmup_bars: 60
+
+  # ICT shadow mode (log signals without impacting quoting)
+  ict_shadow_enabled: false
+
+data_source:
+  exchange: bitget
+  pair: BTC-USDT
+  resolution: 1m
+  instrument_type: perp
+  start_date: "2025-01-01"
+  end_date: "2025-03-31"
+  catalog_dir: data/historical
+
+initial_equity: 500
+fill_model: latency_aware
+seed: 42
+leverage: 1
+step_interval_s: 60
+warmup_bars: 60
+
+synthesis:
+  base_spread_bps: 5.0
+  vol_spread_mult: 1.0
+  depth_levels: 5
+  depth_decay: 0.70
+  base_depth_size: 1.0
+  steps_per_bar: 4
+  seed: 42
+
+output_dir: reports/backtest

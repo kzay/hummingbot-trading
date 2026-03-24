@@ -2,16 +2,15 @@ from __future__ import annotations
 
 import argparse
 import json
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
-from typing import Dict, List, Optional, Tuple
 
 
 def _utc_now() -> str:
-    return datetime.now(timezone.utc).isoformat()
+    return datetime.now(UTC).isoformat()
 
 
-def _read_json(path: Path, default: Dict[str, object]) -> Dict[str, object]:
+def _read_json(path: Path, default: dict[str, object]) -> dict[str, object]:
     if not path.exists():
         return default
     try:
@@ -24,27 +23,27 @@ def _read_json(path: Path, default: Dict[str, object]) -> Dict[str, object]:
 def _minutes_since(ts: str) -> float:
     try:
         dt = datetime.fromisoformat(ts.replace("Z", "+00:00"))
-        return (datetime.now(timezone.utc) - dt).total_seconds() / 60.0
+        return (datetime.now(UTC) - dt).total_seconds() / 60.0
     except Exception:
         return 1e9
 
 
 def _minutes_since_file_mtime(path: Path) -> float:
     try:
-        dt = datetime.fromtimestamp(path.stat().st_mtime, tz=timezone.utc)
-        return (datetime.now(timezone.utc) - dt).total_seconds() / 60.0
+        dt = datetime.fromtimestamp(path.stat().st_mtime, tz=UTC)
+        return (datetime.now(UTC) - dt).total_seconds() / 60.0
     except Exception:
         return 1e9
 
 
-def _report_age_min(path: Path, payload: Dict[str, object]) -> float:
+def _report_age_min(path: Path, payload: dict[str, object]) -> float:
     ts = str(payload.get("ts_utc") or payload.get("last_update_utc") or "").strip()
     if ts:
         return _minutes_since(ts)
     return _minutes_since_file_mtime(path)
 
 
-def _report_timestamp(path: Path, payload: Dict[str, object]) -> Optional[datetime]:
+def _report_timestamp(path: Path, payload: dict[str, object]) -> datetime | None:
     ts = str(payload.get("ts_utc") or payload.get("last_update_utc") or "").strip()
     if ts:
         try:
@@ -52,18 +51,18 @@ def _report_timestamp(path: Path, payload: Dict[str, object]) -> Optional[dateti
         except Exception:
             return None
     try:
-        return datetime.fromtimestamp(path.stat().st_mtime, tz=timezone.utc)
+        return datetime.fromtimestamp(path.stat().st_mtime, tz=UTC)
     except Exception:
         return None
 
 
-def _fmt_list(items: List[str]) -> str:
+def _fmt_list(items: list[str]) -> str:
     if not items:
         return "- (none)"
     return "\n".join(f"- {x}" for x in items)
 
 
-def run(root: Path, *, max_artifact_age_min: float = 20.0) -> Tuple[Dict[str, object], str]:
+def run(root: Path, *, max_artifact_age_min: float = 20.0) -> tuple[dict[str, object], str]:
     reports = root / "reports"
     docs_ops = root / "docs" / "ops"
     docs_ops.mkdir(parents=True, exist_ok=True)
@@ -79,9 +78,9 @@ def run(root: Path, *, max_artifact_age_min: float = 20.0) -> Tuple[Dict[str, ob
         "runtime_performance_budgets": reports / "verification" / "runtime_performance_budgets_latest.json",
     }
     evidence_payloads = {name: _read_json(path, {}) for name, path in evidence_specs.items()}
-    freshness: Dict[str, Dict[str, object]] = {}
-    missing_evidence: List[str] = []
-    stale_evidence: List[str] = []
+    freshness: dict[str, dict[str, object]] = {}
+    missing_evidence: list[str] = []
+    stale_evidence: list[str] = []
     for name, path in evidence_specs.items():
         exists = path.exists()
         payload = evidence_payloads[name]
@@ -124,7 +123,7 @@ def run(root: Path, *, max_artifact_age_min: float = 20.0) -> Tuple[Dict[str, ob
         strict_ts is not None and promotion_latest_ts is not None and promotion_latest_ts > strict_ts
     )
 
-    blockers: List[str] = []
+    blockers: list[str] = []
     blockers.extend(f"missing_evidence:{name}" for name in missing_evidence)
     blockers.extend(f"stale_evidence:{name}" for name in stale_evidence)
     if not day2_go:

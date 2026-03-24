@@ -5,15 +5,15 @@ Receives processed_data each tick and simulates what would have happened
 with a more realistic fill model. Produces shadow_minute.csv for comparison.
 """
 
+import atexit
 import csv
 import logging
-import os
 import random
 import time
 from dataclasses import dataclass
 from decimal import Decimal
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import Any
 
 logger = logging.getLogger(__name__)
 _ZERO = Decimal("0")
@@ -46,7 +46,7 @@ class SimBroker:
         self._position = ShadowPosition()
         self._tick_count: int = 0
         self._fill_count: int = 0
-        self._shadow_csv_path: Optional[Path] = None
+        self._shadow_csv_path: Path | None = None
         self._csv_writer = None
         self._csv_file = None
         self._last_mid: Decimal = _ZERO
@@ -59,21 +59,30 @@ class SimBroker:
         """Initialize CSV output."""
         if not self.config.enabled:
             return
+        if self._csv_file is not None:
+            self.stop()
         path = Path(log_dir)
         path.mkdir(parents=True, exist_ok=True)
         self._shadow_csv_path = path / "shadow_minute.csv"
         write_header = not self._shadow_csv_path.exists()
-        self._csv_file = open(self._shadow_csv_path, "a", newline="")
-        self._csv_writer = csv.writer(self._csv_file)
-        if write_header:
-            self._csv_writer.writerow([
-                "ts", "mid", "shadow_position", "shadow_pnl",
-                "shadow_fill_count", "shadow_adverse_fills",
-                "shadow_fill_rate", "prob_fill", "tick_count",
-            ])
+        fp = open(self._shadow_csv_path, "a", newline="")  # noqa: SIM115
+        try:
+            writer = csv.writer(fp)
+            if write_header:
+                writer.writerow([
+                    "ts", "mid", "shadow_position", "shadow_pnl",
+                    "shadow_fill_count", "shadow_adverse_fills",
+                    "shadow_fill_rate", "prob_fill", "tick_count",
+                ])
+            self._csv_file = fp
+            self._csv_writer = writer
+        except Exception:
+            fp.close()
+            raise
         self._started = True
+        atexit.register(self.stop)
 
-    def on_tick(self, processed_data: Dict[str, Any]) -> Dict[str, Any]:
+    def on_tick(self, processed_data: dict[str, Any]) -> dict[str, Any]:
         """Process one tick of shadow execution.
 
         Returns shadow metrics dict for inclusion in processed_data.
@@ -84,8 +93,11 @@ class SimBroker:
         self._tick_count += 1
 
         # Extract data from processed_data
-        mid = Decimal(str(processed_data.get("mid_price", 0)))
-        if mid <= 0:
+        try:
+            mid = Decimal(str(processed_data.get("mid_price", 0)))
+        except Exception:
+            return {}
+        if mid.is_nan() or mid.is_infinite() or mid <= 0:
             return {}
         self._last_mid = mid
 
@@ -144,6 +156,8 @@ class SimBroker:
         new_base = old_base + sign * amount
 
         # Check adverse: did we buy above mid or sell below mid?
+        if mid <= _ZERO:
+            return
         edge_bps = (price - mid) / mid * Decimal("10000") * sign
         if edge_bps < Decimal("-2"):  # worse than -2 bps
             self._position.adverse_fills += 1
@@ -169,8 +183,11 @@ class SimBroker:
         self._position.base = new_base
 
     def stop(self) -> None:
-        """Close CSV file."""
+        """Close CSV file. Safe to call multiple times."""
         if self._csv_file:
-            self._csv_file.close()
+            try:
+                self._csv_file.close()
+            except Exception:
+                pass  # best-effort on shutdown
             self._csv_file = None
             self._csv_writer = None

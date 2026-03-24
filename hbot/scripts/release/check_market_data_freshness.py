@@ -2,13 +2,12 @@ from __future__ import annotations
 
 import argparse
 import json
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
-from typing import Dict
 
 
 def _utc_now() -> str:
-    return datetime.now(timezone.utc).isoformat()
+    return datetime.now(UTC).isoformat()
 
 
 def _latest_events_file(event_store_dir: Path) -> Path | None:
@@ -18,8 +17,8 @@ def _latest_events_file(event_store_dir: Path) -> Path | None:
 
 def _minutes_since_mtime(path: Path) -> float:
     try:
-        ts = datetime.fromtimestamp(path.stat().st_mtime, tz=timezone.utc)
-        return (datetime.now(timezone.utc) - ts).total_seconds() / 60.0
+        ts = datetime.fromtimestamp(path.stat().st_mtime, tz=UTC)
+        return (datetime.now(UTC) - ts).total_seconds() / 60.0
     except Exception:
         return 1e9
 
@@ -38,7 +37,7 @@ def _count_market_data_rows(path: Path) -> int:
     return count
 
 
-def _write_report(path: Path, payload: Dict[str, object]) -> None:
+def _write_report(path: Path, payload: dict[str, object]) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(json.dumps(payload, indent=2), encoding="utf-8")
 
@@ -76,7 +75,7 @@ def main() -> int:
         },
     }
 
-    stamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
+    stamp = datetime.now(UTC).strftime("%Y%m%dT%H%M%SZ")
     out = out_dir / f"market_data_freshness_{stamp}.json"
     _write_report(out, payload)
     _write_report(out_dir / "latest.json", payload)

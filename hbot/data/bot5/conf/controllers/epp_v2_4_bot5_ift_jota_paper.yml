@@ -1,7 +1,7 @@
 # Bot5 - IFT/JOTA institutional-flow lane (paper engine)
 id: epp_v2_4_bot5_ift_jota_paper
 controller_name: epp_v2_4_bot5
-controller_type: market_making
+controller_type: directional
 
 connector_name: bitget_perpetual
 connector_type: perp
@@ -57,15 +57,6 @@ adaptive_params_enabled: true
 adaptive_edge_relax_max_bps: 2
 adaptive_edge_tighten_max_bps: 4
 adaptive_min_edge_bps_floor: 1.00
-
-# Bot5 owns its own flow-conviction gate logic in `controllers/bots/bot5/ift_jota_v1.py`.
-# Keep the shared bot1-style alpha/selective soft-pause layers disabled here.
-shared_edge_gate_enabled: false
-alpha_policy_enabled: false
-selective_quoting_enabled: false
-adverse_fill_soft_pause_enabled: false
-edge_confidence_soft_pause_enabled: false
-slippage_soft_pause_enabled: false
 
 bot5_flow_imbalance_threshold: 0.18
 bot5_flow_trend_threshold_pct: 0.0008
@@ -166,10 +157,6 @@ max_active_executors: 8
 adverse_fill_spread_multiplier: 1.25
 adverse_fill_count_threshold: 16
 
-paper_edge_gate_bypass: false
-paper_use_portfolio_equity_for_risk: true
-paper_state_reconcile_enabled: true
-paper_daily_baseline_auto_reset_on_startup: true
 paper_engine:
   paper_equity_quote: 200
   paper_realism_profile: balanced

@@ -97,6 +97,9 @@ services:
       - ../../controllers:/home/hummingbot/controllers:ro
       - ../../config:/home/hummingbot/project_config:ro
       - ../../services:/home/hummingbot/services:ro
+      # ---- Refactored packages (pro-grade split) ----
+      - ../../simulation:/home/hummingbot/simulation:ro
+      - ../../platform_lib:/home/hummingbot/platform_lib:ro
     command: /bin/bash -lc "export CONFIG_PASSWORD=\"$${CONFIG_PASSWORD:-$${BOT1_PASSWORD:-}}\"; if [ -z \"$${CONFIG_PASSWORD}\" ]; then echo '[fatal] BOT1_PASSWORD/CONFIG_PASSWORD missing; refusing interactive startup.' >&2; exit 64; fi; conda activate hummingbot && python ./bin/headless_start.py 2>> ./logs/errors.log"
     environment:
       <<: *kzay-env
@@ -165,6 +168,9 @@ services:
       - ../../controllers:/home/hummingbot/controllers:ro
       - ../../config:/home/hummingbot/project_config:ro
       - ../../services:/home/hummingbot/services:ro
+      # ---- Refactored packages (pro-grade split) ----
+      - ../../simulation:/home/hummingbot/simulation:ro
+      - ../../platform_lib:/home/hummingbot/platform_lib:ro
     command: /bin/bash -lc "export CONFIG_PASSWORD=\"$${CONFIG_PASSWORD:-$${BOT2_PASSWORD:-$${BOT1_PASSWORD:-}}}\"; if [ -z \"$${CONFIG_PASSWORD}\" ]; then echo '[fatal] BOT2_PASSWORD/BOT1_PASSWORD/CONFIG_PASSWORD missing; refusing interactive startup.' >&2; exit 64; fi; conda activate hummingbot && python ./bin/headless_start.py 2>> ./logs/errors.log"
     environment:
       <<: *kzay-env
@@ -225,6 +231,9 @@ services:
       - ../../controllers:/home/hummingbot/controllers:ro
       - ../../config:/home/hummingbot/project_config:ro
       - ../../services:/home/hummingbot/services:ro
+      # ---- Refactored packages (pro-grade split) ----
+      - ../../simulation:/home/hummingbot/simulation:ro
+      - ../../platform_lib:/home/hummingbot/platform_lib:ro
       # Mount test script into the scripts dir so `start --script` finds it
       - ../../data/bot3/scripts/paper_test.py:/home/hummingbot/scripts/paper_test.py:ro
     command: /bin/bash -lc "export CONFIG_PASSWORD=\"$${CONFIG_PASSWORD:-$${BOT3_PASSWORD:-$${BOT1_PASSWORD:-}}}\"; if [ -z \"$${CONFIG_PASSWORD}\" ]; then echo '[fatal] BOT3_PASSWORD/BOT1_PASSWORD/CONFIG_PASSWORD missing; refusing interactive startup.' >&2; exit 64; fi; conda activate hummingbot && python ./bin/headless_start.py 2>> ./logs/errors.log"
@@ -288,6 +297,9 @@ services:
       - ../../controllers:/home/hummingbot/controllers:ro
       - ../../config:/home/hummingbot/project_config:ro
       - ../../services:/home/hummingbot/services:ro
+      # ---- Refactored packages (pro-grade split) ----
+      - ../../simulation:/home/hummingbot/simulation:ro
+      - ../../platform_lib:/home/hummingbot/platform_lib:ro
     command: /bin/bash -lc "export CONFIG_PASSWORD=\"$${CONFIG_PASSWORD:-$${BOT4_PASSWORD:-$${BOT1_PASSWORD:-}}}\"; if [ -z \"$${CONFIG_PASSWORD}\" ]; then echo '[fatal] BOT4_PASSWORD/BOT1_PASSWORD/CONFIG_PASSWORD missing; refusing interactive startup.' >&2; exit 64; fi; conda activate hummingbot && python ./bin/headless_start.py 2>> ./logs/errors.log"
     environment:
       <<: *kzay-env
@@ -349,6 +361,9 @@ services:
       - ../../controllers:/home/hummingbot/controllers:ro
       - ../../config:/home/hummingbot/project_config:ro
       - ../../services:/home/hummingbot/services:ro
+      # ---- Refactored packages (pro-grade split) ----
+      - ../../simulation:/home/hummingbot/simulation:ro
+      - ../../platform_lib:/home/hummingbot/platform_lib:ro
     command: /bin/bash -lc "export CONFIG_PASSWORD=\"$${CONFIG_PASSWORD:-$${BOT5_PASSWORD:-$${BOT1_PASSWORD:-}}}\"; if [ -z \"$${CONFIG_PASSWORD}\" ]; then echo '[fatal] BOT5_PASSWORD/BOT1_PASSWORD/CONFIG_PASSWORD missing; refusing interactive startup.' >&2; exit 64; fi; conda activate hummingbot && python ./bin/headless_start.py 2>> ./logs/errors.log"
     environment:
       <<: *kzay-env
@@ -409,6 +424,9 @@ services:
       - ../../controllers:/home/hummingbot/controllers:ro
       - ../../config:/home/hummingbot/project_config:ro
       - ../../services:/home/hummingbot/services:ro
+      # ---- Refactored packages (pro-grade split) ----
+      - ../../simulation:/home/hummingbot/simulation:ro
+      - ../../platform_lib:/home/hummingbot/platform_lib:ro
     command: /bin/bash -lc "export CONFIG_PASSWORD=\"$${CONFIG_PASSWORD:-$${BOT6_PASSWORD:-$${BOT1_PASSWORD:-}}}\"; if [ -z \"$${CONFIG_PASSWORD}\" ]; then echo '[fatal] BOT6_PASSWORD/BOT1_PASSWORD/CONFIG_PASSWORD missing; refusing interactive startup.' >&2; exit 64; fi; conda activate hummingbot && python ./bin/headless_start.py 2>> ./logs/errors.log"
     environment:
       <<: *kzay-env
@@ -469,6 +487,9 @@ services:
       - ../../controllers:/home/hummingbot/controllers:ro
       - ../../config:/home/hummingbot/project_config:ro
       - ../../services:/home/hummingbot/services:ro
+      # ---- Refactored packages (pro-grade split) ----
+      - ../../simulation:/home/hummingbot/simulation:ro
+      - ../../platform_lib:/home/hummingbot/platform_lib:ro
     command: /bin/bash -lc "export CONFIG_PASSWORD=\"$${CONFIG_PASSWORD:-$${BOT7_PASSWORD:-$${BOT1_PASSWORD:-}}}\"; if [ -z \"$${CONFIG_PASSWORD}\" ]; then echo '[fatal] BOT7_PASSWORD/BOT1_PASSWORD/CONFIG_PASSWORD missing; refusing interactive startup.' >&2; exit 64; fi; conda activate hummingbot && python ./bin/headless_start.py 2>> ./logs/errors.log"
     environment:
       <<: *kzay-env
@@ -507,22 +528,6 @@ services:
   # ==========================================
   # External Signal/Risk Stack
   # ==========================================
-  # MQTT broker for Hummingbot conf_client mqtt_bridge (host name "mosquitto" on trading network).
-  mosquitto:
-    image: eclipse-mosquitto:latest
-    container_name: mosquitto
-    profiles:
-      - external
-      - test
-    restart: unless-stopped
-    logging: *default-logging
-    ports:
-      - "${MQTT_BIND_IP:-127.0.0.1}:${MQTT_PORT:-1883}:1883"
-    volumes:
-      - ../../config/mosquitto/mosquitto.conf:/mosquitto/config/mosquitto.conf:ro
-    networks:
-      - trading
-
   redis:
     image: redis:latest
     container_name: redis
@@ -876,24 +881,61 @@ services:
           memory: 64M
           cpus: "0.1"
 
-  event-store-monitor:
+  # ---- ops-scheduler: consolidates 6 periodic containers into one process ----
+  # Replaces: event-store-monitor, day2-gate-monitor, soak-monitor,
+  #           daily-ops-reporter, artifact-retention, exchange-snapshot-service
+  ops-scheduler:
     <<: *control-plane-image
-    container_name: event-store-monitor
+    container_name: ops-scheduler
     profiles:
       - external
-    restart: on-failure
+    restart: unless-stopped
     logging: *default-logging
     command: >
-      /bin/sh -lc "python /workspace/hbot/scripts/utils/event_store_periodic_snapshot.py --interval-sec ${EVENT_STORE_MONITOR_INTERVAL_SEC:-900}"
+      /bin/sh -lc "python /workspace/hbot/services/ops_scheduler/main.py"
     environment:
+      - PYTHONPATH=/workspace/hbot
+      - PYTHONPYCACHEPREFIX=/tmp/pycache
+      - OPS_SCHEDULER_WORKSPACE=/workspace/hbot
+      - OPS_SCHEDULER_HEARTBEAT=/workspace/hbot/reports/ops_scheduler/heartbeat.json
+      - OPS_SCHEDULER_HEALTH_MAX_SEC=${OPS_SCHEDULER_HEALTH_MAX_SEC:-1200}
+      # Redis (for event-store-snapshot, day2-gate jobs)
       - REDIS_HOST=redis
       - REDIS_PORT=${REDIS_PORT:-6379}
       - REDIS_DB=${REDIS_DB:-0}
       - REDIS_PASSWORD=${REDIS_PASSWORD:-kzay_redis_paper_2026}
+      # Job intervals (override defaults)
       - EVENT_STORE_MONITOR_INTERVAL_SEC=${EVENT_STORE_MONITOR_INTERVAL_SEC:-900}
-      - EVENT_STORE_MONITOR_HEALTH_MAX_SEC=${EVENT_STORE_MONITOR_HEALTH_MAX_SEC:-1800}
+      - DAY2_GATE_INTERVAL_SEC=${DAY2_GATE_INTERVAL_SEC:-300}
+      - SOAK_MONITOR_INTERVAL_SEC=${SOAK_MONITOR_INTERVAL_SEC:-300}
+      - DAILY_OPS_REPORT_INTERVAL_SEC=${DAILY_OPS_REPORT_INTERVAL_SEC:-900}
+      - ARTIFACT_RETENTION_INTERVAL_SEC=${ARTIFACT_RETENTION_INTERVAL_SEC:-86400}
+      - EXCHANGE_SNAPSHOT_INTERVAL_SEC=${EXCHANGE_SNAPSHOT_INTERVAL_SEC:-120}
+      # Day2-gate config
+      - DAY2_GATE_MIN_HOURS=${DAY2_GATE_MIN_HOURS:-9}
+      - DAY2_GATE_MAX_DELTA=${DAY2_GATE_MAX_DELTA:-5}
+      # Soak config
+      - SOAK_MONITOR_FRESHNESS_MAX_MIN=${SOAK_MONITOR_FRESHNESS_MAX_MIN:-30}
+      # Exchange snapshot config
+      - HB_DATA_ROOT=/workspace/hbot/data
+      - EXCHANGE_SNAPSHOT_OUT_PATH=/workspace/hbot/reports/exchange_snapshots/latest.json
+      - EXCHANGE_SNAPSHOT_MODE=${EXCHANGE_SNAPSHOT_MODE:-bitget_ccxt_private}
+      - EXCHANGE_SNAPSHOT_ASSETS=${EXCHANGE_SNAPSHOT_ASSETS:-BTC,USDT}
+      - EXCHANGE_ACCOUNT_MAP_PATH=${EXCHANGE_ACCOUNT_MAP_PATH:-/workspace/hbot/config/exchange_account_map.json}
+      - BITGET_API_KEY=${BOT1_BITGET_API_KEY:-}
+      - BITGET_SECRET=${BOT1_BITGET_API_SECRET:-}
+      - BITGET_PASSPHRASE=${BOT1_BITGET_PASSPHRASE:-}
+      - BOT2_BITGET_API_KEY=${BOT2_BITGET_API_KEY:-}
+      - BOT2_BITGET_SECRET=${BOT2_BITGET_API_SECRET:-}
+      - BOT2_BITGET_PASSPHRASE=${BOT2_BITGET_PASSPHRASE:-}
+      - BOT3_BITGET_API_KEY=${BOT3_BITGET_API_KEY:-}
+      - BOT3_BITGET_SECRET=${BOT3_BITGET_API_SECRET:-}
+      - BOT3_BITGET_PASSPHRASE=${BOT3_BITGET_PASSPHRASE:-}
+      # Artifact retention
+      - ARTIFACT_RETENTION_APPLY=${ARTIFACT_RETENTION_APPLY:-true}
     volumes:
       - ../..:/workspace/hbot
+      - ../../reports:/workspace/hbot/reports
     depends_on:
       redis:
         condition: service_healthy
@@ -905,20 +947,20 @@ services:
       test:
         [
           "CMD-SHELL",
-          'python -c "import os,time,sys; from pathlib import Path; p=Path(''/workspace/hbot/reports/event_store''); fs=sorted(p.glob(''integrity_*.json'')); sys.exit(0 if fs and (time.time()-fs[-1].stat().st_mtime)<=float(os.getenv(''EVENT_STORE_MONITOR_HEALTH_MAX_SEC'',''1800'')) else 1)"',
+          'python -c "import json,os,time,sys; from pathlib import Path; p=Path(''/workspace/hbot/reports/ops_scheduler/heartbeat.json''); d=json.loads(p.read_text()) if p.exists() else {}; max_age=float(os.getenv(''OPS_SCHEDULER_HEALTH_MAX_SEC'',''1200'')); ok=p.exists() and d.get(''alive_threads'',0)>0 and (time.time()-p.stat().st_mtime)<=max_age; sys.exit(0 if ok else 1)"',
         ]
       interval: 60s
       timeout: 10s
       retries: 3
-      start_period: 30s
+      start_period: 60s
     deploy:
       resources:
         limits:
-          memory: 128M
-          cpus: "0.25"
+          memory: 256M
+          cpus: "0.5"
         reservations:
-          memory: 32M
-          cpus: "0.05"
+          memory: 64M
+          cpus: "0.1"
 
   market-data-service:
     <<: *control-plane-image
@@ -1141,54 +1183,6 @@ services:
           memory: 64M
           cpus: "0.25"
 
-  day2-gate-monitor:
-    <<: *control-plane-image
-    container_name: day2-gate-monitor
-    profiles:
-      - external
-    restart: on-failure
-    logging: *default-logging
-    command: >
-      /bin/sh -lc "python /workspace/hbot/scripts/utils/day2_gate_monitor.py --interval-sec ${DAY2_GATE_INTERVAL_SEC:-300}"
-    environment:
-      - REDIS_HOST=redis
-      - REDIS_PORT=${REDIS_PORT:-6379}
-      - REDIS_DB=${REDIS_DB:-0}
-      - REDIS_PASSWORD=${REDIS_PASSWORD:-kzay_redis_paper_2026}
-      - DAY2_GATE_INTERVAL_SEC=${DAY2_GATE_INTERVAL_SEC:-300}
-      - DAY2_GATE_MIN_HOURS=${DAY2_GATE_MIN_HOURS:-9}
-      - DAY2_GATE_MAX_DELTA=${DAY2_GATE_MAX_DELTA:-5}
-      - DAY2_GATE_HEALTH_MAX_SEC=${DAY2_GATE_HEALTH_MAX_SEC:-900}
-    volumes:
-      - ../..:/workspace/hbot
-    depends_on:
-      redis:
-        condition: service_healthy
-      event-store-service:
-        condition: service_started
-      event-store-monitor:
-        condition: service_started
-    networks:
-      - trading
-    healthcheck:
-      test:
-        [
-          "CMD-SHELL",
-          'python -c "import os,time,sys; from pathlib import Path; p=Path(''/workspace/hbot/reports/event_store/day2_gate_eval_latest.json''); sys.exit(0 if p.exists() and (time.time()-p.stat().st_mtime)<=float(os.getenv(''DAY2_GATE_HEALTH_MAX_SEC'',''900'')) else 1)"',
-        ]
-      interval: 60s
-      timeout: 10s
-      retries: 3
-      start_period: 30s
-    deploy:
-      resources:
-        limits:
-          memory: 128M
-          cpus: "0.25"
-        reservations:
-          memory: 32M
-          cpus: "0.05"
-
   reconciliation-service:
     <<: *control-plane-image
     container_name: reconciliation-service
@@ -1214,7 +1208,7 @@ services:
     depends_on:
       event-store-service:
         condition: service_started
-      exchange-snapshot-service:
+      ops-scheduler:
         condition: service_started
     networks:
       - trading
@@ -1236,55 +1230,6 @@ services:
         reservations:
           memory: 64M
           cpus: "0.1"
-
-  exchange-snapshot-service:
-    <<: *control-plane-image
-    container_name: exchange-snapshot-service
-    profiles:
-      - external
-    restart: on-failure
-    logging: *default-logging
-    command: >
-      /bin/sh -lc "python /workspace/hbot/services/exchange_snapshot_service/main.py"
-    environment:
-      - HB_DATA_ROOT=/workspace/hbot/data
-      - EXCHANGE_SNAPSHOT_OUT_PATH=/workspace/hbot/reports/exchange_snapshots/latest.json
-      - EXCHANGE_SNAPSHOT_INTERVAL_SEC=${EXCHANGE_SNAPSHOT_INTERVAL_SEC:-120}
-      - EXCHANGE_SNAPSHOT_MODE=${EXCHANGE_SNAPSHOT_MODE:-bitget_ccxt_private}
-      - EXCHANGE_SNAPSHOT_ASSETS=${EXCHANGE_SNAPSHOT_ASSETS:-BTC,USDT}
-      - EXCHANGE_ACCOUNT_MAP_PATH=${EXCHANGE_ACCOUNT_MAP_PATH:-/workspace/hbot/config/exchange_account_map.json}
-      - BITGET_API_KEY=${BOT1_BITGET_API_KEY:-}
-      - BITGET_SECRET=${BOT1_BITGET_API_SECRET:-}
-      - BITGET_PASSPHRASE=${BOT1_BITGET_PASSPHRASE:-}
-      - BOT2_BITGET_API_KEY=${BOT2_BITGET_API_KEY:-}
-      - BOT2_BITGET_SECRET=${BOT2_BITGET_API_SECRET:-}
-      - BOT2_BITGET_PASSPHRASE=${BOT2_BITGET_PASSPHRASE:-}
-      - BOT3_BITGET_API_KEY=${BOT3_BITGET_API_KEY:-}
-      - BOT3_BITGET_SECRET=${BOT3_BITGET_API_SECRET:-}
-      - BOT3_BITGET_PASSPHRASE=${BOT3_BITGET_PASSPHRASE:-}
-      - EXCHANGE_SNAPSHOT_HEALTH_MAX_SEC=${EXCHANGE_SNAPSHOT_HEALTH_MAX_SEC:-600}
-    volumes:
-      - ../..:/workspace/hbot
-    networks:
-      - trading
-    healthcheck:
-      test:
-        [
-          "CMD-SHELL",
-          'python -c "import os,time,sys; from pathlib import Path; p=Path(''/workspace/hbot/reports/exchange_snapshots/latest.json''); sys.exit(0 if p.exists() and (time.time()-p.stat().st_mtime)<=float(os.getenv(''EXCHANGE_SNAPSHOT_HEALTH_MAX_SEC'',''600'')) else 1)"',
-        ]
-      interval: 30s
-      timeout: 10s
-      retries: 3
-      start_period: 30s
-    deploy:
-      resources:
-        limits:
-          memory: 128M
-          cpus: "0.25"
-        reservations:
-          memory: 32M
-          cpus: "0.05"
 
   shadow-parity-service:
     <<: *control-plane-image
@@ -1405,7 +1350,7 @@ services:
     depends_on:
       redis:
         condition: service_healthy
-      exchange-snapshot-service:
+      ops-scheduler:
         condition: service_started
     networks:
       - trading
@@ -1414,91 +1359,6 @@ services:
         [
           "CMD-SHELL",
           'python -c "import os,time,sys; from pathlib import Path; p=Path(''/workspace/hbot/reports/policy/portfolio_allocator_latest.json''); sys.exit(0 if p.exists() and (time.time()-p.stat().st_mtime)<=float(os.getenv(''PORTFOLIO_ALLOCATOR_HEALTH_MAX_SEC'',''900'')) else 1)"',
-        ]
-      interval: 60s
-      timeout: 10s
-      retries: 3
-      start_period: 30s
-    deploy:
-      resources:
-        limits:
-          memory: 128M
-          cpus: "0.25"
-        reservations:
-          memory: 32M
-          cpus: "0.05"
-
-  soak-monitor:
-    <<: *control-plane-image
-    container_name: soak-monitor
-    profiles:
-      - external
-    restart: on-failure
-    logging: *default-logging
-    command: >
-      /bin/sh -lc "python /workspace/hbot/scripts/release/soak_monitor.py --interval-sec ${SOAK_MONITOR_INTERVAL_SEC:-300} --freshness-max-min ${SOAK_MONITOR_FRESHNESS_MAX_MIN:-30}"
-    environment:
-      - SOAK_MONITOR_INTERVAL_SEC=${SOAK_MONITOR_INTERVAL_SEC:-300}
-      - SOAK_MONITOR_FRESHNESS_MAX_MIN=${SOAK_MONITOR_FRESHNESS_MAX_MIN:-30}
-      - SOAK_MONITOR_HEALTH_MAX_SEC=${SOAK_MONITOR_HEALTH_MAX_SEC:-1200}
-    volumes:
-      - ../..:/workspace/hbot
-    depends_on:
-      day2-gate-monitor:
-        condition: service_started
-      reconciliation-service:
-        condition: service_started
-      shadow-parity-service:
-        condition: service_started
-      portfolio-risk-service:
-        condition: service_started
-    networks:
-      - trading
-    healthcheck:
-      test:
-        [
-          "CMD-SHELL",
-          'python -c "import os,time,sys; from pathlib import Path; p=Path(''/workspace/hbot/reports/soak/latest.json''); sys.exit(0 if p.exists() and (time.time()-p.stat().st_mtime)<=float(os.getenv(''SOAK_MONITOR_HEALTH_MAX_SEC'',''1200'')) else 1)"',
-        ]
-      interval: 60s
-      timeout: 10s
-      retries: 3
-      start_period: 30s
-    deploy:
-      resources:
-        limits:
-          memory: 128M
-          cpus: "0.25"
-        reservations:
-          memory: 32M
-          cpus: "0.05"
-
-  daily-ops-reporter:
-    <<: *control-plane-image
-    container_name: daily-ops-reporter
-    profiles:
-      - external
-    restart: on-failure
-    logging: *default-logging
-    command: >
-      /bin/sh -lc "python /workspace/hbot/scripts/release/watch_daily_ops_report.py --interval-sec ${DAILY_OPS_REPORT_INTERVAL_SEC:-900}"
-    environment:
-      - DAILY_OPS_REPORT_INTERVAL_SEC=${DAILY_OPS_REPORT_INTERVAL_SEC:-900}
-      - DAILY_OPS_REPORT_HEALTH_MAX_SEC=${DAILY_OPS_REPORT_HEALTH_MAX_SEC:-3600}
-    volumes:
-      - ../..:/workspace/hbot
-    depends_on:
-      soak-monitor:
-        condition: service_started
-      day2-gate-monitor:
-        condition: service_started
-    networks:
-      - trading
-    healthcheck:
-      test:
-        [
-          "CMD-SHELL",
-          'python -c "import os,time,sys; from pathlib import Path; p=Path(''/workspace/hbot/docs/ops''); fs=sorted(p.glob(''daily_ops_report_*.md'')); sys.exit(0 if fs and (time.time()-fs[-1].stat().st_mtime)<=float(os.getenv(''DAILY_OPS_REPORT_HEALTH_MAX_SEC'',''3600'')) else 1)"',
         ]
       interval: 60s
       timeout: 10s
@@ -1650,56 +1510,25 @@ services:
   # ==========================================
 
   # ---- Bot KPI Exporter ----
-  bot-metrics-exporter:
-    image: python:3.12-slim
-    container_name: bot-metrics-exporter
+  # ---- Unified Metrics Exporter (bot=9400 + control-plane=9401) ----
+  metrics-exporter:
+    <<: *control-plane-image
+    container_name: metrics-exporter
     restart: unless-stopped
     logging: *default-logging
     command: >
-      /bin/sh -lc "python /workspace/hbot/services/monitoring/bot_metrics_exporter.py"
+      /bin/sh -lc "python /workspace/hbot/services/metrics_exporter/main.py"
     environment:
       - PYTHONPATH=/workspace/hbot
       - PYTHONPYCACHEPREFIX=/tmp/pycache
+      # Bot metrics (port 9400)
       - HB_DATA_ROOT=/workspace/hbot/data
       - METRICS_PORT=9400
       - METRICS_PATH=/metrics
       - EXPORTER_LOG_TAIL_LINES=200
       - EXPORTER_CACHE_TTL_S=30
-    volumes:
-      - ../..:/workspace/hbot:ro
-    networks:
-      - monitoring
-    healthcheck:
-      test:
-        [
-          "CMD",
-          "python",
-          "-c",
-          "import urllib.request; urllib.request.urlopen('http://localhost:9400/health')",
-        ]
-      interval: 30s
-      timeout: 15s
-      retries: 3
-      start_period: 10s
-    deploy:
-      resources:
-        limits:
-          memory: 256M
-          cpus: "0.25"
-        reservations:
-          memory: 64M
-
-  # ---- Control-plane KPI Exporter ----
-  control-plane-metrics-exporter:
-    <<: *control-plane-image
-    container_name: control-plane-metrics-exporter
-    restart: unless-stopped
-    logging: *default-logging
-    command: >
-      /bin/sh -lc "python /workspace/hbot/services/control_plane_metrics_exporter.py"
-    environment:
+      # Control-plane metrics (port 9401)
       - HB_REPORTS_ROOT=/workspace/hbot/reports
-      - HB_DATA_ROOT=/workspace/hbot/data
       - CONTROL_PLANE_METRICS_PORT=9401
       - CONTROL_PLANE_METRICS_PATH=/metrics
       - CONTROL_PLANE_FRESHNESS_MAX_SEC=${CONTROL_PLANE_FRESHNESS_MAX_SEC:-1800}
@@ -1727,19 +1556,19 @@ services:
           "CMD",
           "python",
           "-c",
-          "import urllib.request; urllib.request.urlopen('http://localhost:9401/metrics')",
+          "import urllib.request; urllib.request.urlopen('http://localhost:9400/health')",
         ]
       interval: 30s
-      timeout: 10s
+      timeout: 15s
       retries: 3
-      start_period: 10s
+      start_period: 15s
     deploy:
       resources:
         limits:
-          memory: 256M
-          cpus: "0.25"
+          memory: 384M
+          cpus: "0.5"
         reservations:
-          memory: 64M
+          memory: 96M
 
   # ---- PostgreSQL Operational Store (Day 25) ----
   postgres:
@@ -1781,10 +1610,12 @@ services:
           memory: 512M
           cpus: "0.5"
 
-  # ---- Prometheus ----
+  # ---- Prometheus (activate with --profile monitoring) ----
   prometheus:
     image: prom/prometheus:v2.51.2
     container_name: prometheus
+    profiles:
+      - monitoring
     restart: unless-stopped
     logging: *default-logging
     command:
@@ -1823,15 +1654,17 @@ services:
           memory: 512M
           cpus: "0.5"
 
-  # ---- Grafana ----
+  # ---- Grafana (activate with --profile monitoring) ----
   grafana:
     image: grafana/grafana-oss:latest
     container_name: grafana
+    profiles:
+      - monitoring
     restart: unless-stopped
     logging: *default-logging
     environment:
-      - GF_SECURITY_ADMIN_USER=${GRAFANA_ADMIN_USER:-admin}
-      - GF_SECURITY_ADMIN_PASSWORD=${GRAFANA_ADMIN_PASSWORD:-kzay_grafana_2026}
+      - GF_SECURITY_ADMIN_USER=${GF_ADMIN_USER:-admin}
+      - GF_SECURITY_ADMIN_PASSWORD=${GF_ADMIN_PASSWORD:-kzay_grafana_2026}
       - GF_USERS_ALLOW_SIGN_UP=false
     volumes:
       - ../monitoring/grafana/provisioning:/etc/grafana/provisioning:ro
@@ -1865,10 +1698,12 @@ services:
         reservations:
           memory: 64M
 
-  # ---- Node Exporter ----
+  # ---- Node Exporter (activate with --profile monitoring) ----
   node-exporter:
     image: prom/node-exporter:latest
     container_name: node-exporter
+    profiles:
+      - monitoring
     restart: on-failure
     logging: *default-logging
     command:
@@ -1906,10 +1741,12 @@ services:
         reservations:
           memory: 32M
 
-  # ---- cAdvisor ----
+  # ---- cAdvisor (activate with --profile monitoring) ----
   cadvisor:
     image: gcr.io/cadvisor/cadvisor:latest
     container_name: cadvisor
+    profiles:
+      - monitoring
     restart: on-failure
     logging: *default-logging
     volumes:
@@ -2105,50 +1942,3 @@ services:
         reservations:
           memory: 64M
 
-  # ==========================================
-  # ARTIFACT RETENTION — trims aged reports on
-  # a fixed cadence so stale evidence/log growth
-  # stay bounded without manual cleanup.
-  # ==========================================
-  artifact-retention:
-    <<: *control-plane-image
-    container_name: artifact-retention
-    restart: on-failure
-    volumes:
-      - ../..:/workspace/hbot
-      - ../../reports:/workspace/hbot/reports
-    command: >-
-      /bin/bash -lc "
-      while true; do
-        if [ \"${ARTIFACT_RETENTION_APPLY:-true}\" = \"true\" ]; then
-          python /workspace/hbot/scripts/release/run_artifact_retention.py --apply;
-        else
-          python /workspace/hbot/scripts/release/run_artifact_retention.py;
-        fi;
-        sleep ${ARTIFACT_RETENTION_INTERVAL_SEC:-86400};
-      done"
-    environment:
-      - PYTHONPATH=/workspace/hbot
-      - PYTHONPYCACHEPREFIX=/tmp/pycache
-      - ARTIFACT_RETENTION_APPLY=${ARTIFACT_RETENTION_APPLY:-true}
-      - ARTIFACT_RETENTION_INTERVAL_SEC=${ARTIFACT_RETENTION_INTERVAL_SEC:-86400}
-      - ARTIFACT_RETENTION_HEALTH_MAX_SEC=${ARTIFACT_RETENTION_HEALTH_MAX_SEC:-93600}
-    networks:
-      - trading
-    healthcheck:
-      test:
-        [
-          "CMD-SHELL",
-          "python -c \"import json,os,time,sys; from pathlib import Path; p=Path('/workspace/hbot/reports/ops_retention/latest.json'); d=json.loads(p.read_text()) if p.exists() else {}; max_age=float(os.getenv('ARTIFACT_RETENTION_HEALTH_MAX_SEC','93600')); ok=p.exists() and d.get('mode') in {'apply','dry_run'} and (time.time()-p.stat().st_mtime)<=max_age; sys.exit(0 if ok else 1)\"",
-        ]
-      interval: 5m
-      timeout: 20s
-      retries: 3
-      start_period: 30s
-    deploy:
-      resources:
-        limits:
-          memory: 64M
-          cpus: "0.05"
-        reservations:
-          memory: 32M

@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { memo, useEffect, useState } from "react";
 
 import { useDashboardStore } from "../store/useDashboardStore";
 import { formatAgeMs, formatNumber } from "../utils/format";
@@ -26,7 +26,7 @@ async function fetchJsonWithTimeout<T>(url: string, headers: HeadersInit, signal
   return parseHistoryPayload(await response.json()) as T;
 }
 
-export function HistoryMonitorPanel() {
+export const HistoryMonitorPanel = memo(function HistoryMonitorPanel() {
   const apiBase = useDashboardStore((state) => state.settings.apiBase);
   const apiToken = useDashboardStore((state) => state.settings.apiToken);
   const histInstanceName = useDashboardStore((state) => state.settings.instanceName);
@@ -209,8 +209,8 @@ export function HistoryMonitorPanel() {
           <table>
             <thead>
               <tr>
-                <th>Metric</th>
-                <th>Value</th>
+                <th scope="col">Metric</th>
+                <th scope="col">Value</th>
               </tr>
             </thead>
             <tbody>
@@ -243,4 +243,4 @@ export function HistoryMonitorPanel() {
       </Panel>
     </>
   );
-}
+});

@@ -5,9 +5,8 @@ import json
 import os
 import subprocess
 import sys
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
-from typing import Dict, List
 
 CRITICAL_PATH_PREFIXES = [
     "scripts/shared/v2_with_controllers.py",
@@ -20,7 +19,7 @@ CRITICAL_PATH_PREFIXES = [
 ]
 
 
-TEST_GROUPS: Dict[str, List[str]] = {
+TEST_GROUPS: dict[str, list[str]] = {
     "unit": [
         "tests/scripts/test_v2_with_controllers_hot_reload.py",
         "tests/controllers/test_hb_bridge_event_isolation.py::test_sync_state_processed_hydrates_runtime_orders_from_service_snapshot",
@@ -36,6 +35,9 @@ TEST_GROUPS: Dict[str, List[str]] = {
         "tests/services/test_ml_feature_builder.py",
         "tests/services/test_ml_model_loader.py",
     ],
+    "backtest": [
+        "tests/controllers/test_backtesting/test_backtest_smoke.py",
+    ],
     "integration": [
         "tests/integration/test_signal_risk_flow.py",
         "tests/integration/test_ml_signal_to_intent_flow.py",
@@ -44,10 +46,10 @@ TEST_GROUPS: Dict[str, List[str]] = {
 
 
 def _utc_now() -> str:
-    return datetime.now(timezone.utc).isoformat()
+    return datetime.now(UTC).isoformat()
 
 
-def _run_pytest(root: Path, targets: List[str], cov_fail_under: float) -> subprocess.CompletedProcess[str]:
+def _run_pytest(root: Path, targets: list[str], cov_fail_under: float) -> subprocess.CompletedProcess[str]:
     cmd = [
         sys.executable,
         "-m",
@@ -65,7 +67,7 @@ def _run_pytest(root: Path, targets: List[str], cov_fail_under: float) -> subpro
     return subprocess.run(cmd, cwd=str(root), capture_output=True, text=True, check=False)
 
 
-def _run_pytest_docker(root: Path, targets: List[str], cov_fail_under: float) -> subprocess.CompletedProcess[str]:
+def _run_pytest_docker(root: Path, targets: list[str], cov_fail_under: float) -> subprocess.CompletedProcess[str]:
     compose_file = root / "compose" / "docker-compose.yml"
     env_file = root / "env" / ".env"
     inner_cmd = [
@@ -116,12 +118,12 @@ def _should_fallback_to_host(proc: subprocess.CompletedProcess[str]) -> bool:
     out = ((proc.stdout or "") + "\n" + (proc.stderr or "")).lower()
     return (
         "no module named pytest" in out
-        or "module not found" in out and "pytest" in out
-        or "can't open file" in out and "pytest" in out
+        or ("module not found" in out and "pytest" in out)
+        or ("can't open file" in out and "pytest" in out)
     )
 
 
-def _write_md(path: Path, payload: Dict[str, object]) -> None:
+def _write_md(path: Path, payload: dict[str, object]) -> None:
     groups = payload.get("groups", {}) if isinstance(payload.get("groups"), dict) else {}
     critical = payload.get("critical_path_coverage", {}) if isinstance(payload.get("critical_path_coverage"), dict) else {}
     lines = [
@@ -168,7 +170,7 @@ def _write_md(path: Path, payload: Dict[str, object]) -> None:
     path.write_text("\n".join(lines), encoding="utf-8")
 
 
-def _compute_critical_path_coverage(coverage_path: Path) -> Dict[str, object]:
+def _compute_critical_path_coverage(coverage_path: Path) -> dict[str, object]:
     if not coverage_path.exists():
         return {
             "selected_files": 0,
@@ -188,7 +190,7 @@ def _compute_critical_path_coverage(coverage_path: Path) -> Dict[str, object]:
             "files": [],
         }
     files = payload.get("files", {}) if isinstance(payload, dict) else {}
-    selected: List[Dict[str, object]] = []
+    selected: list[dict[str, object]] = []
     total_covered = 0
     total_statements = 0
     for raw_path, info in files.items() if isinstance(files, dict) else []:
@@ -232,7 +234,7 @@ def main() -> int:
     parser.add_argument(
         "--cov-fail-under",
         type=float,
-        default=5.0,
+        default=30.0,
         help="Minimum combined coverage percentage required for PASS.",
     )
     parser.add_argument(
@@ -256,8 +258,8 @@ def main() -> int:
         print(f"[run-tests] unknown groups: {unknown}")
         return 2
 
-    selected_targets: List[str] = []
-    groups_payload: Dict[str, object] = {}
+    selected_targets: list[str] = []
+    groups_payload: dict[str, object] = {}
     for group in ("unit", "service", "integration"):
         targets = TEST_GROUPS[group] if group in selected_groups else []
         groups_payload[group] = {"selected": len(targets)}
@@ -309,7 +311,7 @@ def main() -> int:
         "output_tail": out[-4000:],
     }
 
-    stamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
+    stamp = datetime.now(UTC).strftime("%Y%m%dT%H%M%SZ")
     out_json = reports_root / f"test_run_{stamp}.json"
     out_md = reports_root / f"test_run_{stamp}.md"
     out_json.write_text(json.dumps(payload, indent=2), encoding="utf-8")

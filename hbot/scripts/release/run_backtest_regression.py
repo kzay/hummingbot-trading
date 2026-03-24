@@ -1,25 +1,23 @@
 from __future__ import annotations
 
 import argparse
-import os
 import hashlib
 import json
-import sys
+import os
 from collections import deque
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
-from typing import Dict, List
 
 
 def _utc_now() -> str:
-    return datetime.now(timezone.utc).isoformat()
+    return datetime.now(UTC).isoformat()
 
 
 def _today() -> str:
-    return datetime.now(timezone.utc).strftime("%Y%m%d")
+    return datetime.now(UTC).strftime("%Y%m%d")
 
 
-def _read_json(path: Path, default: Dict[str, object]) -> Dict[str, object]:
+def _read_json(path: Path, default: dict[str, object]) -> dict[str, object]:
     if not path.exists():
         return default
     try:
@@ -68,13 +66,13 @@ def _matching_integrity_for_event(event_file: Path | None, event_store_dir: Path
     return _latest_matching(event_store_dir, "integrity_*.json")
 
 
-def _fingerprint_event_file(path: Path, sample_size: int = 200) -> Dict[str, object]:
+def _fingerprint_event_file(path: Path, sample_size: int = 200) -> dict[str, object]:
     if not path.exists():
         return {"ok": False, "event_count": 0, "fingerprint": "", "first_event_ids": [], "first_event_types": []}
 
     event_count = 0
-    first_ids: List[str] = []
-    first_types: List[str] = []
+    first_ids: list[str] = []
+    first_types: list[str] = []
     try:
         with path.open("r", encoding="utf-8") as f:
             for line in f:
@@ -97,7 +95,7 @@ def _fingerprint_event_file(path: Path, sample_size: int = 200) -> Dict[str, obj
     return {"ok": True, "event_count": event_count, "fingerprint": fp, "first_event_ids": first_ids[:10], "first_event_types": first_types[:10]}
 
 
-def _scan_invariants(path: Path, tail_events: int = 5000) -> Dict[str, object]:
+def _scan_invariants(path: Path, tail_events: int = 5000) -> dict[str, object]:
     stats = {
         "execution_intent_count": 0,
         "risk_decision_count": 0,
@@ -238,7 +236,7 @@ def main() -> int:
         },
     }
 
-    stamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
+    stamp = datetime.now(UTC).strftime("%Y%m%dT%H%M%SZ")
     out = reports_root / f"backtest_regression_{stamp}.json"
     out.write_text(json.dumps(payload, indent=2), encoding="utf-8")
     (reports_root / "latest.json").write_text(json.dumps(payload, indent=2), encoding="utf-8")

@@ -1,0 +1,33 @@
+# Bot1 Baseline — single backtest configuration
+# Usage: python -m scripts.backtest.run_backtest_v2 --config data/backtest_configs/bot1_baseline.yml
+
+strategy_class: controllers.bots.bot1.baseline_v1.BaselineV1Strategy
+strategy_config: {}
+
+data_source:
+  exchange: bitget
+  pair: BTC-USDT
+  resolution: 1m
+  instrument_type: perp
+  # start_date / end_date are used for catalog lookup; set data_path to override
+  start_date: "2025-01-01"
+  end_date: "2025-03-01"
+  # data_path: data/historical/bitget/BTC-USDT/1m/candles.parquet
+
+initial_equity: 500
+fill_model: latency_aware
+seed: 42
+leverage: 1
+step_interval_s: 60
+warmup_bars: 60
+
+synthesis:
+  base_spread_bps: 5.0
+  vol_spread_mult: 1.0
+  depth_levels: 5
+  depth_decay: 0.70
+  base_depth_size: 1.0
+  steps_per_bar: 4
+  seed: 42
+
+output_dir: reports/backtest

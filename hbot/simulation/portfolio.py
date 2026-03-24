@@ -17,23 +17,30 @@ Position accounting is delegated to the standalone `accounting.py` core
 from __future__ import annotations
 
 import logging
-from dataclasses import dataclass, field
-from datetime import datetime, timezone
+from dataclasses import dataclass
+from datetime import UTC, datetime
 from decimal import Decimal
-from typing import Any, Dict, List, Optional
+from typing import Any
 
-from controllers.paper_engine_v2.accounting import (
+from simulation.accounting import (
+    FillTransition,
     PositionState,
+)
+from simulation.accounting import (
     apply_fill as _apply_fill,
+)
+from simulation.accounting import (
     unrealized_pnl as _unrealized_pnl,
 )
-from controllers.paper_engine_v2.risk_engine import (
+from simulation.risk_engine import (
+    LiquidationAction,
     MarginLevel,
     RiskConfig,
     RiskEngine,
-    LiquidationAction,
 )
-from controllers.paper_engine_v2.types import (
+from simulation.types import (
+    _EPS,
+    _ZERO,
     FundingApplied,
     InstrumentId,
     InstrumentSpec,
@@ -42,13 +49,16 @@ from controllers.paper_engine_v2.types import (
     PaperPosition,
     PositionAction,
     PositionChanged,
-    _EPS,
-    _ONE,
-    _ZERO,
     _uuid,
 )
 
 logger = logging.getLogger(__name__)
+
+# Upper bound for in-memory fill-related collections across paper_engine_v2.
+# Portfolio itself uses running totals (no per-fill records), but this constant
+# is shared with the matching engine to cap auxiliary lookup dicts that grow
+# with fill count (e.g. order_sides).
+MAX_FILL_HISTORY: int = 10_000
 
 
 def _is_open_action(position_action: PositionAction) -> bool:
@@ -90,9 +100,9 @@ class MultiAssetLedger:
     if margin temporarily exceeds total, free = 0, not negative.
     """
 
-    def __init__(self, initial_balances: Dict[str, Decimal]):
-        self._balances: Dict[str, Decimal] = {k: v for k, v in initial_balances.items()}
-        self._reserved: Dict[str, Decimal] = {}
+    def __init__(self, initial_balances: dict[str, Decimal]):
+        self._balances: dict[str, Decimal] = {k: v for k, v in initial_balances.items()}
+        self._reserved: dict[str, Decimal] = {}
 
     def total(self, asset: str) -> Decimal:
         return self._balances.get(asset, _ZERO)
@@ -120,13 +130,20 @@ class MultiAssetLedger:
 
     def debit(self, asset: str, amount: Decimal) -> None:
         amount = max(_ZERO, amount)
-        self._balances[asset] = self.total(asset) - amount
+        new_balance = self.total(asset) - amount
+        if new_balance < _ZERO:
+            logger.warning(
+                "NEGATIVE_BALANCE_GUARD: %s debit %.8f would leave %.8f — clamping to 0",
+                asset, amount, new_balance,
+            )
+            new_balance = _ZERO
+        self._balances[asset] = new_balance
 
-    def to_dict(self) -> Dict[str, str]:
+    def to_dict(self) -> dict[str, str]:
         return {k: str(v) for k, v in self._balances.items()}
 
     @classmethod
-    def from_dict(cls, d: Dict[str, str]) -> "MultiAssetLedger":
+    def from_dict(cls, d: dict[str, str]) -> MultiAssetLedger:
         return cls({k: Decimal(v) for k, v in d.items()})
 
 
@@ -137,7 +154,7 @@ class MultiAssetLedger:
 class RiskGuard:
     """Pre-trade risk checks. Returns rejection reason or None if clear."""
 
-    def __init__(self, config: PortfolioConfig, portfolio: "PaperPortfolio"):
+    def __init__(self, config: PortfolioConfig, portfolio: PaperPortfolio):
         self._cfg = config
         self._portfolio = portfolio
 
@@ -145,8 +162,8 @@ class RiskGuard:
         self,
         order: PaperOrder,
         spec: InstrumentSpec,
-        mid_price: Optional[Decimal],
-    ) -> Optional[str]:
+        mid_price: Decimal | None,
+    ) -> str | None:
         if mid_price is None or mid_price <= _ZERO:
             mid_price = order.price
 
@@ -234,21 +251,21 @@ class PaperPortfolio:
 
     def __init__(
         self,
-        initial_balances: Dict[str, Decimal],
+        initial_balances: dict[str, Decimal],
         config: PortfolioConfig,
     ):
         self._ledger = MultiAssetLedger(initial_balances)
-        self._positions: Dict[str, PaperPosition] = {}
+        self._positions: dict[str, PaperPosition] = {}
         # Per-instrument metadata for margin and mark-to-market.
         # Stored opportunistically on fills / mtm ticks so PaperPortfolio can
         # compute maintenance margin without holding a hard dependency on the
         # desk/engine registry.
-        self._spec_by_key: Dict[str, InstrumentSpec] = {}
-        self._leverage_by_key: Dict[str, int] = {}
-        self._position_margin_reserved: Dict[str, Decimal] = {}  # key -> reserved quote
+        self._spec_by_key: dict[str, InstrumentSpec] = {}
+        self._leverage_by_key: dict[str, int] = {}
+        self._position_margin_reserved: dict[str, Decimal] = {}  # key -> reserved quote
         self._peak_equity: Decimal = _ZERO
-        self._daily_open_equity: Optional[Decimal] = None
-        self._daily_open_day_key: Optional[str] = None
+        self._daily_open_equity: Decimal | None = None
+        self._daily_open_day_key: str | None = None
         self.risk_guard = RiskGuard(config, self)
         self._config = config
         # Promoted risk engine (parallel to legacy RiskGuard; gradually replaces it).
@@ -267,17 +284,17 @@ class PaperPortfolio:
         return self._peak_equity
 
     @property
-    def daily_open_equity(self) -> Optional[Decimal]:
+    def daily_open_equity(self) -> Decimal | None:
         return self._daily_open_equity
 
     @staticmethod
-    def _utc_day_key(now_ns: Optional[int] = None) -> str:
+    def _utc_day_key(now_ns: int | None = None) -> str:
         if now_ns is None:
-            return datetime.now(timezone.utc).strftime("%Y-%m-%d")
-        return datetime.fromtimestamp(float(now_ns) / 1e9, tz=timezone.utc).strftime("%Y-%m-%d")
+            return datetime.now(UTC).strftime("%Y-%m-%d")
+        return datetime.fromtimestamp(float(now_ns) / 1e9, tz=UTC).strftime("%Y-%m-%d")
 
-    def _refresh_daily_open_baseline(self, equity_quote: Decimal, now_ns: Optional[int] = None) -> None:
-        """Keep daily_open_equity aligned to UTC day boundaries."""
+    def _refresh_daily_open_baseline(self, equity_quote: Decimal, now_ns: int | None = None) -> None:
+        """Keep daily_open_equity aligned to timezone.utc day boundaries."""
         if equity_quote <= _ZERO:
             return
         day_key = self._utc_day_key(now_ns)
@@ -380,19 +397,28 @@ class PaperPortfolio:
 
     def equity_quote(
         self,
-        mark_prices: Optional[Dict[str, Decimal]] = None,
+        mark_prices: dict[str, Decimal] | None = None,
         quote_asset: str = "USDT",
     ) -> Decimal:
-        """Total equity: cash + unrealized position value in quote."""
+        """Total equity: cash + unrealized position value in quote.
+
+        For perp positions, includes unrealized PnL (from mark_prices when
+        available, otherwise from stored pos.unrealized_pnl so that
+        settle_fill/apply_funding peak-equity tracking sees full equity).
+        """
         equity = self._ledger.total(quote_asset)
-        if mark_prices:
-            for pos in self._positions.values():
-                price = mark_prices.get(pos.instrument_id.key)
-                if price and price > _ZERO and pos.quantity != _ZERO:
-                    if pos.instrument_id.instrument_type == "spot":
-                        equity += pos.abs_quantity * price
-                    else:
-                        equity += pos.unrealized_pnl
+        for pos in self._positions.values():
+            if pos.quantity == _ZERO:
+                continue
+            price = mark_prices.get(pos.instrument_id.key) if mark_prices else None
+            if pos.instrument_id.instrument_type == "spot":
+                if price and price > _ZERO:
+                    equity += pos.abs_quantity * price
+            else:
+                if price and price > _ZERO:
+                    equity += _unrealized_pnl(pos.quantity, pos.avg_entry_price, price)
+                else:
+                    equity += pos.unrealized_pnl
         return equity
 
     # -- Positions ---------------------------------------------------------
@@ -400,7 +426,7 @@ class PaperPortfolio:
     def get_position(
         self,
         instrument_id: InstrumentId,
-        position_action: Optional[PositionAction] = None,
+        position_action: PositionAction | None = None,
     ) -> PaperPosition:
         pos = self._positions.get(instrument_id.key)
         if pos is None:
@@ -457,8 +483,8 @@ class PaperPortfolio:
             )
         return pos
 
-    def all_positions(self) -> Dict[str, PaperPosition]:
-        out: Dict[str, PaperPosition] = {}
+    def all_positions(self) -> dict[str, PaperPosition]:
+        out: dict[str, PaperPosition] = {}
         for key, pos in self._positions.items():
             pos.ensure_leg_consistency()
             PaperPortfolio._collapse_oneway_legs(pos)
@@ -466,16 +492,18 @@ class PaperPortfolio:
             out[key] = pos
         return out
 
-    def mark_to_market(self, prices: Dict[str, Decimal]) -> None:
+    def mark_to_market(self, prices: dict[str, Decimal], now_ns: int | None = None) -> None:
         """Update unrealized PnL on all positions, and refresh maintenance margin reserves."""
         for key, pos in self._positions.items():
             price = prices.get(key)
             pos.ensure_leg_consistency()
             PaperPortfolio._collapse_oneway_legs(pos)
-            if price is None or price <= _ZERO or (pos.quantity == _ZERO and pos.gross_quantity <= _ZERO):
+            if pos.quantity == _ZERO and pos.gross_quantity <= _ZERO:
                 pos.unrealized_pnl = _ZERO
                 pos.long_unrealized_pnl = _ZERO
                 pos.short_unrealized_pnl = _ZERO
+                continue
+            if price is None or price <= _ZERO:
                 continue
             pos.long_unrealized_pnl = _unrealized_pnl(pos.long_quantity, pos.long_avg_entry_price, price)
             pos.short_unrealized_pnl = _unrealized_pnl(-pos.short_quantity, pos.short_avg_entry_price, price)
@@ -484,9 +512,9 @@ class PaperPortfolio:
         eq = self.equity_quote(prices)
         if eq > self._peak_equity:
             self._peak_equity = eq
-        self._refresh_daily_open_baseline(eq)
+        self._refresh_daily_open_baseline(eq, now_ns=now_ns)
 
-    def _refresh_position_margin_reserves(self, prices: Dict[str, Decimal]) -> None:
+    def _refresh_position_margin_reserves(self, prices: dict[str, Decimal]) -> None:
         """Reserve/release maintenance margin for perp positions (Nautilus-style).
 
         Order reserves are handled by the matching engine. This reserve bucket
@@ -528,7 +556,7 @@ class PaperPortfolio:
         """Total maintenance margin reserved across all perps (quote currency)."""
         return sum(self._position_margin_reserved.values(), _ZERO)
 
-    def margin_ratio(self, prices: Optional[Dict[str, Decimal]] = None) -> Decimal:
+    def margin_ratio(self, prices: dict[str, Decimal] | None = None) -> Decimal:
         """Equity / maintenance_margin (higher is safer)."""
         eq = self.equity_quote(prices) if prices else self.equity_quote()
         mm = self.maintenance_margin_quote()
@@ -539,7 +567,7 @@ class PaperPortfolio:
         return eq / mm
 
     def apply_funding(
-        self, instrument_id: InstrumentId, charge: Decimal, now_ns: int, leg_side: Optional[str] = None
+        self, instrument_id: InstrumentId, charge: Decimal, now_ns: int, leg_side: str | None = None
     ) -> FundingApplied:
         """Apply signed funding transfer and record on position.
 
@@ -658,16 +686,48 @@ class PaperPortfolio:
             realized_pnl = result.fill_realized_pnl
             is_closing = result.is_closing
             if leg_side == "long":
-                pos.long_quantity = max(_ZERO, new_state.quantity)
-                pos.long_avg_entry_price = new_state.avg_entry_price if pos.long_quantity > _ZERO else _ZERO
-                pos.long_realized_pnl = new_state.realized_pnl
-                pos.long_opened_at_ns = new_state.opened_at_ns
+                if result.transition == FillTransition.FLIP:
+                    # Flip through zero: close the long leg, open residual on short leg.
+                    pos.long_quantity = _ZERO
+                    pos.long_avg_entry_price = _ZERO
+                    pos.long_realized_pnl = new_state.realized_pnl
+                    pos.long_opened_at_ns = 0
+                    residual = result.open_quantity
+                    from simulation.accounting import vwap_avg_entry
+                    pos.short_quantity = pos.short_quantity + residual
+                    pos.short_avg_entry_price = vwap_avg_entry(
+                        pos.short_quantity - residual, pos.short_avg_entry_price,
+                        residual, price,
+                    )
+                    if pos.short_opened_at_ns <= 0:
+                        pos.short_opened_at_ns = now_ns
+                else:
+                    pos.long_quantity = max(_ZERO, new_state.quantity)
+                    pos.long_avg_entry_price = new_state.avg_entry_price if pos.long_quantity > _ZERO else _ZERO
+                    pos.long_realized_pnl = new_state.realized_pnl
+                    pos.long_opened_at_ns = new_state.opened_at_ns
             else:
-                pos.short_quantity = max(_ZERO, abs(new_state.quantity))
-                pos.short_avg_entry_price = new_state.avg_entry_price if pos.short_quantity > _ZERO else _ZERO
-                pos.short_realized_pnl = new_state.realized_pnl
-                pos.short_opened_at_ns = new_state.opened_at_ns
-            pos.sync_derived_fields()
+                if result.transition == FillTransition.FLIP:
+                    # Flip through zero: close the short leg, open residual on long leg.
+                    pos.short_quantity = _ZERO
+                    pos.short_avg_entry_price = _ZERO
+                    pos.short_realized_pnl = new_state.realized_pnl
+                    pos.short_opened_at_ns = 0
+                    residual = result.open_quantity
+                    from simulation.accounting import vwap_avg_entry
+                    pos.long_quantity = pos.long_quantity + residual
+                    pos.long_avg_entry_price = vwap_avg_entry(
+                        pos.long_quantity - residual, pos.long_avg_entry_price,
+                        residual, price,
+                    )
+                    if pos.long_opened_at_ns <= 0:
+                        pos.long_opened_at_ns = now_ns
+                else:
+                    pos.short_quantity = max(_ZERO, abs(new_state.quantity))
+                    pos.short_avg_entry_price = new_state.avg_entry_price if pos.short_quantity > _ZERO else _ZERO
+                    pos.short_realized_pnl = new_state.realized_pnl
+                    pos.short_opened_at_ns = new_state.opened_at_ns
+            pos.sync_derived_fields(last_fill_price=price)
         else:
             old_state = PositionState(
                 quantity=pos.quantity,
@@ -748,8 +808,8 @@ class PaperPortfolio:
         # Refresh maintenance margin reserve using fill price as a best-effort mark.
         try:
             self._refresh_position_margin_reserves({instrument_id.key: price})
-        except Exception:
-            pass
+        except Exception as exc:
+            logger.warning("margin_reserve_refresh failed after fill: %s", exc, exc_info=True)
 
         return PositionChanged(
             event_id=_uuid(), timestamp_ns=now_ns,
@@ -798,7 +858,7 @@ class PaperPortfolio:
 
     # -- Risk metrics -------------------------------------------------------
 
-    def net_exposure_quote(self, prices: Dict[str, Decimal]) -> Decimal:
+    def net_exposure_quote(self, prices: dict[str, Decimal]) -> Decimal:
         """Net signed exposure across all instruments in quote."""
         exposure = _ZERO
         for key, pos in self._positions.items():
@@ -821,8 +881,8 @@ class PaperPortfolio:
         return self._last_margin_level
 
     def evaluate_risk(
-        self, prices: Optional[Dict[str, Decimal]] = None
-    ) -> "tuple[MarginLevel, list[LiquidationAction]]":
+        self, prices: dict[str, Decimal] | None = None
+    ) -> tuple[MarginLevel, list[LiquidationAction]]:
         """Evaluate portfolio-level risk via the promoted RiskEngine.
 
         Returns (MarginLevel, [LiquidationAction]) where liquidation
@@ -840,14 +900,14 @@ class PaperPortfolio:
         self._last_margin_level = level
         return level, actions
 
-    def risk_reasons(self, prices: Optional[Dict[str, Decimal]] = None) -> str:
+    def risk_reasons(self, prices: dict[str, Decimal] | None = None) -> str:
         """Return ops-compatible risk reason string for current margin level."""
         level, _ = self.evaluate_risk(prices)
         return self._risk_engine.margin_level_to_risk_reason(level)
 
     # -- Persistence -------------------------------------------------------
 
-    def snapshot(self) -> Dict[str, Any]:
+    def snapshot(self) -> dict[str, Any]:
         return {
             "balances": self._ledger.to_dict(),
             "positions": {k: v.to_dict() for k, v in self._positions.items()},
@@ -858,14 +918,14 @@ class PaperPortfolio:
             "position_margin_reserved": {k: str(v) for k, v in self._position_margin_reserved.items()},
         }
 
-    def restore_from_snapshot(self, data: Dict[str, Any]) -> None:
+    def restore_from_snapshot(self, data: dict[str, Any]) -> None:
         if "balances" in data:
             self._ledger = MultiAssetLedger.from_dict(data["balances"])
-        if "peak_equity" in data and data["peak_equity"]:
+        if data.get("peak_equity"):
             self._peak_equity = Decimal(data["peak_equity"])
-        if "daily_open_equity" in data and data["daily_open_equity"]:
+        if data.get("daily_open_equity"):
             self._daily_open_equity = Decimal(data["daily_open_equity"])
-        if "daily_open_day_key" in data and data["daily_open_day_key"]:
+        if data.get("daily_open_day_key"):
             self._daily_open_day_key = str(data["daily_open_day_key"])
         elif self._daily_open_equity is not None:
             self._daily_open_day_key = self._utc_day_key()
@@ -876,12 +936,12 @@ class PaperPortfolio:
                     iid = InstrumentId(venue=venue, trading_pair=pair, instrument_type=itype)
                     self._positions[key] = PaperPosition.from_dict(pd, iid)
                 except Exception as exc:
-                    logger.warning("Could not restore position %s: %s", key, exc)
+                    logger.warning("Could not restore position %s: %s", key, exc, exc_info=True)
         if "leverage_by_key" in data and isinstance(data["leverage_by_key"], dict):
             try:
                 self._leverage_by_key = {k: int(v) for k, v in data["leverage_by_key"].items()}
-            except Exception:
-                pass
+            except Exception as exc:
+                logger.warning("leverage_by_key restore failed: %s", exc, exc_info=True)
         if "position_margin_reserved" in data and isinstance(data["position_margin_reserved"], dict):
             try:
                 self._position_margin_reserved = {k: Decimal(str(v)) for k, v in data["position_margin_reserved"].items()}
@@ -895,8 +955,8 @@ class PaperPortfolio:
                             parts = pair.split("-")
                             if len(parts) > 1 and parts[1]:
                                 quote = parts[1]
-                        except Exception:
-                            pass
+                        except Exception as exc:
+                            logger.warning("margin_reserve quote asset parse failed for %s: %s", key, exc)
                         self._ledger.reserve(quote, amt)
-            except Exception:
-                pass
+            except Exception as exc:
+                logger.warning("position_margin_reserved restore failed: %s", exc, exc_info=True)

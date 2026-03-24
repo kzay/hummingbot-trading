@@ -36,9 +36,10 @@ def _install_import_stubs() -> None:
     models_actions = _ensure_module("hummingbot.strategy_v2.models.executor_actions")
     _ensure_module("hummingbot.strategy_v2")
     _ensure_module("hummingbot.strategy_v2.models")
-    hb_bridge = _ensure_module("controllers.paper_engine_v2.hb_bridge")
+    hb_bridge = _ensure_module("simulation.bridge.hb_bridge")
+    _ensure_module("simulation.bridge")
+    _ensure_module("simulation")
     _ensure_module("controllers")
-    _ensure_module("controllers.paper_engine_v2")
     preflight = _ensure_module("services.common.preflight")
 
     async def _noop_async(*args, **kwargs):
@@ -93,6 +94,8 @@ def _install_import_stubs() -> None:
     models_actions.StopExecutorAction = _StopExecutorAction
     hb_bridge.enable_framework_paper_compat_fallbacks = lambda: None
     hb_bridge.install_paper_desk_bridge = lambda *args, **kwargs: None
+    hb_bridge._canonical_name = lambda name: str(name or "").strip().lower().replace("_paper_trade", "")
+    hb_bridge._paper_exchange_mode_for_instance = lambda name: "disabled"
     preflight.run_controller_preflight = lambda *args, **kwargs: []
 
 

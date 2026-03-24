@@ -23,26 +23,25 @@ import argparse
 import hashlib
 import json
 import logging
-from datetime import datetime, timezone
+from collections.abc import Iterable
+from datetime import UTC, datetime
 from pathlib import Path
-from typing import Dict, Iterable, Optional, Set, Tuple
-
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
 logger = logging.getLogger(__name__)
 
 
-def _parse_iso(ts: str) -> Optional[datetime]:
+def _parse_iso(ts: str) -> datetime | None:
     ts = (ts or "").strip()
     if not ts:
         return None
     try:
-        return datetime.fromisoformat(ts.replace("Z", "+00:00")).astimezone(timezone.utc)
+        return datetime.fromisoformat(ts.replace("Z", "+00:00")).astimezone(UTC)
     except Exception:
         return None
 
 
-def _iter_fill_rows(path: Path) -> Iterable[Dict[str, str]]:
+def _iter_fill_rows(path: Path) -> Iterable[dict[str, str]]:
     if not path.exists():
         return []
     import csv
@@ -54,7 +53,7 @@ def _iter_fill_rows(path: Path) -> Iterable[Dict[str, str]]:
         return []
 
 
-def _deterministic_event_id(bot: str, variant: str, row: Dict[str, str]) -> str:
+def _deterministic_event_id(bot: str, variant: str, row: dict[str, str]) -> str:
     raw = "|".join(
         [
             "fills_csv_backfill_v1",
@@ -71,8 +70,8 @@ def _deterministic_event_id(bot: str, variant: str, row: Dict[str, str]) -> str:
     return hashlib.sha256(raw.encode("utf-8")).hexdigest()
 
 
-def _load_existing_event_ids(path: Path) -> Set[str]:
-    ids: Set[str] = set()
+def _load_existing_event_ids(path: Path) -> set[str]:
+    ids: set[str] = set()
     if not path.exists():
         return ids
     try:
@@ -100,8 +99,8 @@ def _build_envelope(
     connector_name: str,
     trading_pair: str,
     ts_utc: str,
-    row: Dict[str, str],
-) -> Dict[str, object]:
+    row: dict[str, str],
+) -> dict[str, object]:
     def _f(key: str) -> float:
         try:
             return float(str(row.get(key, "")).strip() or 0.0)
@@ -131,7 +130,7 @@ def _build_envelope(
             "fee_quote": _f("fee_quote"),
             "is_maker": str(row.get("is_maker", "")).strip().lower() == "true",
         },
-        "ingest_ts_utc": datetime.now(timezone.utc).isoformat(),
+        "ingest_ts_utc": datetime.now(UTC).isoformat(),
         "schema_validation_status": "ok",
     }
 
@@ -139,10 +138,10 @@ def _build_envelope(
 def backfill(
     *,
     root: Path,
-    bot: Optional[str],
-    variant: Optional[str],
-    day: Optional[str],
-) -> Tuple[int, int]:
+    bot: str | None,
+    variant: str | None,
+    day: str | None,
+) -> tuple[int, int]:
     data_root = root / "data"
     store_dir = root / "reports" / "event_store"
     store_dir.mkdir(parents=True, exist_ok=True)
@@ -165,8 +164,8 @@ def backfill(
     appended = 0
 
     # Cache per-day existing IDs to avoid rereads
-    existing_by_day: Dict[str, Set[str]] = {}
-    fp_by_day: Dict[str, object] = {}
+    existing_by_day: dict[str, set[str]] = {}
+    fp_by_day: dict[str, object] = {}
 
     def _get_day_file(day_key: str) -> Path:
         return store_dir / f"events_{day_key}.jsonl"
@@ -228,7 +227,7 @@ def main() -> None:
     parser = argparse.ArgumentParser(description="Backfill order_filled events from fills.csv")
     parser.add_argument("--bot", default="", help="Filter by bot name (e.g. bot1)")
     parser.add_argument("--variant", default="", help="Filter by variant (e.g. a)")
-    parser.add_argument("--day", default="", help="Filter by UTC day YYYYMMDD (e.g. 20260225)")
+    parser.add_argument("--day", default="", help="Filter by timezone.utc day YYYYMMDD (e.g. 20260225)")
     args = parser.parse_args()
 
     root = Path("/workspace/hbot") if Path("/.dockerenv").exists() else Path(__file__).resolve().parents[2]

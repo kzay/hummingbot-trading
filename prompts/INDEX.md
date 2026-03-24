@@ -14,6 +14,7 @@ Each loop prompt has a `MODE` field at the top. Set it before running.
 | File | Cadence | Modes | Covers |
 |---|---|---|---|
 | `loops/strategy_loop.md` | Weekly | `INITIAL_AUDIT` / `ITERATION` | Strategy logic · finance/risk · execution quality · config tuning · parity gaps · BACKLOG output |
+| `loops/bot7_research_loop.md` | Weekly / Sprint | `INITIAL_AUDIT` / `ITERATION` / `ROBUSTNESS` | BOT7-centric autonomous strategy research · backtest loop · shortlist · BACKLOG output |
 | `loops/tech_loop.md` | Monthly | `INITIAL_AUDIT` / `ITERATION` | Code quality · performance · reliability · test coverage · infra · deps · new tools · BACKLOG output |
 | `loops/ops_loop.md` | Daily / Weekly | `DAILY_SCAN` / `WEEKLY_REVIEW` / `INITIAL_AUDIT` | Bot health · observability · alerting · service status · infrastructure · BACKLOG output |
 
@@ -87,6 +88,7 @@ These complement the loops — use them when inspiration strikes, when something
 |---|---|---|---|
 | **Daily** | `loops/ops_loop.md` | `DAILY_SCAN` | Bot state, container status, Redis ping |
 | **Weekly** | `loops/strategy_loop.md` | `ITERATION` | `minute.csv`, `fills.csv`, Prometheus metrics |
+| **Weekly / research sprint** | `loops/bot7_research_loop.md` | `ITERATION` | BOT7 config, backtest artifacts, historical catalog, experiment ledger |
 | **Weekly** | `loops/ops_loop.md` | `WEEKLY_REVIEW` | 7-day trend data, alert log, service reports |
 | **Monthly** | `loops/tech_loop.md` | `ITERATION` | Freeze count, tick latency, coverage %, dep versions |
 | **After incident** | `ops/21_incident_postmortem_prompt.md` | — | Logs, timeline, metrics |
@@ -110,6 +112,7 @@ These complement the loops — use them when inspiration strikes, when something
 paper stats / logs / metrics          inspiration / something feels wrong
         ↓                                         ↓
 loops/strategy_loop.md            explore/creative_brainstorm.md
+loops/bot7_research_loop.md
 loops/tech_loop.md          OR    explore/focused_refactor.md
 loops/ops_loop.md                 explore/restructure_architecture.md
                                   explore/focused_test_session.md

@@ -10,9 +10,8 @@ import re
 import shutil
 import subprocess
 import time
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
-from typing import Dict, List, Tuple
 
 try:
     import psycopg
@@ -24,10 +23,10 @@ _SAFE_DB_RE = re.compile(r"^[A-Za-z0-9_]+$")
 
 
 def _utc_now() -> str:
-    return datetime.now(timezone.utc).isoformat()
+    return datetime.now(UTC).isoformat()
 
 
-def _read_json(path: Path) -> Dict[str, object]:
+def _read_json(path: Path) -> dict[str, object]:
     if not path.exists():
         return {}
     try:
@@ -47,9 +46,9 @@ def _sha256_file(path: Path) -> str:
     return h.hexdigest()
 
 
-def _write_report(report_dir: Path, stem: str, payload: Dict[str, object]) -> None:
+def _write_report(report_dir: Path, stem: str, payload: dict[str, object]) -> None:
     report_dir.mkdir(parents=True, exist_ok=True)
-    stamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
+    stamp = datetime.now(UTC).strftime("%Y%m%dT%H%M%SZ")
     ts_path = report_dir / f"{stem}_{stamp}.json"
     latest_path = report_dir / f"{stem}_latest.json"
     raw = json.dumps(payload, indent=2)
@@ -102,7 +101,7 @@ def _restore_dump_with_psql(
     password: str,
     restore_db: str,
     timeout_sec: int,
-) -> Tuple[int, str, str]:
+) -> tuple[int, str, str]:
     psql_bin = shutil.which("psql")
     if not psql_bin:
         return 127, "", "psql_not_found_in_path"
@@ -125,22 +124,21 @@ def _restore_dump_with_psql(
         return 2, "", f"restore_exception:{exc}"
 
 
-def _fetch_table_counts(host: str, port: int, dbname: str, user: str, password: str) -> Dict[str, int]:
-    out: Dict[str, int] = {}
-    with _connect_db(host, port, dbname, user, password) as conn:
-        with conn.cursor() as cur:
-            for table in _CANONICAL_TABLES:
-                try:
-                    cur.execute(f"SELECT COUNT(*) FROM {table}")
-                    row = cur.fetchone()
-                    out[table] = int(row[0] if row else 0)
-                except Exception:
-                    conn.rollback()
-                    out[table] = -1
+def _fetch_table_counts(host: str, port: int, dbname: str, user: str, password: str) -> dict[str, int]:
+    out: dict[str, int] = {}
+    with _connect_db(host, port, dbname, user, password) as conn, conn.cursor() as cur:
+        for table in _CANONICAL_TABLES:
+            try:
+                cur.execute(f"SELECT COUNT(*) FROM {table}")
+                row = cur.fetchone()
+                out[table] = int(row[0] if row else 0)
+            except Exception:
+                conn.rollback()
+                out[table] = -1
     return out
 
 
-def _counts_match(expected_counts: Dict[str, int], restored_counts: Dict[str, int]) -> bool:
+def _counts_match(expected_counts: dict[str, int], restored_counts: dict[str, int]) -> bool:
     if not expected_counts:
         return all(int(v) >= 0 for v in restored_counts.values())
     for table, expected in expected_counts.items():
@@ -162,9 +160,9 @@ def run_restore_drill(
     timeout_sec: int,
     keep_restored_db: bool,
     require_parity_sidecar: bool,
-) -> Dict[str, object]:
+) -> dict[str, object]:
     start = time.time()
-    report: Dict[str, object] = {
+    report: dict[str, object] = {
         "ts_utc": _utc_now(),
         "status": "fail",
         "backup_manifest": "",
@@ -202,7 +200,7 @@ def run_restore_drill(
         return report
     report["backup_file"] = str(backup_file)
 
-    expected_source_counts: Dict[str, int] = {}
+    expected_source_counts: dict[str, int] = {}
     raw_counts = manifest.get("source_counts", {})
     if isinstance(raw_counts, dict):
         for table in _CANONICAL_TABLES:
@@ -217,7 +215,7 @@ def run_restore_drill(
             expected_source_counts = {}
     report["expected_source_counts"] = expected_source_counts
 
-    restore_db = _safe_db_name(f"{restore_db_prefix}_{datetime.now(timezone.utc).strftime('%Y%m%d%H%M%S')}")
+    restore_db = _safe_db_name(f"{restore_db_prefix}_{datetime.now(UTC).strftime('%Y%m%d%H%M%S')}")
     report["restore_db"] = restore_db
     try:
         _create_fresh_db(host, port, admin_db, user, password, restore_db)
@@ -240,7 +238,7 @@ def run_restore_drill(
     report["restore_stdout"] = restore_out[:2000]
     report["restore_stderr"] = restore_err[:2000]
 
-    restored_counts: Dict[str, int] = {}
+    restored_counts: dict[str, int] = {}
     if restore_rc == 0:
         try:
             restored_counts = _fetch_table_counts(host, port, restore_db, user, password)

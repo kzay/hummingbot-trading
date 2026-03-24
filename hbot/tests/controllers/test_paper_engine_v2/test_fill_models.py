@@ -5,23 +5,26 @@ Includes all spec test vectors V1-V6 and determinism verification.
 import time
 from decimal import Decimal
 
-import pytest
-
-from controllers.paper_engine_v2.fill_models import (
+from simulation.fill_models import (
     BestPriceFillModel,
     CompetitionAwareFillModel,
-    FillDecision, LatencyAwareFillModel, LatencyAwareConfig,
+    LatencyAwareConfig,
+    LatencyAwareFillModel,
     MarketHoursAwareFillModel,
     OneTickSlippageFillModel,
-    QueuePositionConfig, QueuePositionFillModel, TopOfBookFillModel,
+    QueuePositionConfig,
+    QueuePositionFillModel,
     SizeAwareFillModel,
     ThreeTierFillModel,
-    TwoTierFillModel, make_fill_model,
-    _NO_FILL,
+    TopOfBookFillModel,
+    TwoTierFillModel,
+    make_fill_model,
 )
-from controllers.paper_engine_v2.types import OrderSide, OrderStatus, PaperOrderType
+from simulation.types import OrderStatus
 from tests.controllers.test_paper_engine_v2.conftest import (
-    BTC_SPOT, make_book, make_order,
+    BTC_SPOT,
+    make_book,
+    make_order,
 )
 
 
@@ -124,7 +127,7 @@ class TestQueuePositionFillModel:
         assert decision.is_maker is False
 
     def test_empty_book_no_fill(self):
-        from controllers.paper_engine_v2.types import OrderBookSnapshot
+        from simulation.types import OrderBookSnapshot
         model = self._make()
         order = make_order("buy", "limit_maker", "99.95", "1.0")
         order.status = OrderStatus.OPEN
@@ -157,7 +160,7 @@ class TestQueuePositionFillModel:
 
     def test_taker_fill_uses_multi_level_vwap(self):
         """Taker fill should price from multi-level contra depth, not only top."""
-        from controllers.paper_engine_v2.types import BookLevel, OrderBookSnapshot
+        from simulation.types import BookLevel, OrderBookSnapshot
 
         model = self._make(
             queue_participation=Decimal("1.0"),
@@ -200,7 +203,7 @@ class TestTopOfBookFillModel:
         assert decision.queue_delay_ms == 0
 
     def test_no_fill_empty_book(self):
-        from controllers.paper_engine_v2.types import OrderBookSnapshot
+        from simulation.types import OrderBookSnapshot
         model = TopOfBookFillModel()
         order = make_order("buy", "market", "0", "1.0")
         empty = OrderBookSnapshot(instrument_id=BTC_SPOT, bids=(), asks=(), timestamp_ns=0)

@@ -1,8 +1,9 @@
 """State container dataclasses for EppV24Controller."""
 from __future__ import annotations
-from dataclasses import dataclass, field
+
+from dataclasses import dataclass
 from decimal import Decimal
-from typing import Any, Dict, List, Optional
+from typing import Any
 
 _ZERO = Decimal("0")
 _ONE = Decimal("1")
@@ -20,8 +21,8 @@ class PositionState:
 
 @dataclass
 class DailyCounters:
-    equity_open: Optional[Decimal] = None
-    equity_peak: Optional[Decimal] = None
+    equity_open: Decimal | None = None
+    equity_peak: Decimal | None = None
     traded_notional: Decimal = _ZERO
     fills_count: int = 0
     fees_paid_quote: Decimal = _ZERO
@@ -32,8 +33,8 @@ class DailyCounters:
 
 @dataclass
 class FillEdgeState:
-    ewma: Optional[Decimal] = None
-    variance: Optional[Decimal] = None
+    ewma: Decimal | None = None
+    variance: Decimal | None = None
     fill_count_for_kelly: int = 0
     adverse_fill_count: int = 0
 

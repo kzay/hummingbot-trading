@@ -1,10 +1,9 @@
 """Tests for paper_engine_v2 FundingSimulator."""
 from decimal import Decimal
-import pytest
 
-from controllers.paper_engine_v2.funding_simulator import FundingSimulator
-from controllers.paper_engine_v2.portfolio import PaperPortfolio, PortfolioConfig
-from controllers.paper_engine_v2.types import FundingApplied, OrderSide, _ZERO
+from simulation.funding_simulator import FundingSimulator
+from simulation.portfolio import PaperPortfolio, PortfolioConfig
+from simulation.types import _ZERO, FundingApplied, OrderSide
 from tests.controllers.test_paper_engine_v2.conftest import BTC_PERP, BTC_SPOT, make_spec
 
 

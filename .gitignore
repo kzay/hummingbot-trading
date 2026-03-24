@@ -17,12 +17,15 @@ desktop.ini
 *.swp
 *.swo
 *~
+.cursor/mcp.json
 
 # ---- Python ----
 __pycache__/
 *.pyc
 *.pyo
 .venv/
+.venv-work/
+.venv312/
 venv/
 .coverage
 htmlcov/
@@ -30,3 +33,6 @@ htmlcov/
 # ---- Temp / debug artifacts ----
 *.tmp
 *.bak
+# Ad-hoc screenshots at repo root (Playwright / manual captures)
+screenshot*.png
+screenshot*.js

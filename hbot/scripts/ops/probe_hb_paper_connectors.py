@@ -2,18 +2,17 @@
 from __future__ import annotations
 
 import json
-import sys
 import subprocess
+import sys
 from dataclasses import asdict, dataclass
-from typing import List
 
 
 @dataclass
 class ProbeResult:
     image: str
     ok: bool
-    bitget_connectors: List[str]
-    paper_connectors: List[str]
+    bitget_connectors: list[str]
+    paper_connectors: list[str]
     has_bitget_paper: bool
     error: str = ""
 
@@ -52,7 +51,7 @@ def probe_image(image: str, timeout_s: int = 240) -> ProbeResult:
             has_bitget_paper=False,
             error=exc.output.strip()[-1000:],
         )
-    except Exception as exc:  # noqa: BLE001
+    except Exception as exc:
         return ProbeResult(
             image=image,
             ok=False,
@@ -71,7 +70,7 @@ def main() -> None:
         "version-2.15.0",
         "latest",
     ]
-    results: List[ProbeResult] = []
+    results: list[ProbeResult] = []
     for tag in tags:
         image = f"hummingbot/hummingbot:{tag}"
         print(f"Probing {image} ...")

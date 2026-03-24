@@ -5,20 +5,26 @@ event log, state persistence round-trip, determinism.
 """
 import time
 from decimal import Decimal
-from pathlib import Path
 
 import pytest
 
-from controllers.paper_engine_v2.data_feeds import StaticDataFeed
-from controllers.paper_engine_v2.config import PaperEngineConfig
-from controllers.paper_engine_v2.desk import DeskConfig, PaperDesk
-from controllers.paper_engine_v2.risk_engine import LiquidationAction, MarginLevel
-from controllers.paper_engine_v2.types import (
-    OrderAccepted, OrderFilled, OrderRejected,
-    OrderSide, PaperOrderType,
+from simulation.config import PaperEngineConfig
+from simulation.data_feeds import StaticDataFeed
+from simulation.desk import DeskConfig, PaperDesk
+from simulation.risk_engine import LiquidationAction, MarginLevel
+from simulation.types import (
+    OrderAccepted,
+    OrderFilled,
+    OrderRejected,
+    OrderSide,
+    PaperOrderType,
 )
 from tests.controllers.test_paper_engine_v2.conftest import (
-    BTC_PERP, BTC_SPOT, ETH_SPOT, make_book, make_spec,
+    BTC_PERP,
+    BTC_SPOT,
+    ETH_SPOT,
+    make_book,
+    make_spec,
 )
 
 
@@ -99,7 +105,7 @@ class TestCancelAll:
         desk.submit_order(BTC_SPOT, OrderSide.BUY, PaperOrderType.LIMIT_MAKER, Decimal("99.95"), Decimal("0.1"))
         desk.submit_order(BTC_SPOT, OrderSide.BUY, PaperOrderType.LIMIT_MAKER, Decimal("99.90"), Decimal("0.1"))
         events = desk.cancel_all()
-        from controllers.paper_engine_v2.types import OrderCanceled
+        from simulation.types import OrderCanceled
         assert sum(1 for e in events if isinstance(e, OrderCanceled)) == 2
 
     def test_cancel_all_for_instrument(self, tmp_path):
@@ -108,7 +114,7 @@ class TestCancelAll:
         desk.register_instrument(spec, StaticDataFeed(make_book()))
         desk.submit_order(BTC_SPOT, OrderSide.BUY, PaperOrderType.LIMIT_MAKER, Decimal("99.95"), Decimal("0.1"))
         events = desk.cancel_all(instrument_id=BTC_SPOT)
-        from controllers.paper_engine_v2.types import OrderCanceled
+        from simulation.types import OrderCanceled
         assert any(isinstance(e, OrderCanceled) for e in events)
 
 
@@ -212,7 +218,7 @@ class TestRiskLiquidationExecution:
 
         desk.portfolio.evaluate_risk = _forced_eval  # type: ignore[method-assign]
         events = desk.tick()
-        forced_fills = [e for e in events if isinstance(e, OrderFilled) and str(e.order_id).startswith("forced_liq_")]
+        forced_fills = [e for e in events if isinstance(e, OrderFilled) and str(e.order_id).startswith("liq_")]
         assert forced_fills
         assert desk.portfolio.get_position(BTC_PERP).abs_quantity <= Decimal("1.0")
 

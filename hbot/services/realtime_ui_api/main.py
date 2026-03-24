@@ -1,3615 +1,191 @@
 from __future__ import annotations
 
 import argparse
-import base64
-import csv
-import hashlib
+import asyncio
 import json
 import logging
 import os
 import queue
-import struct
-import threading
 import time
-from collections import defaultdict, deque
-from dataclasses import dataclass, field
-from datetime import datetime, timedelta, timezone
-from decimal import Decimal
-from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+from datetime import UTC, datetime, timezone
+from functools import partial
 from pathlib import Path
-from typing import Any, Deque, Dict, Iterable, List, Optional, Tuple
-from urllib.parse import parse_qs, urlparse
+from typing import Any, Optional
 
-try:
-    import psycopg
-except Exception:  # pragma: no cover - optional at runtime in lightweight environments.
-    psycopg = None  # type: ignore[assignment]
+import orjson
 
-try:
-    import ccxt  # type: ignore
-except Exception:  # pragma: no cover - optional in lightweight environments.
-    ccxt = None  # type: ignore[assignment]
-
-from services.common.logging_config import configure_logging
-from services.common.log_namespace import list_instance_log_files
-from services.common.market_history_provider_impl import MarketHistoryProviderImpl, market_bars_to_candles
-from services.common.market_history_types import MarketBar, MarketBarKey
-from services.contracts.stream_names import (
-    BOT_TELEMETRY_STREAM,
-    DEFAULT_CONSUMER_GROUP,
-    MARKET_DATA_STREAM,
-    MARKET_DEPTH_STREAM,
-    MARKET_QUOTE_STREAM,
-    PAPER_EXCHANGE_EVENT_STREAM,
+from platform_lib.logging.logging_config import configure_logging
+from platform_lib.market_data.market_history_provider_impl import MarketHistoryProviderImpl, market_bars_to_candles
+from platform_lib.market_data.market_history_types import MarketBarKey
+from services.realtime_ui_api._helpers import (
+    RealtimeApiConfig,
+    _account_summary_template,
+    _build_alerts,
+    _build_bot_gates,
+    _build_gate_timeline,
+    _build_quote_gate_summary,
+    _build_runtime_open_order_placeholders,
+    _build_trade_fill_contribution,
+    _candle_dicts_to_market_bars,
+    _candles_from_points,
+    _compare_candle_sets,
+    _daily_review_template,
+    _day_bounds_utc,
+    _depth_mid,
+    _enrich_closed_trades_with_minute_context,
+    _history_quality_from_candles,
+    _infer_trade_exit_reason,
+    _is_loopback_host,
+    _journal_review_template,
+    _merge_activity_window,
+    _merge_fill_activity,
+    _nearest_context_row,
+    _normalize_fill_activity_row,
+    _normalize_pair,
+    _now_ms,
+    _read_paper_exchange_active_orders,
+    _reconstruct_closed_trades,
+    _resolve_realized_pnl,
+    _sample_trade_path_from_fills,
+    _sample_trade_path_points,
+    _sanitize_path_param,
+    _split_risk_reasons,
+    _state_key,
+    _stream_ms,
+    _summarize_daily_review,
+    _summarize_fill_activity,
+    _summarize_journal_review,
+    _summarize_weekly_report,
+    _sync_account_summary_with_open_orders,
+    _to_bool,
+    _to_epoch_ms,
+    _to_float,
+    _validate_runtime_config,
+    _weekly_review_template,
+    _window_summary_template,
 )
-from services.hb_bridge.redis_client import RedisStreamClient
+from services.realtime_ui_api.fallback_readers import (
+    DeskSnapshotFallback,
+    OpsDbReadModel,
+)
+from services.realtime_ui_api.state import RealtimeState
+from services.realtime_ui_api.stream_consumer import StreamWorker
 
 configure_logging()
 logger = logging.getLogger(__name__)
 
 
-def _now_ms() -> int:
-    return int(time.time() * 1000)
+def _operator_api_csv_fallback_allowed(cfg: RealtimeApiConfig, db_available: bool) -> bool:
+    """Allow reads from minute.csv / fills.csv only when explicitly enabled (debug / backup).
 
+    When ``use_csv_for_operator_api`` is true, ``csv_failover_only`` still applies: with
+    failover on, CSV supplements only if the DB path is unavailable.
+    """
+    if not cfg.use_csv_for_operator_api:
+        return False
+    return bool(not cfg.csv_failover_only or not db_available)
 
-def _to_float(value: Any) -> Optional[float]:
-    try:
-        if value in (None, ""):
-            return None
-        return float(value)
-    except Exception:
-        return None
 
+# ---------------------------------------------------------------------------
+# orjson helpers — 3-10x faster than stdlib json.dumps
+# ---------------------------------------------------------------------------
 
-def _depth_mid(snapshot: Dict[str, Any]) -> Optional[float]:
-    best_bid = _to_float(snapshot.get("best_bid"))
-    best_ask = _to_float(snapshot.get("best_ask"))
-    if best_bid is None or best_ask is None:
-        bids = snapshot.get("bids", [])
-        asks = snapshot.get("asks", [])
-        if isinstance(bids, list) and bids:
-            best_bid = _to_float((bids[0] or {}).get("price"))
-        if isinstance(asks, list) and asks:
-            best_ask = _to_float((asks[0] or {}).get("price"))
-    if best_bid is None and best_ask is None:
-        return None
-    if best_bid is None:
-        return best_ask
-    if best_ask is None:
-        return best_bid
-    return (best_bid + best_ask) / 2.0
+def _json_bytes(payload: Any) -> bytes:
+    """Serialize *payload* to UTF-8 JSON bytes via orjson."""
+    return orjson.dumps(payload, option=orjson.OPT_NON_STR_KEYS)
 
 
-def _to_bool(value: Any) -> bool:
-    return str(value or "").strip().lower() in {"1", "true", "yes", "on"}
+def _json_str(payload: Any) -> str:
+    """Serialize *payload* to a JSON string via orjson."""
+    return _json_bytes(payload).decode("utf-8")
 
 
-def _safe_json(value: Any) -> str:
-    return json.dumps(value, ensure_ascii=True)
+# Keep _safe_json available for callers that import it from this module.
+_safe_json = _json_str
 
 
-def _normalize_pair(value: Any) -> str:
-    return str(value or "").strip().upper().replace("/", "").replace("-", "").replace("_", "")
+# ---------------------------------------------------------------------------
+# Shared helpers (auth, fallback, stream key matching)
+# ---------------------------------------------------------------------------
 
-
-def _candle_dicts_to_market_bars(
-    candles: List[Dict[str, Any]],
-    *,
-    bar_interval_s: int,
-    bar_source: str,
-) -> List[MarketBar]:
-    out: List[MarketBar] = []
-    for candle in candles:
-        bucket_ms = _to_epoch_ms(candle.get("bucket_ms"))
-        open_price = candle.get("open")
-        high_price = candle.get("high")
-        low_price = candle.get("low")
-        close_price = candle.get("close")
-        if None in {bucket_ms, open_price, high_price, low_price, close_price}:
-            continue
-        out.append(
-            MarketBar(
-                bucket_start_ms=int(bucket_ms),
-                bar_interval_s=int(bar_interval_s),
-                open=Decimal(str(open_price)),
-                high=Decimal(str(high_price)),
-                low=Decimal(str(low_price)),
-                close=Decimal(str(close_price)),
-                is_closed=True,
-                bar_source=bar_source,
-            )
-        )
-    return out
-
-
-def _history_quality_from_candles(
-    candles: List[Dict[str, Any]],
-    *,
-    bar_interval_s: int,
-    bars_requested: int,
-    source_used: str,
-    degraded_reason: str = "",
-    now_ms: Optional[int] = None,
-) -> Dict[str, Any]:
-    provider = MarketHistoryProviderImpl(now_ms_reader=_now_ms)
-    status = provider._build_status(
-        bars=_candle_dicts_to_market_bars(
-            candles,
-            bar_interval_s=max(60, int(bar_interval_s)),
-            bar_source="quote_mid",
-        ),
-        bar_interval_s=max(60, int(bar_interval_s)),
-        requested=max(1, int(bars_requested)),
-        source_used=str(source_used or "empty"),
-        degraded_reason=str(degraded_reason or ""),
-        now_ms=int(now_ms or _now_ms()),
-    )
-    return {
-        "status": str(status.status or "empty"),
-        "freshness_ms": int(status.freshness_ms),
-        "max_gap_s": int(status.max_gap_s),
-        "coverage_ratio": float(status.coverage_ratio),
-        "source_used": str(status.source_used or source_used or "empty"),
-        "degraded_reason": str(status.degraded_reason or ""),
-        "bars_returned": int(status.bars_returned or len(candles)),
-        "bars_requested": int(status.bars_requested or bars_requested),
-    }
-
-
-def _compare_candle_sets(legacy: List[Dict[str, Any]], shared: List[Dict[str, Any]]) -> Dict[str, Any]:
-    legacy_by_bucket = {int(c.get("bucket_ms", 0) or 0): c for c in legacy if int(c.get("bucket_ms", 0) or 0) > 0}
-    shared_by_bucket = {int(c.get("bucket_ms", 0) or 0): c for c in shared if int(c.get("bucket_ms", 0) or 0) > 0}
-    buckets = sorted(set(legacy_by_bucket.keys()) | set(shared_by_bucket.keys()))
-    max_abs_close_delta = 0.0
-    mismatched_buckets = 0
-    missing_in_shared = 0
-    missing_in_legacy = 0
-    for bucket in buckets:
-        legacy_row = legacy_by_bucket.get(bucket)
-        shared_row = shared_by_bucket.get(bucket)
-        if legacy_row is None:
-            missing_in_legacy += 1
-            mismatched_buckets += 1
-            continue
-        if shared_row is None:
-            missing_in_shared += 1
-            mismatched_buckets += 1
-            continue
-        close_delta = abs(float(legacy_row.get("close", 0.0) or 0.0) - float(shared_row.get("close", 0.0) or 0.0))
-        max_abs_close_delta = max(max_abs_close_delta, close_delta)
-        if any(abs(float(legacy_row.get(k, 0.0) or 0.0) - float(shared_row.get(k, 0.0) or 0.0)) > 1e-9 for k in ("open", "high", "low", "close")):
-            mismatched_buckets += 1
-    return {
-        "bucket_count_legacy": len(legacy_by_bucket),
-        "bucket_count_shared": len(shared_by_bucket),
-        "missing_in_shared": missing_in_shared,
-        "missing_in_legacy": missing_in_legacy,
-        "mismatched_buckets": mismatched_buckets,
-        "max_abs_close_delta": max_abs_close_delta,
-    }
-
-
-def _to_epoch_ms(value: Any) -> Optional[int]:
-    if isinstance(value, datetime):
-        return int(value.timestamp() * 1000)
-    if isinstance(value, int):
-        return value
-    if isinstance(value, float):
-        return int(value)
-    numeric = _to_float(value)
-    if numeric is not None:
-        parsed = int(numeric)
-        return parsed if parsed > 10_000_000_000 else parsed * 1000
-    raw = str(value or "").strip()
-    if not raw:
-        return None
-    try:
-        if raw.isdigit():
-            parsed = int(raw)
-            return parsed if parsed > 10_000_000_000 else parsed * 1000
-    except Exception:
-        return None
-    try:
-        normalized = raw.replace("Z", "+00:00")
-        return int(datetime.fromisoformat(normalized).timestamp() * 1000)
-    except Exception:
-        return None
-
-
-def _ccxt_exchange_id(connector_name: str) -> str:
-    normalized = str(connector_name or "").strip().lower()
-    if normalized.startswith("bitget"):
-        return "bitget"
-    if normalized.startswith("binance_perpetual") or normalized.startswith("binanceusdm"):
-        return "binanceusdm"
-    return ""
-
-
-def _ccxt_symbol(trading_pair: str) -> str:
-    raw = str(trading_pair or "").strip().upper().replace("_", "-")
-    return raw.replace("-", "/")
-
-
-def _ccxt_timeframe(timeframe_s: int) -> str:
-    mapping = {
-        60: "1m",
-        180: "3m",
-        300: "5m",
-        900: "15m",
-        1800: "30m",
-        3600: "1h",
-        14400: "4h",
-        86400: "1d",
-    }
-    return mapping.get(max(1, int(timeframe_s)), "1m")
-
-
-def _candles_from_points(points: List[Tuple[int, float]], timeframe_s: int, limit: int) -> List[Dict[str, Any]]:
-    timeframe_ms = max(1, int(timeframe_s)) * 1000
-    buckets: Dict[int, Dict[str, Any]] = {}
-    last_close: Optional[float] = None
-    last_bucket: Optional[int] = None
-    for ts_ms, price in points:
-        bucket = (int(ts_ms) // timeframe_ms) * timeframe_ms
-        row = buckets.get(bucket)
-        if row is None:
-            open_price = float(price)
-            # When only one point exists per minute, bridge open to previous close to avoid flat 1m bars.
-            if timeframe_ms <= 60_000 and last_close is not None and last_bucket != bucket:
-                open_price = float(last_close)
-            buckets[bucket] = {
-                "bucket_ms": bucket,
-                "open": open_price,
-                "high": max(open_price, float(price)),
-                "low": min(open_price, float(price)),
-                "close": float(price),
-            }
-            last_close = float(price)
-            last_bucket = bucket
-            continue
-        row["high"] = max(float(row["high"]), float(price))
-        row["low"] = min(float(row["low"]), float(price))
-        row["close"] = float(price)
-        last_close = float(price)
-        last_bucket = bucket
-    candles = [buckets[k] for k in sorted(buckets.keys())]
-    return candles[-max(1, int(limit)) :]
-
-
-def _stream_ms(entry_id: str) -> int:
-    raw = str(entry_id or "").strip().split("-", 1)[0]
-    try:
-        return int(raw)
-    except Exception:
-        return _now_ms()
-
-
-def _window_summary_template() -> Dict[str, Any]:
-    return {
-        "fill_count": 0,
-        "buy_count": 0,
-        "sell_count": 0,
-        "maker_count": 0,
-        "maker_ratio": 0.0,
-        "volume_base": 0.0,
-        "notional_quote": 0.0,
-        "realized_pnl_quote": 0.0,
-        "avg_fill_size": 0.0,
-        "avg_fill_price": 0.0,
-    }
-
-
-def _account_summary_template() -> Dict[str, Any]:
-    return {
-        "equity_quote": 0.0,
-        "quote_balance": 0.0,
-        "equity_open_quote": 0.0,
-        "equity_peak_quote": 0.0,
-        "realized_pnl_quote": 0.0,
-        "controller_state": "",
-        "regime": "",
-        "pnl_governor_active": False,
-        "pnl_governor_reason": "",
-        "risk_reasons": "",
-        "daily_loss_pct": 0.0,
-        "max_daily_loss_pct_hard": 0.0,
-        "drawdown_pct": 0.0,
-        "max_drawdown_pct_hard": 0.0,
-        "order_book_stale": False,
-        "soft_pause_edge": False,
-        "net_edge_pct": 0.0,
-        "net_edge_gate_pct": 0.0,
-        "adaptive_effective_min_edge_pct": 0.0,
-        "spread_pct": 0.0,
-        "spread_floor_pct": 0.0,
-        "spread_competitiveness_cap_active": False,
-        "orders_active": 0,
-        "quoting_status": "",
-        "quoting_reason": "",
-        "quote_gates": [],
-        "snapshot_ts": "",
-    }
-
-
-def _day_bounds_utc(day_key: str) -> Tuple[str, int, int]:
-    normalized = str(day_key or "").strip()
-    if normalized:
-        start_dt = datetime.fromisoformat(f"{normalized}T00:00:00+00:00")
-    else:
-        now = datetime.now(timezone.utc)
-        start_dt = now.replace(hour=0, minute=0, second=0, microsecond=0)
-        normalized = start_dt.date().isoformat()
-    end_dt = start_dt + timedelta(days=1)
-    return normalized, int(start_dt.timestamp() * 1000), int(end_dt.timestamp() * 1000)
-
-
-def _daily_review_template(day_key: str) -> Dict[str, Any]:
-    return {
-        "day": day_key,
-        "summary": {
-            "equity_open_quote": 0.0,
-            "equity_close_quote": 0.0,
-            "equity_high_quote": 0.0,
-            "equity_low_quote": 0.0,
-            "quote_balance_end_quote": 0.0,
-            "realized_pnl_day_quote": 0.0,
-            "unrealized_pnl_end_quote": 0.0,
-            "fill_count": 0,
-            "buy_count": 0,
-            "sell_count": 0,
-            "maker_ratio": 0.0,
-            "notional_quote": 0.0,
-            "fees_quote": 0.0,
-            "controller_state_end": "",
-            "regime_end": "",
-            "risk_reasons_end": "",
-            "pnl_governor_active_end": False,
-            "order_book_stale_end": False,
-            "minute_points": 0,
-        },
-        "equity_curve": [],
-        "hourly": [],
-        "fills": [],
-        "gate_timeline": [],
-        "narrative": "",
-    }
-
-
-def _weekly_review_template() -> Dict[str, Any]:
-    return {
-        "summary": {
-            "period_start": "",
-            "period_end": "",
-            "n_days": 0,
-            "days_with_data": 0,
-            "total_net_pnl_quote": 0.0,
-            "mean_daily_pnl_quote": 0.0,
-            "mean_daily_net_pnl_bps": 0.0,
-            "sharpe_annualized": 0.0,
-            "win_rate": 0.0,
-            "winning_days": 0,
-            "losing_days": 0,
-            "max_single_day_drawdown_pct": 0.0,
-            "hard_stop_days": 0,
-            "total_fills": 0,
-            "spread_capture_dominant_source": False,
-            "dominant_source": "",
-            "dominant_regime": "",
-            "gate_pass": False,
-            "gate_failed_criteria": [],
-            "warnings": [],
-        },
-        "days": [],
-        "regime_breakdown": {},
-        "narrative": "",
-    }
-
-
-def _journal_review_template() -> Dict[str, Any]:
-    return {
-        "summary": {
-            "trade_count": 0,
-            "winning_trades": 0,
-            "losing_trades": 0,
-            "win_rate": 0.0,
-            "realized_pnl_quote_total": 0.0,
-            "fees_quote_total": 0.0,
-            "avg_realized_pnl_quote": 0.0,
-            "avg_hold_seconds": 0.0,
-            "avg_win_quote": 0.0,
-            "avg_loss_quote": 0.0,
-            "avg_mfe_quote": 0.0,
-            "avg_mae_quote": 0.0,
-            "start_ts": "",
-            "end_ts": "",
-            "entry_regime_breakdown": {},
-            "exit_reason_breakdown": {},
-        },
-        "trades": [],
-        "narrative": "",
-    }
-
-
-def _build_trade_fill_contribution(
-    fill: Dict[str, Any],
-    amount_base: float,
-    fee_quote: float,
-    realized_pnl_quote: float,
-    role: str,
-) -> Dict[str, Any]:
-    price = float(_to_float(fill.get("price")) or 0.0)
-    ts_ms = int(fill.get("timestamp_ms") or 0)
-    return {
-        "ts": str(fill.get("ts") or (datetime.fromtimestamp(ts_ms / 1000, tz=timezone.utc).isoformat() if ts_ms > 0 else "")),
-        "timestamp_ms": ts_ms,
-        "side": str(fill.get("side", "") or "").upper(),
-        "price": price,
-        "amount_base": float(amount_base),
-        "notional_quote": float(amount_base * price),
-        "fee_quote": float(fee_quote),
-        "realized_pnl_quote": float(realized_pnl_quote),
-        "order_id": str(fill.get("order_id", "") or ""),
-        "is_maker": bool(fill.get("is_maker")),
-        "role": role,
-    }
-
-
-def _reconstruct_closed_trades(fills: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
-    safe_fills = [row for row in fills if isinstance(row, dict)]
-    safe_fills.sort(key=lambda row: int(row.get("timestamp_ms") or 0))
-    trades: List[Dict[str, Any]] = []
-    pos_qty = 0.0
-    avg_entry = 0.0
-    entry_ts_ms = 0
-    entry_notional = 0.0
-    entry_qty = 0.0
-    exit_notional = 0.0
-    exit_qty = 0.0
-    realized_accum = 0.0
-    fees_accum = 0.0
-    fill_count = 0
-    maker_count = 0
-    trade_id = 1
-    entry_side_sign = 0.0
-    trade_fills: List[Dict[str, Any]] = []
-    eps = 1e-12
-
-    def _emit_trade(exit_ts_ms: int) -> None:
-        nonlocal entry_ts_ms, entry_notional, entry_qty, exit_notional, exit_qty, realized_accum, fees_accum, fill_count, maker_count, trade_id, entry_side_sign, trade_fills
-        if entry_qty <= eps or exit_qty <= eps:
-            return
-        side = "long" if entry_side_sign >= 0 else "short"
-        avg_entry_price = entry_notional / entry_qty if entry_qty > eps else 0.0
-        avg_exit_price = exit_notional / exit_qty if exit_qty > eps else 0.0
-        trades.append(
-            {
-                "trade_id": f"trade-{trade_id}",
-                "entry_ts_ms": int(entry_ts_ms),
-                "exit_ts_ms": int(exit_ts_ms),
-                "entry_ts": datetime.fromtimestamp(entry_ts_ms / 1000, tz=timezone.utc).isoformat() if entry_ts_ms > 0 else "",
-                "exit_ts": datetime.fromtimestamp(exit_ts_ms / 1000, tz=timezone.utc).isoformat() if exit_ts_ms > 0 else "",
-                "side": side,
-                "quantity": float(exit_qty),
-                "avg_entry_price": float(avg_entry_price),
-                "avg_exit_price": float(avg_exit_price),
-                "realized_pnl_quote": float(realized_accum),
-                "fees_quote": float(fees_accum),
-                "hold_seconds": max(0.0, (float(exit_ts_ms) - float(entry_ts_ms)) / 1000.0),
-                "fill_count": int(fill_count),
-                "maker_ratio": (float(maker_count) / float(fill_count)) if fill_count > 0 else 0.0,
-                "fills": list(trade_fills),
-            }
-        )
-        trade_id += 1
-        entry_ts_ms = 0
-        entry_notional = 0.0
-        entry_qty = 0.0
-        exit_notional = 0.0
-        exit_qty = 0.0
-        realized_accum = 0.0
-        fees_accum = 0.0
-        fill_count = 0
-        maker_count = 0
-        entry_side_sign = 0.0
-        trade_fills = []
-
-    for fill in safe_fills:
-        ts_ms = int(fill.get("timestamp_ms") or 0)
-        side_raw = str(fill.get("side", "") or "").strip().lower()
-        sign = 1.0 if side_raw == "buy" else -1.0 if side_raw == "sell" else 0.0
-        qty = abs(float(_to_float(fill.get("amount_base")) or 0.0))
-        price = float(_to_float(fill.get("price")) or 0.0)
-        realized_fill = float(_to_float(fill.get("realized_pnl_quote")) or 0.0)
-        fee_fill = float(_to_float(fill.get("fee_quote")) or 0.0)
-        is_maker = bool(fill.get("is_maker"))
-        if sign == 0.0 or qty <= eps or price <= 0.0 or ts_ms <= 0:
-            continue
-
-        remaining_qty = qty
-        remaining_realized = realized_fill
-        remaining_fee = fee_fill
-
-        if abs(pos_qty) <= eps:
-            pos_qty = sign * remaining_qty
-            avg_entry = price
-            entry_side_sign = sign
-            entry_ts_ms = ts_ms
-            entry_notional = remaining_qty * price
-            entry_qty = remaining_qty
-            exit_notional = 0.0
-            exit_qty = 0.0
-            realized_accum = 0.0
-            fees_accum = remaining_fee
-            fill_count = 1
-            maker_count = 1 if is_maker else 0
-            trade_fills = [_build_trade_fill_contribution(fill, remaining_qty, remaining_fee, 0.0, "entry")]
-            continue
-
-        current_sign = 1.0 if pos_qty > 0 else -1.0
-        if sign == current_sign:
-            total_qty = abs(pos_qty) + remaining_qty
-            avg_entry = ((abs(pos_qty) * avg_entry) + (remaining_qty * price)) / total_qty if total_qty > eps else price
-            pos_qty = current_sign * total_qty
-            entry_notional += remaining_qty * price
-            entry_qty += remaining_qty
-            fees_accum += remaining_fee
-            fill_count += 1
-            if is_maker:
-                maker_count += 1
-            trade_fills.append(_build_trade_fill_contribution(fill, remaining_qty, remaining_fee, 0.0, "entry"))
-            continue
-
-        while remaining_qty > eps and abs(pos_qty) > eps and sign != (1.0 if pos_qty > 0 else -1.0):
-            close_qty = min(abs(pos_qty), remaining_qty)
-            ratio = close_qty / qty if qty > eps else 0.0
-            realized_piece = realized_fill * ratio
-            fee_piece = fee_fill * ratio
-            exit_notional += close_qty * price
-            exit_qty += close_qty
-            realized_accum += realized_piece
-            fees_accum += fee_piece
-            fill_count += 1
-            if is_maker:
-                maker_count += 1
-            trade_fills.append(_build_trade_fill_contribution(fill, close_qty, fee_piece, realized_piece, "exit"))
-            remaining_qty -= close_qty
-            remaining_realized -= realized_piece
-            remaining_fee -= fee_piece
-            next_abs = abs(pos_qty) - close_qty
-            pos_qty = (1.0 if pos_qty > 0 else -1.0) * next_abs
-            if abs(pos_qty) <= eps:
-                _emit_trade(ts_ms)
-                pos_qty = 0.0
-                avg_entry = 0.0
-
-        if remaining_qty > eps:
-            pos_qty = sign * remaining_qty
-            avg_entry = price
-            entry_side_sign = sign
-            entry_ts_ms = ts_ms
-            entry_notional = remaining_qty * price
-            entry_qty = remaining_qty
-            exit_notional = 0.0
-            exit_qty = 0.0
-            realized_accum = 0.0
-            fees_accum = max(0.0, remaining_fee)
-            fill_count = 1
-            maker_count = 1 if is_maker else 0
-            trade_fills = [_build_trade_fill_contribution(fill, remaining_qty, max(0.0, remaining_fee), 0.0, "entry")]
-
-    return trades
-
-
-def _nearest_context_row(target_ms: int, rows: List[Dict[str, Any]]) -> Dict[str, Any]:
-    nearest: Dict[str, Any] = {}
-    nearest_distance: Optional[int] = None
-    for row in rows:
-        ts_ms = int(row.get("timestamp_ms") or 0)
-        if ts_ms <= 0:
-            continue
-        distance = abs(ts_ms - target_ms)
-        if nearest_distance is None or distance < nearest_distance:
-            nearest = row
-            nearest_distance = distance
-    return nearest
-
-
-def _split_risk_reasons(raw: Any) -> List[str]:
-    parts = [part.strip() for part in str(raw or "").split("|")]
-    return [part for part in parts if part]
-
-
-def _build_quote_gate_summary(minute: Dict[str, Any], orders_active_override: Optional[int] = None) -> Dict[str, Any]:
-    controller_state = str(minute.get("state", "") or "").strip().lower()
-    risk_reasons = _split_risk_reasons(minute.get("risk_reasons"))
-    order_book_stale = _to_bool(minute.get("order_book_stale"))
-    pnl_governor_active = _to_bool(minute.get("pnl_governor_active"))
-    spread_cap_active = _to_bool(minute.get("spread_competitiveness_cap_active"))
-    soft_pause_edge = _to_bool(minute.get("soft_pause_edge"))
-    orders_active = (
-        max(0, int(orders_active_override or 0))
-        if orders_active_override is not None
-        else int(_to_float(minute.get("orders_active")) or 0)
-    )
-    net_edge_pct = float(_to_float(minute.get("net_edge_pct")) or 0.0)
-    net_edge_gate_pct = float(_to_float(minute.get("net_edge_gate_pct")) or 0.0)
-    adaptive_effective_min_edge_pct = float(_to_float(minute.get("adaptive_effective_min_edge_pct")) or 0.0)
-    edge_threshold = max(net_edge_gate_pct, adaptive_effective_min_edge_pct)
-    spread_pct = float(_to_float(minute.get("spread_pct")) or 0.0)
-    spread_floor_pct = float(_to_float(minute.get("spread_floor_pct")) or 0.0)
-
-    quote_gates: List[Dict[str, Any]] = [
-        {
-            "key": "controller_state",
-            "label": "Controller state",
-            "status": "fail" if controller_state == "hard_stop" else "warn" if controller_state == "soft_pause" else "pass",
-            "detail": controller_state or "running",
-        },
-        {
-            "key": "risk_reasons",
-            "label": "Risk reasons",
-            "status": "fail" if risk_reasons else "pass",
-            "detail": "|".join(risk_reasons) if risk_reasons else "none",
-        },
-        {
-            "key": "order_book",
-            "label": "Order book freshness",
-            "status": "fail" if order_book_stale else "pass",
-            "detail": "stale" if order_book_stale else "fresh",
-        },
-        {
-            "key": "edge",
-            "label": "Net edge >= threshold",
-            "status": "pass" if edge_threshold <= 0 or net_edge_pct >= edge_threshold else "fail",
-            "detail": f"{net_edge_pct:.6f} / {edge_threshold:.6f}",
-        },
-        {
-            "key": "spread",
-            "label": "Spread >= floor",
-            "status": "pass" if spread_floor_pct <= 0 or spread_pct >= spread_floor_pct else "fail",
-            "detail": f"{spread_pct:.6f} / {spread_floor_pct:.6f}",
-        },
-        {
-            "key": "spread_cap",
-            "label": "Competitiveness cap",
-            "status": "warn" if spread_cap_active else "pass",
-            "detail": "active" if spread_cap_active else "inactive",
-        },
-        {
-            "key": "pnl_governor",
-            "label": "PnL governor",
-            "status": "warn" if pnl_governor_active else "pass",
-            "detail": str(minute.get("pnl_governor_activation_reason", "") or "off"),
-        },
-        {
-            "key": "orders",
-            "label": "Orders active",
-            "status": "info" if orders_active > 0 else "warn",
-            "detail": str(orders_active),
-        },
-    ]
-
-    failed = [gate for gate in quote_gates if gate["status"] == "fail"]
-    warned = [gate for gate in quote_gates if gate["status"] == "warn"]
-    only_soft_pause_risk = bool(risk_reasons) and all(reason == "soft_pause_edge" for reason in risk_reasons)
-    if soft_pause_edge and controller_state != "hard_stop" and (not risk_reasons or only_soft_pause_risk) and not order_book_stale:
-        quoting_status = "waiting"
-        quoting_reason = "Soft pause edge gate active"
-    elif failed:
-        quoting_status = "blocked" if controller_state == "hard_stop" else "not quoting"
-        quoting_reason = f"{failed[0]['label']}: {failed[0]['detail']}"
-    elif warned:
-        quoting_status = "limited" if orders_active > 0 else "waiting"
-        quoting_reason = f"{warned[0]['label']}: {warned[0]['detail']}"
-    elif orders_active > 0:
-        quoting_status = "quoting"
-        quoting_reason = f"{orders_active} orders active"
-    else:
-        quoting_status = "ready"
-        quoting_reason = "All quote gates passing"
-
-    return {
-        "soft_pause_edge": soft_pause_edge,
-        "net_edge_pct": net_edge_pct,
-        "net_edge_gate_pct": net_edge_gate_pct,
-        "adaptive_effective_min_edge_pct": adaptive_effective_min_edge_pct,
-        "spread_pct": spread_pct,
-        "spread_floor_pct": spread_floor_pct,
-        "spread_competitiveness_cap_active": spread_cap_active,
-        "orders_active": orders_active,
-        "quoting_status": quoting_status,
-        "quoting_reason": quoting_reason,
-        "quote_gates": quote_gates,
-    }
-
-
-def _sync_account_summary_with_open_orders(account_summary: Dict[str, Any], resolved_open_orders: List[Dict[str, Any]]) -> Dict[str, Any]:
-    safe = dict(account_summary or {})
-    orders_active = len([row for row in resolved_open_orders if isinstance(row, dict)])
-    gate_summary = _build_quote_gate_summary(
-        {
-            "state": safe.get("controller_state"),
-            "risk_reasons": safe.get("risk_reasons"),
-            "order_book_stale": safe.get("order_book_stale"),
-            "pnl_governor_active": safe.get("pnl_governor_active"),
-            "pnl_governor_activation_reason": safe.get("pnl_governor_reason"),
-            "spread_competitiveness_cap_active": safe.get("spread_competitiveness_cap_active"),
-            "soft_pause_edge": safe.get("soft_pause_edge"),
-            "net_edge_pct": safe.get("net_edge_pct"),
-            "net_edge_gate_pct": safe.get("net_edge_gate_pct"),
-            "adaptive_effective_min_edge_pct": safe.get("adaptive_effective_min_edge_pct"),
-            "spread_pct": safe.get("spread_pct"),
-            "spread_floor_pct": safe.get("spread_floor_pct"),
-            "orders_active": orders_active,
-        },
-        orders_active_override=orders_active,
-    )
-    safe["orders_active"] = int(gate_summary.get("orders_active") or 0)
-    safe["quoting_status"] = str(gate_summary.get("quoting_status") or "")
-    safe["quoting_reason"] = str(gate_summary.get("quoting_reason") or "")
-    safe["quote_gates"] = list(gate_summary.get("quote_gates") or [])
-    return safe
-
-
-def _build_runtime_open_order_placeholders(
-    orders_active: int,
-    best_bid: Optional[float],
-    best_ask: Optional[float],
-    mid_price: Optional[float],
-    quantity: Optional[float],
-    trading_pair: str = "",
-    timestamp_ms: Optional[int] = None,
-    source_label: str = "runtime",
-) -> List[Dict[str, Any]]:
-    count = max(0, int(orders_active or 0))
-    if count <= 0:
-        return []
-    ts_ms = int(timestamp_ms or _now_ms())
-    qty_abs = abs(float(quantity)) if quantity is not None else None
-    pair = str(trading_pair or "")
-    bid_hint = best_bid if best_bid is not None else mid_price
-    ask_hint = best_ask if best_ask is not None else mid_price
-    price_hint_source = "book" if best_bid is not None or best_ask is not None else "mid" if mid_price is not None else "none"
-    out: List[Dict[str, Any]] = []
-    if count >= 2:
-        out.append(
-            {
-                "order_id": f"{source_label}-{pair or 'pair'}-buy-1",
-                "side": "buy",
-                "price": bid_hint,
-                "amount": qty_abs,
-                "quantity": qty_abs,
-                "state": source_label,
-                "trading_pair": pair,
-                "is_estimated": True,
-                "estimate_source": source_label,
-                "price_hint_source": price_hint_source,
-                "updated_ts_ms": ts_ms,
-            }
-        )
-        out.append(
-            {
-                "order_id": f"{source_label}-{pair or 'pair'}-sell-1",
-                "side": "sell",
-                "price": ask_hint,
-                "amount": qty_abs,
-                "quantity": qty_abs,
-                "state": source_label,
-                "trading_pair": pair,
-                "is_estimated": True,
-                "estimate_source": source_label,
-                "price_hint_source": price_hint_source,
-                "updated_ts_ms": ts_ms,
-            }
-        )
-        return out[:count]
-    side = "buy" if quantity is not None and quantity < 0 else "sell"
-    price = bid_hint if side == "buy" else ask_hint
-    out.append(
-        {
-            "order_id": f"{source_label}-{pair or 'pair'}-open-1",
-            "side": side,
-            "price": price,
-            "amount": qty_abs,
-            "quantity": qty_abs,
-            "state": source_label,
-            "trading_pair": pair,
-            "is_estimated": True,
-            "estimate_source": source_label,
-            "price_hint_source": price_hint_source,
-            "updated_ts_ms": ts_ms,
-        }
-    )
-    return out
-
-
-def _build_gate_timeline(minute_rows: List[Dict[str, Any]], max_segments: int = 200) -> List[Dict[str, Any]]:
-    safe_rows = [row for row in minute_rows if isinstance(row, dict)]
-    safe_rows.sort(key=lambda row: int(row.get("timestamp_ms") or 0))
-    if not safe_rows:
-        return []
-    segments: List[Dict[str, Any]] = []
-    active: Optional[Dict[str, Any]] = None
-    for row in safe_rows:
-        ts_ms = int(row.get("timestamp_ms") or 0)
-        if ts_ms <= 0:
-            continue
-        gate_summary = _build_quote_gate_summary(row)
-        quoting_status = str(gate_summary.get("quoting_status") or "")
-        quoting_reason = str(gate_summary.get("quoting_reason") or "")
-        controller_state = str(row.get("state", "") or "")
-        regime = str(row.get("regime", "") or "")
-        risk_reasons = str(row.get("risk_reasons", "") or "")
-        signature = "|".join([quoting_status, quoting_reason, controller_state, regime, risk_reasons])
-        if active is None or active["signature"] != signature:
-            if active is not None:
-                segments.append(
-                    {
-                        "start_ts_ms": int(active["start_ts_ms"]),
-                        "end_ts_ms": int(active["end_ts_ms"]),
-                        "start_ts": datetime.fromtimestamp(int(active["start_ts_ms"]) / 1000, tz=timezone.utc).isoformat(),
-                        "end_ts": datetime.fromtimestamp(int(active["end_ts_ms"]) / 1000, tz=timezone.utc).isoformat(),
-                        "duration_seconds": max(0.0, (float(active["end_ts_ms"]) - float(active["start_ts_ms"])) / 1000.0),
-                        "quoting_status": str(active["quoting_status"]),
-                        "quoting_reason": str(active["quoting_reason"]),
-                        "controller_state": str(active["controller_state"]),
-                        "regime": str(active["regime"]),
-                        "risk_reasons": str(active["risk_reasons"]),
-                        "orders_active": int(active["orders_active"]),
-                    }
-                )
-            active = {
-                "signature": signature,
-                "start_ts_ms": ts_ms,
-                "end_ts_ms": ts_ms,
-                "quoting_status": quoting_status,
-                "quoting_reason": quoting_reason,
-                "controller_state": controller_state,
-                "regime": regime,
-                "risk_reasons": risk_reasons,
-                "orders_active": int(gate_summary.get("orders_active") or 0),
-            }
-        else:
-            active["end_ts_ms"] = ts_ms
-            active["orders_active"] = int(gate_summary.get("orders_active") or active["orders_active"])
-    if active is not None:
-        segments.append(
-            {
-                "start_ts_ms": int(active["start_ts_ms"]),
-                "end_ts_ms": int(active["end_ts_ms"]),
-                "start_ts": datetime.fromtimestamp(int(active["start_ts_ms"]) / 1000, tz=timezone.utc).isoformat(),
-                "end_ts": datetime.fromtimestamp(int(active["end_ts_ms"]) / 1000, tz=timezone.utc).isoformat(),
-                "duration_seconds": max(0.0, (float(active["end_ts_ms"]) - float(active["start_ts_ms"])) / 1000.0),
-                "quoting_status": str(active["quoting_status"]),
-                "quoting_reason": str(active["quoting_reason"]),
-                "controller_state": str(active["controller_state"]),
-                "regime": str(active["regime"]),
-                "risk_reasons": str(active["risk_reasons"]),
-                "orders_active": int(active["orders_active"]),
-            }
-        )
-    return segments[-max(1, int(max_segments)) :]
-
-
-def _infer_trade_exit_reason(
-    realized_pnl_quote: float,
-    exit_state: str,
-    risk_reasons: List[str],
-    pnl_governor_seen: bool,
-    order_book_stale_seen: bool,
-) -> str:
-    state = str(exit_state or "").strip().lower()
-    risk_blob = "|".join(risk_reasons).lower()
-    if state == "hard_stop":
-        return "hard stop"
-    if "derisk" in risk_blob or "base_pct_above_max" in risk_blob or "drawdown" in risk_blob or "daily_loss" in risk_blob:
-        return "risk / derisk"
-    if pnl_governor_seen:
-        return "pnl governor"
-    if order_book_stale_seen:
-        return "book stale"
-    if realized_pnl_quote > 0:
-        return "profitable close"
-    if realized_pnl_quote < 0:
-        return "adverse close"
-    return "flat close"
-
-
-def _sample_trade_path_points(window: List[Dict[str, Any]], max_points: int = 120) -> List[Dict[str, Any]]:
-    safe_window = [row for row in window if isinstance(row, dict)]
-    if not safe_window:
-        return []
-    if len(safe_window) <= max_points:
-        sampled = safe_window
-    else:
-        step = max(1, len(safe_window) // max_points)
-        sampled = safe_window[::step]
-        if sampled[-1] is not safe_window[-1]:
-            sampled = sampled[: max_points - 1] + [safe_window[-1]]
-    return [
-        {
-            "ts": str(row.get("ts", "") or ""),
-            "timestamp_ms": int(row.get("timestamp_ms") or 0),
-            "mid": float(_to_float(row.get("mid")) or 0.0),
-            "equity_quote": float(_to_float(row.get("equity_quote")) or 0.0),
-            "state": str(row.get("state", "") or ""),
-            "regime": str(row.get("regime", "") or ""),
-        }
-        for row in sampled
-    ]
-
-
-def _sample_trade_path_from_fills(fill_rows: List[Dict[str, Any]], max_points: int = 120) -> List[Dict[str, Any]]:
-    safe_fills = [row for row in fill_rows if isinstance(row, dict)]
-    if not safe_fills:
-        return []
-    if len(safe_fills) <= max_points:
-        sampled = safe_fills
-    else:
-        step = max(1, len(safe_fills) // max_points)
-        sampled = safe_fills[::step]
-        if sampled[-1] is not safe_fills[-1]:
-            sampled = sampled[: max_points - 1] + [safe_fills[-1]]
-    return [
-        {
-            "ts": str(row.get("ts", "") or ""),
-            "timestamp_ms": int(row.get("timestamp_ms") or 0),
-            "mid": float(_to_float(row.get("price")) or 0.0),
-            "equity_quote": 0.0,
-            "state": str(row.get("role", "") or ""),
-            "regime": "",
-        }
-        for row in sampled
-    ]
-
-
-def _enrich_closed_trades_with_minute_context(
-    trades: List[Dict[str, Any]],
-    minute_rows: List[Dict[str, Any]],
-) -> List[Dict[str, Any]]:
-    safe_minutes = [row for row in minute_rows if isinstance(row, dict)]
-    safe_minutes.sort(key=lambda row: int(row.get("timestamp_ms") or 0))
-    enriched: List[Dict[str, Any]] = []
-    for trade in trades:
-        entry_ms = int(trade.get("entry_ts_ms") or 0)
-        exit_ms = int(trade.get("exit_ts_ms") or 0)
-        side = str(trade.get("side", "") or "").strip().lower()
-        qty = abs(float(_to_float(trade.get("quantity")) or 0.0))
-        entry_price = float(_to_float(trade.get("avg_entry_price")) or 0.0)
-        realized_pnl = float(_to_float(trade.get("realized_pnl_quote")) or 0.0)
-        direction = 1.0 if side == "long" else -1.0 if side == "short" else 0.0
-        window = [
-            row
-            for row in safe_minutes
-            if int(row.get("timestamp_ms") or 0) >= entry_ms and int(row.get("timestamp_ms") or 0) <= exit_ms
-        ]
-        entry_ctx = _nearest_context_row(entry_ms, safe_minutes)
-        exit_ctx = _nearest_context_row(exit_ms, safe_minutes)
-        risk_tags: List[str] = []
-        seen: set[str] = set()
-        for row in window:
-            for risk in _split_risk_reasons(row.get("risk_reasons")):
-                if risk not in seen:
-                    seen.add(risk)
-                    risk_tags.append(risk)
-        pnl_governor_seen = any(_to_bool(row.get("pnl_governor_active")) for row in window)
-        order_book_stale_seen = any(_to_bool(row.get("order_book_stale")) for row in window)
-        mfe_quote = 0.0
-        mae_quote = 0.0
-        mfe_ts = ""
-        mae_ts = ""
-        trade_fill_rows = [row for row in trade.get("fills", []) if isinstance(row, dict)]
-        mid_open = float(_to_float(window[0].get("mid")) or 0.0) if window else float(_to_float(trade_fill_rows[0].get("price")) or 0.0) if trade_fill_rows else 0.0
-        mid_close = float(_to_float(window[-1].get("mid")) or 0.0) if window else float(_to_float(trade_fill_rows[-1].get("price")) or 0.0) if trade_fill_rows else 0.0
-        mid_high = max((float(_to_float(row.get("mid")) or 0.0) for row in window), default=0.0)
-        mid_low = min((float(_to_float(row.get("mid")) or 0.0) for row in window), default=0.0)
-        equity_open = float(_to_float(window[0].get("equity_quote")) or 0.0) if window else 0.0
-        equity_close = float(_to_float(window[-1].get("equity_quote")) or 0.0) if window else 0.0
-        if qty > 0.0 and entry_price > 0.0 and direction != 0.0 and window:
-            best_quote: Optional[float] = None
-            worst_quote: Optional[float] = None
-            best_ts = 0
-            worst_ts = 0
-            for row in window:
-                mid = float(_to_float(row.get("mid")) or 0.0)
-                ts_ms = int(row.get("timestamp_ms") or 0)
-                if mid <= 0.0 or ts_ms <= 0:
-                    continue
-                excursion_quote = direction * (mid - entry_price) * qty
-                if best_quote is None or excursion_quote > best_quote:
-                    best_quote = excursion_quote
-                    best_ts = ts_ms
-                if worst_quote is None or excursion_quote < worst_quote:
-                    worst_quote = excursion_quote
-                    worst_ts = ts_ms
-            mfe_quote = max(0.0, float(best_quote or 0.0))
-            mae_quote = min(0.0, float(worst_quote or 0.0))
-            mfe_ts = datetime.fromtimestamp(best_ts / 1000, tz=timezone.utc).isoformat() if best_ts > 0 else ""
-            mae_ts = datetime.fromtimestamp(worst_ts / 1000, tz=timezone.utc).isoformat() if worst_ts > 0 else ""
-        elif qty > 0.0 and entry_price > 0.0 and direction != 0.0 and trade_fill_rows:
-            best_quote: Optional[float] = None
-            worst_quote: Optional[float] = None
-            best_ts = 0
-            worst_ts = 0
-            for row in trade_fill_rows:
-                mid = float(_to_float(row.get("price")) or 0.0)
-                ts_ms = int(row.get("timestamp_ms") or 0)
-                if mid <= 0.0 or ts_ms <= 0:
-                    continue
-                excursion_quote = direction * (mid - entry_price) * qty
-                if best_quote is None or excursion_quote > best_quote:
-                    best_quote = excursion_quote
-                    best_ts = ts_ms
-                if worst_quote is None or excursion_quote < worst_quote:
-                    worst_quote = excursion_quote
-                    worst_ts = ts_ms
-            mfe_quote = max(0.0, float(best_quote or 0.0))
-            mae_quote = min(0.0, float(worst_quote or 0.0))
-            mfe_ts = datetime.fromtimestamp(best_ts / 1000, tz=timezone.utc).isoformat() if best_ts > 0 else ""
-            mae_ts = datetime.fromtimestamp(worst_ts / 1000, tz=timezone.utc).isoformat() if worst_ts > 0 else ""
-            mid_high = max((float(_to_float(row.get("price")) or 0.0) for row in trade_fill_rows), default=mid_open)
-            mid_low = min((float(_to_float(row.get("price")) or 0.0) for row in trade_fill_rows), default=mid_open)
-        exit_state = str(exit_ctx.get("state", "") or "")
-        exit_reason_label = _infer_trade_exit_reason(
-            realized_pnl,
-            exit_state,
-            risk_tags,
-            pnl_governor_seen,
-            order_book_stale_seen,
-        )
-        enriched.append(
-            {
-                **trade,
-                "entry_regime": str(entry_ctx.get("regime", "") or ""),
-                "entry_state": str(entry_ctx.get("state", "") or ""),
-                "exit_regime": str(exit_ctx.get("regime", "") or ""),
-                "exit_state": exit_state,
-                "risk_reasons_seen": risk_tags,
-                "pnl_governor_seen": pnl_governor_seen,
-                "order_book_stale_seen": order_book_stale_seen,
-                "mfe_quote": float(mfe_quote),
-                "mae_quote": float(mae_quote),
-                "mfe_ts": mfe_ts,
-                "mae_ts": mae_ts,
-                "exit_reason_label": exit_reason_label,
-                "context_source": "minute_log" if safe_minutes else "fills_only",
-                "gate_timeline": _build_gate_timeline(window) if window else [],
-                "path_summary": {
-                    "point_count": len(window) if window else len(trade_fill_rows),
-                    "mid_open": mid_open,
-                    "mid_close": mid_close,
-                    "mid_high": mid_high,
-                    "mid_low": mid_low,
-                    "equity_open_quote": equity_open,
-                    "equity_close_quote": equity_close,
-                },
-                "path_points": _sample_trade_path_points(window) if window else _sample_trade_path_from_fills(trade_fill_rows),
-            }
-        )
-    return enriched
-
-
-def _summarize_journal_review(trades: List[Dict[str, Any]]) -> Dict[str, Any]:
-    payload = _journal_review_template()
-    summary = payload["summary"]
-    safe_trades = [row for row in trades if isinstance(row, dict)]
-    winners = [row for row in safe_trades if float(_to_float(row.get("realized_pnl_quote")) or 0.0) > 0]
-    losers = [row for row in safe_trades if float(_to_float(row.get("realized_pnl_quote")) or 0.0) < 0]
-    trade_count = len(safe_trades)
-    total_realized = sum(float(_to_float(row.get("realized_pnl_quote")) or 0.0) for row in safe_trades)
-    total_fees = sum(float(_to_float(row.get("fees_quote")) or 0.0) for row in safe_trades)
-    avg_hold = sum(float(_to_float(row.get("hold_seconds")) or 0.0) for row in safe_trades) / trade_count if trade_count > 0 else 0.0
-    avg_mfe = sum(float(_to_float(row.get("mfe_quote")) or 0.0) for row in safe_trades) / trade_count if trade_count > 0 else 0.0
-    avg_mae = sum(float(_to_float(row.get("mae_quote")) or 0.0) for row in safe_trades) / trade_count if trade_count > 0 else 0.0
-    entry_regime_breakdown: Dict[str, int] = defaultdict(int)
-    exit_reason_breakdown: Dict[str, int] = defaultdict(int)
-    for row in safe_trades:
-        entry_regime = str(row.get("entry_regime", "") or "").strip() or "unknown"
-        exit_reason = str(row.get("exit_reason_label", "") or "").strip() or "unknown"
-        entry_regime_breakdown[entry_regime] += 1
-        exit_reason_breakdown[exit_reason] += 1
-    summary.update(
-        {
-            "trade_count": trade_count,
-            "winning_trades": len(winners),
-            "losing_trades": len(losers),
-            "win_rate": (float(len(winners)) / float(trade_count)) if trade_count > 0 else 0.0,
-            "realized_pnl_quote_total": total_realized,
-            "fees_quote_total": total_fees,
-            "avg_realized_pnl_quote": (total_realized / trade_count) if trade_count > 0 else 0.0,
-            "avg_hold_seconds": avg_hold,
-            "avg_win_quote": (sum(float(_to_float(row.get("realized_pnl_quote")) or 0.0) for row in winners) / len(winners)) if winners else 0.0,
-            "avg_loss_quote": (sum(float(_to_float(row.get("realized_pnl_quote")) or 0.0) for row in losers) / len(losers)) if losers else 0.0,
-            "avg_mfe_quote": avg_mfe,
-            "avg_mae_quote": avg_mae,
-            "start_ts": str(safe_trades[0].get("entry_ts") or "") if safe_trades else "",
-            "end_ts": str(safe_trades[-1].get("exit_ts") or "") if safe_trades else "",
-            "entry_regime_breakdown": dict(entry_regime_breakdown),
-            "exit_reason_breakdown": dict(exit_reason_breakdown),
-        }
-    )
-    payload["trades"] = safe_trades[-500:]
-    payload["narrative"] = (
-        f"{trade_count} closed trades, realized PnL {total_realized:.4f}, fees {total_fees:.4f}, "
-        f"win rate {summary['win_rate'] * 100:.1f}%, average hold {avg_hold:.1f}s, "
-        f"average MFE {avg_mfe:.4f}, average MAE {avg_mae:.4f}."
-    )
-    return payload
-
-
-def _summarize_weekly_report(instance_name: str, report: Dict[str, Any]) -> Dict[str, Any]:
-    payload = _weekly_review_template()
-    summary = payload["summary"]
-    period = report.get("period", {}) if isinstance(report.get("period"), dict) else {}
-    regime_breakdown = report.get("regime_breakdown", {}) if isinstance(report.get("regime_breakdown"), dict) else {}
-    gate = report.get("road1_gate", {}) if isinstance(report.get("road1_gate"), dict) else {}
-    breakdown = report.get("daily_breakdown", []) if isinstance(report.get("daily_breakdown"), list) else []
-    dominant_regime = ""
-    dominant_regime_count = -1
-    for key, value in regime_breakdown.items():
-        count = int(_to_float(value) or 0)
-        if key and count > dominant_regime_count:
-            dominant_regime = str(key)
-            dominant_regime_count = count
-    summary.update(
-        {
-            "period_start": str(period.get("start", "") or ""),
-            "period_end": str(period.get("end", "") or ""),
-            "n_days": int(report.get("n_days") or 0),
-            "days_with_data": int(report.get("days_with_data") or 0),
-            "total_net_pnl_quote": float(_to_float(report.get("total_net_pnl_usdt")) or 0.0),
-            "mean_daily_pnl_quote": float(_to_float(report.get("mean_daily_pnl_usdt")) or 0.0),
-            "mean_daily_net_pnl_bps": float(_to_float(report.get("mean_daily_net_pnl_bps")) or 0.0),
-            "sharpe_annualized": float(_to_float(report.get("sharpe_annualized")) or 0.0),
-            "win_rate": float(_to_float(report.get("win_rate")) or 0.0),
-            "winning_days": int(report.get("winning_days") or 0),
-            "losing_days": int(report.get("losing_days") or 0),
-            "max_single_day_drawdown_pct": float(_to_float(report.get("max_single_day_drawdown_pct")) or 0.0),
-            "hard_stop_days": int(report.get("hard_stop_days") or 0),
-            "total_fills": int(report.get("total_fills") or 0),
-            "spread_capture_dominant_source": bool((report.get("pnl_decomposition") or {}).get("spread_capture_dominant_source")),
-            "dominant_source": str((report.get("pnl_decomposition") or {}).get("dominant_source", "") or ""),
-            "dominant_regime": dominant_regime,
-            "gate_pass": bool(gate.get("pass")),
-            "gate_failed_criteria": list(gate.get("failed_criteria", [])) if isinstance(gate.get("failed_criteria"), list) else [],
-            "warnings": list(report.get("warnings", [])) if isinstance(report.get("warnings"), list) else [],
-        }
-    )
-    payload["days"] = [
-        {
-            "date": str(day.get("date", "") or ""),
-            "net_pnl_quote": float(_to_float(day.get("net_pnl_usdt")) or 0.0),
-            "net_pnl_bps": float(_to_float(day.get("net_pnl_bps")) or 0.0),
-            "drawdown_pct": float(_to_float(day.get("drawdown_pct")) or 0.0),
-            "daily_loss_pct": float(_to_float(day.get("daily_loss_pct")) or 0.0),
-            "fills": int(day.get("fills") or 0),
-            "turnover_x": float(_to_float(day.get("turnover_x")) or 0.0),
-            "dominant_regime": str(day.get("dominant_regime", "") or ""),
-            "equity_quote": float(_to_float(day.get("equity_quote")) or 0.0),
-        }
-        for day in breakdown
-        if isinstance(day, dict)
-    ]
-    payload["regime_breakdown"] = regime_breakdown
-    payload["narrative"] = (
-        f"{instance_name} weekly review from {summary['period_start']} to {summary['period_end']}: "
-        f"net PnL {summary['total_net_pnl_quote']:.4f}, Sharpe {summary['sharpe_annualized']:.3f}, "
-        f"win rate {summary['win_rate'] * 100:.1f}%, dominant regime {summary['dominant_regime'] or 'n/a'}."
-    )
-    return payload
-
-
-def _build_alerts(account_summary: Dict[str, Any], system: Dict[str, Any]) -> List[Dict[str, Any]]:
-    alerts: List[Dict[str, Any]] = []
-    controller_state = str(account_summary.get("controller_state", "") or "").strip().lower()
-    risk_reasons = str(account_summary.get("risk_reasons", "") or "").strip()
-    if controller_state == "hard_stop":
-        alerts.append({"severity": "fail", "title": "Hard stop active", "detail": "Controller runtime is in hard_stop state."})
-    if risk_reasons:
-        alerts.append({"severity": "warn", "title": "Risk reasons active", "detail": risk_reasons})
-    if bool(account_summary.get("order_book_stale")):
-        alerts.append({"severity": "warn", "title": "Order book stale", "detail": "Order book freshness flag is stale."})
-    if bool(account_summary.get("pnl_governor_active")):
-        reason = str(account_summary.get("pnl_governor_reason", "") or "active")
-        alerts.append({"severity": "info", "title": "PnL governor active", "detail": reason})
-    stream_age_ms = _to_float(system.get("stream_age_ms"))
-    if stream_age_ms is not None and stream_age_ms > 15_000:
-        alerts.append({"severity": "warn", "title": "Stream stale", "detail": f"Latest stream age {int(stream_age_ms)} ms."})
-    if bool(system.get("fallback_active")):
-        alerts.append({"severity": "warn", "title": "Fallback active", "detail": "UI is relying on degraded snapshot or CSV fallback."})
-    if not bool(system.get("redis_available", True)):
-        alerts.append({"severity": "fail", "title": "Redis unavailable", "detail": "Realtime stream dependency is unavailable."})
-    if not bool(system.get("db_available", True)):
-        alerts.append({"severity": "warn", "title": "DB unavailable", "detail": "Historical read model is unavailable."})
-    return alerts
-
-
-def _summarize_daily_review(day_key: str, minute_rows: List[Dict[str, Any]], fills: List[Dict[str, Any]], account_summary: Dict[str, Any]) -> Dict[str, Any]:
-    payload = _daily_review_template(day_key)
-    summary = payload["summary"]
-    safe_minutes = [row for row in minute_rows if isinstance(row, dict)]
-    safe_fills = [row for row in fills if isinstance(row, dict)]
-
-    if safe_minutes:
-        equities = [float(_to_float(row.get("equity_quote")) or 0.0) for row in safe_minutes]
-        summary["equity_open_quote"] = equities[0]
-        summary["equity_close_quote"] = equities[-1]
-        summary["equity_high_quote"] = max(equities)
-        summary["equity_low_quote"] = min(equities)
-        summary["quote_balance_end_quote"] = float(_to_float(safe_minutes[-1].get("quote_balance")) or 0.0)
-        summary["realized_pnl_day_quote"] = float(
-            _to_float(safe_minutes[-1].get("realized_pnl_today_quote") or safe_minutes[-1].get("net_realized_pnl_today_quote")) or 0.0
-        )
-        summary["controller_state_end"] = str(safe_minutes[-1].get("state", "") or "")
-        summary["regime_end"] = str(safe_minutes[-1].get("regime", "") or "")
-        summary["risk_reasons_end"] = str(safe_minutes[-1].get("risk_reasons", "") or "")
-        summary["pnl_governor_active_end"] = bool(safe_minutes[-1].get("pnl_governor_active"))
-        summary["order_book_stale_end"] = bool(safe_minutes[-1].get("order_book_stale"))
-        summary["minute_points"] = len(safe_minutes)
-        summary["unrealized_pnl_end_quote"] = max(0.0, summary["equity_close_quote"] - summary["quote_balance_end_quote"])
-        payload["equity_curve"] = [
-            {
-                "ts_ms": int(row.get("timestamp_ms") or 0),
-                "equity_quote": float(_to_float(row.get("equity_quote")) or 0.0),
-                "mid_price": float(_to_float(row.get("mid")) or 0.0),
-                "state": str(row.get("state", "") or ""),
-                "regime": str(row.get("regime", "") or ""),
-            }
-            for row in safe_minutes
-            if int(row.get("timestamp_ms") or 0) > 0
-        ]
-    else:
-        summary["equity_open_quote"] = float(_to_float(account_summary.get("equity_open_quote")) or 0.0)
-        summary["equity_close_quote"] = float(_to_float(account_summary.get("equity_quote")) or 0.0)
-        summary["equity_high_quote"] = float(_to_float(account_summary.get("equity_peak_quote")) or summary["equity_close_quote"])
-        summary["equity_low_quote"] = min(summary["equity_open_quote"], summary["equity_close_quote"])
-        summary["quote_balance_end_quote"] = float(_to_float(account_summary.get("quote_balance")) or 0.0)
-        summary["controller_state_end"] = str(account_summary.get("controller_state", "") or "")
-        summary["regime_end"] = str(account_summary.get("regime", "") or "")
-        summary["risk_reasons_end"] = str(account_summary.get("risk_reasons", "") or "")
-        summary["pnl_governor_active_end"] = bool(account_summary.get("pnl_governor_active"))
-        summary["order_book_stale_end"] = bool(account_summary.get("order_book_stale"))
-
-    hourly: Dict[int, Dict[str, Any]] = {}
-    maker_count = 0
-    for fill in safe_fills:
-        ts_ms = int(fill.get("timestamp_ms") or 0)
-        if ts_ms <= 0:
-            continue
-        hour_bucket = (ts_ms // 3_600_000) * 3_600_000
-        bucket = hourly.setdefault(
-            hour_bucket,
-            {
-                "hour_ts_ms": hour_bucket,
-                "fill_count": 0,
-                "buy_count": 0,
-                "sell_count": 0,
-                "maker_count": 0,
-                "maker_ratio": 0.0,
-                "realized_pnl_quote": 0.0,
-                "notional_quote": 0.0,
-                "fees_quote": 0.0,
-            },
-        )
-        side = str(fill.get("side", "") or "").lower()
-        amount_base = abs(float(_to_float(fill.get("amount_base")) or 0.0))
-        price = float(_to_float(fill.get("price")) or 0.0)
-        realized = float(_to_float(fill.get("realized_pnl_quote")) or 0.0)
-        fees = float(_to_float(fill.get("fee_quote")) or 0.0)
-        is_maker = bool(fill.get("is_maker"))
-        summary["fill_count"] += 1
-        if side == "buy":
-            summary["buy_count"] += 1
-        if side == "sell":
-            summary["sell_count"] += 1
-        if is_maker:
-            maker_count += 1
-            bucket["maker_count"] += 1
-        summary["notional_quote"] += amount_base * price
-        summary["fees_quote"] += fees
-        bucket["fill_count"] += 1
-        if side == "buy":
-            bucket["buy_count"] += 1
-        if side == "sell":
-            bucket["sell_count"] += 1
-        bucket["realized_pnl_quote"] += realized
-        bucket["notional_quote"] += amount_base * price
-        bucket["fees_quote"] += fees
-
-    summary["maker_ratio"] = (float(maker_count) / float(summary["fill_count"])) if summary["fill_count"] > 0 else 0.0
-    if summary["realized_pnl_day_quote"] == 0.0 and safe_fills:
-        summary["realized_pnl_day_quote"] = float(sum(float(_to_float(fill.get("realized_pnl_quote")) or 0.0) for fill in safe_fills))
-    for bucket in hourly.values():
-        bucket["maker_ratio"] = (float(bucket["maker_count"]) / float(bucket["fill_count"])) if bucket["fill_count"] > 0 else 0.0
-    payload["hourly"] = [hourly[key] for key in sorted(hourly.keys())]
-    payload["fills"] = safe_fills[-400:]
-    payload["gate_timeline"] = _build_gate_timeline(safe_minutes)
-    risk_suffix = f" Risk: {summary['risk_reasons_end']}." if summary["risk_reasons_end"] else ""
-    payload["narrative"] = (
-        f"{summary['fill_count']} fills on {day_key}, realized PnL {summary['realized_pnl_day_quote']:.4f}, "
-        f"close equity {summary['equity_close_quote']:.4f}, regime {summary['regime_end'] or 'n/a'}, "
-        f"state {summary['controller_state_end'] or 'n/a'}.{risk_suffix}"
-    )
-    return payload
-
-
-def _normalize_fill_activity_row(row: Dict[str, Any], prefix: str) -> Dict[str, Any]:
-    fill_count = max(0, int(row.get(f"{prefix}_fill_count") or 0))
-    maker_count = max(0, int(row.get(f"{prefix}_maker_count") or 0))
-    return {
-        "fill_count": fill_count,
-        "buy_count": max(0, int(row.get(f"{prefix}_buy_count") or 0)),
-        "sell_count": max(0, int(row.get(f"{prefix}_sell_count") or 0)),
-        "maker_count": maker_count,
-        "maker_ratio": (float(maker_count) / float(fill_count)) if fill_count > 0 else 0.0,
-        "volume_base": float(_to_float(row.get(f"{prefix}_volume_base")) or 0.0),
-        "notional_quote": float(_to_float(row.get(f"{prefix}_notional_quote")) or 0.0),
-        "realized_pnl_quote": float(_to_float(row.get(f"{prefix}_realized_pnl_quote")) or 0.0),
-        "avg_fill_size": float(_to_float(row.get(f"{prefix}_avg_fill_size")) or 0.0),
-        "avg_fill_price": float(_to_float(row.get(f"{prefix}_avg_fill_price")) or 0.0),
-    }
-
-
-def _summarize_fill_activity(
-    fills: List[Dict[str, Any]],
-    *,
-    now_ms: Optional[int] = None,
-    fills_total: int = 0,
-) -> Dict[str, Any]:
-    reference_ms = int(now_ms or _now_ms())
-    latest_fill_ts_ms = 0
-    windows: Dict[str, Tuple[int, Dict[str, Any]]] = {
-        "window_15m": (15 * 60 * 1000, _window_summary_template()),
-        "window_1h": (60 * 60 * 1000, _window_summary_template()),
-    }
-    for fill in fills or []:
-        if not isinstance(fill, dict):
-            continue
-        ts_ms = int(_to_epoch_ms(fill.get("timestamp_ms") or fill.get("ts")) or 0)
-        if ts_ms <= 0:
-            continue
-        latest_fill_ts_ms = max(latest_fill_ts_ms, ts_ms)
-        age_ms = max(0, reference_ms - ts_ms)
-        side = str(fill.get("side", "")).strip().lower()
-        amount_base = abs(float(_to_float(fill.get("amount_base") or fill.get("amount")) or 0.0))
-        price = float(_to_float(fill.get("price")) or 0.0)
-        realized_pnl = float(_to_float(fill.get("realized_pnl_quote")) or 0.0)
-        is_maker = bool(fill.get("is_maker"))
-        notional_quote = amount_base * price
-        for window_ms, bucket in windows.values():
-            if age_ms > window_ms:
-                continue
-            bucket["fill_count"] += 1
-            if side == "buy":
-                bucket["buy_count"] += 1
-            elif side == "sell":
-                bucket["sell_count"] += 1
-            if is_maker:
-                bucket["maker_count"] += 1
-            bucket["volume_base"] += amount_base
-            bucket["notional_quote"] += notional_quote
-            bucket["realized_pnl_quote"] += realized_pnl
-            bucket["avg_fill_size"] += amount_base
-            bucket["avg_fill_price"] += price
-    for _, bucket in windows.values():
-        fill_count = int(bucket["fill_count"] or 0)
-        bucket["maker_ratio"] = (float(bucket["maker_count"]) / float(fill_count)) if fill_count > 0 else 0.0
-        if fill_count > 0:
-            bucket["avg_fill_size"] = float(bucket["avg_fill_size"]) / float(fill_count)
-            bucket["avg_fill_price"] = float(bucket["avg_fill_price"]) / float(fill_count)
-        else:
-            bucket["avg_fill_size"] = 0.0
-            bucket["avg_fill_price"] = 0.0
-        for key in ("volume_base", "notional_quote", "realized_pnl_quote", "avg_fill_size", "avg_fill_price"):
-            bucket[key] = round(float(bucket[key]), 8)
-        bucket["maker_ratio"] = round(float(bucket["maker_ratio"]), 6)
-    return {
-        "fills_total": max(int(fills_total or 0), len(fills or [])),
-        "latest_fill_ts_ms": latest_fill_ts_ms,
-        "window_15m": windows["window_15m"][1],
-        "window_1h": windows["window_1h"][1],
-    }
-
-
-def _state_key(payload: Dict[str, Any]) -> Tuple[str, str, str]:
-    return (
-        str(payload.get("instance_name", "")).strip(),
-        str(payload.get("controller_id", "")).strip(),
-        str(payload.get("trading_pair", "")).strip(),
-    )
-
-
-@dataclass
-class RealtimeApiConfig:
-    mode: str = field(default_factory=lambda: os.getenv("REALTIME_UI_API_MODE", "disabled").strip().lower())
-    bind_host: str = field(default_factory=lambda: os.getenv("REALTIME_UI_API_BIND_HOST", "0.0.0.0"))
-    port: int = field(default_factory=lambda: int(os.getenv("REALTIME_UI_API_PORT", "9910")))
-    cors_allow_origin: str = field(default_factory=lambda: os.getenv("REALTIME_UI_API_CORS_ALLOW_ORIGIN", "*"))
-    allowed_origins: str = field(default_factory=lambda: os.getenv("REALTIME_UI_API_ALLOWED_ORIGINS", "").strip())
-    auth_enabled: bool = field(
-        default_factory=lambda: os.getenv("REALTIME_UI_API_AUTH_ENABLED", "false").strip().lower() in {"1", "true", "yes"}
-    )
-    auth_token: str = field(default_factory=lambda: os.getenv("REALTIME_UI_API_AUTH_TOKEN", "").strip())
-    allow_query_token: bool = field(
-        default_factory=lambda: os.getenv("REALTIME_UI_API_ALLOW_QUERY_TOKEN", "false").strip().lower() in {"1", "true", "yes"}
-    )
-    poll_ms: int = field(default_factory=lambda: int(os.getenv("REALTIME_UI_API_POLL_MS", "200")))
-    consumer_group: str = field(
-        default_factory=lambda: os.getenv("REALTIME_UI_API_CONSUMER_GROUP", "hb_realtime_ui_api_v1").strip()
-    )
-    consumer_name: str = field(
-        default_factory=lambda: os.getenv("REALTIME_UI_API_CONSUMER_NAME", "realtime-ui-api-1").strip()
-    )
-    stream_stale_ms: int = field(default_factory=lambda: int(os.getenv("REALTIME_UI_API_STREAM_STALE_MS", "15000")))
-    fallback_enabled: bool = field(
-        default_factory=lambda: os.getenv("REALTIME_UI_API_FALLBACK_ENABLED", "true").strip().lower() in {"1", "true", "yes"}
-    )
-    degraded_mode_enabled: bool = field(
-        default_factory=lambda: os.getenv("REALTIME_UI_API_DEGRADED_MODE_ENABLED", "false").strip().lower()
-        in {"1", "true", "yes"}
-    )
-    fallback_root: Path = field(
-        default_factory=lambda: Path(os.getenv("HB_REPORTS_ROOT", "/workspace/hbot/reports")).resolve()
-    )
-    data_root: Path = field(default_factory=lambda: Path(os.getenv("HB_DATA_ROOT", "/workspace/hbot/data")).resolve())
-    max_fills_per_key: int = field(default_factory=lambda: int(os.getenv("REALTIME_UI_API_MAX_FILLS_PER_KEY", "200")))
-    max_events_per_key: int = field(default_factory=lambda: int(os.getenv("REALTIME_UI_API_MAX_EVENTS_PER_KEY", "200")))
-    max_history_points: int = field(default_factory=lambda: int(os.getenv("REALTIME_UI_API_MAX_HISTORY_POINTS", "5000")))
-    max_fallback_fills: int = field(default_factory=lambda: int(os.getenv("REALTIME_UI_API_MAX_FALLBACK_FILLS", "120")))
-    max_fallback_orders: int = field(default_factory=lambda: int(os.getenv("REALTIME_UI_API_MAX_FALLBACK_ORDERS", "40")))
-    db_enabled: bool = field(
-        default_factory=lambda: os.getenv("REALTIME_UI_API_DB_ENABLED", "true").strip().lower() in {"1", "true", "yes"}
-    )
-    csv_failover_only: bool = field(
-        default_factory=lambda: os.getenv("REALTIME_UI_API_CSV_FAILOVER_ONLY", "true").strip().lower()
-        in {"1", "true", "yes"}
-    )
-    db_lookback_hours: int = field(default_factory=lambda: int(os.getenv("REALTIME_UI_API_DB_LOOKBACK_HOURS", "168")))
-    db_max_points_multiplier: int = field(
-        default_factory=lambda: int(os.getenv("REALTIME_UI_API_DB_MAX_POINTS_MULTIPLIER", "20"))
-    )
-    db_statement_timeout_ms: int = field(
-        default_factory=lambda: int(os.getenv("REALTIME_UI_API_DB_STATEMENT_TIMEOUT_MS", "1500"))
-    )
-    db_lock_timeout_ms: int = field(default_factory=lambda: int(os.getenv("REALTIME_UI_API_DB_LOCK_TIMEOUT_MS", "750")))
-    sse_enabled: bool = field(
-        default_factory=lambda: os.getenv("REALTIME_UI_API_SSE_ENABLED", "false").strip().lower() in {"1", "true", "yes"}
-    )
-    history_ui_read_mode: str = field(
-        default_factory=lambda: os.getenv("HB_HISTORY_UI_READ_MODE", "legacy").strip().lower()
-    )
-
-    def normalized_mode(self) -> str:
-        if self.mode not in {"disabled", "shadow", "active"}:
-            return "disabled"
-        return self.mode
-
-    def normalized_history_ui_read_mode(self) -> str:
-        if self.history_ui_read_mode not in {"legacy", "shadow", "shared"}:
-            return "legacy"
-        return self.history_ui_read_mode
-
-
-def _is_loopback_host(host: str) -> bool:
-    normalized = str(host or "").strip().lower()
-    return normalized in {"127.0.0.1", "localhost", "::1"}
-
-
-def _validate_runtime_config(cfg: RealtimeApiConfig) -> None:
-    if cfg.auth_enabled and not cfg.auth_token:
-        raise RuntimeError("REALTIME_UI_API_AUTH_ENABLED requires REALTIME_UI_API_AUTH_TOKEN")
-    bind_ip = str(os.getenv("REALTIME_UI_API_BIND_IP", "")).strip()
-    externally_exposed = bool(bind_ip and not _is_loopback_host(bind_ip))
-    internal_non_loopback = not _is_loopback_host(cfg.bind_host) and str(cfg.bind_host).strip() not in {"0.0.0.0", "::"}
-    if cfg.normalized_mode() != "disabled" and (externally_exposed or internal_non_loopback) and not cfg.auth_enabled:
-        raise RuntimeError("non-loopback realtime_ui_api bind requires REALTIME_UI_API_AUTH_ENABLED=true")
-
-
-class OpsDbReadModel:
-    def __init__(self, cfg: RealtimeApiConfig):
-        self._cfg = cfg
-        self._enabled = bool(cfg.db_enabled and psycopg is not None)
-        self._last_health_check_ms = 0
-        self._last_health_ok = False
-        self._rest_candle_cache: Dict[Tuple[str, str, int, int], Tuple[int, List[Dict[str, Any]]]] = {}
-
-    @property
-    def enabled(self) -> bool:
-        return self._enabled
-
-    def _connect(self):
-        if not self._enabled:
-            return None
-        host = os.getenv("OPS_DB_HOST", "postgres")
-        port = int(os.getenv("OPS_DB_PORT", "5432"))
-        dbname = os.getenv("OPS_DB_NAME", "hbot_ops")
-        user = os.getenv("OPS_DB_USER", "hbot")
-        password = os.getenv("OPS_DB_PASSWORD", "hbot_dev_password")
-        statement_timeout_ms = max(200, int(self._cfg.db_statement_timeout_ms))
-        lock_timeout_ms = max(100, int(self._cfg.db_lock_timeout_ms))
-        options = f"-c statement_timeout={statement_timeout_ms} -c lock_timeout={lock_timeout_ms}"
-        return psycopg.connect(
-            host=host,
-            port=port,
-            dbname=dbname,
-            user=user,
-            password=password,
-            connect_timeout=3,
-            options=options,
-        )
-
-    def available(self) -> bool:
-        if not self._enabled:
-            return False
-        now = _now_ms()
-        if now - self._last_health_check_ms <= 5_000:
-            return self._last_health_ok
-        ok = False
-        try:
-            conn = self._connect()
-            if conn is not None:
-                try:
-                    with conn.cursor() as cur:
-                        cur.execute("SELECT 1")
-                        ok = bool(cur.fetchone())
-                finally:
-                    conn.close()
-        except Exception:
-            ok = False
-        self._last_health_check_ms = now
-        self._last_health_ok = ok
-        return ok
-
-    def _query(self, sql: str, params: Dict[str, Any]) -> List[Dict[str, Any]]:
-        if not self._enabled:
-            return []
-        try:
-            conn = self._connect()
-            if conn is None:
-                return []
-            try:
-                with conn.cursor() as cur:
-                    cur.execute(sql, params)
-                    rows = cur.fetchall()
-                    cols = [desc[0] for desc in cur.description or []]
-                out: List[Dict[str, Any]] = []
-                for row in rows:
-                    if isinstance(row, dict):
-                        out.append(row)
-                    elif isinstance(row, tuple):
-                        out.append({cols[idx]: row[idx] for idx in range(min(len(cols), len(row)))})
-                return out
-            finally:
-                conn.close()
-        except Exception:
-            return []
-
-    def _pair_candidates(self, trading_pair: str) -> List[str]:
-        raw = str(trading_pair or "").strip().upper()
-        if not raw:
-            return []
-        norm = _normalize_pair(raw)
-        out = {raw, raw.replace("/", "-"), raw.replace("_", "-")}
-        if len(norm) >= 6:
-            out.add(norm)
-            if "-" not in raw and "/" not in raw and "_" not in raw:
-                out.add(f"{norm[:-4]}-{norm[-4:]}")
-        return sorted(item for item in out if item)
-
-    def _variant_hint(self, controller_id: str) -> str:
-        raw = str(controller_id or "").strip()
-        if not raw:
-            return ""
-        parts = [p for p in raw.split("_") if p]
-        tail = parts[-1].lower() if parts else ""
-        if len(tail) == 1 and tail.isalpha():
-            return tail
-        return ""
-
-    def get_candles(self, connector_name: str, trading_pair: str, timeframe_s: int, limit: int) -> List[Dict[str, Any]]:
-        bars = self.get_market_bars(
-            MarketBarKey(
-                connector_name=str(connector_name or "").strip(),
-                trading_pair=str(trading_pair or "").strip(),
-                bar_source="quote_mid",
-            ),
-            bar_interval_s=timeframe_s,
-            limit=limit,
-        )
-        if bars:
-            return market_bars_to_candles(bars)
-        return self._get_legacy_quote_candles(connector_name, trading_pair, timeframe_s, limit)
-
-    def _get_legacy_quote_candles(
-        self,
-        connector_name: str,
-        trading_pair: str,
-        timeframe_s: int,
-        limit: int,
-    ) -> List[Dict[str, Any]]:
-        if not self.available():
-            return []
-        limit = max(1, int(limit))
-        pair_candidates = self._pair_candidates(trading_pair)
-        rows = self._query(
-            """
-            SELECT EXTRACT(EPOCH FROM bucket_minute_utc) * 1000.0 AS bucket_ms,
-                   open_price,
-                   high_price,
-                   low_price,
-                   close_price
-            FROM market_quote_bar_minute
-            WHERE (%(connector_name)s = '' OR connector_name = %(connector_name)s)
-              AND (%(pair_count)s = 0 OR trading_pair = ANY(%(pairs)s))
-              AND bucket_minute_utc >= NOW() - (%(lookback_hours)s::text || ' hours')::interval
-            ORDER BY bucket_minute_utc DESC
-            LIMIT %(limit)s
-            """,
-            {
-                "connector_name": str(connector_name or "").strip(),
-                "pairs": pair_candidates,
-                "pair_count": len(pair_candidates),
-                "lookback_hours": max(1, int(self._cfg.db_lookback_hours)),
-                "limit": limit,
-            },
-        )
-        out: List[Dict[str, Any]] = []
-        for row in reversed(rows):
-            bucket_ms = _to_epoch_ms(row.get("bucket_ms"))
-            open_price = _to_float(row.get("open_price"))
-            high_price = _to_float(row.get("high_price"))
-            low_price = _to_float(row.get("low_price"))
-            close_price = _to_float(row.get("close_price"))
-            if None in {bucket_ms, open_price, high_price, low_price, close_price}:
-                continue
-            out.append(
-                {
-                    "bucket_ms": int(bucket_ms),
-                    "open": float(open_price),
-                    "high": float(high_price),
-                    "low": float(low_price),
-                    "close": float(close_price),
-                }
-            )
-        return out[-limit:]
-
-    def get_market_bars(
-        self,
-        key: MarketBarKey,
-        bar_interval_s: int,
-        limit: int,
-        end_time_ms: Optional[int] = None,
-        require_closed: bool = True,
-    ) -> List[MarketBar]:
-        if not self.available():
-            return []
-        limit = max(1, int(limit))
-        pair_candidates = self._pair_candidates(key.trading_pair)
-        end_ts_utc = (
-            datetime.fromtimestamp(int(end_time_ms) / 1000.0, tz=timezone.utc).isoformat()
-            if end_time_ms
-            else None
-        )
-        rows = self._query(
-            """
-            SELECT EXTRACT(EPOCH FROM bucket_minute_utc) * 1000.0 AS bucket_ms,
-                   open_price,
-                   high_price,
-                   low_price,
-                   close_price,
-                   bar_source
-            FROM market_bar_v2
-            WHERE (%(connector_name)s = '' OR connector_name = %(connector_name)s)
-              AND (%(pair_count)s = 0 OR trading_pair = ANY(%(pairs)s))
-              AND bar_source = %(bar_source)s
-              AND bar_interval_s = 60
-              AND (%(end_ts_utc)s IS NULL OR bucket_minute_utc <= %(end_ts_utc)s::timestamptz)
-              AND bucket_minute_utc >= NOW() - (%(lookback_hours)s::text || ' hours')::interval
-            ORDER BY bucket_minute_utc DESC
-            LIMIT %(limit)s
-            """,
-            {
-                "connector_name": str(key.connector_name or "").strip(),
-                "pairs": pair_candidates,
-                "pair_count": len(pair_candidates),
-                "bar_source": str(key.bar_source or "quote_mid"),
-                "end_ts_utc": end_ts_utc,
-                "lookback_hours": max(1, int(self._cfg.db_lookback_hours)),
-                "limit": max(limit, int(limit * max(1, int(bar_interval_s) // 60))),
-            },
-        )
-        if not rows and str(key.bar_source or "quote_mid") == "quote_mid":
-            return _candle_dicts_to_market_bars(
-                self._get_legacy_quote_candles(str(key.connector_name or ""), str(key.trading_pair or ""), bar_interval_s, limit),
-                bar_interval_s=max(60, int(bar_interval_s)),
-                bar_source="quote_mid",
-            )
-        bars = _candle_dicts_to_market_bars(
-            [
-                {
-                    "bucket_ms": row.get("bucket_ms"),
-                    "open": row.get("open_price"),
-                    "high": row.get("high_price"),
-                    "low": row.get("low_price"),
-                    "close": row.get("close_price"),
-                }
-                for row in reversed(rows)
-            ],
-            bar_interval_s=60,
-            bar_source=str(key.bar_source or "quote_mid"),
-        )
-        if int(bar_interval_s) <= 60:
-            return bars[-limit:]
-        provider = MarketHistoryProviderImpl(now_ms_reader=_now_ms)
-        rolled = provider._rollup(bars, int(bar_interval_s))
-        if require_closed:
-            rolled = [bar for bar in rolled if bar.is_closed]
-        return rolled[-limit:]
-
-    def get_position(self, instance_name: str, trading_pair: str) -> Dict[str, Any]:
-        if not self.available() or not instance_name:
-            return {}
-        pair_candidates = self._pair_candidates(trading_pair)
-        rows = self._query(
-            """
-            SELECT trading_pair, quantity, avg_entry_price, unrealized_pnl_quote, side, source_ts_utc
-            FROM bot_position_current
-            WHERE instance_name = %(instance_name)s
-              AND (%(pair_count)s = 0 OR trading_pair = ANY(%(pairs)s))
-            ORDER BY source_ts_utc DESC
-            LIMIT 1
-            """,
-            {
-                "instance_name": instance_name,
-                "pairs": pair_candidates,
-                "pair_count": len(pair_candidates),
-            },
-        )
-        if not rows:
-            return {}
-        row = rows[0]
-        return {
-            "trading_pair": str(row.get("trading_pair", "")),
-            "quantity": _to_float(row.get("quantity")) or 0.0,
-            "avg_entry_price": _to_float(row.get("avg_entry_price")) or 0.0,
-            "unrealized_pnl": _to_float(row.get("unrealized_pnl_quote")) or 0.0,
-            "side": str(row.get("side", "")),
-            "source_ts_ms": _to_epoch_ms(row.get("source_ts_utc")) or 0,
-        }
-
-    def get_rest_backfill_candles(
-        self,
-        connector_name: str,
-        trading_pair: str,
-        timeframe_s: int,
-        limit: int,
-    ) -> List[Dict[str, Any]]:
-        exchange_id = _ccxt_exchange_id(connector_name)
-        if ccxt is None or not exchange_id:
-            return []
-        bounded_limit = max(5, min(int(limit), 500))
-        cache_key = (exchange_id, _normalize_pair(trading_pair), int(timeframe_s), bounded_limit)
-        now_ms = _now_ms()
-        cached = self._rest_candle_cache.get(cache_key)
-        if cached is not None and (now_ms - int(cached[0])) <= 30_000:
-            return list(cached[1])
-        try:
-            exchange_cls = getattr(ccxt, exchange_id)
-            exchange = exchange_cls({"enableRateLimit": True})
-            if "testnet" in str(connector_name or "").lower() and hasattr(exchange, "set_sandbox_mode"):
-                exchange.set_sandbox_mode(True)
-            rows = exchange.fetch_ohlcv(
-                _ccxt_symbol(trading_pair),
-                timeframe=_ccxt_timeframe(timeframe_s),
-                limit=bounded_limit,
-            )
-        except Exception:
-            return []
-        candles: List[Dict[str, Any]] = []
-        for row in rows or []:
-            if not isinstance(row, (list, tuple)) or len(row) < 5:
-                continue
-            bucket_ms = _to_epoch_ms(row[0])
-            open_price = _to_float(row[1])
-            high_price = _to_float(row[2])
-            low_price = _to_float(row[3])
-            close_price = _to_float(row[4])
-            if None in {bucket_ms, open_price, high_price, low_price, close_price}:
-                continue
-            candles.append(
-                {
-                    "bucket_ms": int(bucket_ms),
-                    "open": float(open_price),
-                    "high": float(high_price),
-                    "low": float(low_price),
-                    "close": float(close_price),
-                }
-            )
-        self._rest_candle_cache[cache_key] = (now_ms, list(candles))
-        return candles
-
-    def get_fills(self, instance_name: str, trading_pair: str, limit: int = 120) -> List[Dict[str, Any]]:
-        if not self.available() or not instance_name:
-            return []
-        limit = max(1, int(limit))
-        pair_candidates = self._pair_candidates(trading_pair)
-        rows = self._query(
-            """
-            SELECT ts_utc, side, price, amount_base, realized_pnl_quote, order_id, is_maker
-            FROM fills
-            WHERE bot = %(instance_name)s
-              AND (%(pair_count)s = 0 OR trading_pair = ANY(%(pairs)s))
-              AND ts_utc >= NOW() - (%(lookback_hours)s::text || ' hours')::interval
-            ORDER BY ts_utc DESC
-            LIMIT %(limit)s
-            """,
-            {
-                "instance_name": instance_name,
-                "pairs": pair_candidates,
-                "pair_count": len(pair_candidates),
-                "lookback_hours": max(1, int(self._cfg.db_lookback_hours)),
-                "limit": limit,
-            },
-        )
-        out: List[Dict[str, Any]] = []
-        for row in reversed(rows):
-            ts_raw = row.get("ts_utc")
-            ts_ms = _to_epoch_ms(ts_raw)
-            out.append(
-                {
-                    "ts": str(ts_raw),
-                    "timestamp_ms": ts_ms or 0,
-                    "side": str(row.get("side", "")).upper(),
-                    "price": _to_float(row.get("price")) or 0.0,
-                    "amount_base": _to_float(row.get("amount_base")) or 0.0,
-                    "realized_pnl_quote": _to_float(row.get("realized_pnl_quote")) or 0.0,
-                    "order_id": str(row.get("order_id", "")),
-                    "is_maker": bool(row.get("is_maker")),
-                }
-            )
-        return out
-
-    def get_fills_for_day(self, instance_name: str, trading_pair: str, day_key: str, limit: int = 4000) -> List[Dict[str, Any]]:
-        if not self.available() or not instance_name:
-            return []
-        day_key, start_ms, end_ms = _day_bounds_utc(day_key)
-        pair_candidates = self._pair_candidates(trading_pair)
-        rows = self._query(
-            """
-            SELECT ts_utc, side, price, amount_base, realized_pnl_quote, order_id, is_maker
-            FROM fills
-            WHERE bot = %(instance_name)s
-              AND (%(pair_count)s = 0 OR trading_pair = ANY(%(pairs)s))
-              AND ts_utc >= %(start_ts)s::timestamptz
-              AND ts_utc < %(end_ts)s::timestamptz
-            ORDER BY ts_utc ASC
-            LIMIT %(limit)s
-            """,
-            {
-                "instance_name": instance_name,
-                "pairs": pair_candidates,
-                "pair_count": len(pair_candidates),
-                "start_ts": datetime.fromtimestamp(start_ms / 1000, tz=timezone.utc).isoformat(),
-                "end_ts": datetime.fromtimestamp(end_ms / 1000, tz=timezone.utc).isoformat(),
-                "limit": max(1, int(limit)),
-            },
-        )
-        out: List[Dict[str, Any]] = []
-        for row in rows:
-            ts_ms = _to_epoch_ms(row.get("ts_utc"))
-            if ts_ms is None:
-                continue
-            price = _to_float(row.get("price"))
-            amount_base = _to_float(row.get("amount_base"))
-            if price is None:
-                continue
-            out.append(
-                {
-                    "ts": datetime.fromtimestamp(ts_ms / 1000, tz=timezone.utc).isoformat(),
-                    "timestamp_ms": ts_ms,
-                    "side": str(row.get("side", "")).upper(),
-                    "price": price,
-                    "amount_base": amount_base if amount_base is not None else 0.0,
-                    "realized_pnl_quote": _to_float(row.get("realized_pnl_quote")) or 0.0,
-                    "order_id": str(row.get("order_id", "")),
-                    "is_maker": bool(row.get("is_maker")),
-                }
-            )
-        return out
-
-    def get_fills_range(
-        self,
-        instance_name: str,
-        trading_pair: str,
-        start_day: str = "",
-        end_day: str = "",
-        limit: int = 10000,
-    ) -> List[Dict[str, Any]]:
-        if not self.available() or not instance_name:
-            return []
-        pair_candidates = self._pair_candidates(trading_pair)
-        start_ts = None
-        end_ts = None
-        if str(start_day or "").strip():
-            _, start_ms, _ = _day_bounds_utc(start_day)
-            start_ts = datetime.fromtimestamp(start_ms / 1000, tz=timezone.utc).isoformat()
-        if str(end_day or "").strip():
-            _, _, end_ms = _day_bounds_utc(end_day)
-            end_ts = datetime.fromtimestamp(end_ms / 1000, tz=timezone.utc).isoformat()
-        rows = self._query(
-            """
-            SELECT ts_utc, side, price, amount_base, realized_pnl_quote, order_id, is_maker
-            FROM fills
-            WHERE bot = %(instance_name)s
-              AND (%(pair_count)s = 0 OR trading_pair = ANY(%(pairs)s))
-              AND (%(start_ts)s IS NULL OR ts_utc >= %(start_ts)s::timestamptz)
-              AND (%(end_ts)s IS NULL OR ts_utc < %(end_ts)s::timestamptz)
-            ORDER BY ts_utc ASC
-            LIMIT %(limit)s
-            """,
-            {
-                "instance_name": instance_name,
-                "pairs": pair_candidates,
-                "pair_count": len(pair_candidates),
-                "start_ts": start_ts,
-                "end_ts": end_ts,
-                "limit": max(1, int(limit)),
-            },
-        )
-        out: List[Dict[str, Any]] = []
-        for row in rows:
-            ts_ms = _to_epoch_ms(row.get("ts_utc"))
-            if ts_ms is None:
-                continue
-            price = _to_float(row.get("price"))
-            amount_base = _to_float(row.get("amount_base"))
-            if price is None:
-                continue
-            out.append(
-                {
-                    "ts": datetime.fromtimestamp(ts_ms / 1000, tz=timezone.utc).isoformat(),
-                    "timestamp_ms": ts_ms,
-                    "side": str(row.get("side", "")).upper(),
-                    "price": price,
-                    "amount_base": amount_base if amount_base is not None else 0.0,
-                    "realized_pnl_quote": _to_float(row.get("realized_pnl_quote")) or 0.0,
-                    "order_id": str(row.get("order_id", "")),
-                    "is_maker": bool(row.get("is_maker")),
-                }
-            )
-        return out
-
-    def get_fill_count(self, instance_name: str, trading_pair: str) -> int:
-        if not self.available() or not instance_name:
-            return 0
-        pair_candidates = self._pair_candidates(trading_pair)
-        rows = self._query(
-            """
-            SELECT COUNT(*) AS fill_count
-            FROM fills
-            WHERE bot = %(instance_name)s
-              AND (%(pair_count)s = 0 OR trading_pair = ANY(%(pairs)s))
-              AND ts_utc >= NOW() - (%(lookback_hours)s::text || ' hours')::interval
-            """,
-            {
-                "instance_name": instance_name,
-                "pairs": pair_candidates,
-                "pair_count": len(pair_candidates),
-                "lookback_hours": max(1, int(self._cfg.db_lookback_hours)),
-            },
-        )
-        if not rows:
-            return 0
-        try:
-            return max(0, int(rows[0].get("fill_count") or 0))
-        except Exception:
-            return 0
-
-    def get_fill_activity(self, instance_name: str, trading_pair: str) -> Dict[str, Any]:
-        if not self.available() or not instance_name:
-            return {**_summarize_fill_activity([], fills_total=0), "realized_pnl_total_quote": 0.0}
-        pair_candidates = self._pair_candidates(trading_pair)
-        rows = self._query(
-            """
-            SELECT
-                COUNT(*) FILTER (
-                    WHERE ts_utc >= NOW() - INTERVAL '15 minutes'
-                ) AS m15_fill_count,
-                COUNT(*) FILTER (
-                    WHERE ts_utc >= NOW() - INTERVAL '15 minutes' AND LOWER(side) = 'buy'
-                ) AS m15_buy_count,
-                COUNT(*) FILTER (
-                    WHERE ts_utc >= NOW() - INTERVAL '15 minutes' AND LOWER(side) = 'sell'
-                ) AS m15_sell_count,
-                COUNT(*) FILTER (
-                    WHERE ts_utc >= NOW() - INTERVAL '15 minutes' AND COALESCE(is_maker, FALSE)
-                ) AS m15_maker_count,
-                COALESCE(SUM(ABS(COALESCE(amount_base, 0))) FILTER (
-                    WHERE ts_utc >= NOW() - INTERVAL '15 minutes'
-                ), 0) AS m15_volume_base,
-                COALESCE(SUM(ABS(COALESCE(amount_base, 0) * COALESCE(price, 0))) FILTER (
-                    WHERE ts_utc >= NOW() - INTERVAL '15 minutes'
-                ), 0) AS m15_notional_quote,
-                COALESCE(SUM(COALESCE(realized_pnl_quote, 0)) FILTER (
-                    WHERE ts_utc >= NOW() - INTERVAL '15 minutes'
-                ), 0) AS m15_realized_pnl_quote,
-                COALESCE(AVG(ABS(COALESCE(amount_base, 0))) FILTER (
-                    WHERE ts_utc >= NOW() - INTERVAL '15 minutes'
-                ), 0) AS m15_avg_fill_size,
-                COALESCE(AVG(COALESCE(price, 0)) FILTER (
-                    WHERE ts_utc >= NOW() - INTERVAL '15 minutes'
-                ), 0) AS m15_avg_fill_price,
-                COUNT(*) FILTER (
-                    WHERE ts_utc >= NOW() - INTERVAL '1 hour'
-                ) AS h1_fill_count,
-                COUNT(*) FILTER (
-                    WHERE ts_utc >= NOW() - INTERVAL '1 hour' AND LOWER(side) = 'buy'
-                ) AS h1_buy_count,
-                COUNT(*) FILTER (
-                    WHERE ts_utc >= NOW() - INTERVAL '1 hour' AND LOWER(side) = 'sell'
-                ) AS h1_sell_count,
-                COUNT(*) FILTER (
-                    WHERE ts_utc >= NOW() - INTERVAL '1 hour' AND COALESCE(is_maker, FALSE)
-                ) AS h1_maker_count,
-                COALESCE(SUM(ABS(COALESCE(amount_base, 0))) FILTER (
-                    WHERE ts_utc >= NOW() - INTERVAL '1 hour'
-                ), 0) AS h1_volume_base,
-                COALESCE(SUM(ABS(COALESCE(amount_base, 0) * COALESCE(price, 0))) FILTER (
-                    WHERE ts_utc >= NOW() - INTERVAL '1 hour'
-                ), 0) AS h1_notional_quote,
-                COALESCE(SUM(COALESCE(realized_pnl_quote, 0)) FILTER (
-                    WHERE ts_utc >= NOW() - INTERVAL '1 hour'
-                ), 0) AS h1_realized_pnl_quote,
-                COALESCE(AVG(ABS(COALESCE(amount_base, 0))) FILTER (
-                    WHERE ts_utc >= NOW() - INTERVAL '1 hour'
-                ), 0) AS h1_avg_fill_size,
-                COALESCE(AVG(COALESCE(price, 0)) FILTER (
-                    WHERE ts_utc >= NOW() - INTERVAL '1 hour'
-                ), 0) AS h1_avg_fill_price,
-                COUNT(*) AS fills_total,
-                COALESCE(SUM(COALESCE(realized_pnl_quote, 0)), 0) AS realized_pnl_total_quote,
-                EXTRACT(EPOCH FROM MAX(ts_utc)) * 1000.0 AS latest_fill_ts_ms
-            FROM fills
-            WHERE bot = %(instance_name)s
-              AND (%(pair_count)s = 0 OR trading_pair = ANY(%(pairs)s))
-              AND ts_utc >= NOW() - ((%(lookback_hours)s::int + 1)::text || ' hours')::interval
-            """,
-            {
-                "instance_name": instance_name,
-                "pairs": pair_candidates,
-                "pair_count": len(pair_candidates),
-                "lookback_hours": max(1, int(self._cfg.db_lookback_hours)),
-            },
-        )
-        if not rows:
-            return {**_summarize_fill_activity([], fills_total=0), "realized_pnl_total_quote": 0.0}
-        row = rows[0]
-        return {
-            "fills_total": max(0, int(row.get("fills_total") or 0)),
-            "latest_fill_ts_ms": int(_to_epoch_ms(row.get("latest_fill_ts_ms")) or 0),
-            "realized_pnl_total_quote": float(_to_float(row.get("realized_pnl_total_quote")) or 0.0),
-            "window_15m": _normalize_fill_activity_row(row, "m15"),
-            "window_1h": _normalize_fill_activity_row(row, "h1"),
-        }
-
-    def get_open_orders(self, instance_name: str, trading_pair: str, limit: int = 40) -> List[Dict[str, Any]]:
-        if not self.available() or not instance_name:
-            return []
-        limit = max(1, int(limit))
-        pair_candidates = self._pair_candidates(trading_pair)
-        rows = self._query(
-            """
-            SELECT order_id, side, order_type, amount_base, price, state, updated_ts_utc
-            FROM paper_exchange_open_order_current
-            WHERE instance_name = %(instance_name)s
-              AND (%(pair_count)s = 0 OR trading_pair = ANY(%(pairs)s))
-            ORDER BY updated_ts_utc DESC
-            LIMIT %(limit)s
-            """,
-            {
-                "instance_name": instance_name,
-                "pairs": pair_candidates,
-                "pair_count": len(pair_candidates),
-                "limit": limit,
-            },
-        )
-        out: List[Dict[str, Any]] = []
-        for row in rows:
-            out.append(
-                {
-                    "order_id": str(row.get("order_id", "")),
-                    "side": str(row.get("side", "")).lower(),
-                    "order_type": str(row.get("order_type", "")).lower(),
-                    "price": _to_float(row.get("price")) or 0.0,
-                    "amount": _to_float(row.get("amount_base")) or 0.0,
-                    "quantity": _to_float(row.get("amount_base")) or 0.0,
-                    "state": str(row.get("state", "")).lower() or "open",
-                    "updated_ts_ms": _to_epoch_ms(row.get("updated_ts_utc")) or 0,
-                    "is_estimated": False,
-                }
-            )
-        return out
-
-
-class DeskSnapshotFallback:
-    def __init__(self, reports_root: Path, data_root: Optional[Path] = None):
-        self._reports_root = reports_root
-        self._data_root = (data_root or Path(os.getenv("HB_DATA_ROOT", "/workspace/hbot/data"))).resolve()
-        self._json_cache: Dict[str, Tuple[int, Dict[str, Any]]] = {}
-        self._available_instances_cache: Tuple[int, List[str]] = (0, [])
-        self._order_owner_cache: Tuple[int, Dict[str, str]] = (0, {})
-        self._csv_query_cache: Dict[Tuple[str, str, Tuple[Any, ...]], Tuple[int, int, int, Any]] = {}
-
-    def _csv_query_signature(self, path: Path) -> Optional[Tuple[int, int]]:
-        try:
-            stat = path.stat()
-            return int(stat.st_mtime_ns), int(stat.st_size)
-        except OSError:
-            return None
-
-    def _prune_csv_query_cache(self) -> None:
-        max_entries = 128
-        if len(self._csv_query_cache) <= max_entries:
-            return
-        oldest_keys = sorted(self._csv_query_cache.items(), key=lambda item: item[1][0])[: len(self._csv_query_cache) - max_entries]
-        for key, _value in oldest_keys:
-            self._csv_query_cache.pop(key, None)
-
-    def _cached_csv_query(
-        self,
-        namespace: str,
-        path: Path,
-        query_key: Tuple[Any, ...],
-        loader: Any,
-        *,
-        ttl_ms: int = 30_000,
-    ) -> Any:
-        signature = self._csv_query_signature(path)
-        if signature is None:
-            return loader()
-        cache_key = (namespace, str(path.resolve()), tuple(query_key))
-        now_ms = _now_ms()
-        cached = self._csv_query_cache.get(cache_key)
-        if cached is not None:
-            cached_ts_ms, cached_mtime_ns, cached_size, cached_value = cached
-            if (
-                (now_ms - int(cached_ts_ms)) <= max(1, int(ttl_ms))
-                and int(cached_mtime_ns) == int(signature[0])
-                and int(cached_size) == int(signature[1])
-            ):
-                return cached_value
-        value = loader()
-        self._csv_query_cache[cache_key] = (now_ms, int(signature[0]), int(signature[1]), value)
-        self._prune_csv_query_cache()
-        return value
-
-    def _snapshot_path(self, instance_name: str) -> Path:
-        return self._reports_root / "desk_snapshot" / instance_name / "latest.json"
-
-    def _read_json(self, path: Path) -> Dict[str, Any]:
-        cache_key = str(path.resolve())
-        now_ms = _now_ms()
-        cached_ts_ms, cached_payload = self._json_cache.get(cache_key, (0, {}))
-        if cached_ts_ms > 0 and (now_ms - cached_ts_ms) <= 60_000:
-            return cached_payload
-        if not path.exists():
-            self._json_cache[cache_key] = (now_ms, {})
-            return {}
-        try:
-            payload = json.loads(path.read_text(encoding="utf-8"))
-        except Exception:
-            self._json_cache[cache_key] = (now_ms, {})
-            return {}
-        normalized = payload if isinstance(payload, dict) else {}
-        self._json_cache[cache_key] = (now_ms, normalized)
-        return normalized
-
-    def get_snapshot(self, instance_name: str) -> Dict[str, Any]:
-        return self._read_json(self._snapshot_path(instance_name))
-
-    def _instance_manifest_path(self, instance_name: str) -> Path:
-        return self._data_root / instance_name / "conf" / "instance_meta.json"
-
-    def instance_metadata(self, instance_name: str) -> Dict[str, Any]:
-        if not instance_name:
-            return {}
-        payload = self._read_json(self._instance_manifest_path(instance_name))
-        return payload if isinstance(payload, dict) else {}
-
-    def available_instances(self) -> List[str]:
-        now_ms = _now_ms()
-        cached_ts_ms, cached_instances = self._available_instances_cache
-        if cached_ts_ms > 0 and (now_ms - cached_ts_ms) <= 60_000:
-            return list(cached_instances)
-        instances: set[str] = set()
-        desk_snapshot_root = self._reports_root / "desk_snapshot"
-        if desk_snapshot_root.exists():
-            try:
-                for entry in desk_snapshot_root.iterdir():
-                    if not entry.is_dir() or entry.name.startswith("."):
-                        continue
-                    if (entry / "latest.json").exists():
-                        instances.add(entry.name)
-            except Exception:
-                pass
-        if self._data_root.exists():
-            try:
-                for entry in self._data_root.iterdir():
-                    if not entry.is_dir() or entry.name.startswith("."):
-                        continue
-                    manifest = self.instance_metadata(entry.name)
-                    explicit_visible = bool(
-                        manifest
-                        and (
-                            manifest.get("visible_in_supervision") is True
-                            or manifest.get("enabled") is True
-                            or manifest.get("discover") is True
-                        )
-                    )
-                    marker_visible = (entry / ".supervision_enabled").exists()
-                    if explicit_visible or marker_visible:
-                        instances.add(entry.name)
-                        continue
-                    if any((entry / child).exists() for child in ("conf", "logs", "data", "scripts")):
-                        instances.add(entry.name)
-            except Exception:
-                pass
-        resolved = sorted(instances, key=lambda value: value.lower())
-        self._available_instances_cache = (now_ms, resolved)
-        return list(resolved)
-
-    def weekly_strategy_report(self, instance_name: str) -> Dict[str, Any]:
-        candidates: List[Path] = []
-        if str(instance_name or "").strip().lower() == "bot1":
-            candidates.append(self._reports_root / "strategy" / "multi_day_summary_latest.json")
-        candidates.append(self._reports_root / "strategy" / "multi_day_summary_latest.json")
-        for path in candidates:
-            payload = self._read_json(path)
-            if payload:
-                return payload
-        return {}
-
-    def account_summary(self, instance_name: str) -> Dict[str, Any]:
-        snapshot = self.get_snapshot(instance_name)
-        if not snapshot:
-            return _account_summary_template()
-        minute = snapshot.get("minute", {}) if isinstance(snapshot.get("minute"), dict) else {}
-        daily_state = snapshot.get("daily_state", {}) if isinstance(snapshot.get("daily_state"), dict) else {}
-        portfolio = snapshot.get("portfolio", {}) if isinstance(snapshot.get("portfolio"), dict) else {}
-        portfolio_inner = portfolio.get("portfolio", {}) if isinstance(portfolio.get("portfolio"), dict) else {}
-        gate_summary = _build_quote_gate_summary(minute)
-        return {
-            "equity_quote": float(_to_float(snapshot.get("equity_quote") or minute.get("equity_quote")) or 0.0),
-            "quote_balance": float(_to_float(snapshot.get("quote_balance") or minute.get("quote_balance")) or 0.0),
-            "equity_open_quote": float(
-                _to_float(
-                    snapshot.get("equity_open")
-                    or minute.get("equity_open")
-                    or daily_state.get("equity_open")
-                    or portfolio_inner.get("daily_open_equity")
-                )
-                or 0.0
-            ),
-            "equity_peak_quote": float(
-                _to_float(
-                    snapshot.get("equity_peak")
-                    or minute.get("equity_peak")
-                    or daily_state.get("equity_peak")
-                    or portfolio_inner.get("peak_equity")
-                )
-                or 0.0
-            ),
-            "realized_pnl_quote": 0.0,
-            "controller_state": str(minute.get("state", "") or ""),
-            "regime": str(minute.get("regime", "") or ""),
-            "pnl_governor_active": _to_bool(minute.get("pnl_governor_active")),
-            "pnl_governor_reason": str(minute.get("pnl_governor_activation_reason", "") or ""),
-            "risk_reasons": str(minute.get("risk_reasons", "") or ""),
-            "daily_loss_pct": float(_to_float(minute.get("daily_loss_pct")) or 0.0),
-            "max_daily_loss_pct_hard": float(_to_float(minute.get("max_daily_loss_pct_hard")) or 0.0),
-            "drawdown_pct": float(_to_float(minute.get("drawdown_pct")) or 0.0),
-            "max_drawdown_pct_hard": float(_to_float(minute.get("max_drawdown_pct_hard")) or 0.0),
-            "order_book_stale": _to_bool(minute.get("order_book_stale")),
-            "soft_pause_edge": bool(gate_summary.get("soft_pause_edge")),
-            "net_edge_pct": float(gate_summary.get("net_edge_pct") or 0.0),
-            "net_edge_gate_pct": float(gate_summary.get("net_edge_gate_pct") or 0.0),
-            "adaptive_effective_min_edge_pct": float(gate_summary.get("adaptive_effective_min_edge_pct") or 0.0),
-            "spread_pct": float(gate_summary.get("spread_pct") or 0.0),
-            "spread_floor_pct": float(gate_summary.get("spread_floor_pct") or 0.0),
-            "spread_competitiveness_cap_active": bool(gate_summary.get("spread_competitiveness_cap_active")),
-            "orders_active": int(gate_summary.get("orders_active") or 0),
-            "quoting_status": str(gate_summary.get("quoting_status") or ""),
-            "quoting_reason": str(gate_summary.get("quoting_reason") or ""),
-            "quote_gates": list(gate_summary.get("quote_gates") or []),
-            "snapshot_ts": str(snapshot.get("source_ts") or minute.get("ts") or ""),
-        }
-
-    def _minute_csv_candidates(self, instance_name: str) -> List[Path]:
-        return list_instance_log_files(self._data_root, instance_name, "minute.csv")
-
-    def _fills_csv_candidates(self, instance_name: str) -> List[Path]:
-        return list_instance_log_files(self._data_root, instance_name, "fills.csv")
-
-    def _paper_exchange_state_snapshot_path(self) -> Path:
-        return self._reports_root / "verification" / "paper_exchange_state_snapshot_latest.json"
-
-    def _paper_exchange_command_journal_path(self) -> Path:
-        return self._reports_root / "verification" / "paper_exchange_command_journal_latest.json"
-
-    def paper_exchange_order_owner_map(self) -> Dict[str, str]:
-        now_ms = _now_ms()
-        cached_ts_ms, cached_owners = self._order_owner_cache
-        if cached_ts_ms > 0 and (now_ms - cached_ts_ms) <= 60_000:
-            return dict(cached_owners)
-        owners: Dict[str, str] = {}
-        snapshot_payload = self._read_json(self._paper_exchange_state_snapshot_path())
-        raw_orders = snapshot_payload.get("orders", {}) if isinstance(snapshot_payload.get("orders"), dict) else {}
-        for order_id, record in raw_orders.items():
-            if isinstance(record, dict):
-                resolved_order_id = str(record.get("order_id", order_id) or "").strip()
-                resolved_instance = str(record.get("instance_name", "") or "").strip()
-                if resolved_order_id and resolved_instance:
-                    owners[resolved_order_id] = resolved_instance
-        journal_payload = self._read_json(self._paper_exchange_command_journal_path())
-        raw_commands = journal_payload.get("commands", {}) if isinstance(journal_payload.get("commands"), dict) else {}
-        for _event_id, record in raw_commands.items():
-            if not isinstance(record, dict):
-                continue
-            resolved_order_id = str(record.get("order_id", "") or "").strip()
-            resolved_instance = str(record.get("instance_name", "") or "").strip()
-            if resolved_order_id and resolved_instance and resolved_order_id not in owners:
-                owners[resolved_order_id] = resolved_instance
-        self._order_owner_cache = (now_ms, dict(owners))
-        return owners
-
-    def filter_fill_rows_for_instance(self, instance_name: str, fills: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
-        wanted_instance = str(instance_name or "").strip().lower()
-        safe_fills = [row for row in fills if isinstance(row, dict)]
-        if not wanted_instance or not safe_fills:
-            return safe_fills
-        owners = self.paper_exchange_order_owner_map()
-        if not owners:
-            return safe_fills
-        filtered: List[Dict[str, Any]] = []
-        for row in safe_fills:
-            order_id = str(row.get("order_id", "") or "").strip()
-            if order_id:
-                owner = str(owners.get(order_id, "") or "").strip().lower()
-                if owner and owner != wanted_instance:
-                    continue
-            filtered.append(row)
-        return filtered
-
-    def _parse_ts_ms(self, value: Any) -> Optional[int]:
-        raw = str(value or "").strip()
-        if not raw:
-            return None
-        try:
-            if raw.isdigit():
-                parsed = int(raw)
-                return parsed if parsed > 10_000_000_000 else parsed * 1000
-        except Exception:
-            return None
-        try:
-            normalized = raw.replace("Z", "+00:00")
-            return int(datetime.fromisoformat(normalized).timestamp() * 1000)
-        except Exception:
-            return None
-
-    def candles_from_minute_log(
-        self,
-        instance_name: str,
-        trading_pair: str = "",
-        timeframe_s: int = 60,
-        limit: int = 300,
-    ) -> List[Dict[str, Any]]:
-        timeframe_ms = max(1, int(timeframe_s)) * 1000
-        limit = max(1, int(limit))
-        trading_pair_norm = _normalize_pair(trading_pair)
-        minutes_per_bucket = max(1, timeframe_ms // 60_000)
-        tail_rows = max(1200, min(50_000, limit * minutes_per_bucket * 8))
-
-        for csv_path in self._minute_csv_candidates(instance_name):
-            candles = self._cached_csv_query(
-                "candles_from_minute_log",
-                csv_path,
-                (trading_pair_norm, timeframe_ms, limit, tail_rows),
-                lambda: self._load_candles_from_minute_log(csv_path, trading_pair_norm, timeframe_ms, limit, tail_rows),
-            )
-            if candles:
-                return list(candles)
-        return []
-
-    def fills_from_csv(
-        self,
-        instance_name: str,
-        trading_pair: str = "",
-        limit: int = 120,
-    ) -> List[Dict[str, Any]]:
-        limit = max(1, int(limit))
-        trading_pair_norm = _normalize_pair(trading_pair)
-        tail_rows = max(400, min(80_000, limit * 40))
-        for csv_path in self._fills_csv_candidates(instance_name):
-            rows = self._cached_csv_query(
-                "fills_from_csv",
-                csv_path,
-                (trading_pair_norm, limit, tail_rows),
-                lambda: self._load_fills_from_csv(csv_path, trading_pair_norm, limit, tail_rows),
-            )
-            if rows:
-                return self.filter_fill_rows_for_instance(instance_name, list(rows)[-limit:])
-        return []
-
-    def minute_rows_from_csv(
-        self,
-        instance_name: str,
-        trading_pair: str = "",
-        day_key: str = "",
-    ) -> List[Dict[str, Any]]:
-        trading_pair_norm = _normalize_pair(trading_pair)
-        _, start_ms, end_ms = _day_bounds_utc(day_key)
-        for csv_path in self._minute_csv_candidates(instance_name):
-            rows = self._cached_csv_query(
-                "minute_rows_from_csv",
-                csv_path,
-                (trading_pair_norm, start_ms, end_ms),
-                lambda: self._load_minute_rows_from_csv(csv_path, trading_pair_norm, start_ms, end_ms),
-            )
-            if rows:
-                return list(rows)
-        return []
-
-    def minute_rows_range(
-        self,
-        instance_name: str,
-        trading_pair: str = "",
-        start_day: str = "",
-        end_day: str = "",
-        limit: int = 20000,
-    ) -> List[Dict[str, Any]]:
-        trading_pair_norm = _normalize_pair(trading_pair)
-        start_ms = None
-        end_ms = None
-        if str(start_day or "").strip():
-            _, start_ms, _ = _day_bounds_utc(start_day)
-        if str(end_day or "").strip():
-            _, _, end_ms = _day_bounds_utc(end_day)
-        limit = max(1, int(limit))
-        for csv_path in self._minute_csv_candidates(instance_name):
-            rows = self._cached_csv_query(
-                "minute_rows_range",
-                csv_path,
-                (trading_pair_norm, start_ms, end_ms, limit),
-                lambda: self._load_minute_rows_range(csv_path, trading_pair_norm, start_ms, end_ms, limit),
-            )
-            if rows:
-                return self.filter_fill_rows_for_instance(instance_name, rows[-limit:])
-        return []
-
-    def fills_from_csv_for_day(
-        self,
-        instance_name: str,
-        trading_pair: str = "",
-        day_key: str = "",
-        limit: int = 4000,
-    ) -> List[Dict[str, Any]]:
-        trading_pair_norm = _normalize_pair(trading_pair)
-        _, start_ms, end_ms = _day_bounds_utc(day_key)
-        limit = max(1, int(limit))
-        for csv_path in self._fills_csv_candidates(instance_name):
-            rows = self._cached_csv_query(
-                "fills_from_csv_for_day",
-                csv_path,
-                (trading_pair_norm, start_ms, end_ms, limit),
-                lambda: self._load_fills_for_day(csv_path, trading_pair_norm, start_ms, end_ms, limit),
-            )
-            if rows:
-                return self.filter_fill_rows_for_instance(instance_name, rows[-limit:])
-        return []
-
-    def fills_from_csv_range(
-        self,
-        instance_name: str,
-        trading_pair: str = "",
-        start_day: str = "",
-        end_day: str = "",
-        limit: int = 10000,
-    ) -> List[Dict[str, Any]]:
-        trading_pair_norm = _normalize_pair(trading_pair)
-        start_ms = None
-        end_ms = None
-        if str(start_day or "").strip():
-            _, start_ms, _ = _day_bounds_utc(start_day)
-        if str(end_day or "").strip():
-            _, _, end_ms = _day_bounds_utc(end_day)
-        limit = max(1, int(limit))
-        for csv_path in self._fills_csv_candidates(instance_name):
-            rows = self._cached_csv_query(
-                "fills_from_csv_range",
-                csv_path,
-                (trading_pair_norm, start_ms, end_ms, limit),
-                lambda: self._load_fills_range(csv_path, trading_pair_norm, start_ms, end_ms, limit),
-            )
-            if rows:
-                return rows[-limit:]
-        return []
-
-    def _load_candles_from_minute_log(
-        self,
-        csv_path: Path,
-        trading_pair_norm: str,
-        timeframe_ms: int,
-        limit: int,
-        tail_rows: int,
-    ) -> List[Dict[str, Any]]:
-        points: Deque[Tuple[int, float]] = deque(maxlen=tail_rows)
-        try:
-            with csv_path.open("r", encoding="utf-8", newline="") as fp:
-                reader = csv.DictReader(fp)
-                for row in reader:
-                    if not isinstance(row, dict):
-                        continue
-                    if trading_pair_norm:
-                        row_pair = _normalize_pair(row.get("trading_pair"))
-                        if row_pair and row_pair != trading_pair_norm:
-                            continue
-                    ts_ms = self._parse_ts_ms(row.get("ts"))
-                    mid = _to_float(row.get("mid"))
-                    if ts_ms is None or mid is None:
-                        continue
-                    points.append((ts_ms, mid))
-        except Exception:
-            return []
-        if not points:
-            return []
-        buckets: Dict[int, Dict[str, Any]] = {}
-        last_close: Optional[float] = None
-        last_bucket: Optional[int] = None
-        for ts_ms, price in points:
-            bucket = (ts_ms // timeframe_ms) * timeframe_ms
-            row = buckets.get(bucket)
-            if row is None:
-                open_price = price
-                if timeframe_ms <= 60_000 and last_close is not None and last_bucket != bucket:
-                    open_price = last_close
-                buckets[bucket] = {
-                    "bucket_ms": bucket,
-                    "open": open_price,
-                    "high": max(open_price, price),
-                    "low": min(open_price, price),
-                    "close": price,
-                }
-                last_close = price
-                last_bucket = bucket
-                continue
-            row["high"] = max(float(row["high"]), price)
-            row["low"] = min(float(row["low"]), price)
-            row["close"] = price
-            last_close = price
-            last_bucket = bucket
-        candles = [buckets[k] for k in sorted(buckets.keys())]
-        return candles[-limit:] if candles else []
-
-    def _load_fills_from_csv(
-        self,
-        csv_path: Path,
-        trading_pair_norm: str,
-        limit: int,
-        tail_rows: int,
-    ) -> List[Dict[str, Any]]:
-        rows: Deque[Dict[str, Any]] = deque(maxlen=tail_rows)
-        try:
-            with csv_path.open("r", encoding="utf-8", newline="") as fp:
-                reader = csv.DictReader(fp)
-                for row in reader:
-                    if not isinstance(row, dict):
-                        continue
-                    row_pair_norm = _normalize_pair(row.get("trading_pair"))
-                    if trading_pair_norm and row_pair_norm and row_pair_norm != trading_pair_norm:
-                        continue
-                    ts_ms = self._parse_ts_ms(row.get("ts"))
-                    price = _to_float(row.get("price"))
-                    amount_base = _to_float(row.get("amount_base"))
-                    if ts_ms is None or price is None:
-                        continue
-                    rows.append(
-                        {
-                            "ts": str(row.get("ts", "")),
-                            "timestamp_ms": ts_ms,
-                            "side": str(row.get("side", "")).upper(),
-                            "price": price,
-                            "amount_base": amount_base if amount_base is not None else 0.0,
-                            "notional_quote": _to_float(row.get("notional_quote")) or 0.0,
-                            "fee_quote": _to_float(row.get("fee_quote")) or 0.0,
-                            "realized_pnl_quote": _to_float(row.get("realized_pnl_quote")) or 0.0,
-                            "order_id": str(row.get("order_id", "")),
-                            "is_maker": str(row.get("is_maker", "")).strip().lower() in {"1", "true", "yes"},
-                        }
-                    )
-        except Exception:
-            return []
-        return list(rows)[-limit:] if rows else []
-
-    def _load_minute_rows_from_csv(
-        self,
-        csv_path: Path,
-        trading_pair_norm: str,
-        start_ms: int,
-        end_ms: int,
-    ) -> List[Dict[str, Any]]:
-        rows: List[Dict[str, Any]] = []
-        try:
-            with csv_path.open("r", encoding="utf-8", newline="") as fp:
-                reader = csv.DictReader(fp)
-                for row in reader:
-                    if not isinstance(row, dict):
-                        continue
-                    row_pair_norm = _normalize_pair(row.get("trading_pair"))
-                    if trading_pair_norm and row_pair_norm and row_pair_norm != trading_pair_norm:
-                        continue
-                    ts_ms = self._parse_ts_ms(row.get("ts"))
-                    if ts_ms is None or ts_ms < start_ms or ts_ms >= end_ms:
-                        continue
-                    rows.append(
-                        {
-                            "ts": str(row.get("ts", "")),
-                            "timestamp_ms": ts_ms,
-                            "mid": _to_float(row.get("mid")) or 0.0,
-                            "equity_quote": _to_float(row.get("equity_quote")) or 0.0,
-                            "quote_balance": _to_float(row.get("quote_balance")) or 0.0,
-                            "realized_pnl_today_quote": _to_float(row.get("realized_pnl_today_quote")) or 0.0,
-                            "net_realized_pnl_today_quote": _to_float(row.get("net_realized_pnl_today_quote")) or 0.0,
-                            "state": str(row.get("state", "") or ""),
-                            "regime": str(row.get("regime", "") or ""),
-                            "risk_reasons": str(row.get("risk_reasons", "") or ""),
-                            "pnl_governor_active": _to_bool(row.get("pnl_governor_active")),
-                            "order_book_stale": _to_bool(row.get("order_book_stale")),
-                            "soft_pause_edge": _to_bool(row.get("soft_pause_edge")),
-                            "net_edge_pct": _to_float(row.get("net_edge_pct")) or 0.0,
-                            "net_edge_gate_pct": _to_float(row.get("net_edge_gate_pct")) or 0.0,
-                            "adaptive_effective_min_edge_pct": _to_float(row.get("adaptive_effective_min_edge_pct")) or 0.0,
-                            "spread_pct": _to_float(row.get("spread_pct")) or 0.0,
-                            "spread_floor_pct": _to_float(row.get("spread_floor_pct")) or 0.0,
-                            "spread_competitiveness_cap_active": _to_bool(row.get("spread_competitiveness_cap_active")),
-                            "orders_active": int(_to_float(row.get("orders_active")) or 0),
-                            "pnl_governor_activation_reason": str(row.get("pnl_governor_activation_reason", "") or ""),
-                        }
-                    )
-        except Exception:
-            return []
-        return rows
-
-    def _load_minute_rows_range(
-        self,
-        csv_path: Path,
-        trading_pair_norm: str,
-        start_ms: Optional[int],
-        end_ms: Optional[int],
-        limit: int,
-    ) -> List[Dict[str, Any]]:
-        rows: List[Dict[str, Any]] = []
-        try:
-            with csv_path.open("r", encoding="utf-8", newline="") as fp:
-                reader = csv.DictReader(fp)
-                for row in reader:
-                    if not isinstance(row, dict):
-                        continue
-                    row_pair_norm = _normalize_pair(row.get("trading_pair"))
-                    if trading_pair_norm and row_pair_norm and row_pair_norm != trading_pair_norm:
-                        continue
-                    ts_ms = self._parse_ts_ms(row.get("ts"))
-                    if ts_ms is None:
-                        continue
-                    if start_ms is not None and ts_ms < start_ms:
-                        continue
-                    if end_ms is not None and ts_ms >= end_ms:
-                        continue
-                    rows.append(
-                        {
-                            "ts": str(row.get("ts", "")),
-                            "timestamp_ms": ts_ms,
-                            "mid": _to_float(row.get("mid")) or 0.0,
-                            "equity_quote": _to_float(row.get("equity_quote")) or 0.0,
-                            "quote_balance": _to_float(row.get("quote_balance")) or 0.0,
-                            "realized_pnl_today_quote": _to_float(row.get("realized_pnl_today_quote")) or 0.0,
-                            "net_realized_pnl_today_quote": _to_float(row.get("net_realized_pnl_today_quote")) or 0.0,
-                            "state": str(row.get("state", "") or ""),
-                            "regime": str(row.get("regime", "") or ""),
-                            "risk_reasons": str(row.get("risk_reasons", "") or ""),
-                            "pnl_governor_active": _to_bool(row.get("pnl_governor_active")),
-                            "order_book_stale": _to_bool(row.get("order_book_stale")),
-                            "soft_pause_edge": _to_bool(row.get("soft_pause_edge")),
-                            "net_edge_pct": _to_float(row.get("net_edge_pct")) or 0.0,
-                            "net_edge_gate_pct": _to_float(row.get("net_edge_gate_pct")) or 0.0,
-                            "adaptive_effective_min_edge_pct": _to_float(row.get("adaptive_effective_min_edge_pct")) or 0.0,
-                            "spread_pct": _to_float(row.get("spread_pct")) or 0.0,
-                            "spread_floor_pct": _to_float(row.get("spread_floor_pct")) or 0.0,
-                            "spread_competitiveness_cap_active": _to_bool(row.get("spread_competitiveness_cap_active")),
-                            "orders_active": int(_to_float(row.get("orders_active")) or 0),
-                            "pnl_governor_activation_reason": str(row.get("pnl_governor_activation_reason", "") or ""),
-                        }
-                    )
-        except Exception:
-            return []
-        return rows[-limit:] if rows else []
-
-    def _load_fills_for_day(
-        self,
-        csv_path: Path,
-        trading_pair_norm: str,
-        start_ms: int,
-        end_ms: int,
-        limit: int,
-    ) -> List[Dict[str, Any]]:
-        rows: List[Dict[str, Any]] = []
-        try:
-            with csv_path.open("r", encoding="utf-8", newline="") as fp:
-                reader = csv.DictReader(fp)
-                for row in reader:
-                    if not isinstance(row, dict):
-                        continue
-                    row_pair_norm = _normalize_pair(row.get("trading_pair"))
-                    if trading_pair_norm and row_pair_norm and row_pair_norm != trading_pair_norm:
-                        continue
-                    ts_ms = self._parse_ts_ms(row.get("ts"))
-                    price = _to_float(row.get("price"))
-                    amount_base = _to_float(row.get("amount_base"))
-                    if ts_ms is None or ts_ms < start_ms or ts_ms >= end_ms or price is None:
-                        continue
-                    rows.append(
-                        {
-                            "ts": str(row.get("ts", "")),
-                            "timestamp_ms": ts_ms,
-                            "side": str(row.get("side", "")).upper(),
-                            "price": price,
-                            "amount_base": amount_base if amount_base is not None else 0.0,
-                            "notional_quote": _to_float(row.get("notional_quote")) or 0.0,
-                            "fee_quote": _to_float(row.get("fee_quote")) or 0.0,
-                            "realized_pnl_quote": _to_float(row.get("realized_pnl_quote")) or 0.0,
-                            "order_id": str(row.get("order_id", "")),
-                            "is_maker": _to_bool(row.get("is_maker")),
-                        }
-                    )
-        except Exception:
-            return []
-        return rows[-limit:] if rows else []
-
-    def _load_fills_range(
-        self,
-        csv_path: Path,
-        trading_pair_norm: str,
-        start_ms: Optional[int],
-        end_ms: Optional[int],
-        limit: int,
-    ) -> List[Dict[str, Any]]:
-        rows: List[Dict[str, Any]] = []
-        try:
-            with csv_path.open("r", encoding="utf-8", newline="") as fp:
-                reader = csv.DictReader(fp)
-                for row in reader:
-                    if not isinstance(row, dict):
-                        continue
-                    row_pair_norm = _normalize_pair(row.get("trading_pair"))
-                    if trading_pair_norm and row_pair_norm and row_pair_norm != trading_pair_norm:
-                        continue
-                    ts_ms = self._parse_ts_ms(row.get("ts"))
-                    price = _to_float(row.get("price"))
-                    amount_base = _to_float(row.get("amount_base"))
-                    if ts_ms is None or price is None:
-                        continue
-                    if start_ms is not None and ts_ms < start_ms:
-                        continue
-                    if end_ms is not None and ts_ms >= end_ms:
-                        continue
-                    rows.append(
-                        {
-                            "ts": str(row.get("ts", "")),
-                            "timestamp_ms": ts_ms,
-                            "side": str(row.get("side", "")).upper(),
-                            "price": price,
-                            "amount_base": amount_base if amount_base is not None else 0.0,
-                            "notional_quote": _to_float(row.get("notional_quote")) or 0.0,
-                            "fee_quote": _to_float(row.get("fee_quote")) or 0.0,
-                            "realized_pnl_quote": _to_float(row.get("realized_pnl_quote")) or 0.0,
-                            "order_id": str(row.get("order_id", "")),
-                            "is_maker": _to_bool(row.get("is_maker")),
-                        }
-                    )
-        except Exception:
-            return []
-        return rows[-limit:] if rows else []
-
-    def open_orders_from_state_snapshot(
-        self,
-        instance_name: str,
-        trading_pair: str = "",
-        limit: int = 40,
-    ) -> List[Dict[str, Any]]:
-        path = self._paper_exchange_state_snapshot_path()
-        payload = self._read_json(path)
-        orders = payload.get("orders", {}) if isinstance(payload.get("orders"), dict) else {}
-        if not orders:
-            return []
-        limit = max(1, int(limit))
-        trading_pair_norm = _normalize_pair(trading_pair)
-        terminal_states = {"filled", "canceled", "cancelled", "rejected", "expired", "failed", "closed"}
-        out: List[Dict[str, Any]] = []
-        for _, order in orders.items():
-            if not isinstance(order, dict):
-                continue
-            if instance_name and str(order.get("instance_name", "")).strip() != instance_name:
-                continue
-            row_pair_norm = _normalize_pair(order.get("trading_pair"))
-            if trading_pair_norm and row_pair_norm and row_pair_norm != trading_pair_norm:
-                continue
-            state_value = str(order.get("state", "")).strip().lower()
-            if state_value in terminal_states:
-                continue
-            price = _to_float(order.get("price"))
-            if price is None:
-                continue
-            out.append(
-                {
-                    "order_id": str(order.get("order_id", "")),
-                    "side": str(order.get("side", "")).lower(),
-                    "price": price,
-                    "amount": _to_float(order.get("amount_base")) or 0.0,
-                    "quantity": _to_float(order.get("amount_base")) or 0.0,
-                    "state": state_value or "open",
-                    "created_ts_ms": int(_to_float(order.get("created_ts_ms")) or 0),
-                    "updated_ts_ms": int(_to_float(order.get("updated_ts_ms")) or 0),
-                    "is_estimated": False,
-                }
-            )
-        out.sort(key=lambda row: int(row.get("updated_ts_ms", 0) or 0))
-        return out[-limit:]
-
-    def state_from_snapshot(
-        self,
-        instance_name: str,
-        trading_pair: str = "",
-        max_fills: int = 120,
-        max_orders: int = 40,
-        include_csv_fills: bool = True,
-        include_estimated_orders: bool = True,
-    ) -> Dict[str, Any]:
-        snapshot = self.get_snapshot(instance_name)
-        minute = snapshot.get("minute", {}) if isinstance(snapshot.get("minute"), dict) else {}
-        portfolio = snapshot.get("portfolio", {}) if isinstance(snapshot.get("portfolio"), dict) else {}
-        portfolio_inner = portfolio.get("portfolio", {}) if isinstance(portfolio.get("portfolio"), dict) else {}
-        requested_pair_norm = _normalize_pair(trading_pair)
-        snapshot_orders = snapshot.get("open_orders", []) if isinstance(snapshot.get("open_orders"), list) else []
-        open_orders = []
-        for order in snapshot_orders:
-            if not isinstance(order, dict):
-                continue
-            if not requested_pair_norm:
-                open_orders.append(order)
-                continue
-            row_pair_norm = _normalize_pair(order.get("trading_pair"))
-            if row_pair_norm and row_pair_norm == requested_pair_norm:
-                open_orders.append(order)
-        if not open_orders:
-            open_orders = self.open_orders_from_state_snapshot(instance_name, trading_pair, limit=max_orders)
-        positions = portfolio_inner.get("positions", {}) if isinstance(portfolio_inner.get("positions"), dict) else {}
-        resolved_position = {}
-        if requested_pair_norm:
-            for instrument_id, pos in positions.items():
-                if not isinstance(pos, dict):
-                    continue
-                instrument_pair = str(instrument_id).split(":")[1] if ":" in str(instrument_id) else str(instrument_id)
-                if requested_pair_norm == _normalize_pair(instrument_pair):
-                    resolved_position = pos
-                    break
-        if not requested_pair_norm and not resolved_position and positions:
-            # Fallback to first non-flat position so UI still shows active exposure when pair filter is stale/mismatched.
-            for pos in positions.values():
-                if not isinstance(pos, dict):
-                    continue
-                qty = _to_float(pos.get("quantity"))
-                if qty is not None and abs(qty) > 0:
-                    resolved_position = pos
-                    break
-        if not requested_pair_norm and not resolved_position and positions:
-            first = next(iter(positions.values()), {})
-            resolved_position = first if isinstance(first, dict) else {}
-
-        minute_pair_norm = _normalize_pair(minute.get("trading_pair"))
-        allow_runtime_estimated_orders = bool(
-            not requested_pair_norm or resolved_position or (minute_pair_norm and minute_pair_norm == requested_pair_norm)
-        )
-        if include_estimated_orders and not open_orders and allow_runtime_estimated_orders:
-            orders_active = int(_to_float(minute.get("orders_active")) or 0)
-            if orders_active > 0:
-                best_bid = _to_float(minute.get("best_bid_price"))
-                best_ask = _to_float(minute.get("best_ask_price"))
-                qty = _to_float(resolved_position.get("quantity"))
-                open_orders = _build_runtime_open_order_placeholders(
-                    orders_active=orders_active,
-                    best_bid=best_bid,
-                    best_ask=best_ask,
-                    mid_price=_to_float(minute.get("mid")) or _to_float(minute.get("mid_price")),
-                    quantity=qty,
-                    trading_pair=trading_pair or str(minute.get("trading_pair") or ""),
-                    timestamp_ms=_to_epoch_ms(minute.get("ts")) or _to_epoch_ms(snapshot.get("source_ts")) or _now_ms(),
-                    source_label="runtime",
-                )
-
-        fills = self.fills_from_csv(instance_name, trading_pair, limit=max_fills) if include_csv_fills else []
-        return {
-            "snapshot_ts": str(snapshot.get("source_ts", "")),
-            "minute": minute,
-            "open_orders": open_orders,
-            "fills": fills,
-            "position": resolved_position,
-            "portfolio": portfolio_inner,
-        }
-
-
-class RealtimeState:
-    def __init__(self, cfg: RealtimeApiConfig):
-        self._cfg = cfg
-        self._lock = threading.Lock()
-        self._market: Dict[Tuple[str, str, str], Dict[str, Any]] = {}
-        self._depth: Dict[Tuple[str, str, str], Dict[str, Any]] = {}
-        self._market_quote: Dict[Tuple[str, str], Dict[str, Any]] = {}
-        self._market_depth: Dict[Tuple[str, str], Dict[str, Any]] = {}
-        self._market_ts_ms: Dict[Tuple[str, str, str], int] = {}
-        self._depth_ts_ms: Dict[Tuple[str, str, str], int] = {}
-        self._market_quote_ts_ms: Dict[Tuple[str, str], int] = {}
-        self._market_depth_ts_ms: Dict[Tuple[str, str], int] = {}
-        self._fills_ts_ms: Dict[Tuple[str, str, str], int] = {}
-        self._paper_events_ts_ms: Dict[Tuple[str, str, str], int] = {}
-        self._fills: Dict[Tuple[str, str, str], Deque[Dict[str, Any]]] = defaultdict(
-            lambda: deque(maxlen=max(20, cfg.max_fills_per_key))
-        )
-        self._paper_events: Dict[Tuple[str, str, str], Deque[Dict[str, Any]]] = defaultdict(
-            lambda: deque(maxlen=max(20, cfg.max_events_per_key))
-        )
-        self._history: Dict[Tuple[str, str, str], Deque[Tuple[int, float]]] = defaultdict(
-            lambda: deque(maxlen=max(100, cfg.max_history_points))
-        )
-        self._market_history: Dict[Tuple[str, str], Deque[Tuple[int, float]]] = defaultdict(
-            lambda: deque(maxlen=max(100, cfg.max_history_points))
-        )
-        self._stream_watermark_ms: Dict[str, int] = {}
-        self._subscribers: List[Tuple["queue.Queue[str]", Tuple[str, str, str]]] = []
-        self._publish_seq = 0
-        self._subscriber_drop_count = 0
-
-    @staticmethod
-    def _selection_dict(key: Tuple[str, str, str]) -> Dict[str, str]:
-        return {
-            "instance_name": str(key[0] or "").strip(),
-            "controller_id": str(key[1] or "").strip(),
-            "trading_pair": str(key[2] or "").strip(),
-        }
-
-    @staticmethod
-    def _selection_from_event(event: Dict[str, Any]) -> Tuple[str, str, str]:
-        event_key = event.get("key")
-        if isinstance(event_key, dict):
-            return (
-                str(event_key.get("instance_name", "") or "").strip(),
-                str(event_key.get("controller_id", "") or "").strip(),
-                str(event_key.get("trading_pair", "") or "").strip(),
-            )
-        if isinstance(event_key, (list, tuple)) and len(event_key) >= 3:
-            return (
-                str(event_key[0] or "").strip(),
-                str(event_key[1] or "").strip(),
-                str(event_key[2] or "").strip(),
-            )
-        payload = event.get("event") if isinstance(event.get("event"), dict) else {}
-        return _state_key(payload if isinstance(payload, dict) else {})
-
-    @staticmethod
-    def _subscriber_matches(
-        subscriber_key: Tuple[str, str, str],
-        event_key: Tuple[str, str, str],
-    ) -> bool:
-        sub_instance, sub_controller, sub_pair = subscriber_key
-        ev_instance, ev_controller, ev_pair = event_key
-        if sub_instance and ev_instance and sub_instance != ev_instance:
-            return False
-        if sub_controller and ev_controller and sub_controller != ev_controller:
-            return False
-        if sub_pair and ev_pair and _normalize_pair(sub_pair) != _normalize_pair(ev_pair):
-            return False
+def _is_authorized(cfg: RealtimeApiConfig, request) -> bool:
+    if not cfg.auth_enabled:
         return True
-
-    def _notify(self, event: Dict[str, Any]) -> None:
-        payload = _safe_json(event)
-        event_key = self._selection_from_event(event)
-        with self._lock:
-            subscribers = list(self._subscribers)
-        for q, subscriber_key in subscribers:
-            if not self._subscriber_matches(subscriber_key, event_key):
-                continue
-            try:
-                q.put_nowait(payload)
-            except queue.Full:
-                with self._lock:
-                    self._subscriber_drop_count += 1
-                continue
-            except Exception:
-                with self._lock:
-                    self._subscriber_drop_count += 1
-                continue
-
-    def register_subscriber(
-        self,
-        instance_name: str = "",
-        controller_id: str = "",
-        trading_pair: str = "",
-    ) -> "queue.Queue[str]":
-        q: "queue.Queue[str]" = queue.Queue(maxsize=200)
-        subscriber_key = (
-            str(instance_name or "").strip(),
-            str(controller_id or "").strip(),
-            str(trading_pair or "").strip(),
-        )
-        with self._lock:
-            self._subscribers.append((q, subscriber_key))
-        return q
-
-    def unregister_subscriber(self, q: "queue.Queue[str]") -> None:
-        with self._lock:
-            self._subscribers = [item for item in self._subscribers if item[0] is not q]
-
-    def process(self, stream: str, entry_id: str, payload: Dict[str, Any]) -> None:
-        ts_ms = _stream_ms(entry_id)
-        key = _state_key(payload)
-        pair_key = (
-            str(payload.get("connector_name", "")).strip(),
-            str(payload.get("trading_pair", "")).strip(),
-        )
-        event_type = str(payload.get("event_type", "")).strip()
-
-        def _depth_mid(snapshot: Dict[str, Any]) -> Optional[float]:
-            best_bid = _to_float(snapshot.get("best_bid"))
-            best_ask = _to_float(snapshot.get("best_ask"))
-            if best_bid is None or best_ask is None:
-                bids = snapshot.get("bids", [])
-                asks = snapshot.get("asks", [])
-                if isinstance(bids, list) and bids:
-                    best_bid = _to_float((bids[0] or {}).get("price"))
-                if isinstance(asks, list) and asks:
-                    best_ask = _to_float((asks[0] or {}).get("price"))
-            if best_bid is None and best_ask is None:
-                return None
-            if best_bid is None:
-                return best_ask
-            if best_ask is None:
-                return best_bid
-            return (best_bid + best_ask) / 2.0
-
-        with self._lock:
-            self._stream_watermark_ms[stream] = max(ts_ms, self._stream_watermark_ms.get(stream, 0))
-            if stream == MARKET_QUOTE_STREAM or event_type == "market_quote":
-                self._market_quote[pair_key] = payload
-                self._market_quote_ts_ms[pair_key] = ts_ms
-                mid = _to_float(payload.get("mid_price"))
-                if mid is not None:
-                    self._market_history[pair_key].append((ts_ms, mid))
-            elif stream == MARKET_DATA_STREAM or event_type == "market_snapshot":
-                self._market[key] = payload
-                self._market_ts_ms[key] = ts_ms
-                mid = _to_float(payload.get("mid_price"))
-                if mid is not None:
-                    self._history[key].append((ts_ms, mid))
-            elif stream == MARKET_DEPTH_STREAM or event_type == "market_depth_snapshot":
-                if pair_key[0] and (not key[0] and not key[1]):
-                    self._market_depth[pair_key] = payload
-                    self._market_depth_ts_ms[pair_key] = ts_ms
-                else:
-                    self._depth[key] = payload
-                    self._depth_ts_ms[key] = ts_ms
-                mid = _depth_mid(payload)
-                if mid is not None:
-                    if pair_key[0] and (not key[0] and not key[1]):
-                        self._market_history[pair_key].append((ts_ms, mid))
-                    else:
-                        self._history[key].append((ts_ms, mid))
-            elif stream == BOT_TELEMETRY_STREAM and event_type == "bot_fill":
-                self._fills[key].append(payload)
-                self._fills_ts_ms[key] = ts_ms
-            elif stream == PAPER_EXCHANGE_EVENT_STREAM:
-                self._paper_events[key].append(payload)
-                self._paper_events_ts_ms[key] = ts_ms
-            self._publish_seq += 1
-            seq = self._publish_seq
-        selection = self._selection_dict(key)
-        self._notify(
-            {
-                "seq": seq,
-                "stream": stream,
-                "event_type": event_type,
-                "instance_name": selection["instance_name"],
-                "controller_id": selection["controller_id"],
-                "trading_pair": selection["trading_pair"],
-                "key": selection,
-                "event": payload,
-                "ts_ms": ts_ms,
-            }
-        )
-
-    def newest_stream_age_ms(self) -> Optional[int]:
-        with self._lock:
-            if not self._stream_watermark_ms:
-                return None
-            latest = max(self._stream_watermark_ms.values())
-        return max(0, _now_ms() - latest)
-
-    def selected_stream_age_ms(self, instance_name: str = "", controller_id: str = "", trading_pair: str = "") -> Optional[int]:
-        requested_pair_norm = _normalize_pair(trading_pair)
-
-        def _match(key: Tuple[str, str, str]) -> bool:
-            i, c, p = key
-            return (
-                (not instance_name or instance_name == i)
-                and (not controller_id or controller_id == c)
-                and (not requested_pair_norm or requested_pair_norm == _normalize_pair(p))
-            )
-
-        with self._lock:
-            candidate_ts: List[int] = []
-            connector_name = ""
-            connector_candidates: List[Tuple[int, str]] = []
-            for key, ts_ms in self._market_ts_ms.items():
-                if _match(key) and ts_ms > 0:
-                    candidate_ts.append(ts_ms)
-                    connector = str((self._market.get(key, {}) or {}).get("connector_name", "")).strip()
-                    if connector:
-                        connector_candidates.append((ts_ms, connector))
-            for key, ts_ms in self._depth_ts_ms.items():
-                if _match(key) and ts_ms > 0:
-                    candidate_ts.append(ts_ms)
-                    connector = str((self._depth.get(key, {}) or {}).get("connector_name", "")).strip()
-                    if connector:
-                        connector_candidates.append((ts_ms, connector))
-            for key, ts_ms in self._fills_ts_ms.items():
-                if _match(key) and ts_ms > 0:
-                    candidate_ts.append(ts_ms)
-            for key, ts_ms in self._paper_events_ts_ms.items():
-                if _match(key) and ts_ms > 0:
-                    candidate_ts.append(ts_ms)
-            if connector_candidates:
-                connector_name = max(connector_candidates, key=lambda item: item[0])[1]
-            if requested_pair_norm:
-                if connector_name:
-                    pair_key = next(
-                        (key for key in self._market_quote_ts_ms.keys() if key[0] == connector_name and requested_pair_norm == _normalize_pair(key[1])),
-                        None,
-                    )
-                    if pair_key is not None:
-                        candidate_ts.append(int(self._market_quote_ts_ms.get(pair_key, 0) or 0))
-                    depth_pair_key = next(
-                        (key for key in self._market_depth_ts_ms.keys() if key[0] == connector_name and requested_pair_norm == _normalize_pair(key[1])),
-                        None,
-                    )
-                    if depth_pair_key is not None:
-                        candidate_ts.append(int(self._market_depth_ts_ms.get(depth_pair_key, 0) or 0))
-                else:
-                    candidate_ts.extend(
-                        int(ts_ms)
-                        for key, ts_ms in self._market_quote_ts_ms.items()
-                        if requested_pair_norm == _normalize_pair(key[1]) and ts_ms > 0
-                    )
-                    candidate_ts.extend(
-                        int(ts_ms)
-                        for key, ts_ms in self._market_depth_ts_ms.items()
-                        if requested_pair_norm == _normalize_pair(key[1]) and ts_ms > 0
-                    )
-            latest = max(candidate_ts) if candidate_ts else None
-        return None if latest is None else max(0, _now_ms() - latest)
-
-    def resolve_connector_name(self, instance_name: str = "", controller_id: str = "", trading_pair: str = "") -> str:
-        requested_pair_norm = _normalize_pair(trading_pair)
-
-        def _match(key: Tuple[str, str, str]) -> bool:
-            i, c, p = key
-            return (
-                (not instance_name or instance_name == i)
-                and (not controller_id or controller_id == c)
-                and (not requested_pair_norm or requested_pair_norm == _normalize_pair(p))
-            )
-
-        with self._lock:
-            market_keys = [k for k in self._market.keys() if _match(k)]
-            if market_keys:
-                freshest_market_key = max(market_keys, key=lambda key: int(self._market_ts_ms.get(key, 0) or 0))
-                connector_name = str((self._market.get(freshest_market_key, {}) or {}).get("connector_name", "")).strip()
-                if connector_name:
-                    return connector_name
-            depth_keys = [k for k in self._depth.keys() if _match(k)]
-            if depth_keys:
-                freshest_depth_key = max(depth_keys, key=lambda key: int(self._depth_ts_ms.get(key, 0) or 0))
-                connector_name = str((self._depth.get(freshest_depth_key, {}) or {}).get("connector_name", "")).strip()
-                if connector_name:
-                    return connector_name
-            pair_matches = [k for k in self._market_quote.keys() if (not requested_pair_norm or requested_pair_norm == _normalize_pair(k[1]))]
-            if pair_matches:
-                freshest_pair_key = max(pair_matches, key=lambda key: int(self._market_quote_ts_ms.get(key, 0) or 0))
-                return str(freshest_pair_key[0] or "").strip()
-            depth_pair_matches = [k for k in self._market_depth.keys() if (not requested_pair_norm or requested_pair_norm == _normalize_pair(k[1]))]
-            if depth_pair_matches:
-                freshest_depth_pair_key = max(depth_pair_matches, key=lambda key: int(self._market_depth_ts_ms.get(key, 0) or 0))
-                return str(freshest_depth_pair_key[0] or "").strip()
-        return ""
-
-    def resolve_trading_pair(self, instance_name: str = "", controller_id: str = "", trading_pair: str = "") -> str:
-        requested_pair = str(trading_pair or "").strip()
-        if requested_pair:
-            return requested_pair
-
-        def _match(key: Tuple[str, str, str]) -> bool:
-            i, c, _p = key
-            return (not instance_name or instance_name == i) and (not controller_id or controller_id == c)
-
-        with self._lock:
-            matched_keys_with_ts: List[Tuple[int, Tuple[str, str, str]]] = []
-            matched_keys_with_ts.extend((int(self._market_ts_ms.get(k, 0) or 0), k) for k in self._market.keys() if _match(k))
-            matched_keys_with_ts.extend((int(self._depth_ts_ms.get(k, 0) or 0), k) for k in self._depth.keys() if _match(k))
-            matched_keys_with_ts.extend((int(self._fills_ts_ms.get(k, 0) or 0), k) for k in self._fills.keys() if _match(k))
-            matched_keys_with_ts.extend((int(self._paper_events_ts_ms.get(k, 0) or 0), k) for k in self._paper_events.keys() if _match(k))
-            if matched_keys_with_ts:
-                freshest_key = max(matched_keys_with_ts, key=lambda item: item[0])[1]
-                if str(freshest_key[2] or "").strip():
-                    return str(freshest_key[2] or "").strip()
-                market_pair = str((self._market.get(freshest_key, {}) or {}).get("trading_pair", "")).strip()
-                if market_pair:
-                    return market_pair
-                depth_pair = str((self._depth.get(freshest_key, {}) or {}).get("trading_pair", "")).strip()
-                if depth_pair:
-                    return depth_pair
-        return ""
-
-    def instance_names(self) -> List[str]:
-        with self._lock:
-            names = {
-                key[0]
-                for key in (
-                    list(self._market.keys())
-                    + list(self._depth.keys())
-                    + list(self._fills.keys())
-                    + list(self._paper_events.keys())
-                )
-                if key[0]
-            }
-        return sorted(names, key=lambda value: value.lower())
-
-    def get_state(self, instance_name: str = "", controller_id: str = "", trading_pair: str = "") -> Dict[str, Any]:
-        requested_pair_norm = _normalize_pair(trading_pair)
-
-        def _match(key: Tuple[str, str, str]) -> bool:
-            i, c, p = key
-            return (
-                (not instance_name or instance_name == i)
-                and (not controller_id or controller_id == c)
-                and (not requested_pair_norm or requested_pair_norm == _normalize_pair(p))
-            )
-
-        with self._lock:
-            matched_keys_with_ts: List[Tuple[int, Tuple[str, str, str]]] = []
-            matched_keys_with_ts.extend((int(self._market_ts_ms.get(k, 0) or 0), k) for k in self._market.keys() if _match(k))
-            matched_keys_with_ts.extend((int(self._depth_ts_ms.get(k, 0) or 0), k) for k in self._depth.keys() if _match(k))
-            matched_keys_with_ts.extend((int(self._fills_ts_ms.get(k, 0) or 0), k) for k in self._fills.keys() if _match(k))
-            matched_keys_with_ts.extend((int(self._paper_events_ts_ms.get(k, 0) or 0), k) for k in self._paper_events.keys() if _match(k))
-            key = max(matched_keys_with_ts, key=lambda item: item[0])[1] if matched_keys_with_ts else ("", "", "")
-            telemetry_market = self._market.get(key, {})
-            telemetry_depth = self._depth.get(key, {})
-            resolved_trading_pair = str(
-                trading_pair or key[2] or telemetry_market.get("trading_pair") or telemetry_depth.get("trading_pair") or ""
-            ).strip()
-            resolved_pair_norm = _normalize_pair(resolved_trading_pair)
-
-            def _related_key(candidate: Tuple[str, str, str]) -> bool:
-                i, c, p = candidate
-                if instance_name and i and instance_name != i:
-                    return False
-                if controller_id and c and controller_id != c:
-                    return False
-                if resolved_pair_norm and resolved_pair_norm != _normalize_pair(p):
-                    return False
-                return True
-
-            fills = [
-                fill
-                for related_key in self._fills.keys()
-                if _related_key(related_key)
-                for fill in list(self._fills.get(related_key, deque()))
-            ]
-            events = [
-                event
-                for related_key in self._paper_events.keys()
-                if _related_key(related_key)
-                for event in list(self._paper_events.get(related_key, deque()))
-            ]
-            connector_name = str(telemetry_market.get("connector_name") or telemetry_depth.get("connector_name") or "").strip()
-            effective_pair_norm = resolved_pair_norm or requested_pair_norm
-            if not connector_name and effective_pair_norm:
-                pair_matches = [k for k in self._market_quote.keys() if effective_pair_norm == _normalize_pair(k[1])]
-                if pair_matches:
-                    freshest_pair_key = max(pair_matches, key=lambda pair_key: int(self._market_quote_ts_ms.get(pair_key, 0) or 0))
-                    connector_name = str(freshest_pair_key[0] or "").strip()
-            market = telemetry_market
-            depth = telemetry_depth
-            if connector_name and effective_pair_norm:
-                market_pair_matches = [
-                    k for k in self._market_quote.keys()
-                    if k[0] == connector_name and effective_pair_norm == _normalize_pair(k[1])
-                ]
-                if market_pair_matches:
-                    freshest_market_pair_key = max(
-                        market_pair_matches, key=lambda pair_key: int(self._market_quote_ts_ms.get(pair_key, 0) or 0)
-                    )
-                    market = self._market_quote.get(freshest_market_pair_key, {}) or telemetry_market
-                depth_pair_matches = [
-                    k for k in self._market_depth.keys()
-                    if k[0] == connector_name and effective_pair_norm == _normalize_pair(k[1])
-                ]
-                if depth_pair_matches:
-                    freshest_depth_pair_key = max(
-                        depth_pair_matches, key=lambda pair_key: int(self._market_depth_ts_ms.get(pair_key, 0) or 0)
-                    )
-                    depth = self._market_depth.get(freshest_depth_pair_key, {}) or telemetry_depth
-        return {
-            "key": {"instance_name": key[0], "controller_id": key[1], "trading_pair": key[2]},
-            "connector_name": connector_name,
-            "market": market,
-            "bot_market": telemetry_market,
-            "depth": depth,
-            "fills": fills,
-            "fills_total": len(fills),
-            "paper_events": events,
-        }
-
-    def get_candles(
-        self,
-        instance_name: str = "",
-        controller_id: str = "",
-        trading_pair: str = "",
-        timeframe_s: int = 60,
-        limit: int = 300,
-    ) -> List[Dict[str, Any]]:
-        timeframe_ms = max(1, int(timeframe_s)) * 1000
-        resolved_trading_pair = self.resolve_trading_pair(instance_name, controller_id, trading_pair)
-        requested_pair_norm = _normalize_pair(resolved_trading_pair)
-
-        def _match(key: Tuple[str, str, str]) -> bool:
-            i, c, p = key
-            return (
-                (not instance_name or instance_name == i)
-                and (not controller_id or controller_id == c)
-                and (not requested_pair_norm or requested_pair_norm == _normalize_pair(p))
-            )
-
-        connector_name = self.resolve_connector_name(instance_name, controller_id, resolved_trading_pair)
-        with self._lock:
-            pair_points = []
-            if connector_name:
-                pair_matches = [
-                    k for k in self._market_history.keys()
-                    if k[0] == connector_name and (not requested_pair_norm or requested_pair_norm == _normalize_pair(k[1]))
-                ]
-                if pair_matches:
-                    pair_points = list(self._market_history.get(pair_matches[-1], deque()))
-            if pair_points:
-                return _candles_from_points(pair_points, timeframe_s=timeframe_s, limit=limit)
-            keys = [k for k in self._history.keys() if _match(k)]
-            if not keys:
-                return []
-            points = list(self._history[keys[-1]])
-        return _candles_from_points(points, timeframe_s=timeframe_s, limit=limit)
-
-    def get_connector_candles(
-        self,
-        connector_name: str,
-        trading_pair: str,
-        timeframe_s: int = 60,
-        limit: int = 300,
-    ) -> List[Dict[str, Any]]:
-        requested_pair_norm = _normalize_pair(trading_pair)
-        connector_name = str(connector_name or "").strip()
-        if not connector_name or not requested_pair_norm:
-            return []
-        with self._lock:
-            pair_matches = [
-                key for key in self._market_history.keys()
-                if key[0] == connector_name and requested_pair_norm == _normalize_pair(key[1])
-            ]
-            if not pair_matches:
-                return []
-            freshest_pair_key = max(
-                pair_matches,
-                key=lambda pair_key: max(
-                    int(self._market_quote_ts_ms.get(pair_key, 0) or 0),
-                    int(self._market_depth_ts_ms.get(pair_key, 0) or 0),
-                ),
-            )
-            points = list(self._market_history.get(freshest_pair_key, deque()))
-        return _candles_from_points(points, timeframe_s=timeframe_s, limit=limit)
-
-    def metrics(self) -> Dict[str, Any]:
-        with self._lock:
-            return {
-                "market_keys": len(self._market),
-                "depth_keys": len(self._depth),
-                "market_quote_keys": len(self._market_quote),
-                "market_depth_keys": len(self._market_depth),
-                "fills_keys": len(self._fills),
-                "paper_event_keys": len(self._paper_events),
-                "subscribers": len(self._subscribers),
-                "subscriber_drops": int(self._subscriber_drop_count or 0),
-            }
+    expected = cfg.auth_token.strip()
+    if not expected:
+        return False
+    auth = request.headers.get("authorization", "")
+    if auth == f"Bearer {expected}":
+        return True
+    token = request.query_params.get("token", "").strip()
+    return bool(cfg.allow_query_token and token and token == expected)
 
 
-def _build_instance_status_rows(
-    realtime_state: RealtimeState,
-    snapshot_fallback: "DeskSnapshotFallback",
-    stream_stale_ms: int,
-) -> List[Dict[str, Any]]:
-    stream_instances = realtime_state.instance_names()
-    artifact_instances = snapshot_fallback.available_instances()
-    merged_instances = sorted({*stream_instances, *artifact_instances}, key=lambda value: value.lower())
-    rows: List[Dict[str, Any]] = []
-    stale_threshold_ms = max(1000, int(stream_stale_ms or 0))
-    for instance_name in merged_instances:
-        stream_state = realtime_state.get_state(instance_name, "", "")
-        key = stream_state.get("key", {}) if isinstance(stream_state.get("key"), dict) else {}
-        snapshot = snapshot_fallback.get_snapshot(instance_name)
-        minute = snapshot.get("minute", {}) if isinstance(snapshot.get("minute"), dict) else {}
-        metadata = snapshot_fallback.instance_metadata(instance_name)
-        account_summary = snapshot_fallback.account_summary(instance_name) if instance_name in artifact_instances else _account_summary_template()
-        stream_age_ms = realtime_state.selected_stream_age_ms(instance_name, "", "")
-        has_stream = instance_name in stream_instances
-        has_artifacts = instance_name in artifact_instances
-        source_parts: List[str] = []
-        if has_stream:
-            source_parts.append("stream")
-        if has_artifacts:
-            source_parts.append("artifacts")
-        controller_id = str(key.get("controller_id") or minute.get("controller_id") or metadata.get("controller_id") or "").strip()
-        trading_pair = str(
-            key.get("trading_pair")
-            or (stream_state.get("market", {}) if isinstance(stream_state.get("market"), dict) else {}).get("trading_pair")
-            or (stream_state.get("depth", {}) if isinstance(stream_state.get("depth"), dict) else {}).get("trading_pair")
-            or minute.get("trading_pair")
-            or metadata.get("trading_pair")
-            or ""
-        ).strip()
-        snapshot_ts = str(snapshot.get("source_ts") or minute.get("ts") or account_summary.get("snapshot_ts") or "").strip()
-        freshness = "offline"
-        tone = "neutral"
-        if has_stream and stream_age_ms is not None:
-            freshness = "live" if int(stream_age_ms) <= stale_threshold_ms else "stale"
-            tone = "ok" if freshness == "live" else "warn"
-        elif has_artifacts:
-            freshness = "artifact"
-            tone = "neutral"
-        rows.append(
-            {
-                "instance_name": instance_name,
-                "label": str(metadata.get("label") or instance_name),
-                "sources": source_parts,
-                "source_label": "+".join(source_parts) if source_parts else "unknown",
-                "has_stream": has_stream,
-                "has_artifacts": has_artifacts,
-                "stream_age_ms": int(stream_age_ms) if stream_age_ms is not None else None,
-                "freshness": freshness,
-                "tone": tone,
-                "controller_id": controller_id,
-                "trading_pair": trading_pair,
-                "snapshot_ts": snapshot_ts,
-                "quoting_status": str(account_summary.get("quoting_status") or "").strip(),
-                "quoting_reason": str(account_summary.get("quoting_reason") or "").strip(),
-                "orders_active": int(_to_float(account_summary.get("orders_active")) or 0),
-                "equity_quote": float(_to_float(account_summary.get("equity_quote")) or 0.0),
-                "equity_open_quote": float(_to_float(account_summary.get("equity_open_quote")) or 0.0),
-                "equity_peak_quote": float(_to_float(account_summary.get("equity_peak_quote")) or 0.0),
-                "realized_pnl_quote": float(_to_float(account_summary.get("realized_pnl_quote")) or 0.0),
-                "equity_delta_open_quote": float(
-                    (float(_to_float(account_summary.get("equity_quote")) or 0.0) - float(_to_float(account_summary.get("equity_open_quote")) or 0.0))
-                    if float(_to_float(account_summary.get("equity_open_quote")) or 0.0) != 0.0
-                    else 0.0
-                ),
-            }
-        )
-    return rows
+def _needs_fallback(cfg: RealtimeApiConfig, state: RealtimeState,
+                    instance_name: str, controller_id: str, trading_pair: str) -> bool:
+    age = state.selected_stream_age_ms(instance_name, controller_id, trading_pair)
+    if age is None:
+        return True
+    return age > max(1000, cfg.stream_stale_ms)
 
 
-class StreamWorker:
-    def __init__(self, cfg: RealtimeApiConfig, state: RealtimeState):
-        self._cfg = cfg
-        self._state = state
-        self._stop = threading.Event()
-        self._thread: Optional[threading.Thread] = None
-        self._client = RedisStreamClient(
-            host=os.getenv("REDIS_HOST", "redis"),
-            port=int(os.getenv("REDIS_PORT", "6379")),
-            db=int(os.getenv("REDIS_DB", "0")),
-            password=os.getenv("REDIS_PASSWORD", "") or None,
-            enabled=os.getenv("EXT_SIGNAL_RISK_ENABLED", "true").strip().lower() in {"1", "true", "yes"},
-        )
-        self._streams = [
-            MARKET_DATA_STREAM,
-            MARKET_QUOTE_STREAM,
-            MARKET_DEPTH_STREAM,
-            BOT_TELEMETRY_STREAM,
-            PAPER_EXCHANGE_EVENT_STREAM,
-        ]
-
-    def start(self) -> None:
-        if self._thread is not None:
-            return
-        self._thread = threading.Thread(target=self._run, daemon=True, name="realtime-ui-api-stream-worker")
-        self._thread.start()
-
-    def stop(self) -> None:
-        self._stop.set()
-        if self._thread is not None:
-            self._thread.join(timeout=3.0)
-
-    @property
-    def redis_available(self) -> bool:
-        return self._client.enabled and self._client.ping()
-
-    def _run(self) -> None:
-        if not self._client.enabled:
-            logger.warning("realtime_ui_api stream worker started with Redis disabled; fallback mode only.")
-            return
-        for stream in self._streams:
-            self._client.create_group(stream, self._cfg.consumer_group or DEFAULT_CONSUMER_GROUP)
-        while not self._stop.is_set():
-            processed = 0
-            for stream in self._streams:
-                entries = self._client.read_group(
-                    stream=stream,
-                    group=self._cfg.consumer_group or DEFAULT_CONSUMER_GROUP,
-                    consumer=self._cfg.consumer_name or "realtime-ui-api-1",
-                    count=200,
-                    block_ms=max(1, self._cfg.poll_ms),
-                )
-                for entry_id, payload in entries:
-                    if not isinstance(payload, dict):
-                        continue
-                    self._state.process(stream=stream, entry_id=entry_id, payload=payload)
-                    self._client.ack(stream, self._cfg.consumer_group or DEFAULT_CONSUMER_GROUP, entry_id)
-                    processed += 1
-            if processed == 0:
-                time.sleep(0.05)
+def _fallback_allowed(cfg: RealtimeApiConfig) -> bool:
+    return bool(cfg.fallback_enabled and cfg.degraded_mode_enabled)
 
 
-def _response(handler: BaseHTTPRequestHandler, status: int, payload: Dict[str, Any], cors_origin: str) -> None:
-    body = _safe_json(payload).encode("utf-8")
-    handler.send_response(status)
-    handler.send_header("Content-Type", "application/json")
-    handler.send_header("Content-Length", str(len(body)))
-    handler.send_header("Access-Control-Allow-Origin", cors_origin)
-    handler.send_header("Cache-Control", "no-store")
-    handler.end_headers()
-    handler.wfile.write(body)
+def _cors_origin(cfg: RealtimeApiConfig, request) -> str:
+    request_origin = request.headers.get("origin", "").strip()
+    allowed = {item.strip() for item in cfg.allowed_origins.split(",") if item.strip()}
+    if allowed:
+        return request_origin if request_origin in allowed else "null"
+    return cfg.cors_allow_origin
 
+
+def _stream_key_matches(
+    event_key: Any,
+    instance_name: str,
+    controller_id: str,
+    trading_pair: str,
+) -> bool:
+    if isinstance(event_key, dict):
+        ev_instance = str(event_key.get("instance_name", "") or "").strip()
+        ev_controller = str(event_key.get("controller_id", "") or "").strip()
+        ev_pair = str(event_key.get("trading_pair", "") or "").strip()
+    elif isinstance(event_key, (list, tuple)) and len(event_key) >= 3:
+        ev_instance = str(event_key[0] or "").strip()
+        ev_controller = str(event_key[1] or "").strip()
+        ev_pair = str(event_key[2] or "").strip()
+    else:
+        return True
+    if instance_name and ev_instance and instance_name != ev_instance:
+        return False
+    if controller_id and ev_controller and controller_id != ev_controller:
+        return False
+    return not (trading_pair and _normalize_pair(trading_pair) != _normalize_pair(ev_pair))
+
+
+# ---------------------------------------------------------------------------
+# Health payload (unchanged logic, now standalone)
+# ---------------------------------------------------------------------------
 
 def _build_health_payload(
     cfg: RealtimeApiConfig,
     state: RealtimeState,
     worker: StreamWorker,
-    fallback: "DeskSnapshotFallback",
+    fallback: DeskSnapshotFallback,
     db_reader: OpsDbReadModel,
-) -> Tuple[int, Dict[str, Any]]:
+) -> tuple[int, dict[str, Any]]:
     mode = cfg.normalized_mode()
     age = state.newest_stream_age_ms()
     db_available = db_reader.available() if db_reader.enabled else False
-    fallback_allowed = bool(cfg.fallback_enabled and cfg.degraded_mode_enabled)
+    fallback_allowed_flag = bool(cfg.fallback_enabled and cfg.degraded_mode_enabled)
     fallback_candidate = bool(fallback.available_instances())
     stale_threshold_ms = max(1000, int(cfg.stream_stale_ms or 0))
-    fallback_active = bool(fallback_allowed and fallback_candidate and (age is None or age > stale_threshold_ms))
+    fallback_active = bool(fallback_allowed_flag and fallback_candidate and (age is None or age > stale_threshold_ms))
 
     status = "ok"
     http_status = 200
-    reasons: List[str] = []
+    reasons: list[str] = []
     if mode == "disabled":
         status = "disabled"
         http_status = 503
@@ -3626,19 +202,17 @@ def _build_health_payload(
         elif age > stale_threshold_ms:
             status = "degraded"
             http_status = 503
-            reasons.append("stream_stale")
+            reasons.append(f"stream_stale_{age}ms")
     if fallback_active:
-        status = "degraded"
         http_status = 503
         reasons.append("fallback_active")
-
     return http_status, {
         "status": status,
         "mode": mode,
         "redis_available": worker.redis_available,
-        "db_enabled": bool(cfg.db_enabled),
+        "db_enabled": db_reader.enabled,
         "db_available": db_available,
-        "stream_age_ms": age,
+        "stream_age_ms": int(age) if age is not None else None,
         "stream_stale_threshold_ms": stale_threshold_ms,
         "fallback_active": fallback_active,
         "degraded_reasons": reasons,
@@ -3646,857 +220,1177 @@ def _build_health_payload(
     }
 
 
-def _text_response(handler: BaseHTTPRequestHandler, status: int, body: str, cors_origin: str, content_type: str) -> None:
-    raw = body.encode("utf-8")
-    handler.send_response(status)
-    handler.send_header("Content-Type", content_type)
-    handler.send_header("Content-Length", str(len(raw)))
-    handler.send_header("Access-Control-Allow-Origin", cors_origin)
-    handler.send_header("Cache-Control", "no-store")
-    handler.end_headers()
-    handler.wfile.write(raw)
+# ---------------------------------------------------------------------------
+# Instance status rows
+# ---------------------------------------------------------------------------
+
+def _build_instance_status_rows(
+    realtime_state: RealtimeState,
+    snapshot_fallback: DeskSnapshotFallback,
+    stream_stale_ms: int,
+) -> list[dict[str, Any]]:
+    stream_instances = realtime_state.instance_names()
+    artifact_instances = snapshot_fallback.available_instances()
+    merged_instances = sorted({*stream_instances, *artifact_instances}, key=lambda value: value.lower())
+    rows: list[dict[str, Any]] = []
+    stale_threshold_ms = max(1000, int(stream_stale_ms or 0))
+    for instance_name in merged_instances:
+        stream_state = realtime_state.get_state(instance_name, "", "")
+        key = stream_state.get("key", {}) if isinstance(stream_state.get("key"), dict) else {}
+        snapshot = snapshot_fallback.get_snapshot(instance_name)
+        minute = snapshot.get("minute", {}) if isinstance(snapshot.get("minute"), dict) else {}
+        metadata = snapshot_fallback.instance_metadata(instance_name)
+        account_summary = snapshot_fallback.account_summary(instance_name) if instance_name in artifact_instances else _account_summary_template()
+        _live = realtime_state.get_bot_snapshot(instance_name)
+        if _live:
+            _live_pos = _live.get("position") if isinstance(_live.get("position"), dict) else {}
+            for _lk in ("equity_quote", "quote_balance", "realized_pnl_quote", "controller_state", "regime"):
+                _lv = _live.get(_lk)
+                if _lv is not None:
+                    account_summary[_lk] = float(_lv) if _lk.endswith("_quote") else str(_lv)
+            if isinstance(_live_pos, dict) and _live_pos:
+                account_summary["position_base"] = float(_to_float(_live_pos.get("quantity")) or 0.0)
+        _resolved_pair = str(
+            key.get("trading_pair")
+            or minute.get("trading_pair", "")
+            or metadata.get("trading_pair", "")
+            or ""
+        ).strip()
+        stream_age_ms = realtime_state.selected_stream_age_ms(instance_name, trading_pair=_resolved_pair)
+        stream_fresh = stream_age_ms is not None and stream_age_ms <= stale_threshold_ms
+        # Derive freshness label expected by frontend
+        if stream_fresh:
+            freshness = "live"
+        elif stream_age_ms is not None:
+            freshness = "stale"
+        elif bool(snapshot) or instance_name in artifact_instances:
+            freshness = "artifact"
+        else:
+            freshness = "offline"
+        # Derive source_label
+        source_parts: list[str] = []
+        if stream_age_ms is not None:
+            source_parts.append("stream")
+        if bool(snapshot):
+            source_parts.append("artifacts")
+        source_label = "+".join(source_parts) or "none"
+        # Compute equity_delta_open_quote
+        eq = float(_to_float(account_summary.get("equity_quote")) or 0.0)
+        eq_open = float(_to_float(account_summary.get("equity_open_quote")) or 0.0)
+        equity_delta = eq - eq_open if eq and eq_open else 0.0
+        # Count active orders from stream, fall back to artifact minute snapshot
+        open_orders = stream_state.get("open_orders", []) if isinstance(stream_state.get("open_orders"), list) else []
+        orders_active = len(open_orders) or int(_to_float(minute.get("orders_active")) or 0)
+        # Flatten: merge account_summary fields at top level
+        row: dict[str, Any] = {
+            "instance_name": instance_name,
+            "controller_id": key.get("controller_id") or str(metadata.get("controller_id", "") or ""),
+            "trading_pair": key.get("trading_pair") or str(minute.get("trading_pair", "")) or str(metadata.get("trading_pair", "") or ""),
+            "stream_fresh": stream_fresh,
+            "stream_age_ms": int(stream_age_ms) if stream_age_ms is not None else None,
+            "has_artifact": bool(snapshot),
+            "metadata": metadata,
+            "freshness": freshness,
+            "source_label": source_label,
+            "orders_active": orders_active,
+            "equity_delta_open_quote": round(equity_delta, 6),
+        }
+        # Flatten account_summary fields onto the row
+        for _ak in ("equity_quote", "quote_balance", "equity_open_quote", "equity_peak_quote",
+                     "realized_pnl_quote", "unrealized_pnl_quote", "controller_state", "regime",
+                     "quoting_status", "quoting_reason", "position_base"):
+            _av = account_summary.get(_ak)
+            if _av is not None:
+                row[_ak] = _av
+        # Keep nested account for backward compat
+        row["account"] = account_summary
+        rows.append(row)
+    return rows
 
 
-def _ws_accept_key(client_key: str) -> str:
-    magic = "258EAFA5-E914-47DA-95CA-C5AB0DC85B11"
-    digest = hashlib.sha1((client_key + magic).encode("utf-8")).digest()
-    return base64.b64encode(digest).decode("ascii")
+# ---------------------------------------------------------------------------
+# Business logic — extracted from Handler class methods.
+# All functions take explicit dependencies (no self).
+# ---------------------------------------------------------------------------
 
-
-def _ws_send_text(handler: BaseHTTPRequestHandler, text: str) -> None:
-    payload = text.encode("utf-8")
-    header = bytearray()
-    header.append(0x81)  # FIN + text frame
-    length = len(payload)
-    if length < 126:
-        header.append(length)
-    elif length <= 0xFFFF:
-        header.append(126)
-        header.extend(struct.pack("!H", length))
-    else:
-        header.append(127)
-        header.extend(struct.pack("!Q", length))
-    handler.wfile.write(bytes(header) + payload)
-    handler.wfile.flush()
-
-
-def make_handler(
+def _build_state_payload(
     cfg: RealtimeApiConfig,
     state: RealtimeState,
     worker: StreamWorker,
     fallback: DeskSnapshotFallback,
     db_reader: OpsDbReadModel,
-    history_provider: Optional[MarketHistoryProviderImpl],
-):
-    class Handler(BaseHTTPRequestHandler):
-        server_version = "RealtimeUiApi/1.0"
+    instance_name: str,
+    controller_id: str,
+    trading_pair: str,
+) -> dict[str, Any]:
+    stream_state = state.get_state(instance_name, controller_id, trading_pair)
+    connector_name = state.resolve_connector_name(instance_name, controller_id, trading_pair)
+    db_available = bool(db_reader.enabled and db_reader._last_health_ok)
+    allow_csv_fallback = _operator_api_csv_fallback_allowed(cfg, db_available)
+    resolved_trading_pair = str(
+        trading_pair
+        or (stream_state.get("key", {}) if isinstance(stream_state.get("key"), dict) else {}).get("trading_pair")
+        or (stream_state.get("market", {}) if isinstance(stream_state.get("market"), dict) else {}).get("trading_pair")
+        or (stream_state.get("depth", {}) if isinstance(stream_state.get("depth"), dict) else {}).get("trading_pair")
+        or ""
+    ).strip()
+    account_summary = fallback.account_summary(instance_name) if instance_name else _account_summary_template()
+    live_snap = state.get_bot_snapshot(instance_name) if instance_name else None
+    _snap_age_ms = (
+        int(_now_ms()) - int(live_snap.get("source_ts_ms") or 0)
+        if live_snap and live_snap.get("source_ts_ms")
+        else None
+    )
+    _snap_fresh = live_snap is not None and (_snap_age_ms is None or _snap_age_ms < 300_000)
+    if _snap_fresh and live_snap:
+        live_pos = live_snap.get("position") if isinstance(live_snap.get("position"), dict) else {}
+        _eq = _to_float(live_snap.get("equity_quote"))
+        if _eq is not None:
+            account_summary["equity_quote"] = float(_eq)
+        _qb = _to_float(live_snap.get("quote_balance"))
+        if _qb is not None:
+            account_summary["quote_balance"] = float(_qb)
+        _eo = _to_float(live_snap.get("equity_open_quote"))
+        if _eo is not None:
+            account_summary["equity_open_quote"] = float(_eo)
+        _ep = _to_float(live_snap.get("equity_peak_quote"))
+        if _ep is not None:
+            account_summary["equity_peak_quote"] = float(_ep)
+        _rp = _to_float(live_snap.get("realized_pnl_quote"))
+        if _rp is not None:
+            account_summary["realized_pnl_quote"] = float(_rp)
+        for _sk in ("controller_state", "regime"):
+            _sv = live_snap.get(_sk)
+            if _sv is not None:
+                account_summary[_sk] = str(_sv)
+        _risk = live_snap.get("risk_reasons")
+        if _risk is not None:
+            parts = _split_risk_reasons(_risk)
+            account_summary["risk_reasons"] = ",".join(parts) if isinstance(parts, list) else str(parts)
+        for _bk in ("daily_loss_pct", "drawdown_pct", "max_daily_loss_pct_hard", "max_drawdown_pct_hard"):
+            _bv = _to_float(live_snap.get(_bk))
+            if _bv is not None:
+                account_summary[_bk] = float(_bv)
+        if live_snap.get("order_book_stale") is not None:
+            account_summary["order_book_stale"] = _to_bool(live_snap.get("order_book_stale"))
+        _fc = live_snap.get("fills_count_today")
+        if _fc is not None:
+            account_summary["fills_count_today"] = int(_fc)
+        _snap_ts_ms = int(live_snap.get("source_ts_ms") or 0)
+        if _snap_ts_ms > 0:
+            account_summary["snapshot_ts"] = datetime.fromtimestamp(_snap_ts_ms / 1000, tz=UTC).isoformat()
+        for _pgk in ("pnl_governor_active", "pnl_governor_reason"):
+            _pgv = live_snap.get(_pgk)
+            if _pgv is not None:
+                account_summary[_pgk] = _to_bool(_pgv) if _pgk.endswith("_active") else str(_pgv)
+        if isinstance(live_pos, dict) and live_pos:
+            for _pk in ("quantity", "side", "avg_entry_price", "unrealized_pnl"):
+                _pval = live_pos.get(_pk)
+                if _pval is not None:
+                    stream_state.setdefault("position", {})[_pk] = _pval
+    # _build_quote_gate_summary expects a minute-like dict keyed "state" (not "controller_state").
+    _gate_minute = dict(account_summary)
+    _gate_minute.setdefault("state", _gate_minute.get("controller_state", ""))
+    _strategy_type = str(live_snap.get("strategy_type", "")) if live_snap else None
+    quote_gates = _build_quote_gate_summary(_gate_minute, strategy_type=_strategy_type or None)
+    account_summary["quote_gates"] = quote_gates
+    # Per-bot gate metrics from telemetry payload.
+    _raw_bot_gates = (live_snap.get("bot_gates") or {}) if live_snap else {}
+    account_summary["bot_gates"] = _build_bot_gates(_raw_bot_gates, _strategy_type)
+    fallback_state = (
+        fallback.state_from_snapshot(
+            instance_name,
+            resolved_trading_pair,
+            max_fills=cfg.max_fallback_fills,
+            max_orders=cfg.max_fallback_orders,
+            include_csv_fills=allow_csv_fallback,
+            include_estimated_orders=True,
+        )
+        if (_fallback_allowed(cfg) and instance_name)
+        else {}
+    )
+    db_fills = (
+        db_reader.get_fills(instance_name, resolved_trading_pair, limit=cfg.max_fallback_fills)
+        if (db_available and instance_name)
+        else []
+    )
+    db_fill_activity = (
+        db_reader.get_fill_activity(instance_name, resolved_trading_pair)
+        if (db_available and instance_name)
+        else {}
+    )
+    raw_stream_fills = fallback.filter_fill_rows_for_instance(
+        instance_name,
+        stream_state.get("fills", []) if isinstance(stream_state.get("fills"), list) else [],
+    )
+    for _sf in raw_stream_fills:
+        if isinstance(_sf, dict) and not _sf.get("timestamp_ms"):
+            _ts = _to_epoch_ms(_sf.get("ts_utc") or _sf.get("ts"))
+            if _ts:
+                _sf["timestamp_ms"] = _ts
+    stream_fills = raw_stream_fills
+    paper_fills: list[dict[str, Any]] = []
+    for pe in (stream_state.get("paper_events", []) if isinstance(stream_state.get("paper_events"), list) else []):
+        if not isinstance(pe, dict) or str(pe.get("command", "")).strip() != "order_fill":
+            continue
+        meta = pe.get("metadata", {}) if isinstance(pe.get("metadata"), dict) else {}
+        paper_fills.append({
+            "order_id": pe.get("order_id") or meta.get("order_id", ""),
+            "trading_pair": pe.get("trading_pair") or meta.get("trading_pair", ""),
+            "instance_name": pe.get("instance_name", ""),
+            "side": meta.get("side", ""),
+            "price": meta.get("fill_price", 0),
+            "amount_base": meta.get("fill_amount_base", 0),
+            "amount": meta.get("fill_amount_base", 0),
+            "notional_quote": meta.get("fill_notional_quote", 0),
+            "fee_quote": meta.get("fill_fee_quote", 0),
+            "realized_pnl_quote": meta.get("realized_pnl_quote", 0),
+            "is_maker": meta.get("is_maker") in ("1", "true", True),
+            "timestamp_ms": int(_to_epoch_ms(pe.get("ts") or pe.get("timestamp_ms")) or 0),
+            "source": "paper_exchange",
+        })
+    stream_fill_order_ids = {str(f.get("order_id", "")) for f in stream_fills if f.get("order_id")}
+    deduped_paper_fills = [f for f in paper_fills if str(f.get("order_id", "")) not in stream_fill_order_ids]
+    all_stream_fills = list(stream_fills) + deduped_paper_fills
+    stream_state["fills"] = list(all_stream_fills)
+    fallback_fills = list(fallback_state.get("fills", [])) if isinstance(fallback_state.get("fills"), list) else []
+    summary_fills = list(all_stream_fills) or list(db_fills) or list(fallback_fills)
+    if not all_stream_fills:
+        stream_state["fills"] = list(summary_fills)
+    fills_total = max(
+        int(stream_state.get("fills_total", 0) or 0),
+        int(db_fill_activity.get("fills_total", 0) or 0),
+        int(fallback_state.get("fills_total", 0) or 0),
+        len(db_fills),
+        len(summary_fills),
+        len(paper_fills),
+    )
+    _today_key = datetime.now(UTC).strftime("%Y-%m-%d")
+    _today_fills = [
+        f for f in summary_fills
+        if str(f.get("ts_utc") or f.get("ts") or "").startswith(_today_key)
+    ]
+    stream_activity = _summarize_fill_activity(list(summary_fills), fills_total=max(0, int(fills_total)))
+    stream_activity["realized_pnl_total_quote"] = float(
+        sum(float(_to_float(fill.get("realized_pnl_quote")) or 0.0) for fill in _today_fills)
+    )
+    if int(db_fill_activity.get("fills_total", 0) or 0) > 0:
+        activity = _merge_fill_activity(db_fill_activity, stream_activity)
+    else:
+        activity = stream_activity
+    stream_state["fills_total"] = max(
+        int(stream_state.get("fills_total", 0) or 0),
+        len(all_stream_fills),
+        len(db_fills),
+        len(fallback_fills),
+        len(summary_fills),
+        len(paper_fills),
+        int(db_fill_activity.get("fills_total", 0) or 0),
+    )
+    stream_position = stream_state.get("position", {}) if isinstance(stream_state.get("position"), dict) else {}
+    fallback_position = fallback_state.get("position", {}) if isinstance(fallback_state.get("position"), dict) else {}
+    resolved_position = stream_position or fallback_position
+    if not resolved_position and instance_name:
+        snap_state = fallback.state_from_snapshot(
+            instance_name, resolved_trading_pair,
+            max_fills=0, max_orders=0,
+            include_csv_fills=False, include_estimated_orders=False,
+        )
+        snap_pos = snap_state.get("position", {}) if isinstance(snap_state.get("position"), dict) else {}
+        if snap_pos:
+            resolved_position = dict(snap_pos)
+    if not resolved_position and db_available and instance_name:
+        resolved_position = db_reader.get_position(instance_name, resolved_trading_pair) or {}
 
-        def log_message(self, fmt: str, *args: Any) -> None:  # pragma: no cover
-            logger.info("%s - %s", self.address_string(), fmt % args)
-
-        def _request_origin(self) -> str:
-            return str(self.headers.get("Origin", "")).strip()
-
-        def _cors_origin(self) -> str:
-            request_origin = self._request_origin()
-            allowed = {item.strip() for item in cfg.allowed_origins.split(",") if item.strip()}
-            if allowed:
-                return request_origin if request_origin in allowed else "null"
-            return cfg.cors_allow_origin
-
-        def _is_authorized(self, query_token: str = "") -> bool:
-            if not cfg.auth_enabled:
-                return True
-            expected = cfg.auth_token.strip()
-            if not expected:
-                return False
-            auth = str(self.headers.get("Authorization", "")).strip()
-            if auth == f"Bearer {expected}":
-                return True
-            token = str(query_token or "").strip()
-            return bool(cfg.allow_query_token and token and token == expected)
-
-        def _needs_fallback(self, instance_name: str, controller_id: str, trading_pair: str) -> bool:
-            age = state.selected_stream_age_ms(instance_name, controller_id, trading_pair)
-            if age is None:
-                return True
-            return age > max(1000, cfg.stream_stale_ms)
-
-        def _fallback_allowed(self) -> bool:
-            return bool(cfg.fallback_enabled and cfg.degraded_mode_enabled)
-
-        def _build_state_payload(self, instance_name: str, controller_id: str, trading_pair: str) -> Dict[str, Any]:
-            stream_state = state.get_state(instance_name, controller_id, trading_pair)
-            connector_name = state.resolve_connector_name(instance_name, controller_id, trading_pair)
-            db_available = bool(db_reader.enabled and db_reader._last_health_ok)
-            allow_csv = bool(not cfg.csv_failover_only or not db_available)
-            resolved_trading_pair = str(
-                trading_pair
-                or (stream_state.get("key", {}) if isinstance(stream_state.get("key"), dict) else {}).get("trading_pair")
-                or (stream_state.get("market", {}) if isinstance(stream_state.get("market"), dict) else {}).get("trading_pair")
-                or (stream_state.get("depth", {}) if isinstance(stream_state.get("depth"), dict) else {}).get("trading_pair")
-                or ""
-            ).strip()
-            account_summary = fallback.account_summary(instance_name) if instance_name else _account_summary_template()
-            fallback_state = (
-                fallback.state_from_snapshot(
-                    instance_name,
-                    trading_pair,
-                    max_fills=cfg.max_fallback_fills,
-                    max_orders=cfg.max_fallback_orders,
-                    include_csv_fills=allow_csv,
-                    include_estimated_orders=True,
+    # Cross-validate: if the bot reports flat but the paper exchange holds a
+    # real position, prefer the paper exchange (it is the authoritative ledger).
+    if instance_name:
+        _pe_pos = fallback.paper_exchange_position(instance_name, resolved_trading_pair)
+        _pe_qty = abs(float(_pe_pos.get("quantity", 0) or 0)) if _pe_pos else 0.0
+        _stream_qty = abs(float(_to_float(resolved_position.get("quantity")) or 0.0))
+        if _pe_qty > 1e-12 and _stream_qty < 1e-12:
+            logger.warning(
+                "POSITION_DESYNC instance=%s: bot reports flat but paper exchange has qty=%.8f — adopting authoritative position",
+                instance_name, _pe_qty,
+            )
+            resolved_position = dict(_pe_pos)
+        elif _pe_qty > 1e-12 and _stream_qty > 1e-12:
+            _pe_side = str(_pe_pos.get("side", "")).strip().lower()
+            _stream_side = str(resolved_position.get("side", "")).strip().lower()
+            if _pe_side != _stream_side and _pe_side in ("long", "short"):
+                logger.warning(
+                    "POSITION_DESYNC instance=%s: bot says side=%s but paper exchange says side=%s — adopting authoritative position",
+                    instance_name, _stream_side, _pe_side,
                 )
-                if (self._fallback_allowed() and instance_name)
-                else {}
-            )
-            db_fills = (
-                db_reader.get_fills(instance_name, resolved_trading_pair, limit=cfg.max_fallback_fills)
-                if (db_available and instance_name)
-                else []
-            )
-            db_fill_activity = (
-                db_reader.get_fill_activity(instance_name, resolved_trading_pair)
-                if (db_available and instance_name)
-                else {}
-            )
-            stream_fills = fallback.filter_fill_rows_for_instance(
-                instance_name,
-                stream_state.get("fills", []) if isinstance(stream_state.get("fills"), list) else [],
-            )
-            stream_state["fills"] = list(stream_fills)
-            fallback_fills = list(fallback_state.get("fills", [])) if isinstance(fallback_state.get("fills"), list) else []
-            summary_fills = list(stream_fills) or list(db_fills) or list(fallback_fills)
-            if not stream_fills:
-                stream_state["fills"] = list(summary_fills)
-            fills_total = max(
-                int(stream_state.get("fills_total", 0) or 0),
-                int(db_fill_activity.get("fills_total", 0) or 0),
-                int(fallback_state.get("fills_total", 0) or 0),
-                len(db_fills),
-                len(summary_fills),
-            )
-            if int(db_fill_activity.get("fills_total", 0) or 0) > 0:
-                activity = dict(db_fill_activity)
-            else:
-                activity = _summarize_fill_activity(list(summary_fills), fills_total=max(0, int(fills_total)))
-                activity["realized_pnl_total_quote"] = float(
-                    sum(float(_to_float(fill.get("realized_pnl_quote")) or 0.0) for fill in summary_fills)
-                )
-            stream_state["fills_total"] = max(
-                int(stream_state.get("fills_total", 0) or 0),
-                len(stream_fills),
-                len(db_fills),
-                len(fallback_fills),
-                len(summary_fills),
-                int(db_fill_activity.get("fills_total", 0) or 0),
-            )
-            stream_position = stream_state.get("position", {}) if isinstance(stream_state.get("position"), dict) else {}
-            fallback_position = fallback_state.get("position", {}) if isinstance(fallback_state.get("position"), dict) else {}
-            stream_state["position"] = stream_position or fallback_position
-            stream_open_orders = list(stream_state.get("open_orders", [])) if isinstance(stream_state.get("open_orders"), list) else []
-            resolved_open_orders = list(stream_open_orders)
-            if not resolved_open_orders and isinstance(fallback_state.get("open_orders"), list):
-                resolved_open_orders = list(fallback_state.get("open_orders", []))
-            if not resolved_open_orders:
-                runtime_orders_active = int(_to_float(account_summary.get("orders_active")) or 0)
-                stream_market = stream_state.get("market", {}) if isinstance(stream_state.get("market"), dict) else {}
-                stream_depth = stream_state.get("depth", {}) if isinstance(stream_state.get("depth"), dict) else {}
-                state_key = stream_state.get("key", {}) if isinstance(stream_state.get("key"), dict) else {}
-                best_bid = _to_float(stream_market.get("best_bid"))
-                if best_bid is None:
-                    best_bid = _to_float(stream_depth.get("best_bid")) or _to_float(
-                        ((stream_depth.get("bids") or [{}])[0] if isinstance(stream_depth.get("bids"), list) else {}).get("price")
-                    )
-                best_ask = _to_float(stream_market.get("best_ask"))
-                if best_ask is None:
-                    best_ask = _to_float(stream_depth.get("best_ask")) or _to_float(
-                        ((stream_depth.get("asks") or [{}])[0] if isinstance(stream_depth.get("asks"), list) else {}).get("price")
-                    )
-                mid_price = _to_float(stream_market.get("mid_price")) or _depth_mid(stream_depth)
-                runtime_position = stream_state.get("position", {}) if isinstance(stream_state.get("position"), dict) else {}
-                runtime_qty = _to_float(runtime_position.get("quantity"))
-                resolved_trading_pair = str(
-                    trading_pair
-                    or state_key.get("trading_pair")
-                    or stream_market.get("trading_pair")
-                    or stream_depth.get("trading_pair")
-                    or runtime_position.get("trading_pair")
-                    or ""
-                ).strip()
-                runtime_order_ts_ms = int(
-                    _to_epoch_ms(
-                        stream_market.get("ts")
-                        or stream_market.get("timestamp_ms")
-                        or stream_depth.get("ts")
-                        or stream_depth.get("timestamp_ms")
-                    )
-                    or _now_ms()
-                )
-                if runtime_orders_active > 0:
-                    resolved_open_orders = _build_runtime_open_order_placeholders(
-                        orders_active=runtime_orders_active,
-                        best_bid=best_bid,
-                        best_ask=best_ask,
-                        mid_price=mid_price,
-                        quantity=runtime_qty,
-                        trading_pair=resolved_trading_pair,
-                        timestamp_ms=runtime_order_ts_ms,
-                        source_label="runtime",
-                    )
-            stream_state["open_orders"] = resolved_open_orders
-            account_summary = _sync_account_summary_with_open_orders(account_summary, resolved_open_orders)
-            if fallback_state:
-                fallback_state["position"] = fallback_state.get("position", {})
-                fallback_state["fills"] = list(summary_fills) or fallback_state.get("fills", [])
-                fallback_state["open_orders"] = list(resolved_open_orders)
-                fallback_state["fills_total"] = max(
-                    int(fallback_state.get("fills_total", 0) or 0),
-                    len(fallback_state.get("fills", [])) if isinstance(fallback_state.get("fills"), list) else 0,
-                    len(summary_fills),
-                )
-            selected_stream_age_ms = state.selected_stream_age_ms(instance_name, controller_id, trading_pair)
-            fallback_active = bool(self._fallback_allowed() and self._needs_fallback(instance_name, controller_id, trading_pair))
-            account_summary["realized_pnl_quote"] = float(_to_float(activity.get("realized_pnl_total_quote")) or 0.0)
-            latest_market_ts_ms = int(
-                _to_epoch_ms(
-                    (stream_state.get("market", {}) if isinstance(stream_state.get("market"), dict) else {}).get("ts")
-                    or (stream_state.get("market", {}) if isinstance(stream_state.get("market"), dict) else {}).get("timestamp_ms")
-                    or (stream_state.get("depth", {}) if isinstance(stream_state.get("depth"), dict) else {}).get("ts")
-                    or (stream_state.get("depth", {}) if isinstance(stream_state.get("depth"), dict) else {}).get("timestamp_ms")
-                )
-                or 0
-            )
-            position_source_ts_ms = int(
-                _to_epoch_ms(
-                    (stream_state.get("position", {}) if isinstance(stream_state.get("position"), dict) else {}).get("source_ts_ms")
-                    or (fallback_state.get("position", {}) if isinstance(fallback_state.get("position"), dict) else {}).get("source_ts_ms")
-                )
-                or 0
-            )
-            stream_age_ms = selected_stream_age_ms
-            state_metrics = state.metrics()
-            system = {
-                "redis_available": bool(worker.redis_available),
-                "db_available": bool(db_available),
-                "fallback_active": fallback_active,
-                "stream_age_ms": int(stream_age_ms) if stream_age_ms is not None else None,
-                "latest_market_ts_ms": latest_market_ts_ms,
-                "latest_fill_ts_ms": int(activity.get("latest_fill_ts_ms") or 0),
-                "position_source_ts_ms": position_source_ts_ms,
-                "subscriber_count": int(state_metrics.get("subscribers", 0) or 0),
-                "market_key_count": int(state_metrics.get("market_quote_keys", 0) or 0),
-                "depth_key_count": int(state_metrics.get("market_depth_keys", 0) or 0),
-                "fills_key_count": int(state_metrics.get("fills_keys", 0) or 0),
-                "paper_event_key_count": int(state_metrics.get("paper_event_keys", 0) or 0),
-            }
-            alerts = _build_alerts(account_summary, system)
-            source_parts: List[str] = []
-            if stream_state.get("market") or stream_state.get("depth") or stream_state.get("fills"):
-                source_parts.append("stream")
-            if fallback_state:
-                source_parts.append("degraded_snapshot")
-            source = "+".join(dict.fromkeys(source_parts)) if source_parts else "stream"
-            if fallback_active and fallback_state and source == "degraded_snapshot":
-                source = "degraded_mode"
-            return {
-                "mode": cfg.normalized_mode(),
-                "source": source,
-                "fallback_active": fallback_active,
-                "data_sources": {
-                    "stream": True,
-                    "db": db_available,
-                    "connector_name": connector_name,
-                    "csv_failover_used": bool(allow_csv and fallback_state.get("fills")),
-                },
-                "summary": {
-                    "activity": activity,
-                    "account": account_summary,
-                    "system": system,
-                    "alerts": alerts,
-                },
-                "stream": stream_state,
-                "fallback": fallback_state,
-            }
+                resolved_position = dict(_pe_pos)
 
-        def _build_instances_payload(self) -> Dict[str, Any]:
-            stream_instances = state.instance_names()
-            artifact_instances = fallback.available_instances()
-            merged = sorted({*stream_instances, *artifact_instances}, key=lambda value: value.lower())
-            statuses = _build_instance_status_rows(state, fallback, cfg.stream_stale_ms)
-            return {
-                "instances": merged,
-                "statuses": statuses,
-                "sources": {
-                    "stream": stream_instances,
-                    "artifacts": artifact_instances,
-                },
-            }
+    if resolved_position:
+        qty_val = _to_float(resolved_position.get("quantity"))
+        if qty_val is not None:
+            side_str = str(resolved_position.get("side", "")).strip().lower()
+            if (not side_str or side_str == "flat") and abs(qty_val) > 1e-12:
+                resolved_position["side"] = "short" if qty_val < 0 else "long"
+            resolved_position["quantity"] = abs(qty_val)
+    stream_state["position"] = resolved_position
+    stream_open_orders = list(stream_state.get("open_orders", [])) if isinstance(stream_state.get("open_orders"), list) else []
+    resolved_open_orders = list(stream_open_orders)
+    if not resolved_open_orders and isinstance(fallback_state.get("open_orders"), list):
+        resolved_open_orders = list(fallback_state.get("open_orders", []))
+    if not resolved_open_orders and db_available and instance_name:
+        resolved_open_orders = db_reader.get_open_orders(instance_name, resolved_trading_pair)
+    if not resolved_open_orders and instance_name:
+        paper_active = _read_paper_exchange_active_orders(
+            fallback, instance_name, resolved_trading_pair,
+        )
+        if paper_active:
+            resolved_open_orders = paper_active
+    if not resolved_open_orders and instance_name and _fallback_allowed(cfg):
+        runtime_placeholders = _build_runtime_open_order_placeholders(
+            fallback, instance_name, resolved_trading_pair,
+        )
+        if runtime_placeholders:
+            resolved_open_orders = runtime_placeholders
+    stream_state["open_orders"] = resolved_open_orders
+    account_summary = _sync_account_summary_with_open_orders(account_summary, resolved_open_orders, strategy_type=_strategy_type)
+    if fallback_state:
+        fallback_state["position"] = fallback_state.get("position", {})
+        fallback_state["fills"] = list(summary_fills) or fallback_state.get("fills", [])
+        fallback_state["open_orders"] = list(resolved_open_orders)
+        fallback_state["fills_total"] = max(
+            int(fallback_state.get("fills_total", 0) or 0),
+            len(fallback_state.get("fills", [])) if isinstance(fallback_state.get("fills"), list) else 0,
+            len(summary_fills),
+        )
+    selected_stream_age_ms = state.selected_stream_age_ms(instance_name, controller_id, resolved_trading_pair or trading_pair)
+    fallback_active = bool(_fallback_allowed(cfg) and _needs_fallback(cfg, state, instance_name, controller_id, resolved_trading_pair or trading_pair))
+    snapshot_pnl = float(_to_float(account_summary.get("realized_pnl_quote")) or 0.0)
+    fill_based_pnl = float(_to_float(activity.get("realized_pnl_total_quote")) or 0.0)
+    _snap_has_data = bool(account_summary.get("snapshot_ts"))
+    account_summary["realized_pnl_quote"] = (
+        snapshot_pnl if _snap_has_data else (fill_based_pnl if bool(_today_fills) else 0.0)
+    )
+    latest_market_ts_ms = int(
+        _to_epoch_ms(
+            (stream_state.get("market", {}) if isinstance(stream_state.get("market"), dict) else {}).get("ts")
+            or (stream_state.get("market", {}) if isinstance(stream_state.get("market"), dict) else {}).get("timestamp_ms")
+            or (stream_state.get("depth", {}) if isinstance(stream_state.get("depth"), dict) else {}).get("ts")
+            or (stream_state.get("depth", {}) if isinstance(stream_state.get("depth"), dict) else {}).get("timestamp_ms")
+        )
+        or 0
+    )
+    position_source_ts_ms = int(
+        _to_epoch_ms(
+            (stream_state.get("position", {}) if isinstance(stream_state.get("position"), dict) else {}).get("source_ts_ms")
+            or (fallback_state.get("position", {}) if isinstance(fallback_state.get("position"), dict) else {}).get("source_ts_ms")
+        )
+        or 0
+    )
+    stream_age_ms = selected_stream_age_ms
+    state_metrics = state.metrics()
+    stale_threshold_ms = max(1000, int(cfg.stream_stale_ms or 0))
+    system = {
+        "redis_available": bool(worker.redis_available),
+        "db_available": bool(db_available),
+        "fallback_active": fallback_active,
+        "stream_age_ms": int(stream_age_ms) if stream_age_ms is not None else None,
+        "stream_stale_threshold_ms": stale_threshold_ms,
+        "latest_market_ts_ms": latest_market_ts_ms,
+        "latest_fill_ts_ms": int(activity.get("latest_fill_ts_ms") or 0),
+        "position_source_ts_ms": position_source_ts_ms,
+        "subscriber_count": int(state_metrics.get("subscribers", 0) or 0),
+        "market_key_count": int(state_metrics.get("market_quote_keys", 0) or 0),
+        "depth_key_count": int(state_metrics.get("market_depth_keys", 0) or 0),
+        "fills_key_count": int(state_metrics.get("fills_keys", 0) or 0),
+        "paper_event_key_count": int(state_metrics.get("paper_event_keys", 0) or 0),
+    }
+    alerts = _build_alerts(account_summary, system)
+    source_parts: list[str] = []
+    if stream_state.get("market") or stream_state.get("depth") or stream_state.get("fills"):
+        source_parts.append("stream")
+    if fallback_state:
+        source_parts.append("degraded_snapshot")
+    source = "+".join(dict.fromkeys(source_parts)) if source_parts else "stream"
+    if fallback_active and fallback_state and source == "degraded_snapshot":
+        source = "degraded_mode"
+    return {
+        "mode": cfg.normalized_mode(),
+        "source": source,
+        "fallback_active": fallback_active,
+        "data_sources": {
+            "stream": True,
+            "db": db_available,
+            "connector_name": connector_name,
+            "csv_failover_used": bool(allow_csv_fallback and fallback_state.get("fills")),
+        },
+        "summary": {
+            "activity": activity,
+            "account": account_summary,
+            "system": system,
+            "alerts": alerts,
+        },
+        "stream": stream_state,
+        "fallback": fallback_state,
+    }
 
-        def _build_daily_review_payload(self, instance_name: str, trading_pair: str, day_key: str) -> Dict[str, Any]:
-            if not instance_name:
-                return {"status": "error", "reason": "instance_name_required"}
-            snapshot = fallback.get_snapshot(instance_name)
-            minute = snapshot.get("minute", {}) if isinstance(snapshot.get("minute"), dict) else {}
-            daily_state = snapshot.get("daily_state", {}) if isinstance(snapshot.get("daily_state"), dict) else {}
-            snapshot_day = str(daily_state.get("day_key") or "") or str(snapshot.get("source_ts", "") or "")[:10]
-            resolved_pair = trading_pair or str(minute.get("trading_pair", "") or "")
-            resolved_day, _, _ = _day_bounds_utc(day_key or snapshot_day)
-            account_summary = fallback.account_summary(instance_name)
-            minute_rows = fallback.minute_rows_from_csv(instance_name, resolved_pair, resolved_day)
-            db_available = db_reader.available() if db_reader.enabled else False
-            fills = (
-                fallback.filter_fill_rows_for_instance(
-                    instance_name,
-                    db_reader.get_fills_for_day(instance_name, resolved_pair, resolved_day),
-                )
-                if db_available
-                else []
-            )
-            source_parts: List[str] = []
-            if fills:
-                source_parts.append("db_fills")
-            if not fills:
-                fills = fallback.fills_from_csv_for_day(instance_name, resolved_pair, resolved_day)
-                if fills:
-                    source_parts.append("fills_csv")
-            if minute_rows:
-                source_parts.append("minute_log")
-            if not source_parts and snapshot:
-                source_parts.append("desk_snapshot")
-            review = _summarize_daily_review(resolved_day, minute_rows, fills, account_summary)
-            review["instance_name"] = instance_name
-            review["trading_pair"] = resolved_pair
-            return {
-                "mode": cfg.normalized_mode(),
-                "source": "+".join(source_parts) if source_parts else "unavailable",
-                "review": review,
-            }
 
-        def _build_weekly_review_payload(self, instance_name: str) -> Dict[str, Any]:
-            if not instance_name:
-                return {"status": "error", "reason": "instance_name_required"}
-            report = fallback.weekly_strategy_report(instance_name)
-            if not report:
-                return {
-                    "mode": cfg.normalized_mode(),
-                    "source": "unavailable",
-                    "review": {
-                        **_weekly_review_template(),
-                        "narrative": f"No weekly report artifact available for {instance_name}.",
-                    },
-                }
-            review = _summarize_weekly_report(instance_name, report)
-            return {
-                "mode": cfg.normalized_mode(),
-                "source": "strategy_multi_day_report",
-                "review": review,
-            }
+def _build_instances_payload(
+    cfg: RealtimeApiConfig,
+    state: RealtimeState,
+    fallback: DeskSnapshotFallback,
+) -> dict[str, Any]:
+    stream_instances = state.instance_names()
+    artifact_instances = fallback.available_instances()
+    merged = sorted({*stream_instances, *artifact_instances}, key=lambda value: value.lower())
+    statuses = _build_instance_status_rows(state, fallback, cfg.stream_stale_ms)
+    return {
+        "instances": merged,
+        "statuses": statuses,
+        "sources": {
+            "stream": stream_instances,
+            "artifacts": artifact_instances,
+        },
+    }
 
-        def _build_journal_review_payload(
-            self,
-            instance_name: str,
-            trading_pair: str,
-            start_day: str,
-            end_day: str,
-        ) -> Dict[str, Any]:
-            if not instance_name:
-                return {"status": "error", "reason": "instance_name_required"}
-            snapshot = fallback.get_snapshot(instance_name)
-            minute = snapshot.get("minute", {}) if isinstance(snapshot.get("minute"), dict) else {}
-            resolved_pair = trading_pair or str(minute.get("trading_pair", "") or "")
-            source_parts: List[str] = []
-            fills = fallback.fills_from_csv_range(instance_name, resolved_pair, start_day, end_day, limit=12000)
-            if fills:
-                source_parts.append("fills_csv")
-            if not fills:
-                db_available = db_reader.available() if db_reader.enabled else False
-                fills = (
-                    fallback.filter_fill_rows_for_instance(
-                        instance_name,
-                        db_reader.get_fills_range(instance_name, resolved_pair, start_day, end_day, limit=12000),
-                    )
-                    if db_available
-                    else []
-                )
-                if fills:
-                    source_parts.append("db_fills")
-            minute_rows = fallback.minute_rows_range(instance_name, resolved_pair, start_day, end_day, limit=20000)
-            if minute_rows:
-                source_parts.append("minute_log")
-            trades = _reconstruct_closed_trades(fills)
-            trades = _enrich_closed_trades_with_minute_context(trades, minute_rows)
-            review = _summarize_journal_review(trades)
-            review["instance_name"] = instance_name
-            review["trading_pair"] = resolved_pair
-            review["start_day"] = start_day
-            review["end_day"] = end_day
-            return {
-                "mode": cfg.normalized_mode(),
-                "source": "+".join(source_parts) if source_parts else "unavailable",
-                "review": review,
-            }
 
-        def _build_legacy_candles_payload(
-            self,
-            instance_name: str,
-            controller_id: str,
-            trading_pair: str,
-            timeframe_s: int,
-            limit: int,
-        ) -> Dict[str, Any]:
-            resolved_trading_pair = state.resolve_trading_pair(instance_name, controller_id, trading_pair)
-            connector_name = state.resolve_connector_name(instance_name, controller_id, resolved_trading_pair)
-            db_available = db_reader.available() if db_reader.enabled else False
-            allow_csv = bool(not cfg.csv_failover_only or not db_available)
-            db_candles = db_reader.get_candles(connector_name, resolved_trading_pair, timeframe_s, limit) if db_available else []
-            stream_candles = state.get_candles(instance_name, controller_id, resolved_trading_pair, timeframe_s, limit)
-            candles = list(db_candles or stream_candles)
-            source = "db" if db_candles else "stream"
-            if stream_candles:
-                merged_by_bucket = {int(c.get("bucket_ms", 0)): c for c in candles}
-                merged_by_bucket.update({int(c.get("bucket_ms", 0)): c for c in stream_candles})
-                candles = [merged_by_bucket[k] for k in sorted(merged_by_bucket.keys()) if k > 0]
-                candles = candles[-max(1, int(limit)) :]
-                if db_candles:
-                    source = "db+stream"
-            if connector_name and resolved_trading_pair and len(candles) < max(5, int(limit)):
-                rest_candles = db_reader.get_rest_backfill_candles(connector_name, resolved_trading_pair, timeframe_s, limit)
-                if rest_candles:
-                    merged_by_bucket = {int(c.get("bucket_ms", 0)): c for c in rest_candles}
-                    merged_by_bucket.update({int(c.get("bucket_ms", 0)): c for c in candles})
-                    candles = [merged_by_bucket[k] for k in sorted(merged_by_bucket.keys()) if k > 0]
-                    candles = candles[-max(1, int(limit)) :]
-                    source = f"{source}+rest_backfill" if source else "rest_backfill"
-            if self._fallback_allowed() and instance_name and resolved_trading_pair and len(candles) < max(5, int(limit)) and allow_csv:
-                fallback_candles = fallback.candles_from_minute_log(instance_name, resolved_trading_pair, timeframe_s, limit)
-                if fallback_candles:
-                    merged_by_bucket = {int(c.get("bucket_ms", 0)): c for c in fallback_candles}
-                    merged_by_bucket.update({int(c.get("bucket_ms", 0)): c for c in candles})
-                    candles = [merged_by_bucket[k] for k in sorted(merged_by_bucket.keys()) if k > 0]
-                    candles = candles[-max(1, int(limit)) :]
-                    source = f"{source}+minute_log" if source else "minute_log"
-            return {
-                "mode": cfg.normalized_mode(),
-                "source": source,
-                "trading_pair": resolved_trading_pair,
-                "db_available": db_available,
-                "csv_failover_used": bool(allow_csv and source.endswith("minute_log")),
-                "candles": candles,
-            }
+def _build_candles_payload(
+    cfg: RealtimeApiConfig,
+    state: RealtimeState,
+    fallback: DeskSnapshotFallback,
+    db_reader: OpsDbReadModel,
+    history_provider: MarketHistoryProviderImpl | None,
+    instance_name: str,
+    controller_id: str,
+    trading_pair: str,
+    timeframe_s: int,
+    limit: int,
+) -> dict[str, Any]:
+    legacy = _build_legacy_candles(cfg, state, fallback, db_reader, instance_name, controller_id, trading_pair, timeframe_s, limit)
+    mode = cfg.normalized_history_ui_read_mode()
+    if mode == "legacy":
+        return legacy
+    shared = _build_provider_candles(cfg, state, fallback, db_reader, history_provider, instance_name, controller_id, trading_pair, timeframe_s, limit)
+    if mode == "shadow":
+        legacy["shadow"] = {
+            "mode": "shadow",
+            "provider": {
+                "source": shared.get("source"),
+                "source_chain": shared.get("source_chain", []),
+                "quality": shared.get("quality", {}),
+            },
+            "parity": _compare_candle_sets(
+                legacy.get("candles", []) if isinstance(legacy.get("candles"), list) else [],
+                shared.get("candles", []) if isinstance(shared.get("candles"), list) else [],
+            ),
+        }
+        return legacy
+    return shared if shared.get("candles") else legacy
 
-        def _build_provider_candles_payload(
-            self,
-            instance_name: str,
-            controller_id: str,
-            trading_pair: str,
-            timeframe_s: int,
-            limit: int,
-        ) -> Dict[str, Any]:
-            resolved_trading_pair = state.resolve_trading_pair(instance_name, controller_id, trading_pair)
-            connector_name = state.resolve_connector_name(instance_name, controller_id, resolved_trading_pair)
-            if history_provider is None:
-                return {
-                    "mode": cfg.normalized_mode(),
-                    "source": "provider_unavailable",
-                    "db_available": db_reader.available() if db_reader.enabled else False,
-                    "csv_failover_used": False,
-                    "source_chain": [],
-                    "quality": {
-                        "status": "empty",
-                        "freshness_ms": 0,
-                        "max_gap_s": 0,
-                        "coverage_ratio": 0.0,
-                        "source_used": "provider_unavailable",
-                        "degraded_reason": "provider_unavailable",
-                        "bars_returned": 0,
-                        "bars_requested": int(limit),
-                    },
-                    "candles": [],
-                }
-            key = MarketBarKey(
-                connector_name=str(connector_name or "").strip(),
-                trading_pair=str(resolved_trading_pair or "").strip(),
-                bar_source="quote_mid",
-            )
-            bars, status = history_provider.get_bars(
-                key=key,
+
+def _build_legacy_candles(
+    cfg: RealtimeApiConfig,
+    state: RealtimeState,
+    fallback: DeskSnapshotFallback,
+    db_reader: OpsDbReadModel,
+    instance_name: str,
+    controller_id: str,
+    trading_pair: str,
+    timeframe_s: int,
+    limit: int,
+) -> dict[str, Any]:
+    resolved_trading_pair = state.resolve_trading_pair(instance_name, controller_id, trading_pair)
+    connector_name = state.resolve_connector_name(instance_name, controller_id, resolved_trading_pair)
+    db_available = db_reader.available() if db_reader.enabled else False
+    allow_csv_fallback = _operator_api_csv_fallback_allowed(cfg, db_available)
+    candles: list[dict[str, Any]] = []
+    source = ""
+    if connector_name and resolved_trading_pair:
+        rest_candles = db_reader.get_rest_backfill_candles(connector_name, resolved_trading_pair, timeframe_s, limit)
+        if rest_candles:
+            candles = list(rest_candles)
+            source = "rest_ohlc"
+    db_candles = db_reader.get_candles(connector_name, resolved_trading_pair, timeframe_s, limit) if db_available else []
+    if db_candles:
+        merged_by_bucket = {int(c.get("bucket_ms", 0)): c for c in candles}
+        for c in db_candles:
+            bk = int(c.get("bucket_ms", 0))
+            if bk > 0 and bk not in merged_by_bucket:
+                merged_by_bucket[bk] = c
+        candles = [merged_by_bucket[k] for k in sorted(merged_by_bucket.keys()) if k > 0]
+        candles = candles[-max(1, int(limit)):]
+        source = f"{source}+db" if source else "db"
+    stream_candles = state.get_candles(instance_name, controller_id, resolved_trading_pair, timeframe_s, limit)
+    if stream_candles:
+        merged_by_bucket = {int(c.get("bucket_ms", 0)): c for c in candles}
+        for c in stream_candles:
+            bk = int(c.get("bucket_ms", 0))
+            if bk > 0 and bk not in merged_by_bucket:
+                merged_by_bucket[bk] = c
+        candles = [merged_by_bucket[k] for k in sorted(merged_by_bucket.keys()) if k > 0]
+        candles = candles[-max(1, int(limit)):]
+        source = f"{source}+stream" if source else "stream"
+    if _fallback_allowed(cfg) and instance_name and resolved_trading_pair and len(candles) < max(5, int(limit)) and allow_csv_fallback:
+        fallback_candles = fallback.candles_from_minute_log(instance_name, resolved_trading_pair, timeframe_s, limit)
+        if fallback_candles:
+            merged_by_bucket = {int(c.get("bucket_ms", 0)): c for c in candles}
+            for c in fallback_candles:
+                bk = int(c.get("bucket_ms", 0))
+                if bk > 0 and bk not in merged_by_bucket:
+                    merged_by_bucket[bk] = c
+            candles = [merged_by_bucket[k] for k in sorted(merged_by_bucket.keys()) if k > 0]
+            candles = candles[-max(1, int(limit)):]
+            source = f"{source}+minute_log" if source else "minute_log"
+    return {
+        "mode": cfg.normalized_mode(),
+        "source": source or "empty",
+        "trading_pair": resolved_trading_pair,
+        "db_available": db_available,
+        "csv_failover_used": bool(allow_csv_fallback and source.endswith("minute_log")),
+        "candles": candles,
+    }
+
+
+def _build_provider_candles(
+    cfg: RealtimeApiConfig,
+    state: RealtimeState,
+    fallback: DeskSnapshotFallback,
+    db_reader: OpsDbReadModel,
+    history_provider: MarketHistoryProviderImpl | None,
+    instance_name: str,
+    controller_id: str,
+    trading_pair: str,
+    timeframe_s: int,
+    limit: int,
+) -> dict[str, Any]:
+    resolved_trading_pair = state.resolve_trading_pair(instance_name, controller_id, trading_pair)
+    connector_name = state.resolve_connector_name(instance_name, controller_id, resolved_trading_pair)
+    if history_provider is None:
+        return {
+            "mode": cfg.normalized_mode(),
+            "source": "provider_unavailable",
+            "db_available": db_reader.available() if db_reader.enabled else False,
+            "csv_failover_used": False,
+            "source_chain": [],
+            "quality": {
+                "status": "empty",
+                "freshness_ms": 0,
+                "max_gap_s": 0,
+                "coverage_ratio": 0.0,
+                "source_used": "provider_unavailable",
+                "degraded_reason": "provider_unavailable",
+                "bars_returned": 0,
+                "bars_requested": int(limit),
+            },
+            "candles": [],
+        }
+    key = MarketBarKey(
+        connector_name=str(connector_name or "").strip(),
+        trading_pair=str(resolved_trading_pair or "").strip(),
+        bar_source="quote_mid",
+    )
+    bars, status = history_provider.get_bars(
+        key=key,
+        bar_interval_s=int(timeframe_s),
+        limit=int(limit),
+        require_closed=True,
+    )
+    candles = market_bars_to_candles(bars)
+    source_chain = [part for part in str(status.source_used or "").split("+") if part]
+    quality = {
+        "status": str(status.status),
+        "freshness_ms": int(status.freshness_ms),
+        "max_gap_s": int(status.max_gap_s),
+        "coverage_ratio": float(status.coverage_ratio),
+        "source_used": str(status.source_used or "empty"),
+        "degraded_reason": str(status.degraded_reason or ""),
+        "bars_returned": int(status.bars_returned or len(candles)),
+        "bars_requested": int(status.bars_requested),
+    }
+    if (
+        _fallback_allowed(cfg)
+        and instance_name
+        and resolved_trading_pair
+        and len(candles) < max(5, int(limit))
+        and _operator_api_csv_fallback_allowed(cfg, db_reader.available() if db_reader.enabled else False)
+    ):
+        fallback_candles = fallback.candles_from_minute_log(instance_name, resolved_trading_pair, timeframe_s, limit)
+        if fallback_candles:
+            merged_by_bucket = {int(c.get("bucket_ms", 0)): c for c in fallback_candles}
+            merged_by_bucket.update({int(c.get("bucket_ms", 0)): c for c in candles})
+            candles = [merged_by_bucket[k] for k in sorted(merged_by_bucket.keys()) if k > 0]
+            candles = candles[-max(1, int(limit)):]
+            if "minute_log" not in source_chain:
+                source_chain.append("minute_log")
+            quality = _history_quality_from_candles(
+                candles,
                 bar_interval_s=int(timeframe_s),
-                limit=int(limit),
-                require_closed=True,
+                bars_requested=int(status.bars_requested),
+                source_used="+".join(source_chain) if source_chain else str(status.source_used or "empty"),
+                degraded_reason=str(status.degraded_reason or "minute_log"),
             )
-            candles = market_bars_to_candles(bars)
-            source_chain = [part for part in str(status.source_used or "").split("+") if part]
-            quality = {
-                "status": str(status.status),
-                "freshness_ms": int(status.freshness_ms),
-                "max_gap_s": int(status.max_gap_s),
-                "coverage_ratio": float(status.coverage_ratio),
-                "source_used": str(status.source_used or "empty"),
-                "degraded_reason": str(status.degraded_reason or ""),
-                "bars_returned": int(status.bars_returned or len(candles)),
-                "bars_requested": int(status.bars_requested),
+            if quality["status"] == "fresh":
+                quality["status"] = "degraded"
+            if not str(quality.get("degraded_reason", "")).strip():
+                quality["degraded_reason"] = "minute_log"
+    return {
+        "mode": cfg.normalized_mode(),
+        "source": "+".join(source_chain) if source_chain else str(status.source_used or "empty"),
+        "trading_pair": resolved_trading_pair,
+        "db_available": db_reader.available() if db_reader.enabled else False,
+        "csv_failover_used": "minute_log" in source_chain,
+        "source_chain": source_chain,
+        "quality": quality,
+        "candles": candles,
+    }
+
+
+def _build_daily_review_payload(
+    cfg: RealtimeApiConfig,
+    fallback: DeskSnapshotFallback,
+    db_reader: OpsDbReadModel,
+    instance_name: str,
+    trading_pair: str,
+    day_key: str,
+) -> dict[str, Any]:
+    if not instance_name:
+        return {"status": "error", "reason": "instance_name_required"}
+    snapshot = fallback.get_snapshot(instance_name)
+    minute = snapshot.get("minute", {}) if isinstance(snapshot.get("minute"), dict) else {}
+    daily_state = snapshot.get("daily_state", {}) if isinstance(snapshot.get("daily_state"), dict) else {}
+    snapshot_day = str(daily_state.get("day_key") or "") or str(snapshot.get("source_ts", "") or "")[:10]
+    resolved_pair = trading_pair or str(minute.get("trading_pair", "") or "")
+    resolved_day, _, _ = _day_bounds_utc(day_key or snapshot_day)
+    account_summary = fallback.account_summary(instance_name)
+    minute_rows = (
+        fallback.minute_rows_from_csv(instance_name, resolved_pair, resolved_day)
+        if cfg.use_csv_for_operator_api
+        else []
+    )
+    db_available = db_reader.available() if db_reader.enabled else False
+    fills = (
+        fallback.filter_fill_rows_for_instance(
+            instance_name,
+            db_reader.get_fills_for_day(instance_name, resolved_pair, resolved_day),
+        )
+        if db_available
+        else []
+    )
+    source_parts: list[str] = []
+    if fills:
+        source_parts.append("db_fills")
+    if not fills and _operator_api_csv_fallback_allowed(cfg, db_available):
+        fills = fallback.fills_from_csv_for_day(instance_name, resolved_pair, resolved_day)
+        if fills:
+            source_parts.append("fills_csv")
+    if minute_rows:
+        source_parts.append("minute_log")
+    if not source_parts and snapshot:
+        source_parts.append("desk_snapshot")
+    review = _summarize_daily_review(resolved_day, minute_rows, fills, account_summary)
+    review["instance_name"] = instance_name
+    review["trading_pair"] = resolved_pair
+    return {
+        "mode": cfg.normalized_mode(),
+        "source": "+".join(source_parts) if source_parts else "unavailable",
+        "review": review,
+    }
+
+
+def _build_weekly_review_payload(
+    cfg: RealtimeApiConfig,
+    fallback: DeskSnapshotFallback,
+    instance_name: str,
+) -> dict[str, Any]:
+    if not instance_name:
+        return {"status": "error", "reason": "instance_name_required"}
+    report = fallback.weekly_strategy_report(instance_name)
+    if not report:
+        return {
+            "mode": cfg.normalized_mode(),
+            "source": "unavailable",
+            "review": {
+                **_weekly_review_template(),
+                "narrative": f"No weekly report artifact available for {instance_name}.",
+            },
+        }
+    review = _summarize_weekly_report(instance_name, report)
+    return {
+        "mode": cfg.normalized_mode(),
+        "source": "strategy_multi_day_report",
+        "review": review,
+    }
+
+
+def _build_journal_review_payload(
+    cfg: RealtimeApiConfig,
+    fallback: DeskSnapshotFallback,
+    db_reader: OpsDbReadModel,
+    instance_name: str,
+    trading_pair: str,
+    start_day: str,
+    end_day: str,
+) -> dict[str, Any]:
+    if not instance_name:
+        return {"status": "error", "reason": "instance_name_required"}
+    snapshot = fallback.get_snapshot(instance_name)
+    minute = snapshot.get("minute", {}) if isinstance(snapshot.get("minute"), dict) else {}
+    resolved_pair = trading_pair or str(minute.get("trading_pair", "") or "")
+    source_parts: list[str] = []
+    db_available = db_reader.available() if db_reader.enabled else False
+    fills = (
+        fallback.filter_fill_rows_for_instance(
+            instance_name,
+            db_reader.get_fills_range(instance_name, resolved_pair, start_day, end_day, limit=12000),
+        )
+        if db_available
+        else []
+    )
+    if fills:
+        source_parts.append("db_fills")
+    if not fills and _operator_api_csv_fallback_allowed(cfg, db_available):
+        fills = fallback.fills_from_csv_range(instance_name, resolved_pair, start_day, end_day, limit=12000)
+        if fills:
+            source_parts.append("fills_csv")
+    minute_rows = (
+        fallback.minute_rows_range(instance_name, resolved_pair, start_day, end_day, limit=20000)
+        if cfg.use_csv_for_operator_api
+        else []
+    )
+    if minute_rows:
+        source_parts.append("minute_log")
+    trades = _reconstruct_closed_trades(fills)
+    trades = _enrich_closed_trades_with_minute_context(trades, minute_rows)
+    review = _summarize_journal_review(trades)
+    review["instance_name"] = instance_name
+    review["trading_pair"] = resolved_pair
+    review["start_day"] = start_day
+    review["end_day"] = end_day
+    return {
+        "mode": cfg.normalized_mode(),
+        "source": "+".join(source_parts) if source_parts else "unavailable",
+        "review": review,
+    }
+
+
+# ---------------------------------------------------------------------------
+# Starlette application factory
+# ---------------------------------------------------------------------------
+
+def create_app(
+    cfg: RealtimeApiConfig,
+    state: RealtimeState,
+    worker: StreamWorker,
+    fallback: DeskSnapshotFallback,
+    db_reader: OpsDbReadModel,
+    history_provider: MarketHistoryProviderImpl | None,
+):
+    from starlette.applications import Starlette
+    from starlette.middleware import Middleware
+    from starlette.middleware.cors import CORSMiddleware
+    from starlette.requests import Request
+    from starlette.responses import Response
+    from starlette.routing import Route, WebSocketRoute
+    from starlette.websockets import WebSocket, WebSocketDisconnect
+
+    # Parse allowed origins for CORS middleware.
+    allowed_origins = [item.strip() for item in cfg.allowed_origins.split(",") if item.strip()]
+    if not allowed_origins:
+        allowed_origins = [cfg.cors_allow_origin] if cfg.cors_allow_origin and cfg.cors_allow_origin != "*" else ["*"]
+
+    loop: asyncio.AbstractEventLoop | None = None
+
+    def _get_loop() -> asyncio.AbstractEventLoop:
+        nonlocal loop
+        if loop is None:
+            loop = asyncio.get_event_loop()
+        return loop
+
+    # ── Helpers ──────────────────────────────────────────────────────────
+
+    def _json_response(payload: Any, status_code: int = 200) -> Response:
+        return Response(
+            content=_json_bytes(payload),
+            status_code=status_code,
+            media_type="application/json",
+            headers={"Cache-Control": "no-store"},
+        )
+
+    def _check_auth(request: Request) -> Response | None:
+        if not _is_authorized(cfg, request):
+            return _json_response({"status": "unauthorized"}, 401)
+        return None
+
+    def _check_disabled() -> Response | None:
+        if cfg.normalized_mode() == "disabled":
+            return _json_response({"status": "disabled", "reason": "REALTIME_UI_API_MODE=disabled"}, 503)
+        return None
+
+    def _params(request: Request) -> tuple[str, str, str]:
+        instance_name = _sanitize_path_param(request.query_params.get("instance_name", ""))
+        controller_id = request.query_params.get("controller_id", "").strip()
+        trading_pair = request.query_params.get("trading_pair", "").strip()
+        return instance_name, controller_id, trading_pair
+
+    # ── Route handlers ──────────────────────────────────────────────────
+
+    async def health(request: Request) -> Response:
+        status_code, payload = await _get_loop().run_in_executor(
+            None, _build_health_payload, cfg, state, worker, fallback, db_reader,
+        )
+        return _json_response(payload, status_code)
+
+    async def get_state(request: Request) -> Response:
+        denied = _check_auth(request) or _check_disabled()
+        if denied:
+            return denied
+        instance_name, controller_id, trading_pair = _params(request)
+        payload = await _get_loop().run_in_executor(
+            None,
+            partial(_build_state_payload, cfg, state, worker, fallback, db_reader, instance_name, controller_id, trading_pair),
+        )
+        return _json_response(payload)
+
+    async def get_instances(request: Request) -> Response:
+        denied = _check_auth(request) or _check_disabled()
+        if denied:
+            return denied
+        payload = await _get_loop().run_in_executor(
+            None, partial(_build_instances_payload, cfg, state, fallback),
+        )
+        return _json_response(payload)
+
+    async def get_candles(request: Request) -> Response:
+        denied = _check_auth(request) or _check_disabled()
+        if denied:
+            return denied
+        instance_name, controller_id, trading_pair = _params(request)
+        timeframe_s = int(request.query_params.get("timeframe_s", "60") or "60")
+        limit = int(request.query_params.get("limit", "300") or "300")
+        payload = await _get_loop().run_in_executor(
+            None,
+            partial(
+                _build_candles_payload, cfg, state, fallback, db_reader, history_provider,
+                instance_name, controller_id, trading_pair, timeframe_s, limit,
+            ),
+        )
+        return _json_response(payload)
+
+    async def get_depth(request: Request) -> Response:
+        denied = _check_auth(request) or _check_disabled()
+        if denied:
+            return denied
+        instance_name, controller_id, trading_pair = _params(request)
+        stream_state = state.get_state(instance_name, controller_id, trading_pair)
+        depth = stream_state.get("depth", {})
+        return _json_response({"mode": cfg.normalized_mode(), "source": "stream", "depth": depth})
+
+    async def get_positions(request: Request) -> Response:
+        denied = _check_auth(request) or _check_disabled()
+        if denied:
+            return denied
+        instance_name, _, trading_pair = _params(request)
+        if not instance_name:
+            return _json_response({"status": "error", "reason": "instance_name_required"}, 400)
+        db_available = db_reader.available() if db_reader.enabled else False
+        fallback_state = {}
+        used_degraded_snapshot = False
+        if _fallback_allowed(cfg):
+            fallback_state = fallback.state_from_snapshot(
+                instance_name, trading_pair,
+                max_fills=cfg.max_fallback_fills, max_orders=cfg.max_fallback_orders,
+                include_csv_fills=False, include_estimated_orders=False,
+            )
+            used_degraded_snapshot = bool(fallback_state)
+        if db_available:
+            fallback_state["position"] = db_reader.get_position(instance_name, trading_pair) or fallback_state.get("position", {})
+        return _json_response({
+            "mode": cfg.normalized_mode(),
+            "source": "db+degraded_snapshot" if db_available and used_degraded_snapshot else ("db" if db_available else "degraded_snapshot"),
+            **fallback_state,
+        })
+
+    async def get_metrics(request: Request) -> Response:
+        denied = _check_auth(request) or _check_disabled()
+        if denied:
+            return denied
+        metrics = state.metrics()
+        lines = [
+            "# HELP realtime_ui_api_market_keys market states",
+            "# TYPE realtime_ui_api_market_keys gauge",
+            f"realtime_ui_api_market_keys {metrics.get('market_keys', 0)}",
+            "# HELP realtime_ui_api_market_quote_keys market quote states",
+            "# TYPE realtime_ui_api_market_quote_keys gauge",
+            f"realtime_ui_api_market_quote_keys {metrics.get('market_quote_keys', 0)}",
+            "# HELP realtime_ui_api_depth_keys depth states",
+            "# TYPE realtime_ui_api_depth_keys gauge",
+            f"realtime_ui_api_depth_keys {metrics.get('depth_keys', 0)}",
+            "# HELP realtime_ui_api_subscribers active SSE subscribers",
+            "# TYPE realtime_ui_api_subscribers gauge",
+            f"realtime_ui_api_subscribers {metrics.get('subscribers', 0)}",
+        ]
+        return Response(
+            content=("\n".join(lines) + "\n").encode(),
+            status_code=200,
+            media_type="text/plain; version=0.0.4",
+            headers={"Cache-Control": "no-store"},
+        )
+
+    async def review_daily(request: Request) -> Response:
+        denied = _check_auth(request) or _check_disabled()
+        if denied:
+            return denied
+        instance_name, _, trading_pair = _params(request)
+        if not instance_name:
+            return _json_response({"status": "error", "reason": "instance_name_required"}, 400)
+        day_key = request.query_params.get("day", "").strip()
+        payload = await _get_loop().run_in_executor(
+            None,
+            partial(_build_daily_review_payload, cfg, fallback, db_reader, instance_name, trading_pair, day_key),
+        )
+        return _json_response(payload)
+
+    async def review_weekly(request: Request) -> Response:
+        denied = _check_auth(request) or _check_disabled()
+        if denied:
+            return denied
+        instance_name, _, _ = _params(request)
+        if not instance_name:
+            return _json_response({"status": "error", "reason": "instance_name_required"}, 400)
+        payload = await _get_loop().run_in_executor(
+            None,
+            partial(_build_weekly_review_payload, cfg, fallback, instance_name),
+        )
+        return _json_response(payload)
+
+    async def review_journal(request: Request) -> Response:
+        denied = _check_auth(request) or _check_disabled()
+        if denied:
+            return denied
+        instance_name, _, trading_pair = _params(request)
+        if not instance_name:
+            return _json_response({"status": "error", "reason": "instance_name_required"}, 400)
+        start_day = request.query_params.get("start_day", "").strip()
+        end_day = request.query_params.get("end_day", "").strip()
+        payload = await _get_loop().run_in_executor(
+            None,
+            partial(_build_journal_review_payload, cfg, fallback, db_reader, instance_name, trading_pair, start_day, end_day),
+        )
+        return _json_response(payload)
+
+    # ── WebSocket handler (replaces hand-rolled RFC 6455) ───────────────
+
+    async def ws_handler(websocket: WebSocket) -> None:
+        # Auth check via query params (WS can't send custom headers easily).
+        token = websocket.query_params.get("token", "").strip()
+        auth_header = websocket.headers.get("authorization", "")
+        authorized = not cfg.auth_enabled
+        if not authorized:
+            expected = cfg.auth_token.strip()
+            if expected:
+                authorized = (auth_header == f"Bearer {expected}") or (cfg.allow_query_token and token == expected)
+        if not authorized:
+            await websocket.close(code=4001, reason="unauthorized")
+            return
+        if cfg.normalized_mode() == "disabled":
+            await websocket.close(code=4003, reason="disabled")
+            return
+
+        instance_name = _sanitize_path_param(websocket.query_params.get("instance_name", ""))
+        controller_id = websocket.query_params.get("controller_id", "").strip()
+        trading_pair = websocket.query_params.get("trading_pair", "").strip()
+        timeframe_s = int(websocket.query_params.get("timeframe_s", "60") or "60")
+        candle_limit = int(websocket.query_params.get("limit", "300") or "300")
+
+        await websocket.accept()
+
+        q = state.register_subscriber(instance_name, controller_id, trading_pair)
+        try:
+            # Send initial snapshot.
+            snapshot_payload = await _get_loop().run_in_executor(
+                None,
+                partial(_build_state_payload, cfg, state, worker, fallback, db_reader, instance_name, controller_id, trading_pair),
+            )
+            candles_payload = await _get_loop().run_in_executor(
+                None,
+                partial(
+                    _build_candles_payload, cfg, state, fallback, db_reader, history_provider,
+                    instance_name, controller_id, trading_pair, timeframe_s, candle_limit,
+                ),
+            )
+            snapshot_msg = {
+                "type": "snapshot",
+                "ts_ms": _now_ms(),
+                "instance_name": instance_name,
+                "controller_id": controller_id,
+                "trading_pair": trading_pair,
+                "key": {"instance_name": instance_name, "controller_id": controller_id, "trading_pair": trading_pair},
+                "state": snapshot_payload,
+                "candles": candles_payload.get("candles", []),
             }
-            if (
-                self._fallback_allowed()
-                and instance_name
-                and resolved_trading_pair
-                and len(candles) < max(5, int(limit))
-                and bool(not cfg.csv_failover_only or not (db_reader.available() if db_reader.enabled else False))
-            ):
-                fallback_candles = fallback.candles_from_minute_log(instance_name, resolved_trading_pair, timeframe_s, limit)
-                if fallback_candles:
-                    merged_by_bucket = {int(c.get("bucket_ms", 0)): c for c in fallback_candles}
-                    merged_by_bucket.update({int(c.get("bucket_ms", 0)): c for c in candles})
-                    candles = [merged_by_bucket[k] for k in sorted(merged_by_bucket.keys()) if k > 0]
-                    candles = candles[-max(1, int(limit)) :]
-                    if "minute_log" not in source_chain:
-                        source_chain.append("minute_log")
-                    quality = _history_quality_from_candles(
-                        candles,
-                        bar_interval_s=int(timeframe_s),
-                        bars_requested=int(status.bars_requested),
-                        source_used="+".join(source_chain) if source_chain else str(status.source_used or "empty"),
-                        degraded_reason=str(status.degraded_reason or "minute_log"),
-                    )
-                    if quality["status"] == "fresh":
-                        quality["status"] = "degraded"
-                    if not str(quality.get("degraded_reason", "")).strip():
-                        quality["degraded_reason"] = "minute_log"
-            return {
-                "mode": cfg.normalized_mode(),
-                "source": "+".join(source_chain) if source_chain else str(status.source_used or "empty"),
-                "trading_pair": resolved_trading_pair,
-                "db_available": db_reader.available() if db_reader.enabled else False,
-                "csv_failover_used": "minute_log" in source_chain,
-                "source_chain": source_chain,
-                "quality": quality,
-                "candles": candles,
-            }
+            await websocket.send_text(_json_str(snapshot_msg))
 
-        def _build_candles_payload(
-            self,
-            instance_name: str,
-            controller_id: str,
-            trading_pair: str,
-            timeframe_s: int,
-            limit: int,
-        ) -> Dict[str, Any]:
-            legacy = self._build_legacy_candles_payload(instance_name, controller_id, trading_pair, timeframe_s, limit)
-            mode = cfg.normalized_history_ui_read_mode()
-            if mode == "legacy":
-                return legacy
-            shared = self._build_provider_candles_payload(instance_name, controller_id, trading_pair, timeframe_s, limit)
-            if mode == "shadow":
-                legacy["shadow"] = {
-                    "mode": "shadow",
-                    "provider": {
-                        "source": shared.get("source"),
-                        "source_chain": shared.get("source_chain", []),
-                        "quality": shared.get("quality", {}),
-                    },
-                    "parity": _compare_candle_sets(
-                        legacy.get("candles", []) if isinstance(legacy.get("candles"), list) else [],
-                        shared.get("candles", []) if isinstance(shared.get("candles"), list) else [],
-                    ),
-                }
-                return legacy
-            return shared if shared.get("candles") else legacy
+            last_snapshot_ms = _now_ms()
 
-        def _stream_key_matches(
-            self,
-            event_key: Any,
-            instance_name: str,
-            controller_id: str,
-            trading_pair: str,
-        ) -> bool:
-            if isinstance(event_key, dict):
-                ev_instance = str(event_key.get("instance_name", "") or "").strip()
-                ev_controller = str(event_key.get("controller_id", "") or "").strip()
-                ev_pair = str(event_key.get("trading_pair", "") or "").strip()
-            elif isinstance(event_key, (list, tuple)) and len(event_key) >= 3:
-                ev_instance = str(event_key[0] or "").strip()
-                ev_controller = str(event_key[1] or "").strip()
-                ev_pair = str(event_key[2] or "").strip()
-            else:
-                return True
-            if instance_name and ev_instance and instance_name != ev_instance:
-                return False
-            if controller_id and ev_controller and controller_id != ev_controller:
-                return False
-            if trading_pair and _normalize_pair(trading_pair) != _normalize_pair(ev_pair):
-                return False
-            return True
-
-        def do_OPTIONS(self) -> None:  # noqa: N802
-            self.send_response(204)
-            self.send_header("Access-Control-Allow-Origin", self._cors_origin())
-            self.send_header("Access-Control-Allow-Headers", "Authorization,Content-Type")
-            self.send_header("Access-Control-Allow-Methods", "GET,OPTIONS")
-            self.end_headers()
-
-        def do_GET(self) -> None:  # noqa: N802
-            parsed = urlparse(self.path)
-            path = parsed.path
-            params = parse_qs(parsed.query, keep_blank_values=False)
-            query_token = str(params.get("token", [""])[0]).strip()
-
-            if path == "/health":
-                health_status, health_payload = _build_health_payload(cfg, state, worker, fallback, db_reader)
-                _response(self, health_status, health_payload, self._cors_origin())
-                return
-
-            if not self._is_authorized(query_token):
-                _response(self, 401, {"status": "unauthorized"}, self._cors_origin())
-                return
-
-            if cfg.normalized_mode() == "disabled":
-                _response(
-                    self,
-                    503,
-                    {"status": "disabled", "reason": "REALTIME_UI_API_MODE=disabled"},
-                    self._cors_origin(),
-                )
-                return
-
-            instance_name = str(params.get("instance_name", [""])[0]).strip()
-            controller_id = str(params.get("controller_id", [""])[0]).strip()
-            trading_pair = str(params.get("trading_pair", [""])[0]).strip()
-
-            if path == "/metrics":
-                metrics = state.metrics()
-                lines = [
-                    "# HELP realtime_ui_api_market_keys market states",
-                    "# TYPE realtime_ui_api_market_keys gauge",
-                    f"realtime_ui_api_market_keys {metrics.get('market_keys', 0)}",
-                    "# HELP realtime_ui_api_market_quote_keys market quote states",
-                    "# TYPE realtime_ui_api_market_quote_keys gauge",
-                    f"realtime_ui_api_market_quote_keys {metrics.get('market_quote_keys', 0)}",
-                    "# HELP realtime_ui_api_depth_keys depth states",
-                    "# TYPE realtime_ui_api_depth_keys gauge",
-                    f"realtime_ui_api_depth_keys {metrics.get('depth_keys', 0)}",
-                    "# HELP realtime_ui_api_subscribers active SSE subscribers",
-                    "# TYPE realtime_ui_api_subscribers gauge",
-                    f"realtime_ui_api_subscribers {metrics.get('subscribers', 0)}",
-                ]
-                _text_response(self, 200, "\n".join(lines) + "\n", self._cors_origin(), "text/plain; version=0.0.4")
-                return
-
-            if path == "/api/v1/state":
-                payload = self._build_state_payload(instance_name, controller_id, trading_pair)
-                _response(self, 200, payload, self._cors_origin())
-                return
-
-            if path == "/api/v1/instances":
-                payload = self._build_instances_payload()
-                _response(self, 200, payload, self._cors_origin())
-                return
-
-            if path == "/api/v1/candles":
-                timeframe_s = int(params.get("timeframe_s", ["60"])[0] or "60")
-                limit = int(params.get("limit", ["300"])[0] or "300")
-                payload = self._build_candles_payload(instance_name, controller_id, trading_pair, timeframe_s, limit)
-                _response(self, 200, payload, self._cors_origin())
-                return
-
-            if path == "/api/v1/depth":
-                stream_state = state.get_state(instance_name, controller_id, trading_pair)
-                depth = stream_state.get("depth", {})
-                _response(
-                    self,
-                    200,
-                    {"mode": cfg.normalized_mode(), "source": "stream", "depth": depth},
-                    self._cors_origin(),
-                )
-                return
-
-            if path == "/api/v1/positions":
-                if not instance_name:
-                    _response(self, 400, {"status": "error", "reason": "instance_name_required"}, self._cors_origin())
-                    return
-                db_available = db_reader.available() if db_reader.enabled else False
-                fallback_state = {}
-                used_degraded_snapshot = False
-                if self._fallback_allowed():
-                    fallback_state = fallback.state_from_snapshot(
-                        instance_name,
-                        trading_pair,
-                        max_fills=cfg.max_fallback_fills,
-                        max_orders=cfg.max_fallback_orders,
-                        include_csv_fills=False,
-                        include_estimated_orders=False,
-                    )
-                    used_degraded_snapshot = bool(fallback_state)
-                if db_available:
-                    fallback_state["position"] = db_reader.get_position(instance_name, trading_pair) or fallback_state.get("position", {})
-                _response(
-                    self,
-                    200,
-                    {
-                        "mode": cfg.normalized_mode(),
-                        "source": "db+degraded_snapshot" if db_available and used_degraded_snapshot else ("db" if db_available else "degraded_snapshot"),
-                        **fallback_state,
-                    },
-                    self._cors_origin(),
-                )
-                return
-
-            if path == "/api/v1/review/daily":
-                if not instance_name:
-                    _response(self, 400, {"status": "error", "reason": "instance_name_required"}, self._cors_origin())
-                    return
-                day_key = str(params.get("day", [""])[0]).strip()
-                payload = self._build_daily_review_payload(instance_name, trading_pair, day_key)
-                _response(self, 200, payload, self._cors_origin())
-                return
-
-            if path == "/api/v1/review/weekly":
-                if not instance_name:
-                    _response(self, 400, {"status": "error", "reason": "instance_name_required"}, self._cors_origin())
-                    return
-                payload = self._build_weekly_review_payload(instance_name)
-                _response(self, 200, payload, self._cors_origin())
-                return
-
-            if path == "/api/v1/review/journal":
-                if not instance_name:
-                    _response(self, 400, {"status": "error", "reason": "instance_name_required"}, self._cors_origin())
-                    return
-                start_day = str(params.get("start_day", [""])[0]).strip()
-                end_day = str(params.get("end_day", [""])[0]).strip()
-                payload = self._build_journal_review_payload(instance_name, trading_pair, start_day, end_day)
-                _response(self, 200, payload, self._cors_origin())
-                return
-
-            if path == "/api/v1/ws":
-                ws_key = str(self.headers.get("Sec-WebSocket-Key", "")).strip()
-                ws_upgrade = str(self.headers.get("Upgrade", "")).strip().lower()
-                if not ws_key or ws_upgrade != "websocket":
-                    _response(self, 400, {"status": "error", "reason": "websocket_upgrade_required"}, self._cors_origin())
-                    return
-                timeframe_s = int(params.get("timeframe_s", ["60"])[0] or "60")
-                candle_limit = int(params.get("limit", ["300"])[0] or "300")
-                q = state.register_subscriber(instance_name, controller_id, trading_pair)
+            while True:
+                # Bridge blocking queue.get() to async via executor.
                 try:
-                    self.send_response(101, "Switching Protocols")
-                    self.send_header("Upgrade", "websocket")
-                    self.send_header("Connection", "Upgrade")
-                    self.send_header("Sec-WebSocket-Accept", _ws_accept_key(ws_key))
-                    self.end_headers()
+                    raw = await asyncio.wait_for(
+                        _get_loop().run_in_executor(None, partial(q.get, timeout=2.0)),
+                        timeout=6.0,
+                    )
+                    evt = json.loads(raw) if isinstance(raw, str) else {}
+                    event_key = evt.get("key")
+                    if not _stream_key_matches(event_key, instance_name, controller_id, trading_pair):
+                        continue
+                    await websocket.send_text(_json_str({"type": "event", **evt}))
+                except (TimeoutError, queue.Empty):
+                    await websocket.send_text(_json_str({"type": "keepalive", "ts_ms": _now_ms()}))
 
-                    snapshot_msg = {
+                # Periodic full snapshot every 30s.
+                now_ms = _now_ms()
+                if now_ms - last_snapshot_ms >= 30_000:
+                    periodic_state = await _get_loop().run_in_executor(
+                        None,
+                        partial(_build_state_payload, cfg, state, worker, fallback, db_reader, instance_name, controller_id, trading_pair),
+                    )
+                    periodic_candles = await _get_loop().run_in_executor(
+                        None,
+                        partial(
+                            _build_candles_payload, cfg, state, fallback, db_reader, history_provider,
+                            instance_name, controller_id, trading_pair, timeframe_s, candle_limit,
+                        ),
+                    )
+                    periodic_msg = {
                         "type": "snapshot",
-                        "ts_ms": _now_ms(),
+                        "ts_ms": now_ms,
                         "instance_name": instance_name,
                         "controller_id": controller_id,
                         "trading_pair": trading_pair,
-                        "key": {
-                            "instance_name": instance_name,
-                            "controller_id": controller_id,
-                            "trading_pair": trading_pair,
-                        },
-                        "state": self._build_state_payload(instance_name, controller_id, trading_pair),
-                        "candles": self._build_candles_payload(
-                            instance_name, controller_id, trading_pair, timeframe_s, candle_limit
-                        ).get("candles", []),
+                        "key": {"instance_name": instance_name, "controller_id": controller_id, "trading_pair": trading_pair},
+                        "state": periodic_state,
+                        "candles": periodic_candles.get("candles", []),
                     }
-                    _ws_send_text(self, _safe_json(snapshot_msg))
+                    await websocket.send_text(_json_str(periodic_msg))
+                    last_snapshot_ms = now_ms
 
-                    last_snapshot_ms = _now_ms()
-                    while True:
-                        try:
-                            raw = q.get(timeout=5.0)
-                            evt = json.loads(raw) if isinstance(raw, str) else {}
-                            event_key = evt.get("key")
-                            if not self._stream_key_matches(event_key, instance_name, controller_id, trading_pair):
-                                continue
-                            _ws_send_text(self, _safe_json({"type": "event", **evt}))
-                        except queue.Empty:
-                            _ws_send_text(self, _safe_json({"type": "keepalive", "ts_ms": _now_ms()}))
-                        now_ms = _now_ms()
-                        if now_ms - last_snapshot_ms >= 30_000:
-                            periodic_msg = {
-                                "type": "snapshot",
-                                "ts_ms": now_ms,
-                                "instance_name": instance_name,
-                                "controller_id": controller_id,
-                                "trading_pair": trading_pair,
-                                "key": {
-                                    "instance_name": instance_name,
-                                    "controller_id": controller_id,
-                                    "trading_pair": trading_pair,
-                                },
-                                "state": self._build_state_payload(instance_name, controller_id, trading_pair),
-                                "candles": self._build_candles_payload(
-                                    instance_name, controller_id, trading_pair, timeframe_s, candle_limit
-                                ).get("candles", []),
-                            }
-                            _ws_send_text(self, _safe_json(periodic_msg))
-                            last_snapshot_ms = now_ms
-                except (BrokenPipeError, ConnectionResetError, OSError):
-                    return
-                finally:
-                    state.unregister_subscriber(q)
-                return
+        except WebSocketDisconnect:
+            pass
+        except (BrokenPipeError, ConnectionResetError, OSError):
+            pass
+        finally:
+            state.unregister_subscriber(q)
 
-            if path == "/api/v1/stream":
-                if not cfg.sse_enabled:
-                    _response(self, 404, {"status": "not_found", "path": path}, self._cors_origin())
-                    return
-                q = state.register_subscriber(instance_name, controller_id, trading_pair)
-                try:
-                    self.send_response(200)
-                    self.send_header("Content-Type", "text/event-stream")
-                    self.send_header("Cache-Control", "no-cache")
-                    self.send_header("Connection", "keep-alive")
-                    self.send_header("Access-Control-Allow-Origin", self._cors_origin())
-                    self.end_headers()
-                    self.wfile.write(b"event: ready\ndata: {\"status\":\"ok\"}\n\n")
-                    self.wfile.flush()
-                    while True:
-                        try:
-                            payload = q.get(timeout=15.0)
-                            self.wfile.write(f"event: update\ndata: {payload}\n\n".encode("utf-8"))
-                            self.wfile.flush()
-                        except queue.Empty:
-                            self.wfile.write(b": keepalive\n\n")
-                            self.wfile.flush()
-                except (BrokenPipeError, ConnectionResetError):
-                    return
-                finally:
-                    state.unregister_subscriber(q)
-                return
+    # ── SSE stream handler ──────────────────────────────────────────────
 
-            _response(self, 404, {"status": "not_found", "path": path}, self._cors_origin())
+    async def sse_stream(request: Request) -> Response:
+        denied = _check_auth(request) or _check_disabled()
+        if denied:
+            return denied
+        if not cfg.sse_enabled:
+            return _json_response({"status": "not_found", "path": "/api/v1/stream"}, 404)
 
-    return Handler
+        instance_name, controller_id, trading_pair = _params(request)
+        q = state.register_subscriber(instance_name, controller_id, trading_pair)
 
+        from starlette.responses import StreamingResponse
+
+        async def _event_generator():
+            try:
+                yield "event: ready\ndata: {\"status\":\"ok\"}\n\n"
+                while True:
+                    try:
+                        payload = await asyncio.wait_for(
+                            _get_loop().run_in_executor(None, partial(q.get, timeout=10.0)),
+                            timeout=16.0,
+                        )
+                        yield f"event: update\ndata: {payload}\n\n"
+                    except (TimeoutError, queue.Empty):
+                        yield ": keepalive\n\n"
+            except (BrokenPipeError, ConnectionResetError, asyncio.CancelledError):
+                pass
+            finally:
+                state.unregister_subscriber(q)
+
+        return StreamingResponse(
+            _event_generator(),
+            media_type="text/event-stream",
+            headers={"Cache-Control": "no-cache", "Connection": "keep-alive"},
+        )
+
+    # ── Backtest API routes ─────────────────────────────────────────────
+
+    from services.realtime_ui_api.backtest_api import create_backtest_routes
+    backtest_routes = create_backtest_routes(auth_check=_check_auth)
+
+    from services.realtime_ui_api.research_api import create_research_routes
+    research_routes = create_research_routes(auth_check=_check_auth)
+
+    # ── Routes ──────────────────────────────────────────────────────────
+
+    routes = [
+        Route("/health", health, methods=["GET"]),
+        Route("/metrics", get_metrics, methods=["GET"]),
+        Route("/api/v1/state", get_state, methods=["GET"]),
+        Route("/api/v1/instances", get_instances, methods=["GET"]),
+        Route("/api/v1/candles", get_candles, methods=["GET"]),
+        Route("/api/v1/depth", get_depth, methods=["GET"]),
+        Route("/api/v1/positions", get_positions, methods=["GET"]),
+        Route("/api/v1/review/daily", review_daily, methods=["GET"]),
+        Route("/api/v1/review/weekly", review_weekly, methods=["GET"]),
+        Route("/api/v1/review/journal", review_journal, methods=["GET"]),
+        Route("/api/v1/stream", sse_stream, methods=["GET"]),
+        WebSocketRoute("/api/v1/ws", ws_handler),
+        *backtest_routes,
+        *research_routes,
+    ]
+
+    middleware = [
+        Middleware(
+            CORSMiddleware,
+            allow_origins=allowed_origins,
+            allow_methods=["GET", "POST", "OPTIONS"],
+            allow_headers=["Authorization", "Content-Type"],
+        ),
+    ]
+
+    return Starlette(routes=routes, middleware=middleware)
+
+
+# ---------------------------------------------------------------------------
+# Server lifecycle
+# ---------------------------------------------------------------------------
 
 def run() -> None:
+    import uvicorn
+
     cfg = RealtimeApiConfig()
     _validate_runtime_config(cfg)
     state = RealtimeState(cfg)
     worker = StreamWorker(cfg, state)
     fallback = DeskSnapshotFallback(cfg.fallback_root, cfg.data_root)
     db_reader = OpsDbReadModel(cfg)
-    history_provider: Optional[MarketHistoryProviderImpl] = None
+    history_provider: MarketHistoryProviderImpl | None = None
 
     if cfg.normalized_history_ui_read_mode() in {"shadow", "shared"}:
-        def _db_bar_reader(key: MarketBarKey, bar_interval_s: int, limit: int, end_time_ms: Optional[int], require_closed: bool):
-            return db_reader.get_market_bars(key, bar_interval_s, limit, end_time_ms=end_time_ms, require_closed=require_closed)
-
-        def _stream_bar_reader(key: MarketBarKey, bar_interval_s: int, limit: int, end_time_ms: Optional[int], require_closed: bool):
-            candles = state.get_connector_candles(
-                str(key.connector_name or ""),
-                str(key.trading_pair or ""),
-                timeframe_s=bar_interval_s,
-                limit=limit,
+        def _db_bar_reader(connector_name, trading_pair, bar_interval_s, limit):
+            return _candle_dicts_to_market_bars(
+                db_reader.get_market_bars(connector_name, trading_pair, bar_interval_s, limit),
+                bar_interval_s=bar_interval_s,
+                bar_source="db",
             )
-            return _candle_dicts_to_market_bars(candles, bar_interval_s=max(60, int(bar_interval_s)), bar_source=str(key.bar_source))
 
-        def _rest_bar_reader(key: MarketBarKey, bar_interval_s: int, limit: int, end_time_ms: Optional[int], require_closed: bool):
-            candles = db_reader.get_rest_backfill_candles(key.connector_name, key.trading_pair, bar_interval_s, limit)
-            return _candle_dicts_to_market_bars(candles, bar_interval_s=max(60, int(bar_interval_s)), bar_source="exchange_ohlcv")
+        def _stream_bar_reader(connector_name, trading_pair, bar_interval_s, limit):
+            return _candle_dicts_to_market_bars(
+                state.get_candles("", "", trading_pair, bar_interval_s, limit),
+                bar_interval_s=bar_interval_s,
+                bar_source="stream",
+            )
+
+        def _rest_bar_reader(connector_name, trading_pair, bar_interval_s, limit):
+            return _candle_dicts_to_market_bars(
+                db_reader.get_rest_backfill_candles(connector_name, trading_pair, bar_interval_s, limit),
+                bar_interval_s=bar_interval_s,
+                bar_source="rest_ohlc",
+            )
 
         history_provider = MarketHistoryProviderImpl(
             db_reader=_db_bar_reader,
@@ -4506,8 +1400,8 @@ def run() -> None:
         )
     worker.start()
 
-    handler_cls = make_handler(cfg, state, worker, fallback, db_reader, history_provider)
-    server = ThreadingHTTPServer((cfg.bind_host, cfg.port), handler_cls)
+    app = create_app(cfg, state, worker, fallback, db_reader, history_provider)
+
     logger.info(
         "realtime_ui_api starting host=%s port=%s mode=%s fallback_enabled=%s degraded_mode_enabled=%s",
         cfg.bind_host,
@@ -4516,13 +1410,25 @@ def run() -> None:
         cfg.fallback_enabled,
         cfg.degraded_mode_enabled,
     )
+
     try:
-        server.serve_forever(poll_interval=0.5)
-    except KeyboardInterrupt:
-        logger.info("realtime_ui_api stopping (keyboard interrupt)")
+        uvicorn.run(
+            app,
+            host=cfg.bind_host,
+            port=cfg.port,
+            log_level="info",
+            access_log=True,
+            ws="auto",
+            lifespan="off",
+        )
     finally:
         worker.stop()
-        server.server_close()
+        try:
+            from services.realtime_ui_api.backtest_api import shutdown_backtest_subprocesses
+
+            shutdown_backtest_subprocesses()
+        except Exception:
+            logger.debug("backtest subprocess shutdown skipped", exc_info=True)
 
 
 def main() -> None:

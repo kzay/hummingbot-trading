@@ -1,23 +1,30 @@
 from __future__ import annotations
 
+import itertools
+import logging
 import os
 import time
-from datetime import datetime, timezone
+from collections.abc import Callable, Iterable, Sequence
+from datetime import UTC, datetime
 from decimal import Decimal
-from typing import Callable, Dict, Iterable, List, Optional, Sequence, Tuple
+from typing import TYPE_CHECKING
 
 try:
     import psycopg
 except Exception:  # pragma: no cover - optional in lightweight test environments.
     psycopg = None  # type: ignore[assignment]
 
-from controllers.price_buffer import MidPriceBuffer, MinuteBar
-from services.common.market_history_provider import MarketHistoryProvider
-from services.common.market_history_types import MarketBar, MarketBarKey, MarketHistoryStatus
+from platform_lib.market_data.market_history_provider import MarketHistoryProvider
+from platform_lib.market_data.market_history_types import MarketBar, MarketBarKey, MarketHistoryStatus
 
-BarReader = Callable[[MarketBarKey, int, int, Optional[int], bool], List[MarketBar]]
-SampleReader = Callable[[MarketBarKey, int], List[Tuple[float, Decimal]]]
+if TYPE_CHECKING:
+    from controllers.price_buffer import MinuteBar, PriceBuffer
+
+BarReader = Callable[[MarketBarKey, int, int, int | None, bool], list[MarketBar]]
+SampleReader = Callable[[MarketBarKey, int], list[tuple[float, Decimal]]]
 NowMsReader = Callable[[], int]
+
+logger = logging.getLogger(__name__)
 
 _ZERO = Decimal("0")
 
@@ -26,7 +33,7 @@ def _now_ms() -> int:
     return int(time.time() * 1000)
 
 
-def _to_decimal(value: object) -> Optional[Decimal]:
+def _to_decimal(value: object) -> Decimal | None:
     if value is None:
         return None
     try:
@@ -36,19 +43,19 @@ def _to_decimal(value: object) -> Optional[Decimal]:
 
 
 def _to_ts_utc_from_ms(value: int) -> str:
-    return datetime.fromtimestamp(value / 1000.0, tz=timezone.utc).isoformat()
+    return datetime.fromtimestamp(value / 1000.0, tz=UTC).isoformat()
 
 
 class MarketHistoryProviderImpl(MarketHistoryProvider):
     def __init__(
         self,
         *,
-        db_reader: Optional[BarReader] = None,
-        stream_reader: Optional[BarReader] = None,
-        rest_reader: Optional[BarReader] = None,
-        file_reader: Optional[BarReader] = None,
-        sample_reader: Optional[SampleReader] = None,
-        now_ms_reader: Optional[NowMsReader] = None,
+        db_reader: BarReader | None = None,
+        stream_reader: BarReader | None = None,
+        rest_reader: BarReader | None = None,
+        file_reader: BarReader | None = None,
+        sample_reader: SampleReader | None = None,
+        now_ms_reader: NowMsReader | None = None,
     ) -> None:
         self._db_reader = db_reader or self._read_bars_from_db
         self._stream_reader = stream_reader
@@ -62,12 +69,12 @@ class MarketHistoryProviderImpl(MarketHistoryProvider):
         key: MarketBarKey,
         bar_interval_s: int = 60,
         limit: int = 300,
-        end_time_ms: Optional[int] = None,
+        end_time_ms: int | None = None,
         require_closed: bool = True,
-    ) -> Tuple[List[MarketBar], MarketHistoryStatus]:
+    ) -> tuple[list[MarketBar], MarketHistoryStatus]:
         bounded_limit = max(1, int(limit))
         effective_end_ms = int(end_time_ms or self._now_ms_reader())
-        source_chain: List[str] = []
+        source_chain: list[str] = []
         degraded_reason = ""
 
         db_bars = self._read_with(self._db_reader, key, 60, bounded_limit * max(1, int(bar_interval_s // 60)), effective_end_ms, True)
@@ -75,7 +82,7 @@ class MarketHistoryProviderImpl(MarketHistoryProvider):
         if bars:
             source_chain.append("db_v2")
 
-        stream_bars: List[MarketBar] = []
+        stream_bars: list[MarketBar] = []
         if self._stream_reader is not None:
             stream_bars = self._read_with(self._stream_reader, key, bar_interval_s, bounded_limit, effective_end_ms, require_closed)
             if stream_bars:
@@ -150,13 +157,15 @@ class MarketHistoryProviderImpl(MarketHistoryProvider):
         _, status = self.get_bars(key, bar_interval_s=bar_interval_s, limit=1)
         return status
 
-    def seed_midprice_buffer(
+    def seed_price_buffer(
         self,
-        buffer: MidPriceBuffer,
+        buffer: PriceBuffer,
         key: MarketBarKey,
         bars_needed: int,
         now_ms: int,
     ) -> MarketHistoryStatus:
+        from controllers.price_buffer import MinuteBar  # lazy: avoid circular layer dep
+
         bars, status = self.get_bars(
             key=key,
             bar_interval_s=60,
@@ -199,13 +208,13 @@ class MarketHistoryProviderImpl(MarketHistoryProvider):
 
     def _read_with(
         self,
-        reader: Optional[BarReader],
+        reader: BarReader | None,
         key: MarketBarKey,
         bar_interval_s: int,
         limit: int,
-        end_time_ms: Optional[int],
+        end_time_ms: int | None,
         require_closed: bool,
-    ) -> List[MarketBar]:
+    ) -> list[MarketBar]:
         if reader is None:
             return []
         try:
@@ -218,9 +227,9 @@ class MarketHistoryProviderImpl(MarketHistoryProvider):
         key: MarketBarKey,
         bar_interval_s: int,
         limit: int,
-        end_time_ms: Optional[int],
+        end_time_ms: int | None,
         require_closed: bool,
-    ) -> List[MarketBar]:
+    ) -> list[MarketBar]:
         if psycopg is None:
             return []
         host = os.getenv("OPS_DB_HOST", "postgres")
@@ -228,9 +237,10 @@ class MarketHistoryProviderImpl(MarketHistoryProvider):
         dbname = os.getenv("OPS_DB_NAME", "kzay_capital_ops")
         user = os.getenv("OPS_DB_USER", "hbot")
         password = os.getenv("OPS_DB_PASSWORD", "kzay_capital_dev_password")
-        rows: List[MarketBar] = []
-        conn = psycopg.connect(host=host, port=port, dbname=dbname, user=user, password=password, connect_timeout=3)
+        rows: list[MarketBar] = []
+        conn = None
         try:
+            conn = psycopg.connect(host=host, port=port, dbname=dbname, user=user, password=password, connect_timeout=3)
             with conn.cursor() as cur:
                 cur.execute(
                     """
@@ -279,9 +289,11 @@ class MarketHistoryProviderImpl(MarketHistoryProvider):
                         )
                     )
         except Exception:
+            logger.warning("_read_bars_from_db query failed for %s", key, exc_info=True)
             return []
         finally:
-            conn.close()
+            if conn:
+                conn.close()
         return rows
 
     def _prepare_bars(
@@ -291,7 +303,7 @@ class MarketHistoryProviderImpl(MarketHistoryProvider):
         require_closed: bool,
         end_time_ms: int,
         limit: int,
-    ) -> List[MarketBar]:
+    ) -> list[MarketBar]:
         prepared = list(bars)
         if require_closed:
             prepared = [bar for bar in prepared if bool(bar.is_closed)]
@@ -304,7 +316,7 @@ class MarketHistoryProviderImpl(MarketHistoryProvider):
             return True
         return str(status.status or "empty") in {"empty", "stale", "gapped"}
 
-    def _pair_candidates(self, trading_pair: str) -> List[str]:
+    def _pair_candidates(self, trading_pair: str) -> list[str]:
         raw = str(trading_pair or "").strip().upper()
         if not raw:
             return []
@@ -315,16 +327,16 @@ class MarketHistoryProviderImpl(MarketHistoryProvider):
             out.add(f"{norm[:-4]}-{norm[-4:]}")
         return sorted(item for item in out if item)
 
-    def _rollup(self, bars: Sequence[MarketBar], bar_interval_s: int) -> List[MarketBar]:
+    def _rollup(self, bars: Sequence[MarketBar], bar_interval_s: int) -> list[MarketBar]:
         effective_interval_s = max(60, int(bar_interval_s or 60))
         if effective_interval_s <= 60:
             return list(sorted(bars, key=lambda item: int(item.bucket_start_ms)))
         bucket_ms = effective_interval_s * 1000
-        grouped: Dict[int, List[MarketBar]] = {}
+        grouped: dict[int, list[MarketBar]] = {}
         for bar in sorted(bars, key=lambda item: int(item.bucket_start_ms)):
             bucket_start_ms = (int(bar.bucket_start_ms) // bucket_ms) * bucket_ms
             grouped.setdefault(bucket_start_ms, []).append(bar)
-        rolled: List[MarketBar] = []
+        rolled: list[MarketBar] = []
         for bucket_start_ms in sorted(grouped.keys()):
             group = grouped[bucket_start_ms]
             if not group:
@@ -345,8 +357,8 @@ class MarketHistoryProviderImpl(MarketHistoryProvider):
             )
         return rolled
 
-    def _merge_bars(self, base: Sequence[MarketBar], overlay: Sequence[MarketBar]) -> List[MarketBar]:
-        merged: Dict[int, MarketBar] = {int(bar.bucket_start_ms): bar for bar in base}
+    def _merge_bars(self, base: Sequence[MarketBar], overlay: Sequence[MarketBar]) -> list[MarketBar]:
+        merged: dict[int, MarketBar] = {int(bar.bucket_start_ms): bar for bar in base}
         for bar in overlay:
             merged[int(bar.bucket_start_ms)] = bar
         return [merged[key] for key in sorted(merged.keys())]
@@ -375,7 +387,7 @@ class MarketHistoryProviderImpl(MarketHistoryProvider):
             )
         ordered = sorted(bars, key=lambda item: int(item.bucket_start_ms))
         max_gap_s = 0
-        for prev_bar, bar in zip(ordered[:-1], ordered[1:]):
+        for prev_bar, bar in itertools.pairwise(ordered):
             diff_s = max(0, int((int(bar.bucket_start_ms) - int(prev_bar.bucket_start_ms)) / 1000) - effective_interval_s)
             max_gap_s = max(max_gap_s, diff_s)
         expected = max(1, requested)
@@ -400,8 +412,8 @@ class MarketHistoryProviderImpl(MarketHistoryProvider):
         )
 
 
-def market_bars_to_candles(bars: Iterable[MarketBar]) -> List[Dict[str, float]]:
-    candles: List[Dict[str, float]] = []
+def market_bars_to_candles(bars: Iterable[MarketBar]) -> list[dict[str, float]]:
+    candles: list[dict[str, float]] = []
     for bar in bars:
         candles.append(
             {

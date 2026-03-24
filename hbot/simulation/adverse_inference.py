@@ -6,12 +6,12 @@ as a parameter to avoid circular imports with hb_bridge.
 from __future__ import annotations
 
 import logging
-from typing import Any, List, Optional
+from typing import Any
 
 logger = logging.getLogger(__name__)
 
 
-def _load_adverse_model(bridge_state: Any, model_path: str) -> Optional[Any]:
+def _load_adverse_model(bridge_state: Any, model_path: str) -> Any | None:
     """Lazy-load adverse fill classifier from joblib file. Returns None on failure."""
     if bridge_state.adverse_model_loaded and bridge_state.adverse_model_path == model_path:
         return bridge_state.adverse_model
@@ -20,7 +20,7 @@ def _load_adverse_model(bridge_state: Any, model_path: str) -> Optional[Any]:
     if not model_path:
         return None
     try:
-        import joblib as _joblib  # type: ignore
+        import joblib as _joblib  # type: ignore[import-untyped]
         bridge_state.adverse_model = _joblib.load(model_path)
         logger.info("Adverse classifier loaded from %s", model_path)
         return bridge_state.adverse_model
@@ -30,7 +30,7 @@ def _load_adverse_model(bridge_state: Any, model_path: str) -> Optional[Any]:
         return None
 
 
-def _build_adverse_features(controller: Any) -> Optional[List[float]]:
+def _build_adverse_features(controller: Any) -> list[float] | None:
     """Build feature vector from controller's processed_data for adverse inference."""
     try:
         custom = controller.get_custom_info() if hasattr(controller, "get_custom_info") else {}
@@ -114,7 +114,7 @@ def _run_adverse_inference(strategy: Any, bridge_state: Any) -> None:
                 if hasattr(model, "classes_"):
                     adverse_class_idx = list(model.classes_).index(1) if 1 in model.classes_ else 1
                     p_adverse = float(proba[adverse_class_idx])
-            except Exception:
+            except (ValueError, TypeError, IndexError, AttributeError):
                 continue
 
             threshold_widen = float(getattr(cfg, "adverse_threshold_widen", 0.70))

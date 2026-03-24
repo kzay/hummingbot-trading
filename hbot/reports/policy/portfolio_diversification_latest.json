@@ -1,6 +1,6 @@
 {
-  "ts_utc": "2026-03-05T21:27:50.033833+00:00",
-  "status": "pass",
+  "ts_utc": "2026-03-22T22:54:30.183737+00:00",
+  "status": "fail",
   "inputs": {
     "btc_minute_path": "F:\\Environement\\git-repo\\hummingbot_custo\\hbot\\data\\bot1\\logs\\epp_v24\\bot1_a\\minute.csv",
     "eth_minute_path": "F:\\Environement\\git-repo\\hummingbot_custo\\hbot\\data\\bot3\\logs\\epp_v24\\bot3_a\\minute.csv",
@@ -8,23 +8,23 @@
     "min_overlap_points": 120
   },
   "metrics": {
-    "overlap_points": 1907,
-    "btc_returns_count": 4139,
-    "eth_returns_count": 2741,
-    "btc_eth_return_correlation": 0.3768121795788915,
-    "btc_variance": 1.3190745453454885e-06,
-    "eth_variance": 2.8764114914475624e-06
+    "overlap_points": 3726,
+    "btc_returns_count": 3727,
+    "eth_returns_count": 5787,
+    "btc_eth_return_correlation": 0.8258848727606687,
+    "btc_variance": 3.1285922847860444e-07,
+    "eth_variance": 5.592090780632603e-07
   },
   "allocation_recommendation_inverse_variance": {
-    "btc": 0.6855967261533865,
-    "eth": 0.31440327384661343
+    "btc": 0.6412445835587934,
+    "eth": 0.35875541644120656
   },
   "checks": [
     {
       "name": "btc_eth_return_correlation",
-      "pass": true,
-      "value": 0.3768121795788915,
-      "abs_value": 0.3768121795788915,
+      "pass": false,
+      "value": 0.8258848727606687,
+      "abs_value": 0.8258848727606687,
       "max_abs_allowed": 0.7
     }
   ]

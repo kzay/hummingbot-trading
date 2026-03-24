@@ -37,7 +37,7 @@ Define repeatable recovery drills for control-plane services and event/report fr
 - Scenario:
   - restart writer and ensure no duplicate amplification.
 - Steps:
-  1. run `docker compose --env-file infra/env/.env --profile ops -f infra/compose/docker-compose.yml run --rm ops-db-writer python /workspace/hbot/services/ops_db_writer/main.py --once`
+  1. run `docker compose --env-file infra/env/.env -f infra/compose/docker-compose.yml run --rm ops-db-writer python /workspace/hbot/services/ops_db_writer/main.py --once`
   2. capture row counts
   3. run same command again
   4. compare row counts and key uniqueness constraints

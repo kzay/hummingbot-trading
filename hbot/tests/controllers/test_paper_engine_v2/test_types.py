@@ -1,16 +1,20 @@
 """Tests for paper_engine_v2 types."""
-import time
 from decimal import Decimal
 
 import pytest
 
-from controllers.paper_engine_v2.types import (
-    BookLevel, InstrumentId, InstrumentSpec,
-    OrderBookSnapshot, OrderSide, OrderStatus,
-    PaperOrder, PaperOrderType, PaperPosition, _ZERO,
+from simulation.types import (
+    _ZERO,
+    InstrumentId,
+    InstrumentSpec,
+    OrderBookSnapshot,
+    PaperPosition,
 )
 from tests.controllers.test_paper_engine_v2.conftest import (
-    BTC_PERP, BTC_SPOT, ETH_SPOT, make_book, make_spec,
+    BTC_PERP,
+    BTC_SPOT,
+    make_book,
+    make_spec,
 )
 
 
@@ -50,10 +54,15 @@ class TestInstrumentSpec:
         result = spec.quantize_size(Decimal("1.0009"))
         assert result == Decimal("1.000")
 
-    def test_quantize_size_clamps_to_min(self):
+    def test_quantize_size_below_min_returns_zero(self):
         spec = make_spec(BTC_SPOT, size_inc="0.001", min_qty="0.01")
         result = spec.quantize_size(Decimal("0.0001"))
-        assert result == Decimal("0.010")
+        assert result == Decimal("0")
+
+    def test_quantize_size_zero_stays_zero(self):
+        spec = make_spec(BTC_SPOT, size_inc="0.001", min_qty="0.01")
+        result = spec.quantize_size(Decimal("0"))
+        assert result == Decimal("0")
 
     def test_validate_order_passes(self):
         spec = make_spec(BTC_SPOT, min_qty="0.001", min_notional="1", max_qty="100")

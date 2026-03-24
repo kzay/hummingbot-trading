@@ -23,8 +23,6 @@ import sys
 from datetime import date, timedelta
 from decimal import Decimal
 from pathlib import Path
-from typing import Dict, List, Optional
-
 
 _ZERO = Decimal("0")
 def _repo_root() -> Path:
@@ -36,7 +34,7 @@ def _repo_root() -> Path:
 _REPORTS_DIR = _repo_root() / "reports" / "strategy"
 
 
-def _date_range(start: str, end: str) -> List[str]:
+def _date_range(start: str, end: str) -> list[str]:
     d0 = date.fromisoformat(start)
     d1 = date.fromisoformat(end)
     result = []
@@ -47,7 +45,7 @@ def _date_range(start: str, end: str) -> List[str]:
     return result
 
 
-def _run_day_summary(day: str, root: str) -> Optional[Dict]:
+def _run_day_summary(day: str, root: str) -> dict | None:
     """Run bot1_paper_day_summary.py for a single day and return parsed output."""
     script = Path(__file__).parent / "bot1_paper_day_summary.py"
     try:
@@ -64,7 +62,7 @@ def _run_day_summary(day: str, root: str) -> Optional[Dict]:
         return None
 
 
-def _daily_table_markdown(rows: List[Dict]) -> str:
+def _daily_table_markdown(rows: list[dict]) -> str:
     header = "| date | net_pnl_usdt | net_pnl_bps | drawdown_pct | fills | turnover_x | dominant_regime |"
     sep = "|---|---:|---:|---:|---:|---:|---|"
 
@@ -90,7 +88,7 @@ def _d(x) -> Decimal:
         return _ZERO
 
 
-def _sharpe_ci_90(sharpe: float, sample_size: int) -> Dict[str, float]:
+def _sharpe_ci_90(sharpe: float, sample_size: int) -> dict[str, float]:
     """Approximate 90% CI for Sharpe (iid normal-return assumption)."""
     n = max(0, int(sample_size))
     if n <= 0:
@@ -113,12 +111,12 @@ def compute_summary(
     end: str,
     root: str = "",
     save: bool = False,
-) -> Dict:
+) -> dict:
     if not root:
         root = str(_repo_root() / "data" / "bot1" / "logs" / "epp_v24" / "bot1_a")
     days = _date_range(start, end)
-    daily_results: List[Dict] = []
-    missing_days: List[str] = []
+    daily_results: list[dict] = []
+    missing_days: list[str] = []
 
     for day in days:
         result = _run_day_summary(day, root)
@@ -240,15 +238,15 @@ def compute_summary(
 
     max_dd = max((float(d["drawdown_pct"]) for d in daily_results), default=0.0)
     hard_stop_days = sum(1 for d in daily_results if d["daily_loss_pct"] >= 0.03)
-    confidence_counts: Dict[str, int] = {"high": 0, "medium": 0, "low": 0}
-    data_source_mode_counts: Dict[str, int] = {}
+    confidence_counts: dict[str, int] = {"high": 0, "medium": 0, "low": 0}
+    data_source_mode_counts: dict[str, int] = {}
     for d in daily_results:
         c = str(d.get("data_quality", {}).get("confidence", "low"))
         confidence_counts[c] = confidence_counts.get(c, 0) + 1
         m = str(d.get("data_source_mode", "csv")).strip() or "csv"
         data_source_mode_counts[m] = data_source_mode_counts.get(m, 0) + 1
 
-    all_regimes: Dict[str, int] = {}
+    all_regimes: dict[str, int] = {}
     for d in daily_results:
         for r, cnt in d.get("regime_counts", {}).items():
             all_regimes[r] = all_regimes.get(r, 0) + cnt

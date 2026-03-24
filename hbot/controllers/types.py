@@ -9,7 +9,6 @@ from __future__ import annotations
 from decimal import Decimal
 from typing import TypedDict
 
-
 PROCESSED_STATE_SCHEMA_VERSION: int = 11
 """Increment whenever a field is added, removed, or changes semantics.
 Consumers should check this on deserialization and drop/log on mismatch."""

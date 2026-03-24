@@ -1,4 +1,4 @@
-from services.contracts.event_schemas import (
+from platform_lib.contracts.event_schemas import (
     AuditEvent,
     ExecutionIntentEvent,
     MarketDepthSnapshotEvent,

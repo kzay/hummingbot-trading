@@ -3,7 +3,7 @@ from __future__ import annotations
 import os
 from dataclasses import dataclass, field
 
-from services.common.utils import env_bool
+from platform_lib.core.utils import env_bool
 
 
 @dataclass

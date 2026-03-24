@@ -1,30 +1,30 @@
 from __future__ import annotations
 
 import json
-from collections import deque
+from collections.abc import Iterable, Iterator
 from pathlib import Path
-from typing import Any, Deque, Dict, Iterable, Iterator, List, Optional
+from typing import Any
 
 
-def _event_files(event_store_root: Path) -> List[Path]:
+def _event_files(event_store_root: Path) -> list[Path]:
     return sorted(event_store_root.glob("events_*.jsonl"), reverse=True)
 
 
-def _read_jsonl_reverse(path: Path) -> Iterable[Dict[str, Any]]:
+def _read_jsonl_reverse(path: Path) -> Iterable[dict[str, Any]]:
     if not path.exists():
         return []
     try:
         lines = path.read_text(encoding="utf-8", errors="ignore").splitlines()
     except Exception:
         return []
-    out: List[Dict[str, Any]] = []
+    out: list[dict[str, Any]] = []
     for raw in reversed(lines):
         line = raw.strip()
         if not line:
             continue
         try:
             payload = json.loads(line)
-        except Exception:
+        except (json.JSONDecodeError, ValueError):
             continue
         if isinstance(payload, dict):
             out.append(payload)
@@ -56,7 +56,7 @@ def _iter_lines_reverse(path: Path, *, chunk_size: int = 1024 * 1024) -> Iterato
         return
 
 
-def _iter_jsonl(path: Path) -> Iterable[Dict[str, Any]]:
+def _iter_jsonl(path: Path) -> Iterable[dict[str, Any]]:
     """Yield parsed JSONL rows in file order with bounded memory use."""
     if not path.exists():
         return []
@@ -68,15 +68,15 @@ def _iter_jsonl(path: Path) -> Iterable[Dict[str, Any]]:
                     continue
                 try:
                     payload = json.loads(line)
-                except Exception:
+                except (json.JSONDecodeError, ValueError):
                     continue
                 if isinstance(payload, dict):
                     yield payload
-    except Exception:
+    except OSError:
         return []
 
 
-def _iter_jsonl_reverse_streaming(path: Path) -> Iterable[Dict[str, Any]]:
+def _iter_jsonl_reverse_streaming(path: Path) -> Iterable[dict[str, Any]]:
     """Yield parsed JSONL rows in reverse order with bounded memory use."""
     for raw in _iter_lines_reverse(path):
         line = raw.strip()
@@ -84,15 +84,15 @@ def _iter_jsonl_reverse_streaming(path: Path) -> Iterable[Dict[str, Any]]:
             continue
         try:
             payload = json.loads(line)
-        except Exception:
+        except (json.JSONDecodeError, ValueError):
             continue
         if isinstance(payload, dict):
             yield payload
 
 
-def _merged_snapshot(row: Dict[str, Any]) -> Dict[str, Any]:
+def _merged_snapshot(row: dict[str, Any]) -> dict[str, Any]:
     payload = row.get("payload", {}) if isinstance(row.get("payload"), dict) else {}
-    merged: Dict[str, Any] = dict(payload)
+    merged: dict[str, Any] = dict(payload)
     for key in ("event_id", "event_type", "ts_utc", "instance_name", "controller_id", "connector_name", "trading_pair"):
         value = row.get(key)
         if value not in (None, "") and key not in merged:
@@ -106,8 +106,8 @@ def load_bot_snapshot_windows(
     event_store_root: Path,
     *,
     max_snapshots_per_bot: int = 2,
-) -> Dict[str, List[Dict[str, Any]]]:
-    windows: Dict[str, List[Dict[str, Any]]] = {}
+) -> dict[str, list[dict[str, Any]]]:
+    windows: dict[str, list[dict[str, Any]]] = {}
     max_snapshots_per_bot = max(1, int(max_snapshots_per_bot))
     for event_file in _event_files(event_store_root):
         all_satisfied = bool(windows) and all(len(rows) >= max_snapshots_per_bot for rows in windows.values())
@@ -127,8 +127,8 @@ def load_bot_snapshot_windows(
     return windows
 
 
-def count_bot_fill_events(event_store_root: Path, bot: str, *, day_utc: Optional[str] = None) -> int:
-    files: List[Path]
+def count_bot_fill_events(event_store_root: Path, bot: str, *, day_utc: str | None = None) -> int:
+    files: list[Path]
     if day_utc:
         files = [event_store_root / f"events_{str(day_utc).replace('-', '')}.jsonl"]
     else:

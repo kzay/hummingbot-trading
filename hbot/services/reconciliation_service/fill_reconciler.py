@@ -6,26 +6,23 @@ Compares local fills (from ``fills.csv``) against exchange-reported trades
 from __future__ import annotations
 
 import csv
-import json
 import logging
-import os
 import time
-from datetime import datetime, timezone
+from datetime import datetime
 from pathlib import Path
-from typing import Dict, List, Optional, Set, Tuple
 
 try:
     import ccxt  # type: ignore
 except Exception:
     ccxt = None
 
-from services.common.utils import safe_float, utc_now, write_json
-from services.common.log_namespace import iter_bot_log_files
+from platform_lib.logging.log_namespace import iter_bot_log_files
+from platform_lib.core.utils import safe_float, utc_now, write_json
 
 logger = logging.getLogger(__name__)
 
 
-def _ts_to_ms(value: object) -> Optional[int]:
+def _ts_to_ms(value: object) -> int | None:
     raw = str(value or "").strip()
     if not raw:
         return None
@@ -37,7 +34,7 @@ def _ts_to_ms(value: object) -> Optional[int]:
         return None
 
 
-def _load_local_fills(fills_path: Path) -> List[Dict[str, str]]:
+def _load_local_fills(fills_path: Path) -> list[dict[str, str]]:
     """Read all rows from a fills CSV."""
     if not fills_path.exists():
         return []
@@ -55,9 +52,9 @@ def _fetch_exchange_fills(
     secret: str,
     passphrase: str,
     symbol: str,
-    since_ms: Optional[int] = None,
+    since_ms: int | None = None,
     limit: int = 200,
-) -> Tuple[List[Dict], str]:
+) -> tuple[list[dict], str]:
     """Fetch recent trades from the exchange via ccxt.
 
     Returns ``(trades, error_string)``.
@@ -71,7 +68,7 @@ def _fetch_exchange_fills(
         return [], "missing_credentials"
 
     try:
-        cfg: Dict = {"apiKey": api_key, "secret": secret, "enableRateLimit": True}
+        cfg: dict = {"apiKey": api_key, "secret": secret, "enableRateLimit": True}
         if passphrase:
             cfg["password"] = passphrase
         exchange = exchange_cls(cfg)
@@ -83,13 +80,13 @@ def _fetch_exchange_fills(
 
 
 def reconcile_fills(
-    local_fills: List[Dict[str, str]],
-    exchange_fills: List[Dict],
+    local_fills: list[dict[str, str]],
+    exchange_fills: list[dict],
     price_tolerance_pct: float = 0.01,
     amount_tolerance_pct: float = 0.01,
     fee_tolerance_pct: float = 0.05,
     timestamp_tolerance_ms: int = 30_000,
-) -> Dict[str, object]:
+) -> dict[str, object]:
     """Compare local fills against exchange fills.
 
     Returns a report dict with:
@@ -97,16 +94,16 @@ def reconcile_fills(
     - ``missing_exchange``: fills in local CSV not on exchange
     - ``price_mismatch``: fills where price differs beyond tolerance
     """
-    local_order_ids: Set[str] = set()
-    local_by_order: Dict[str, Dict] = {}
+    local_order_ids: set[str] = set()
+    local_by_order: dict[str, dict] = {}
     for row in local_fills:
         oid = str(row.get("order_id", "")).strip()
         if oid:
             local_order_ids.add(oid)
             local_by_order[oid] = row
 
-    exchange_order_ids: Set[str] = set()
-    exchange_by_order: Dict[str, Dict] = {}
+    exchange_order_ids: set[str] = set()
+    exchange_by_order: dict[str, dict] = {}
     for trade in exchange_fills:
         oid = str(trade.get("order", trade.get("orderId", ""))).strip()
         if oid:
@@ -116,10 +113,10 @@ def reconcile_fills(
     missing_local = sorted(exchange_order_ids - local_order_ids)
     missing_exchange = sorted(local_order_ids - exchange_order_ids)
 
-    price_mismatches: List[Dict[str, object]] = []
-    amount_mismatches: List[Dict[str, object]] = []
-    fee_mismatches: List[Dict[str, object]] = []
-    timestamp_mismatches: List[Dict[str, object]] = []
+    price_mismatches: list[dict[str, object]] = []
+    amount_mismatches: list[dict[str, object]] = []
+    fee_mismatches: list[dict[str, object]] = []
+    timestamp_mismatches: list[dict[str, object]] = []
     for oid in local_order_ids & exchange_order_ids:
         local_price = safe_float(local_by_order[oid].get("price"))
         exchange_price = safe_float(exchange_by_order[oid].get("price"))
@@ -204,10 +201,10 @@ def run_fill_reconciliation(
     secret: str = "",
     passphrase: str = "",
     lookback_hours: int = 24,
-) -> Dict[str, object]:
+) -> dict[str, object]:
     """Run fill reconciliation for all bots that have fills.csv files."""
     since_ms = int((time.time() - lookback_hours * 3600) * 1000)
-    bot_reports: List[Dict[str, object]] = []
+    bot_reports: list[dict[str, object]] = []
 
     for fills_file in iter_bot_log_files(data_root, "fills.csv"):
         bot = fills_file.parts[-5]

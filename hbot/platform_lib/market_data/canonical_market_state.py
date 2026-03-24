@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from decimal import Decimal
-from typing import Any, Dict, Optional, Tuple
+from typing import Any
 
 _ZERO_D = Decimal("0")
 
@@ -40,7 +40,7 @@ def _normalize_connector(value: Any) -> str:
     return str(value or "").strip().lower()
 
 
-def _depth_level(levels: Any) -> Tuple[Decimal, Decimal]:
+def _depth_level(levels: Any) -> tuple[Decimal, Decimal]:
     if not isinstance(levels, list) or not levels:
         return _ZERO_D, _ZERO_D
     first = levels[0]
@@ -51,7 +51,7 @@ def _depth_level(levels: Any) -> Tuple[Decimal, Decimal]:
     return _ZERO_D, _ZERO_D
 
 
-def market_payload_freshness_ts_ms(payload: Dict[str, Any], *, entry_id: str = "") -> int:
+def market_payload_freshness_ts_ms(payload: dict[str, Any], *, entry_id: str = "") -> int:
     if not isinstance(payload, dict):
         return 0
     for key in ("ingest_ts_ms", "exchange_ts_ms", "timestamp_ms"):
@@ -61,7 +61,7 @@ def market_payload_freshness_ts_ms(payload: Dict[str, Any], *, entry_id: str = "
     return _entry_id_ts_ms(entry_id)
 
 
-def market_payload_order_key(payload: Dict[str, Any], *, entry_id: str = "") -> Tuple[int, int, int]:
+def market_payload_order_key(payload: dict[str, Any], *, entry_id: str = "") -> tuple[int, int, int]:
     if not isinstance(payload, dict):
         return 0, 0, 0
     exchange_ts_ms = _to_int(payload.get("exchange_ts_ms"))
@@ -74,7 +74,7 @@ def market_payload_order_key(payload: Dict[str, Any], *, entry_id: str = "") -> 
 
 
 def market_payload_is_fresh(
-    payload: Dict[str, Any],
+    payload: dict[str, Any],
     *,
     now_ms: int,
     stale_after_ms: int,
@@ -84,7 +84,7 @@ def market_payload_is_fresh(
     return freshness_ts_ms > 0 and max(0, int(now_ms) - freshness_ts_ms) <= max(1, int(stale_after_ms))
 
 
-def canonical_market_state_age_ms(state: "CanonicalMarketState", *, now_ms: int) -> int:
+def canonical_market_state_age_ms(state: CanonicalMarketState, *, now_ms: int) -> int:
     freshness_ts_ms = int(getattr(state, "freshness_ts_ms", 0) or 0)
     timestamp_ms = int(getattr(state, "timestamp_ms", 0) or 0)
     reference_ts_ms = freshness_ts_ms or timestamp_ms
@@ -94,7 +94,7 @@ def canonical_market_state_age_ms(state: "CanonicalMarketState", *, now_ms: int)
 
 
 def canonical_market_state_is_stale(
-    state: "CanonicalMarketState",
+    state: CanonicalMarketState,
     *,
     now_ms: int,
     stale_after_ms: int,
@@ -138,7 +138,7 @@ class CanonicalMarketState:
         return (self.best_ask - self.best_bid) / mid
 
     @property
-    def order_key(self) -> Tuple[int, int, int]:
+    def order_key(self) -> tuple[int, int, int]:
         return market_payload_order_key(
             {
                 "exchange_ts_ms": self.exchange_ts_ms,
@@ -150,7 +150,7 @@ class CanonicalMarketState:
         )
 
 
-def parse_canonical_market_state(payload: Dict[str, Any], *, entry_id: str = "") -> Optional[CanonicalMarketState]:
+def parse_canonical_market_state(payload: dict[str, Any], *, entry_id: str = "") -> CanonicalMarketState | None:
     if not isinstance(payload, dict):
         return None
     event_type = str(payload.get("event_type", "")).strip().lower()

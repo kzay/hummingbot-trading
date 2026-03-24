@@ -18,24 +18,23 @@ HUMMINGBOT_AVAILABLE = _hummingbot_available()
 
 if HUMMINGBOT_AVAILABLE:
     from controllers.bot5_ift_jota_v1 import Bot5IftJotaV1Config, Bot5IftJotaV1Controller
-    from controllers.epp_v2_4 import EppV24Config, EppV24Controller
     from controllers.epp_v2_4_bot5 import EppV24Bot5Config, EppV24Bot5Controller
-    from controllers.runtime.base import StrategyRuntimeV24Config, StrategyRuntimeV24Controller
+    from controllers.runtime.base import DirectionalStrategyRuntimeV24Config, DirectionalStrategyRuntimeV24Controller
     from controllers.runtime.data_context import RuntimeDataContext
     from controllers.runtime.directional_core import DirectionalRuntimeAdapter
     from controllers.runtime.execution_context import RuntimeExecutionPlan
-    from controllers.runtime.market_making_types import RegimeSpec
+    from controllers.runtime.runtime_types import RegimeSpec
+    from controllers.shared_runtime_v24 import SharedRuntimeKernel
 else:  # pragma: no cover - exercised only in stripped test environments
     Bot5IftJotaV1Config = object
     Bot5IftJotaV1Controller = object
-    EppV24Config = object
-    EppV24Controller = object
     DirectionalRuntimeAdapter = object
     RuntimeDataContext = object
     RuntimeExecutionPlan = object
     RegimeSpec = object
-    StrategyRuntimeV24Config = object
-    StrategyRuntimeV24Controller = object
+    DirectionalStrategyRuntimeV24Config = object
+    DirectionalStrategyRuntimeV24Controller = object
+    SharedRuntimeKernel = object
     EppV24Bot5Config = object
     EppV24Bot5Controller = object
 
@@ -43,16 +42,14 @@ pytestmark = pytest.mark.skipif(not HUMMINGBOT_AVAILABLE, reason="hummingbot not
 
 
 def test_bot5_controller_reuses_shared_runtime_stack() -> None:
-    assert issubclass(Bot5IftJotaV1Config, StrategyRuntimeV24Config)
-    assert issubclass(Bot5IftJotaV1Controller, StrategyRuntimeV24Controller)
+    assert issubclass(Bot5IftJotaV1Config, DirectionalStrategyRuntimeV24Config)
+    assert issubclass(Bot5IftJotaV1Controller, DirectionalStrategyRuntimeV24Controller)
     assert Bot5IftJotaV1Config.controller_name == "bot5_ift_jota_v1"
 
     assert issubclass(EppV24Bot5Config, Bot5IftJotaV1Config)
     assert issubclass(EppV24Bot5Controller, Bot5IftJotaV1Controller)
-    assert issubclass(EppV24Bot5Config, StrategyRuntimeV24Config)
-    assert issubclass(EppV24Bot5Controller, StrategyRuntimeV24Controller)
-    assert issubclass(EppV24Bot5Config, EppV24Config)
-    assert issubclass(EppV24Bot5Controller, EppV24Controller)
+    assert issubclass(EppV24Bot5Config, DirectionalStrategyRuntimeV24Config)
+    assert issubclass(EppV24Bot5Controller, DirectionalStrategyRuntimeV24Controller)
     assert EppV24Bot5Config.controller_name == "epp_v2_4_bot5"
 
 
@@ -65,7 +62,7 @@ def test_bot5_controller_uses_directional_family_adapter() -> None:
 def _make_bot5_config(**overrides) -> SimpleNamespace:
     defaults = dict(
         id="epp_v2_4_bot5_test",
-        controller_type="market_making",
+        controller_type="directional",
         connector_name="bitget_perpetual",
         trading_pair="BTC-USDT",
         variant="a",
@@ -152,7 +149,7 @@ def _make_bot5_controller(
     ctrl.executors_info = []
     ctrl._external_target_base_pct_override = None
     ctrl._bot5_flow_state = EppV24Bot5Controller._empty_bot5_flow_state(ctrl)
-    ctrl._cancel_stale_side_executors = MethodType(EppV24Controller._cancel_stale_side_executors, ctrl)
+    ctrl._cancel_stale_side_executors = MethodType(SharedRuntimeKernel._cancel_stale_side_executors, ctrl)
     ctrl.market_data_provider = SimpleNamespace(time=lambda: 1_000.0)
     ctrl.processed_data = {}
     return ctrl
@@ -267,10 +264,10 @@ def test_bot5_keeps_two_sided_quotes_when_regime_mode_is_off(monkeypatch) -> Non
     ctrl._project_total_amount_quote = lambda **kwargs: Decimal(kwargs["total_levels"])
 
     monkeypatch.setattr(
-        StrategyRuntimeV24Controller,
+        DirectionalStrategyRuntimeV24Controller,
         "build_runtime_execution_plan",
         lambda self, data_context: RuntimeExecutionPlan(
-            family="market_making",
+            family="directional",
             buy_spreads=[Decimal("0.001"), Decimal("0.002")],
             sell_spreads=[Decimal("0.001"), Decimal("0.002")],
             projected_total_quote=Decimal("4"),
@@ -311,10 +308,10 @@ def test_bot5_build_runtime_execution_plan_marks_directional_family(monkeypatch)
     }
 
     monkeypatch.setattr(
-        StrategyRuntimeV24Controller,
+        DirectionalStrategyRuntimeV24Controller,
         "build_runtime_execution_plan",
         lambda self, data_context: RuntimeExecutionPlan(
-            family="market_making",
+            family="directional",
             buy_spreads=[Decimal("0.001"), Decimal("0.002")],
             sell_spreads=[Decimal("0.001"), Decimal("0.002")],
             projected_total_quote=Decimal("4"),
@@ -394,7 +391,7 @@ def test_bot5_fail_closed_reason_is_bot_specific(monkeypatch) -> None:
     def _fake_super(self, spread_state, base_pct_gross, equity_quote, projected_total_quote, market):
         return (["shared_reason"], False, Decimal("0"), Decimal("0"))
 
-    monkeypatch.setattr(StrategyRuntimeV24Controller, "_evaluate_all_risk", _fake_super)
+    monkeypatch.setattr(DirectionalStrategyRuntimeV24Controller, "_evaluate_all_risk", _fake_super)
 
     reasons, risk_hard_stop, daily_loss_pct, drawdown_pct = EppV24Bot5Controller._evaluate_all_risk(
         ctrl,

@@ -72,6 +72,24 @@ npm run build
 
 `npm run test:e2e` rebuilds the app and runs a mocked Playwright smoke flow against the operator shell.
 
+### Live dashboard debug (Playwright, Docker UI)
+
+With `realtime-ui-web` and `realtime-ui-api` running locally (e.g. port **8088** / **9910**):
+
+```bash
+cd hbot/apps/realtime_ui_v2
+npm run debug:dashboard
+```
+
+This opens Chromium (headed), hits the real UI, calls `/health` on the API, logs console + failed network requests, and writes `dashboard-debug-full.png` under Playwright’s `test-results` output for that run.
+
+Optional env (same shell as `npm run`):
+
+- `PLAYWRIGHT_BASE_URL` — UI origin (default `http://127.0.0.1:8088` when using the launcher script).
+- `PLAYWRIGHT_API_BASE` — API origin for the health probe (default `http://127.0.0.1:9910`). Should match the API host the **built** SPA uses (`DEFAULT_API_BASE` / build-time config), or browser calls may fail (e.g. `localhost` vs `127.0.0.1`).
+
+Other scripts: `debug:dashboard:trace` (full trace), `debug:dashboard:ui` (Playwright UI mode).
+
 ## Build check
 
 ```bash
@@ -81,7 +99,7 @@ npm run build
 
 ## Notes
 
-- Legacy `hbot/apps/realtime_ui` remains available as fallback during migration.
+- The operator dashboard is **v2 only** (`hbot/apps/realtime_ui_v2`). The former static `realtime_ui` app was removed after migration.
 - Remaining parity work is mostly visual polish and optional charting enhancements for review modes.
 - Feed pause and auto-scroll are session-only controls and reset on reload.
 - View-level error boundaries now keep a panel failure from blanking the entire operator app.

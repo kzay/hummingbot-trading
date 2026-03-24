@@ -4,10 +4,8 @@ from __future__ import annotations
 import argparse
 import json
 import re
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
-from typing import Dict, List
-
 
 SECTION_RE = re.compile(r"^###\s+(\d+)\.\s+(.*)$")
 CHECKBOX_RE = re.compile(r"^(\s*)- \[( |x|X)\]\s+(.*)$")
@@ -16,7 +14,7 @@ EVIDENCE_RE = re.compile(r"^(\s*)- \*\*Evidence:\*\*\s*(.*)$")
 
 # Deterministic evidence map for the go-live hardening checklist.
 # Paths are relative to repository root.
-CHECKLIST_EVIDENCE_PATHS: Dict[int, List[str]] = {
+CHECKLIST_EVIDENCE_PATHS: dict[int, list[str]] = {
     1: ["reports/accounting/latest.json"],
     2: ["reports/tests/latest.json"],
     3: ["reports/kill_switch/latest.json", "reports/ops/kill_switch_non_dry_run_evidence_latest.json"],
@@ -48,10 +46,10 @@ CHECKLIST_EVIDENCE_PATHS: Dict[int, List[str]] = {
 
 
 def _utc_now() -> str:
-    return datetime.now(timezone.utc).isoformat()
+    return datetime.now(UTC).isoformat()
 
 
-def _format_evidence(paths: List[str]) -> str:
+def _format_evidence(paths: list[str]) -> str:
     if not paths:
         return ""
     return ", ".join(f"`{path}`" for path in paths)
@@ -61,14 +59,14 @@ def complete_checklist(
     *,
     root: Path,
     checklist_path: Path,
-    evidence_paths_by_item: Dict[int, List[str]],
+    evidence_paths_by_item: dict[int, list[str]],
     require_paths: bool,
-) -> Dict[str, object]:
+) -> dict[str, object]:
     lines = checklist_path.read_text(encoding="utf-8").splitlines()
-    out_lines: List[str] = []
+    out_lines: list[str] = []
     current_item: int | None = None
-    missing_by_item: Dict[str, List[str]] = {}
-    touched_item_numbers: List[int] = []
+    missing_by_item: dict[str, list[str]] = {}
+    touched_item_numbers: list[int] = []
 
     for line in lines:
         section_match = SECTION_RE.match(line.strip())
@@ -157,7 +155,7 @@ def main() -> int:
 
     out_dir = root / "reports" / "ops"
     out_dir.mkdir(parents=True, exist_ok=True)
-    stamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
+    stamp = datetime.now(UTC).strftime("%Y%m%dT%H%M%SZ")
     ts_file = out_dir / f"go_live_checklist_completion_{stamp}.json"
     latest_file = out_dir / "go_live_checklist_completion_latest.json"
     raw = json.dumps(payload, indent=2)

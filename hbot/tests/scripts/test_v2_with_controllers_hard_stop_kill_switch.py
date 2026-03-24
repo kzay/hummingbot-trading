@@ -36,9 +36,9 @@ def _install_import_stubs() -> None:
     models_actions = _ensure_module("hummingbot.strategy_v2.models.executor_actions")
     _ensure_module("hummingbot.strategy_v2")
     _ensure_module("hummingbot.strategy_v2.models")
-    hb_bridge = _ensure_module("controllers.paper_engine_v2.hb_bridge")
+    hb_bridge = _ensure_module("simulation.bridge.hb_bridge")
     _ensure_module("controllers")
-    _ensure_module("controllers.paper_engine_v2")
+    _ensure_module("simulation")
     preflight = _ensure_module("services.common.preflight")
 
     async def _noop_async(*args, **kwargs):
@@ -91,6 +91,8 @@ def _install_import_stubs() -> None:
     models_base.RunnableStatus = _RunnableStatus
     models_actions.CreateExecutorAction = _CreateExecutorAction
     models_actions.StopExecutorAction = _StopExecutorAction
+    hb_bridge._canonical_name = lambda name: str(name).replace("_paper_trade", "")
+    hb_bridge._paper_exchange_mode_for_instance = lambda *a, **kw: None
     hb_bridge.enable_framework_paper_compat_fallbacks = lambda: None
     hb_bridge.install_paper_desk_bridge = lambda *args, **kwargs: None
     preflight.run_controller_preflight = lambda *args, **kwargs: []
@@ -138,28 +140,39 @@ def _build_runner(controller: _FakeController):
 def test_collect_open_orders_snapshot_includes_paper_desk_orders():
     controller_cls = _controller_cls()
     controller = SimpleNamespace(
-        config=SimpleNamespace(connector_name="bitget_perpetual", trading_pair="BTC-USDT")
+        config=SimpleNamespace(
+            connector_name="bitget_perpetual",
+            trading_pair="BTC-USDT",
+            instance_name="bot1",
+        )
     )
     paper_order = SimpleNamespace(
         order_id="paper_v2_91",
-        instrument_id=SimpleNamespace(trading_pair="BTC-USDT"),
+        client_order_id="paper_v2_91",
+        trading_pair="BTC-USDT",
+        trade_type=SimpleNamespace(name="BUY", value="BUY"),
         side=SimpleNamespace(value="buy"),
         price="68356.1",
+        amount="0.001",
         quantity="0.001",
         remaining_quantity="0.001",
         created_at_ns=1_700_000_000_000_000_000,
         source_bot="bitget_perpetual",
     )
-    engine = SimpleNamespace(open_orders=lambda: [paper_order])
+    connector = SimpleNamespace(get_open_orders=lambda: [paper_order])
     runner = SimpleNamespace(
         controllers={"ctrl_1": controller},
-        connectors={"bitget_perpetual": SimpleNamespace(get_open_orders=lambda: [])},
-        _paper_desk_v2_bridges={
-            "bitget_perpetual": {
-                "desk": SimpleNamespace(_engines={"bitget:BTC-USDT:perp": engine}),
-                "instrument_id": SimpleNamespace(key="bitget:BTC-USDT:perp"),
-            }
-        },
+        connectors={"bitget_perpetual": connector},
+        _paper_exchange_runtime_orders={},
+    )
+    runner._iter_connector_open_orders = types.MethodType(
+        controller_cls._iter_connector_open_orders, runner
+    )
+    runner._iter_runtime_open_orders = types.MethodType(
+        controller_cls._iter_runtime_open_orders, runner
+    )
+    runner._append_open_order_snapshot_entry = types.MethodType(
+        controller_cls._append_open_order_snapshot_entry, runner
     )
 
     with patch("scripts.shared.v2_with_controllers.time.time", return_value=1_700_000_100.0):
@@ -175,36 +188,35 @@ def test_collect_open_orders_snapshot_includes_paper_desk_orders():
 def test_collect_open_orders_snapshot_dedupes_connector_and_paper_orders():
     controller_cls = _controller_cls()
     controller = SimpleNamespace(
-        config=SimpleNamespace(connector_name="bitget_perpetual", trading_pair="BTC-USDT")
+        config=SimpleNamespace(
+            connector_name="bitget_perpetual",
+            trading_pair="BTC-USDT",
+            instance_name="bot1",
+        )
     )
     shared_order = SimpleNamespace(
         order_id="paper_v2_92",
+        client_order_id="paper_v2_92",
         trading_pair="BTC-USDT",
-        trade_type=SimpleNamespace(value="BUY"),
+        trade_type=SimpleNamespace(name="BUY", value="BUY"),
         price="68300.0",
         amount="0.001",
         age=5.0,
     )
-    paper_order = SimpleNamespace(
-        order_id="paper_v2_92",
-        instrument_id=SimpleNamespace(trading_pair="BTC-USDT"),
-        side=SimpleNamespace(value="buy"),
-        price="68300.0",
-        quantity="0.001",
-        remaining_quantity="0.001",
-        created_at_ns=1_700_000_000_000_000_000,
-        source_bot="bitget_perpetual",
-    )
-    engine = SimpleNamespace(open_orders=lambda: [paper_order])
+    connector = SimpleNamespace(get_open_orders=lambda: [shared_order])
     runner = SimpleNamespace(
         controllers={"ctrl_1": controller},
-        connectors={"bitget_perpetual": SimpleNamespace(get_open_orders=lambda: [shared_order])},
-        _paper_desk_v2_bridges={
-            "bitget_perpetual": {
-                "desk": SimpleNamespace(_engines={"bitget:BTC-USDT:perp": engine}),
-                "instrument_id": SimpleNamespace(key="bitget:BTC-USDT:perp"),
-            }
-        },
+        connectors={"bitget_perpetual": connector},
+        _paper_exchange_runtime_orders={},
+    )
+    runner._iter_connector_open_orders = types.MethodType(
+        controller_cls._iter_connector_open_orders, runner
+    )
+    runner._iter_runtime_open_orders = types.MethodType(
+        controller_cls._iter_runtime_open_orders, runner
+    )
+    runner._append_open_order_snapshot_entry = types.MethodType(
+        controller_cls._append_open_order_snapshot_entry, runner
     )
 
     payload = controller_cls._collect_open_orders_snapshot(runner)

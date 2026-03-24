@@ -4,23 +4,22 @@ import argparse
 import csv
 import json
 import os
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
-from typing import Dict, List, Tuple
 
 
 def _utc_now_iso() -> str:
-    return datetime.now(timezone.utc).isoformat()
+    return datetime.now(UTC).isoformat()
 
 
 def _age_seconds(path: Path) -> float:
     try:
-        return max(0.0, datetime.now(timezone.utc).timestamp() - path.stat().st_mtime)
+        return max(0.0, datetime.now(UTC).timestamp() - path.stat().st_mtime)
     except Exception:
         return float("inf")
 
 
-def _parse_required_sources(raw: str) -> List[str]:
+def _parse_required_sources(raw: str) -> list[str]:
     items = [chunk.strip() for chunk in str(raw or "").split(",")]
     return [item for item in items if item]
 
@@ -30,8 +29,8 @@ def _source_key(bot_dir: str, variant_dir: str) -> str:
     return f"{bot_dir}:{variant}"
 
 
-def _discover_sources(paths: List[Path]) -> Dict[str, Path]:
-    discovered: Dict[str, Path] = {}
+def _discover_sources(paths: list[Path]) -> dict[str, Path]:
+    discovered: dict[str, Path] = {}
     for path in paths:
         try:
             bot_dir = path.parents[3].name  # .../data/<bot>/logs/epp_v24/<bot_variant>/minute.csv
@@ -67,7 +66,7 @@ def _latest_events_jsonl_path(reports_root: Path) -> Path | None:
     return candidates[-1] if candidates else None
 
 
-def _read_json(path: Path) -> Dict[str, object]:
+def _read_json(path: Path) -> dict[str, object]:
     if not path.exists():
         return {}
     try:
@@ -78,10 +77,10 @@ def _read_json(path: Path) -> Dict[str, object]:
 
 
 def _source_check(
-    discovered: Dict[str, Path],
-    required_sources: List[str],
+    discovered: dict[str, Path],
+    required_sources: list[str],
     max_age_s: int,
-) -> Tuple[bool, bool, bool, List[str], Dict[str, Dict[str, object]]]:
+) -> tuple[bool, bool, bool, list[str], dict[str, dict[str, object]]]:
     missing_required = [source for source in required_sources if source not in discovered]
     target_sources = required_sources if required_sources else sorted(discovered.keys())
     if not target_sources:
@@ -89,7 +88,7 @@ def _source_check(
 
     rows_ok = True
     fresh_ok = True
-    details: Dict[str, Dict[str, object]] = {}
+    details: dict[str, dict[str, object]] = {}
     for source in target_sources:
         path = discovered.get(source)
         if path is None:
@@ -115,7 +114,7 @@ def run(
     strict: bool,
     max_data_age_s: int,
     required_grafana_bot_variants: str,
-) -> Dict[str, object]:
+) -> dict[str, object]:
     data_root = root / "data"
     reports_root = root / "reports"
 
@@ -222,7 +221,7 @@ def run(
 
     ops_reports = reports_root / "ops"
     ops_reports.mkdir(parents=True, exist_ok=True)
-    stamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
+    stamp = datetime.now(UTC).strftime("%Y%m%dT%H%M%SZ")
     out_path = ops_reports / f"dashboard_data_ready_{stamp}.json"
     out_path.write_text(json.dumps(payload, indent=2), encoding="utf-8")
     (ops_reports / "dashboard_data_ready_latest.json").write_text(

@@ -5,11 +5,11 @@ from services.portfolio_allocator.main import (
     _compute_daily_goal_plan,
     _compute_inverse_variance_allocations,
     _daily_goal_intent_signature,
-    _extract_last_rebalance_state,
     _eligible_bots,
+    _extract_last_rebalance_state,
     _rebalance_signature,
-    _should_publish_rebalance_intents,
     _should_publish_daily_goal_intent,
+    _should_publish_rebalance_intents,
 )
 
 

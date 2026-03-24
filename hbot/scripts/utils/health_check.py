@@ -12,7 +12,6 @@ import argparse
 import asyncio
 import logging
 import sys
-from datetime import datetime, timezone
 
 logging.basicConfig(
     level=logging.INFO,
@@ -27,9 +26,9 @@ async def check_system_time_drift(max_drift_seconds: float = 2.0) -> bool:
     Queries Bitget's public time endpoint and compares against local clock.
     Falls back to checking against multiple HTTP Date headers if Bitget is unreachable.
     """
+    import json as _json
     import time
     import urllib.request
-    import json as _json
 
     endpoints = [
         ("https://api.bitget.com/api/v2/public/time", "bitget"),
@@ -80,7 +79,7 @@ def check_disk_space(min_free_gb: float = 1.0) -> bool:
 def check_memory(min_free_mb: float = 256.0) -> bool:
     """Check available memory."""
     try:
-        with open("/proc/meminfo", "r") as f:
+        with open("/proc/meminfo") as f:
             for line in f:
                 if line.startswith("MemAvailable:"):
                     available_kb = int(line.split()[1])

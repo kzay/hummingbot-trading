@@ -552,7 +552,7 @@ These are optional building blocks to improve repeatability, observability, and 
 - Provision Grafana PostgreSQL datasource for dashboards (blotter, wallet history, equity curves).
 
 ### Deliverables
-- Compose additions for `postgres` + volume + optional `pgadmin` (optional).
+- Compose additions for `postgres` + volume (default profile).
 - `docs/ops/postgres_ops_store_v1.md` (connection, backup/restore, retention, access model).
 - Grafana datasource provisioning (or manual steps documented).
 

@@ -3,9 +3,9 @@ from __future__ import annotations
 import argparse
 import json
 import os
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
-from typing import Any, Dict, List
+from typing import Any
 
 try:
     import psycopg
@@ -14,10 +14,10 @@ except Exception:  # pragma: no cover
 
 
 def _utc_now() -> str:
-    return datetime.now(timezone.utc).isoformat()
+    return datetime.now(UTC).isoformat()
 
 
-def _connect() -> "psycopg.Connection[Any]":
+def _connect() -> psycopg.Connection[Any]:
     if psycopg is None:
         raise RuntimeError("psycopg_not_installed")
     return psycopg.connect(
@@ -56,21 +56,21 @@ def _bytes_to_mb(value: float) -> float:
 
 
 def _summarize_capacity(
-    key_rows: List[Dict[str, Any]],
+    key_rows: list[dict[str, Any]],
     *,
     retention_max_bars: int,
     max_distinct_keys: int,
     storage_budget_mb: float,
     total_table_bytes: int,
     total_index_bytes: int,
-) -> Dict[str, Any]:
+) -> dict[str, Any]:
     distinct_keys = len(key_rows)
     total_rows = sum(int(row.get("row_count", 0) or 0) for row in key_rows)
     total_storage_bytes = float(total_table_bytes + total_index_bytes)
     bytes_per_row = (total_storage_bytes / float(total_rows)) if total_rows > 0 else 0.0
-    per_key: List[Dict[str, Any]] = []
-    over_cap_keys: List[str] = []
-    near_cap_keys: List[str] = []
+    per_key: list[dict[str, Any]] = []
+    over_cap_keys: list[str] = []
+    near_cap_keys: list[str] = []
     max_utilization = 0.0
 
     for row in key_rows:
@@ -111,7 +111,7 @@ def _summarize_capacity(
     total_storage_mb = _bytes_to_mb(total_storage_bytes)
 
     status = "pass"
-    reasons: List[str] = []
+    reasons: list[str] = []
     if distinct_keys > int(max_distinct_keys):
         status = "fail"
         reasons.append("distinct_keys_above_budget")
@@ -164,7 +164,7 @@ def main() -> int:
     max_distinct_keys = max(1, _env_int("OPS_DB_MARKET_BAR_V2_MAX_DISTINCT_KEYS", 50))
     storage_budget_mb = max(1.0, _env_float("OPS_DB_MARKET_BAR_V2_STORAGE_BUDGET_MB", 512.0))
 
-    payload: Dict[str, Any] = {
+    payload: dict[str, Any] = {
         "ts_utc": _utc_now(),
         "report_path": str(report_path),
     }

@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from typing import Any, Dict
+from typing import Any
 
 from controllers.runtime.contracts import RuntimeCompatibilitySurface
 
@@ -54,7 +54,7 @@ def resolve_runtime_compatibility(config: Any, *, runtime_impl: str) -> RuntimeC
     )
 
 
-def runtime_metadata(surface: RuntimeCompatibilitySurface) -> Dict[str, str]:
+def runtime_metadata(surface: RuntimeCompatibilitySurface) -> dict[str, str]:
     return {
         "controller_contract_version": surface.controller_contract_version,
         "runtime_impl": surface.runtime_impl,

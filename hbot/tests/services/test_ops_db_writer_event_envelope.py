@@ -2,25 +2,25 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import Any
 
 from services.ops_db_writer.main import _ingest_event_envelope_raw
 
 
 class _EnvelopeCursor:
     def __init__(self) -> None:
-        self.calls: List[Dict[str, Any]] = []
-        self.sql_calls: List[str] = []
-        self._checkpoint: Optional[tuple[str, int]] = None
+        self.calls: list[dict[str, Any]] = []
+        self.sql_calls: list[str] = []
+        self._checkpoint: tuple[str, int] | None = None
         self._last_select_checkpoint = False
 
-    def __enter__(self) -> "_EnvelopeCursor":
+    def __enter__(self) -> _EnvelopeCursor:
         return self
 
-    def __exit__(self, exc_type, exc, tb) -> bool:  # noqa: ANN001
+    def __exit__(self, exc_type, exc, tb) -> bool:
         return False
 
-    def execute(self, sql: str, params: Optional[Dict[str, Any]] = None) -> None:
+    def execute(self, sql: str, params: dict[str, Any] | None = None) -> None:
         self.sql_calls.append(sql)
         self.calls.append(params or {})
         self._last_select_checkpoint = "FROM event_envelope_ingest_checkpoint" in sql
@@ -44,7 +44,7 @@ class _EnvelopeConn:
         return self.cur
 
 
-def _write_jsonl(path: Path, rows: List[Dict[str, Any]]) -> None:
+def _write_jsonl(path: Path, rows: list[dict[str, Any]]) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     with path.open("w", encoding="utf-8") as fp:
         for row in rows:

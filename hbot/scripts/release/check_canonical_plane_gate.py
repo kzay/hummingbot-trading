@@ -5,9 +5,8 @@ import csv
 import hashlib
 import json
 import os
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
-from typing import Dict, List, Tuple
 
 try:
     import psycopg
@@ -16,7 +15,7 @@ except Exception:  # pragma: no cover - optional dependency in lightweight envir
 
 
 def _utc_now_iso() -> str:
-    return datetime.now(timezone.utc).isoformat()
+    return datetime.now(UTC).isoformat()
 
 
 def _minutes_since(ts: str) -> float:
@@ -24,13 +23,13 @@ def _minutes_since(ts: str) -> float:
     if not raw:
         return 1e9
     try:
-        dt = datetime.fromisoformat(raw.replace("Z", "+00:00")).astimezone(timezone.utc)
+        dt = datetime.fromisoformat(raw.replace("Z", "+00:00")).astimezone(UTC)
     except Exception:
         return 1e9
-    return max(0.0, (datetime.now(timezone.utc) - dt).total_seconds() / 60.0)
+    return max(0.0, (datetime.now(UTC) - dt).total_seconds() / 60.0)
 
 
-def _read_json(path: Path, default: Dict[str, object]) -> Dict[str, object]:
+def _read_json(path: Path, default: dict[str, object]) -> dict[str, object]:
     if not path.exists():
         return default
     try:
@@ -40,7 +39,7 @@ def _read_json(path: Path, default: Dict[str, object]) -> Dict[str, object]:
         return default
 
 
-def _count_csv_rows(paths: List[Path]) -> int:
+def _count_csv_rows(paths: list[Path]) -> int:
     total = 0
     for path in paths:
         if not path.exists():
@@ -54,7 +53,7 @@ def _count_csv_rows(paths: List[Path]) -> int:
     return total
 
 
-def _event_key_digest(event: Dict[str, object], line_hash_fallback: str) -> bytes:
+def _event_key_digest(event: dict[str, object], line_hash_fallback: str) -> bytes:
     stream = str(event.get("stream", "")).strip()
     stream_entry_id = str(event.get("stream_entry_id", "")).strip()
     ts_utc = str(event.get("ts_utc", "")).strip()
@@ -66,7 +65,7 @@ def _event_key_digest(event: Dict[str, object], line_hash_fallback: str) -> byte
     return hashlib.sha1(raw.encode("utf-8")).digest()
 
 
-def _count_event_jsonl(paths: List[Path]) -> Tuple[int, int]:
+def _count_event_jsonl(paths: list[Path]) -> tuple[int, int]:
     total = 0
     unique_keys: set[bytes] = set()
     for path in paths:
@@ -85,7 +84,7 @@ def _count_event_jsonl(paths: List[Path]) -> Tuple[int, int]:
                         payload = {}
                     digest = _event_key_digest(
                         payload,
-                        line_hash_fallback=hashlib.sha1(f"{path}:{idx}".encode("utf-8")).hexdigest(),
+                        line_hash_fallback=hashlib.sha1(f"{path}:{idx}".encode()).hexdigest(),
                     )
                     unique_keys.add(digest)
         except Exception:
@@ -98,7 +97,7 @@ def _parity_delta_ratio(db_count: int, csv_count: int) -> float:
     return abs(int(db_count) - int(csv_count)) / float(denom)
 
 
-def _duplicate_suppression_metrics(total_source: int, unique_source: int, db_event_count: int) -> Dict[str, float]:
+def _duplicate_suppression_metrics(total_source: int, unique_source: int, db_event_count: int) -> dict[str, float]:
     duplicate_source = max(0, int(total_source) - int(unique_source))
     retained_duplicates = max(0, int(db_event_count) - int(unique_source))
     if duplicate_source <= 0:
@@ -115,7 +114,7 @@ def _duplicate_suppression_metrics(total_source: int, unique_source: int, db_eve
     }
 
 
-def _max_replay_lag_from_day2(day2_payload: Dict[str, object], reports_root: Path) -> int:
+def _max_replay_lag_from_day2(day2_payload: dict[str, object], reports_root: Path) -> int:
     lag = day2_payload.get("lag_diagnostics")
     if isinstance(lag, dict) and "max_delta_observed" in lag:
         try:
@@ -135,7 +134,7 @@ def _max_replay_lag_from_day2(day2_payload: Dict[str, object], reports_root: Pat
         delta_map = source_compare.get("delta_produced_minus_ingested_since_baseline")
     if not isinstance(delta_map, dict):
         return 10**9
-    values: List[int] = []
+    values: list[int] = []
     for value in delta_map.values():
         try:
             values.append(max(0, int(value)))
@@ -156,10 +155,10 @@ def _connect_db():
     )
 
 
-def _fetch_db_counts() -> Dict[str, int]:
+def _fetch_db_counts() -> dict[str, int]:
     conn = _connect_db()
     try:
-        out: Dict[str, int] = {}
+        out: dict[str, int] = {}
         with conn.cursor() as cur:
             for table, key in (
                 ("bot_snapshot_minute", "minute"),
@@ -182,9 +181,9 @@ def run(
     max_parity_delta_ratio: float,
     min_duplicate_suppression_rate: float,
     max_replay_lag_delta: int,
-) -> Dict[str, object]:
-    checks: List[Dict[str, object]] = []
-    metrics: Dict[str, object] = {}
+) -> dict[str, object]:
+    checks: list[dict[str, object]] = []
+    metrics: dict[str, object] = {}
 
     ops_db_writer_path = reports_root / "ops_db_writer" / "latest.json"
     ops_db_writer = _read_json(ops_db_writer_path, {})
@@ -219,7 +218,7 @@ def run(
     csv_counts["events_unique"] = events_unique
 
     db_counts_error = ""
-    db_counts: Dict[str, int] = {"minute": 0, "fills": 0, "events": 0}
+    db_counts: dict[str, int] = {"minute": 0, "fills": 0, "events": 0}
     try:
         db_counts = _fetch_db_counts()
     except Exception as exc:
@@ -357,7 +356,7 @@ def run(
 
     ops_reports = reports_root / "ops"
     ops_reports.mkdir(parents=True, exist_ok=True)
-    stamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
+    stamp = datetime.now(UTC).strftime("%Y%m%dT%H%M%SZ")
     out_file = ops_reports / f"canonical_plane_gate_{stamp}.json"
     out_file.write_text(json.dumps(out, indent=2), encoding="utf-8")
     (ops_reports / "canonical_plane_gate_latest.json").write_text(json.dumps(out, indent=2), encoding="utf-8")

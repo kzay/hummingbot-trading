@@ -1,21 +1,14 @@
 import { useEffect, useMemo, useState } from "react";
 
 import { useDashboardStore } from "../store/useDashboardStore";
+import { buildHeaders } from "../utils/fetch";
 import { formatNumber, formatSigned } from "../utils/format";
-import { gateTone, signedClass } from "../utils/presentation";
+import { signedClass } from "../utils/presentation";
 import type { InstanceStatusRow } from "../utils/realtimeParsers";
 import { parseInstancesPayload } from "../utils/realtimeParsers";
 
 const REQUEST_TIMEOUT_MS = 8_000;
 const REFRESH_INTERVAL_MS = 30_000;
-
-function buildHeaders(token: string): HeadersInit {
-  const headers: Record<string, string> = { "Content-Type": "application/json" };
-  if (token.trim()) {
-    headers.Authorization = `Bearer ${token.trim()}`;
-  }
-  return headers;
-}
 
 interface InstancesPreviewStripProps {
   embedded?: boolean;
@@ -27,6 +20,7 @@ export function InstancesPreviewStrip({ embedded = false }: InstancesPreviewStri
   const instanceName = useDashboardStore((state) => state.settings.instanceName);
   const updateSettings = useDashboardStore((state) => state.updateSettings);
   const setInstanceNames = useDashboardStore((state) => state.setInstanceNames);
+  const setInstanceStatuses = useDashboardStore((state) => state.setInstanceStatuses);
   const [rows, setRows] = useState<InstanceStatusRow[]>([]);
   const [error, setError] = useState("");
 
@@ -55,6 +49,7 @@ export function InstancesPreviewStrip({ embedded = false }: InstancesPreviewStri
         const nextRows = Array.isArray(payload.statuses) ? payload.statuses : [];
         setRows(nextRows);
         setInstanceNames(nextRows.map((entry) => String(entry.instance_name ?? "")));
+        setInstanceStatuses(nextRows);
         setError("");
       } catch (err) {
         if (cancelled || (err instanceof DOMException && err.name === "AbortError")) {
@@ -62,6 +57,7 @@ export function InstancesPreviewStrip({ embedded = false }: InstancesPreviewStri
         }
         setRows([]);
         setInstanceNames([]);
+        setInstanceStatuses([], err instanceof Error ? err.message : String(err));
         setError(err instanceof Error ? err.message : String(err));
       } finally {
         window.clearTimeout(timeoutId);
@@ -82,7 +78,7 @@ export function InstancesPreviewStrip({ embedded = false }: InstancesPreviewStri
         window.clearTimeout(timer);
       }
     };
-  }, [apiBase, apiToken, setInstanceNames]);
+  }, [apiBase, apiToken, setInstanceNames, setInstanceStatuses]);
 
   const sortedRows = useMemo(
     () =>
@@ -98,13 +94,14 @@ export function InstancesPreviewStrip({ embedded = false }: InstancesPreviewStri
 
   return (
     <section className={`instance-preview-strip ${embedded ? "embedded" : ""}`.trim()}>
-      <div className="instance-preview-header">
-        <div>
-          <h2>Instances</h2>
-          <p>Click any instance to switch the dashboard. Preview shows live equity and day PnL.</p>
+      {!embedded && (
+        <div className="instance-preview-header">
+          <div>
+            <h2>Instances</h2>
+          </div>
+          {error ? <span className="pill fail">{error}</span> : null}
         </div>
-        {error ? <span className="pill fail">{error}</span> : null}
-      </div>
+      )}
       <div className="instance-preview-grid">
         {sortedRows.map((row) => {
           const rowName = String(row.instance_name ?? "").trim();
@@ -115,25 +112,28 @@ export function InstancesPreviewStrip({ embedded = false }: InstancesPreviewStri
               type="button"
               className={`instance-preview-card ${isActive ? "active" : ""}`.trim()}
               onClick={() => {
-                if (!rowName) {
-                  return;
-                }
+                if (!rowName) return;
                 updateSettings({ instanceName: rowName });
               }}
             >
               <div className="instance-preview-topline">
-                <span className="instance-preview-name">{rowName || "unknown"}</span>
-                <span className={`pill ${gateTone(String(row.freshness ?? ""))}`}>{String(row.freshness ?? "n/a")}</span>
+                <div className="instance-preview-name-wrap">
+                  <div className={`instance-preview-icon ${rowName === "shared" ? "shared" : ""}`}>
+                    {rowName === "shared" ? "👥" : "₿"}
+                  </div>
+                  <span className="instance-preview-name">{rowName || "unknown"}</span>
+                </div>
+                <span className="instance-preview-status">LIVE</span>
               </div>
               <div className="instance-preview-values">
-                <div>
+                <div className="instance-preview-row">
                   <span className="instance-preview-label">Equity</span>
                   <div className="instance-preview-value">{formatNumber(row.equity_quote, 2)}</div>
                 </div>
-                <div>
-                  <span className="instance-preview-label">Day PnL</span>
-                  <div className={`instance-preview-value ${signedClass(row.realized_pnl_quote)}`}>
-                    {formatSigned(row.realized_pnl_quote, 2)}
+                <div className="instance-preview-row">
+                  <span className="instance-preview-label">Unrealized PNL</span>
+                  <div className={`instance-preview-value ${signedClass(row.unrealized_pnl_quote)}`}>
+                    {formatSigned(row.unrealized_pnl_quote, 2)}
                   </div>
                 </div>
               </div>

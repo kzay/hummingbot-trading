@@ -1,9 +1,8 @@
 from __future__ import annotations
 
 import os
-from typing import List
 
-from services.common.market_history_types import HistoryPolicy, MarketHistoryStatus
+from platform_lib.market_data.market_history_types import HistoryPolicy, MarketHistoryStatus
 
 _KNOWN_SOURCES = {"quote_mid", "exchange_ohlcv"}
 
@@ -25,8 +24,8 @@ def _env_int(name: str, default: int) -> int:
         return default
 
 
-def _normalize_sources(raw: str) -> List[str]:
-    out: List[str] = []
+def _normalize_sources(raw: str) -> list[str]:
+    out: list[str] = []
     for item in str(raw or "").split(","):
         source = str(item).strip().lower()
         if source in _KNOWN_SOURCES and source not in out:

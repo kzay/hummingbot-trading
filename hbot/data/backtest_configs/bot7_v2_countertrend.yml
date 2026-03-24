@@ -1,0 +1,64 @@
+strategy_class: ""
+strategy_config:
+  adapter_mode: "pullback_v2"
+  bb_period: 22
+  bb_stddev: "2.2"
+  rsi_period: 9
+  adx_period: 14
+  atr_period: 14
+  sma_fast: 12
+  sma_slow: 30
+  entry_score_threshold: "0.46"
+  w_pullback_zone: "0.35"
+  w_trend_slope: "0.10"
+  w_rsi_zone: "0.25"
+  w_adx_strength: "0.05"
+  w_rsi_divergence: "0.25"
+  pullback_depth_min_pct: "0.0007"
+  pullback_depth_max_pct: "0.009"
+  rsi_long_max: "47"
+  rsi_short_min: "53"
+  adx_trend_min: "12"
+  min_slope_pct: "0.00003"
+  divergence_lookback: 18
+  base_risk_pct: "0.035"
+  vol_scale_atr_target: "0.0065"
+  sl_atr_mult: "0.9"
+  tp_atr_mult: "1.1"
+  partial_take_at_r: "0.5"
+  partial_take_pct: "0.60"
+  trail_activate_r: "0.8"
+  trail_offset_atr: "0.30"
+  max_hold_minutes: 60
+  signal_cooldown_s: 30
+  max_daily_loss_pct: "0.018"
+  max_drawdown_pct: "0.028"
+  max_concurrent_positions: 1
+  session_filter_enabled: true
+  quality_hours_utc: "1-4,8-16,20-23"
+  off_session_size_mult: "0.8"
+  min_warmup_bars: 60
+  regime_reversal_exit: false
+data_source:
+  exchange: bitget
+  pair: BTC-USDT
+  resolution: 1m
+  instrument_type: perp
+  start_date: "2025-01-01"
+  end_date: "2025-03-31"
+  catalog_dir: data/historical
+initial_equity: 500
+fill_model: latency_aware
+seed: 42
+leverage: 1
+step_interval_s: 60
+warmup_bars: 60
+synthesis:
+  base_spread_bps: 5.0
+  vol_spread_mult: 1.0
+  depth_levels: 5
+  depth_decay: 0.70
+  base_depth_size: 1.0
+  steps_per_bar: 1
+  seed: 42
+output_dir: reports/backtest

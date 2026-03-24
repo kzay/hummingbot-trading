@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from services.contracts.event_schemas import AuditEvent, BotFillEvent, MarketQuoteEvent
+from platform_lib.contracts.event_schemas import AuditEvent, BotFillEvent, MarketQuoteEvent
 from services.hb_bridge.publisher import HBEventPublisher
 
 
@@ -12,7 +12,7 @@ class _FakeRedisClient:
     def ping(self) -> bool:
         return True
 
-    def xadd(self, stream: str, payload: dict, maxlen=None):  # noqa: ANN001
+    def xadd(self, stream: str, payload: dict, maxlen=None):
         self.calls.append((stream, payload, maxlen))
         return "1-0"
 

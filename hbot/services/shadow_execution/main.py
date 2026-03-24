@@ -5,21 +5,26 @@ import csv
 import json
 import os
 import time
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
-from typing import Dict, List, Optional, Tuple
 
-from services.common.log_namespace import iter_bot_log_files
-from services.common.activity_scope import active_bots_from_minute_logs
-from services.common.utils import (
+from platform_lib.core.activity_scope import active_bots_from_minute_logs
+from platform_lib.logging.log_namespace import iter_bot_log_files
+from platform_lib.core.utils import (
     safe_bool as _safe_bool,
+)
+from platform_lib.core.utils import (
     safe_float as _safe_float,
+)
+from platform_lib.core.utils import (
     today_utc as _today,
+)
+from platform_lib.core.utils import (
     utc_now as _utc_now,
 )
 
 
-def _to_ms(value: object) -> Optional[int]:
+def _to_ms(value: object) -> int | None:
     if value in (None, ""):
         return None
     s = str(value).strip()
@@ -34,7 +39,7 @@ def _to_ms(value: object) -> Optional[int]:
         return None
 
 
-def _read_json(path: Path, default: Dict[str, object]) -> Dict[str, object]:
+def _read_json(path: Path, default: dict[str, object]) -> dict[str, object]:
     if not path.exists():
         return default
     try:
@@ -44,10 +49,10 @@ def _read_json(path: Path, default: Dict[str, object]) -> Dict[str, object]:
         return default
 
 
-def _read_latest_csv_row(path: Path) -> Optional[Dict[str, str]]:
+def _read_latest_csv_row(path: Path) -> dict[str, str] | None:
     if not path.exists():
         return None
-    latest: Optional[Dict[str, str]] = None
+    latest: dict[str, str] | None = None
     try:
         with path.open("r", encoding="utf-8", newline="") as f:
             for row in csv.DictReader(f):
@@ -58,8 +63,8 @@ def _read_latest_csv_row(path: Path) -> Optional[Dict[str, str]]:
     return latest
 
 
-def _load_controller_market_rows(data_root: Path) -> Dict[str, Dict[str, object]]:
-    rows: Dict[str, Dict[str, object]] = {}
+def _load_controller_market_rows(data_root: Path) -> dict[str, dict[str, object]]:
+    rows: dict[str, dict[str, object]] = {}
     for minute_file in iter_bot_log_files(data_root, "minute.csv"):
         try:
             bot = minute_file.parts[-5]
@@ -82,8 +87,8 @@ def _load_controller_market_rows(data_root: Path) -> Dict[str, Dict[str, object]
     return rows
 
 
-def _load_latest_fill_rows(data_root: Path) -> Dict[str, Dict[str, object]]:
-    rows: Dict[str, Dict[str, object]] = {}
+def _load_latest_fill_rows(data_root: Path) -> dict[str, dict[str, object]]:
+    rows: dict[str, dict[str, object]] = {}
     for fills_file in iter_bot_log_files(data_root, "fills.csv"):
         try:
             bot = fills_file.parts[-5]
@@ -104,8 +109,8 @@ def _load_latest_fill_rows(data_root: Path) -> Dict[str, Dict[str, object]]:
     return rows
 
 
-def _load_latest_stream_market_rows(event_path: Path) -> Dict[str, Dict[str, object]]:
-    out: Dict[str, Dict[str, object]] = {}
+def _load_latest_stream_market_rows(event_path: Path) -> dict[str, dict[str, object]]:
+    out: dict[str, dict[str, object]] = {}
     if not event_path.exists():
         return out
     try:
@@ -150,12 +155,12 @@ def _load_latest_stream_market_rows(event_path: Path) -> Dict[str, Dict[str, obj
     return out
 
 
-def _load_paper_service_pair_rows(path: Path) -> Dict[str, Dict[str, object]]:
+def _load_paper_service_pair_rows(path: Path) -> dict[str, dict[str, object]]:
     payload = _read_json(path, {})
     raw_pairs = payload.get("pairs", {})
     if not isinstance(raw_pairs, dict):
         return {}
-    out: Dict[str, Dict[str, object]] = {}
+    out: dict[str, dict[str, object]] = {}
     for row in raw_pairs.values():
         if not isinstance(row, dict):
             continue
@@ -178,7 +183,7 @@ def _load_paper_service_pair_rows(path: Path) -> Dict[str, Dict[str, object]]:
     return out
 
 
-def _load_thresholds(path: Path) -> Dict[str, object]:
+def _load_thresholds(path: Path) -> dict[str, object]:
     default = {
         "version": 1,
         "defaults": {
@@ -203,7 +208,7 @@ def _load_thresholds(path: Path) -> Dict[str, object]:
     return {"version": payload.get("version", 1), "defaults": defaults, "bots": bots}
 
 
-def _bot_cfg(cfg: Dict[str, object], bot: str) -> Dict[str, float]:
+def _bot_cfg(cfg: dict[str, object], bot: str) -> dict[str, float]:
     defaults = cfg.get("defaults", {}) if isinstance(cfg.get("defaults"), dict) else {}
     bots = cfg.get("bots", {}) if isinstance(cfg.get("bots"), dict) else {}
     row = bots.get(bot, {}) if isinstance(bots.get(bot, {}), dict) else {}
@@ -246,12 +251,12 @@ def _bot_cfg(cfg: Dict[str, object], bot: str) -> Dict[str, float]:
 
 def _read_minute_equity_series(
     path: Path, now_ms: int, lookback_min: int
-) -> Tuple[Optional[float], Optional[float], Optional[int]]:
+) -> tuple[float | None, float | None, int | None]:
     if not path.exists():
         return None, None, None
-    first: Optional[float] = None
-    last: Optional[float] = None
-    last_ts: Optional[int] = None
+    first: float | None = None
+    last: float | None = None
+    last_ts: int | None = None
     min_ts = now_ms - max(1, lookback_min) * 60 * 1000
     try:
         with path.open("r", encoding="utf-8", newline="") as f:
@@ -272,8 +277,8 @@ def _read_minute_equity_series(
     return first, last, last_ts
 
 
-def _latest_market_mid(markets: List[Tuple[int, float]], ts_ms: int) -> Optional[float]:
-    best: Optional[float] = None
+def _latest_market_mid(markets: list[tuple[int, float]], ts_ms: int) -> float | None:
+    best: float | None = None
     best_ts = -1
     for item_ts, mid in markets:
         if item_ts <= ts_ms and item_ts > best_ts:
@@ -284,13 +289,13 @@ def _latest_market_mid(markets: List[Tuple[int, float]], ts_ms: int) -> Optional
 
 def _metric_result(
     name: str,
-    value: Optional[float],
+    value: float | None,
     expected: float,
     max_abs_delta: float,
     *,
     informative: bool,
     fail_when_missing: bool,
-) -> Dict[str, object]:
+) -> dict[str, object]:
     if value is None or not informative:
         return {
             "metric": name,
@@ -314,34 +319,34 @@ def _metric_result(
 
 def _compute_bot_parity(
     bot: str,
-    metrics: Dict[str, object],
-    cfg: Dict[str, float],
+    metrics: dict[str, object],
+    cfg: dict[str, float],
     *,
     active_window: bool,
-) -> Dict[str, object]:
+) -> dict[str, object]:
     intents_total = int(metrics.get("intents_total", 0))
     actionable_intents = int(metrics.get("actionable_intents", 0))
     fills_total = int(metrics.get("fills_total", 0))
     order_failed_total = int(metrics.get("order_failed_total", 0))
     denied_risk_total = int(metrics.get("risk_denied_total", 0))
 
-    fill_ratio_realized: Optional[float] = None
+    fill_ratio_realized: float | None = None
     if actionable_intents > 0:
         fill_ratio_realized = fills_total / actionable_intents
 
     denom = fills_total + order_failed_total
-    reject_rate_realized: Optional[float] = None
+    reject_rate_realized: float | None = None
     if denom > 0:
         reject_rate_realized = order_failed_total / denom
 
     slippage_samples = metrics.get("slippage_samples_bps", [])
-    slippage_realized: Optional[float] = None
+    slippage_realized: float | None = None
     if isinstance(slippage_samples, list) and slippage_samples:
         slippage_realized = sum(float(x) for x in slippage_samples) / len(slippage_samples)
 
     first_eq = metrics.get("equity_first")
     last_eq = metrics.get("equity_last")
-    pnl_realized: Optional[float] = None
+    pnl_realized: float | None = None
     if isinstance(first_eq, float) and isinstance(last_eq, float):
         pnl_realized = last_eq - first_eq
 
@@ -413,19 +418,19 @@ def _compute_bot_parity(
 def _build_drift_audit(
     *,
     today: str,
-    parity_report: Dict[str, object],
-    reconciliation: Dict[str, object],
-    active_bots: Dict[str, Dict[str, object]],
+    parity_report: dict[str, object],
+    reconciliation: dict[str, object],
+    active_bots: dict[str, dict[str, object]],
     data_root: Path,
     event_path: Path,
     pair_snapshot_path: Path,
-) -> Dict[str, object]:
+) -> dict[str, object]:
     controller_rows = _load_controller_market_rows(data_root)
     latest_fill_rows = _load_latest_fill_rows(data_root)
     stream_rows = _load_latest_stream_market_rows(event_path)
     pair_rows = _load_paper_service_pair_rows(pair_snapshot_path)
     reconciliation_findings = reconciliation.get("findings", [])
-    recon_by_bot: Dict[str, List[Dict[str, object]]] = {}
+    recon_by_bot: dict[str, list[dict[str, object]]] = {}
     if isinstance(reconciliation_findings, list):
         for finding in reconciliation_findings:
             if not isinstance(finding, dict):
@@ -435,7 +440,7 @@ def _build_drift_audit(
                 continue
             recon_by_bot.setdefault(bot, []).append(finding)
 
-    drift_rows: List[Dict[str, object]] = []
+    drift_rows: list[dict[str, object]] = []
     for row in parity_report.get("bots", []):
         if not isinstance(row, dict):
             continue
@@ -451,7 +456,7 @@ def _build_drift_audit(
         stream_row = stream_rows.get(bot, {})
         pair_row = pair_rows.get(bot, {})
         fill_row = latest_fill_rows.get(bot, {})
-        buckets: List[str] = []
+        buckets: list[str] = []
         if str(metric_map.get("fill_ratio_delta", {}).get("note", "")) == "insufficient_data":
             buckets.append("fill_path_insufficient_evidence")
         if str(metric_map.get("slippage_delta_bps", {}).get("note", "")) == "insufficient_data":
@@ -527,7 +532,7 @@ def run(once: bool = False) -> None:
         reconciliation = _read_json(reconciliation_path, {})
         active_bots = active_bots_from_minute_logs(data_root, active_within_minutes=active_bot_window_min)
 
-        per_bot: Dict[str, Dict[str, object]] = {}
+        per_bot: dict[str, dict[str, object]] = {}
         for bot, activity in active_bots.items():
             per_bot[bot] = {
                 "intents_total": 0,
@@ -629,7 +634,7 @@ def run(once: bool = False) -> None:
             per_bot[bot]["equity_last"] = last_eq
             per_bot[bot]["equity_last_ts"] = last_ts
 
-        bot_reports: List[Dict[str, object]] = []
+        bot_reports: list[dict[str, object]] = []
         for bot in sorted(per_bot.keys()):
             bcfg = _bot_cfg(cfg, bot)
             if not bcfg["enabled"]:
@@ -671,7 +676,7 @@ def run(once: bool = False) -> None:
 
         day_dir = reports_root / today
         day_dir.mkdir(parents=True, exist_ok=True)
-        stamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
+        stamp = datetime.now(UTC).strftime("%Y%m%dT%H%M%SZ")
         out_path = day_dir / f"parity_{stamp}.json"
         drift_out_path = day_dir / f"drift_audit_{stamp}.json"
         out_path.write_text(json.dumps(report, indent=2), encoding="utf-8")

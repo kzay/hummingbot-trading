@@ -4,10 +4,8 @@ from __future__ import annotations
 import argparse
 import json
 import re
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
-from typing import Dict, List
-
 
 SECTION_RE = re.compile(r"^###\s+(\d+)\.\s+(.*)$")
 CHECKBOX_RE = re.compile(r"^- \[( |x|X)\]\s+(.*)$")
@@ -15,10 +13,10 @@ EVIDENCE_RE = re.compile(r"^- \*\*Evidence:\*\*\s*(.*)$")
 
 
 def _utc_now() -> str:
-    return datetime.now(timezone.utc).isoformat()
+    return datetime.now(UTC).isoformat()
 
 
-def _classify_section(items: List[Dict[str, object]], evidence_text: str) -> str:
+def _classify_section(items: list[dict[str, object]], evidence_text: str) -> str:
     if not items:
         return "unknown"
     all_checked = all(bool(it.get("checked", False)) for it in items)
@@ -31,10 +29,10 @@ def _classify_section(items: List[Dict[str, object]], evidence_text: str) -> str
     return "fail"
 
 
-def collect(checklist_path: Path) -> Dict[str, object]:
+def collect(checklist_path: Path) -> dict[str, object]:
     lines = checklist_path.read_text(encoding="utf-8").splitlines()
-    sections: List[Dict[str, object]] = []
-    current: Dict[str, object] | None = None
+    sections: list[dict[str, object]] = []
+    current: dict[str, object] | None = None
 
     for idx, line in enumerate(lines, start=1):
         section_match = SECTION_RE.match(line.strip())
@@ -120,7 +118,7 @@ def main() -> int:
     payload = collect(checklist_path)
     out_dir = root / "reports" / "ops"
     out_dir.mkdir(parents=True, exist_ok=True)
-    stamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
+    stamp = datetime.now(UTC).strftime("%Y%m%dT%H%M%SZ")
     ts_file = out_dir / f"go_live_checklist_evidence_{stamp}.json"
     latest_file = out_dir / "go_live_checklist_evidence_latest.json"
     raw = json.dumps(payload, indent=2)

@@ -1,13 +1,16 @@
 from __future__ import annotations
 
+import logging
 from decimal import Decimal
 from typing import Any
 
-from pydantic import Field
+from pydantic import Field, model_validator
 
 from controllers.runtime.base import StrategyRuntimeV24Config, StrategyRuntimeV24Controller
-from controllers.runtime.market_making_types import MarketConditions, SpreadEdgeState
-from services.common.utils import to_decimal
+from controllers.runtime.runtime_types import MarketConditions, SpreadEdgeState
+from platform_lib.core.utils import to_decimal
+
+_logger = logging.getLogger(__name__)
 
 _ZERO = Decimal("0")
 
@@ -17,6 +20,16 @@ class Bot1BaselineV1Config(StrategyRuntimeV24Config):
 
     controller_name: str = "bot1_baseline_v1"
     shared_edge_gate_enabled: bool = Field(default=True)
+
+    @model_validator(mode="after")
+    def _validate_base_pct_range(self) -> Bot1BaselineV1Config:
+        if self.min_base_pct >= self.max_base_pct:
+            _logger.error(
+                "min_base_pct (%.4f) >= max_base_pct (%.4f) — swapping values",
+                float(self.min_base_pct), float(self.max_base_pct),
+            )
+            self.min_base_pct, self.max_base_pct = self.max_base_pct, self.min_base_pct
+        return self
 
 
 class Bot1BaselineV1Controller(StrategyRuntimeV24Controller):
@@ -103,3 +116,12 @@ class Bot1BaselineV1Controller(StrategyRuntimeV24Controller):
         self.processed_data["bot1_signal_side"] = str(gate["signal_side"])
         self.processed_data["bot1_signal_reason"] = str(gate["signal_reason"])
         self.processed_data["bot1_signal_score"] = to_decimal(gate["signal_score"])
+
+    def telemetry_fields(self) -> tuple[tuple[str, str, Any], ...]:
+        return (
+            ("bot1_gate_state", "bot1_gate_state", "n/a"),
+            ("bot1_gate_reason", "bot1_gate_reason", "n/a"),
+            ("bot1_signal_side", "bot1_signal_side", "off"),
+            ("bot1_signal_reason", "bot1_signal_reason", "n/a"),
+            ("bot1_signal_score", "bot1_signal_score", _ZERO),
+        )

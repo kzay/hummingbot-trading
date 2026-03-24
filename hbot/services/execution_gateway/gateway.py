@@ -3,9 +3,8 @@ from __future__ import annotations
 import time
 import uuid
 from dataclasses import dataclass, field
-from typing import Dict, Optional
 
-from services.contracts.event_schemas import PaperExchangeCommandEvent
+from platform_lib.contracts.event_schemas import PaperExchangeCommandEvent
 
 
 @dataclass(frozen=True)
@@ -17,11 +16,11 @@ class ExecutionOrderState:
     state: str
     side: str = ""
     order_type: str = ""
-    amount_base: Optional[float] = None
-    price: Optional[float] = None
-    created_ts_ms: Optional[int] = None
-    updated_ts_ms: Optional[int] = None
-    metadata: Dict[str, str] = field(default_factory=dict)
+    amount_base: float | None = None
+    price: float | None = None
+    created_ts_ms: int | None = None
+    updated_ts_ms: int | None = None
+    metadata: dict[str, str] = field(default_factory=dict)
 
 
 @dataclass(frozen=True)
@@ -29,10 +28,10 @@ class ExecutionPositionState:
     instance_name: str
     trading_pair: str
     quantity: float = 0.0
-    avg_entry_price: Optional[float] = None
-    unrealized_pnl_quote: Optional[float] = None
+    avg_entry_price: float | None = None
+    unrealized_pnl_quote: float | None = None
     side: str = "flat"
-    metadata: Dict[str, str] = field(default_factory=dict)
+    metadata: dict[str, str] = field(default_factory=dict)
 
 
 def build_paper_execution_command(
@@ -42,17 +41,17 @@ def build_paper_execution_command(
     connector_name: str,
     trading_pair: str,
     command: str,
-    metadata: Optional[Dict[str, str]] = None,
-    order_id: Optional[str] = None,
-    side: Optional[str] = None,
-    order_type: Optional[str] = None,
-    amount_base: Optional[float] = None,
-    price: Optional[float] = None,
+    metadata: dict[str, str] | None = None,
+    order_id: str | None = None,
+    side: str | None = None,
+    order_type: str | None = None,
+    amount_base: float | None = None,
+    price: float | None = None,
     reduce_only: bool = False,
-    position_action: Optional[str] = None,
-    position_mode: Optional[str] = None,
+    position_action: str | None = None,
+    position_mode: str | None = None,
     ttl_ms: int = 30_000,
-    event_id: Optional[str] = None,
+    event_id: str | None = None,
 ) -> PaperExchangeCommandEvent:
     now_ms = int(time.time() * 1000)
     return PaperExchangeCommandEvent(

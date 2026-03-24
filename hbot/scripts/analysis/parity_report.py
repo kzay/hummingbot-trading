@@ -15,18 +15,17 @@ from __future__ import annotations
 import argparse
 import csv
 import sys
-from collections import Counter, defaultdict
+from collections import Counter
 from pathlib import Path
-from typing import Dict, List, Optional, Tuple
 
 _SCRIPT_DIR = Path(__file__).resolve().parent
 _PROJECT_ROOT = _SCRIPT_DIR.parents[1]
 sys.path.insert(0, str(_PROJECT_ROOT))
 
-from services.common.utils import safe_float, utc_now, write_json
+from platform_lib.core.utils import safe_float, utc_now, write_json
 
 
-def _read_csv(path: Path) -> List[Dict[str, str]]:
+def _read_csv(path: Path) -> list[dict[str, str]]:
     if not path.exists():
         return []
     with path.open("r", encoding="utf-8", newline="") as f:
@@ -34,9 +33,9 @@ def _read_csv(path: Path) -> List[Dict[str, str]]:
 
 
 def _compute_env_metrics(
-    fills: List[Dict[str, str]],
-    minutes: List[Dict[str, str]],
-) -> Dict[str, object]:
+    fills: list[dict[str, str]],
+    minutes: list[dict[str, str]],
+) -> dict[str, object]:
     """Compute key metrics from one environment's data."""
     if not minutes:
         return {"status": "no_minute_data"}
@@ -45,7 +44,7 @@ def _compute_env_metrics(
     running_count = sum(1 for r in minutes if str(r.get("state", "")).strip() == "running")
     running_pct = running_count / total_minutes if total_minutes > 0 else 0
 
-    regime_counts: Dict[str, int] = Counter()
+    regime_counts: dict[str, int] = Counter()
     for r in minutes:
         regime_counts[str(r.get("regime", "unknown")).strip()] += 1
     regime_dist = {k: round(v / total_minutes, 4) for k, v in regime_counts.items()} if total_minutes > 0 else {}
@@ -106,12 +105,12 @@ def _compute_env_metrics(
     }
 
 
-def _compare(metrics_a: Dict, metrics_b: Dict) -> Dict[str, object]:
+def _compare(metrics_a: dict, metrics_b: dict) -> dict[str, object]:
     """Compare two environments and produce parity flags."""
     if metrics_a.get("status") != "ok" or metrics_b.get("status") != "ok":
         return {"status": "insufficient_data", "warnings": ["one or both environments have no data"]}
 
-    warnings: List[str] = []
+    warnings: list[str] = []
 
     fph_a = float(metrics_a.get("fills_per_hour", 0))
     fph_b = float(metrics_b.get("fills_per_hour", 0))
@@ -162,7 +161,7 @@ def main() -> None:
 
     data_root = Path(args.data_root)
 
-    def _load(bot: str, variant: str) -> Tuple[List[Dict], List[Dict]]:
+    def _load(bot: str, variant: str) -> tuple[list[dict], list[dict]]:
         base = data_root / bot / "logs" / "epp_v24" / f"{bot}_{variant}"
         return _read_csv(base / "fills.csv"), _read_csv(base / "minute.csv")
 

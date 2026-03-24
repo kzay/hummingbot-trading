@@ -7,16 +7,19 @@ Tests the critical accounting rules:
 - V6 position flip test vector.
 - Available balance clamped to zero.
 """
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from decimal import Decimal
-import pytest
 
-from controllers.paper_engine_v2.portfolio import (
-    MultiAssetLedger, PaperPortfolio, PortfolioConfig,
+from simulation.portfolio import (
+    MultiAssetLedger,
+    PaperPortfolio,
+    PortfolioConfig,
 )
-from controllers.paper_engine_v2.types import OrderSide, PositionAction, _ZERO
+from simulation.types import _ZERO, OrderSide, PositionAction
 from tests.controllers.test_paper_engine_v2.conftest import (
-    BTC_PERP, BTC_SPOT, make_spec,
+    BTC_PERP,
+    BTC_SPOT,
+    make_spec,
 )
 
 
@@ -107,6 +110,22 @@ class TestMultiAssetLedger:
         ledger = MultiAssetLedger({"USDT": Decimal("100")})
         ledger.reserve("USDT", Decimal("200"))  # over-reserve
         assert ledger.available("USDT") == Decimal("0")
+
+    def test_debit_clamped_to_zero(self):
+        """Negative balance guard: debit cannot push total below zero."""
+        ledger = MultiAssetLedger({"USDT": Decimal("100")})
+        ledger.debit("USDT", Decimal("200"))
+        assert ledger.total("USDT") == Decimal("0")
+
+    def test_debit_exact_to_zero(self):
+        ledger = MultiAssetLedger({"USDT": Decimal("100")})
+        ledger.debit("USDT", Decimal("100"))
+        assert ledger.total("USDT") == Decimal("0")
+
+    def test_debit_normal_positive(self):
+        ledger = MultiAssetLedger({"USDT": Decimal("100")})
+        ledger.debit("USDT", Decimal("30"))
+        assert ledger.total("USDT") == Decimal("70")
 
     def test_can_reserve_insufficient(self):
         ledger = MultiAssetLedger({"USDT": Decimal("100")})
@@ -203,7 +222,46 @@ class TestMarkToMarket:
         p._daily_open_day_key = "2000-01-01"
         p.mark_to_market({})
         assert p.daily_open_equity == Decimal("250")
-        assert p._daily_open_day_key == datetime.now(timezone.utc).strftime("%Y-%m-%d")
+        assert p._daily_open_day_key == datetime.now(UTC).strftime("%Y-%m-%d")
+
+
+class TestPerpLedgerSettlement:
+    """Verify that perp fills correctly update the cash ledger (fees + PnL)."""
+
+    def test_perp_open_debits_fee_only(self):
+        p = make_portfolio(usdt=Decimal("5000"))
+        settle(p, BTC_PERP, "buy", "0.001", "70000", fee="0.014", leverage=1)
+        assert p.balance("USDT") == Decimal("4999.986")
+
+    def test_perp_close_debits_fee_and_loss(self):
+        p = make_portfolio(usdt=Decimal("5000"))
+        settle(p, BTC_PERP, "buy", "0.001", "70000", fee="0.014", leverage=1)
+        settle(p, BTC_PERP, "sell", "0.001", "69000", fee="0.014", leverage=1)
+        expected = Decimal("5000") - Decimal("0.014") - Decimal("0.014") - Decimal("1")
+        assert p.balance("USDT") == expected
+
+    def test_perp_close_credits_profit(self):
+        p = make_portfolio(usdt=Decimal("5000"))
+        settle(p, BTC_PERP, "buy", "0.001", "70000", fee="0.014", leverage=1)
+        settle(p, BTC_PERP, "sell", "0.001", "71000", fee="0.014", leverage=1)
+        expected = Decimal("5000") - Decimal("0.014") - Decimal("0.014") + Decimal("1")
+        assert p.balance("USDT") == expected
+
+    def test_equity_quote_reflects_settled_loss(self):
+        p = make_portfolio(usdt=Decimal("5000"))
+        settle(p, BTC_PERP, "buy", "0.001", "70000", fee="0.014", leverage=1)
+        settle(p, BTC_PERP, "sell", "0.001", "69000", fee="0.014", leverage=1)
+        eq = p.equity_quote({BTC_PERP.key: Decimal("69000")})
+        expected = Decimal("5000") - Decimal("0.028") - Decimal("1")
+        assert eq == expected
+
+    def test_snapshot_reflects_settled_balance(self):
+        p = make_portfolio(usdt=Decimal("5000"))
+        settle(p, BTC_PERP, "buy", "0.001", "70000", fee="0.014", leverage=1)
+        settle(p, BTC_PERP, "sell", "0.001", "69000", fee="0.014", leverage=1)
+        snap = p.snapshot()
+        expected = Decimal("5000") - Decimal("0.028") - Decimal("1")
+        assert Decimal(snap["balances"]["USDT"]) == expected
 
 
 class TestPerpMaintenanceMargin:
@@ -227,8 +285,8 @@ class TestPerpMaintenanceMargin:
 
 class TestRiskGuard:
     def test_drawdown_hard_stop(self):
-        from controllers.paper_engine_v2.types import PaperOrder, PaperOrderType, OrderStatus
-        import time
+
+        from simulation.types import OrderStatus, PaperOrder, PaperOrderType
         p = make_portfolio(usdt=Decimal("100"))
         spec = make_spec(BTC_SPOT)
         # Force peak equity and then a large loss

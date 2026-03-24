@@ -2,14 +2,14 @@ from __future__ import annotations
 
 import logging
 from decimal import Decimal
-from typing import Any, List, Tuple
+from typing import Any
 
 from hummingbot.core.data_type.common import TradeType
 from hummingbot.strategy_v2.executors.position_executor.data_types import PositionExecutorConfig
 
 from controllers.runtime.data_context import RuntimeDataContext
 from controllers.runtime.execution_context import RuntimeExecutionPlan
-from services.common.utils import to_decimal
+from platform_lib.core.utils import to_decimal
 
 logger = logging.getLogger(__name__)
 
@@ -18,11 +18,6 @@ _ONE = Decimal("1")
 _BALANCE_EPSILON = Decimal("1e-8")
 
 
-def _config_is_paper(config: Any) -> bool:
-    explicit = getattr(config, "is_paper", None)
-    if explicit is not None:
-        return bool(explicit)
-    return str(getattr(config, "bot_mode", "")).strip().lower() == "paper"
 
 
 class MarketMakingRuntimeAdapter:
@@ -101,7 +96,7 @@ class MarketMakingRuntimeAdapter:
             size_mult=plan.size_mult,
         )
 
-    def get_executor_config(self, level_id: str, price: Decimal, amount: Decimal):
+    def get_executor_config(self, level_id: str, price: Decimal, amount: Decimal) -> Any:
         controller = self._controller
         side = controller.get_trade_type_from_level_id(level_id)
         q_price = controller._quantize_price(price, side)
@@ -145,16 +140,13 @@ class MarketMakingRuntimeAdapter:
             side=side,
         )
 
-    def executors_to_refresh(self) -> List[Any]:
+    def executors_to_refresh(self) -> list[Any]:
         controller = self._controller
         refresh_s = max(1, int(controller._runtime_levels.executor_refresh_time))
         ack_timeout_s = max(5, controller.config.order_ack_timeout_s)
         now = controller.market_data_provider.time()
         reconnect_refresh_suppressed = controller._in_reconnect_refresh_suppression_window(now)
         stale_age_s = refresh_s
-        if _config_is_paper(controller.config):
-            paper_min_lifetime_s = max(0, int(getattr(controller.config, "paper_executor_min_lifetime_s", 0) or 0))
-            stale_age_s = max(stale_age_s, paper_min_lifetime_s)
 
         if reconnect_refresh_suppressed:
             stale_executors = []
@@ -177,41 +169,33 @@ class MarketMakingRuntimeAdapter:
                 executors=controller.executors_info,
                 filter_func=lambda x: not x.is_trading and x.is_active and now - x.timestamp > stale_age_s,
             )
-            if _config_is_paper(controller.config):
-                stuck_executors = []
-                controller._consecutive_stuck_ticks = 0
-            else:
-                stuck_executors = controller.filter_executors(
-                    executors=controller.executors_info,
-                    filter_func=lambda x: (
-                        not x.is_trading
-                        and x.is_active
-                        and _is_unacked_executor(x)
-                        and now - x.timestamp > ack_timeout_s
-                        and now - x.timestamp <= refresh_s
-                    ),
+            stuck_executors = controller.filter_executors(
+                executors=controller.executors_info,
+                filter_func=lambda x: (
+                    not x.is_trading
+                    and x.is_active
+                    and _is_unacked_executor(x)
+                    and now - x.timestamp > ack_timeout_s
+                    and now - x.timestamp <= refresh_s
+                ),
+            )
+            if stuck_executors:
+                logger.warning(
+                    "Order ack timeout: %d executor(s) stuck in placing state for >%ds",
+                    len(stuck_executors),
+                    ack_timeout_s,
                 )
-                if stuck_executors:
-                    logger.warning(
-                        "Order ack timeout: %d executor(s) stuck in placing state for >%ds",
-                        len(stuck_executors),
-                        ack_timeout_s,
-                    )
-                    controller._consecutive_stuck_ticks += 1
-                else:
-                    controller._consecutive_stuck_ticks = 0
+                controller._consecutive_stuck_ticks += 1
+            else:
+                controller._consecutive_stuck_ticks = 0
 
-        if not reconnect_refresh_suppressed and _config_is_paper(controller.config):
-            cancel_stale_paper_orders = getattr(controller, "_cancel_stale_paper_orders", None)
-            if cancel_stale_paper_orders is None:
-                from controllers.shared_mm_v24 import EppV24Controller
-
-                cancel_stale_paper_orders = lambda **kwargs: EppV24Controller._cancel_stale_paper_orders(controller, **kwargs)
-            if callable(cancel_stale_paper_orders):
-                canceled = cancel_stale_paper_orders(stale_age_s=stale_age_s, now_ts=now)
+        if not reconnect_refresh_suppressed:
+            cancel_stale_fn = getattr(controller, "_cancel_stale_orders", None)
+            if callable(cancel_stale_fn):
+                canceled = cancel_stale_fn(stale_age_s=stale_age_s, now_ts=now)
                 if canceled > 0:
                     logger.info(
-                        "Canceled %d stale PaperDesk order(s) older than %.1fs for %s during refresh reconciliation",
+                        "Canceled %d stale order(s) older than %.1fs for %s during refresh reconciliation",
                         canceled,
                         stale_age_s,
                         controller.config.trading_pair,
@@ -225,7 +209,7 @@ class MarketMakingRuntimeAdapter:
             controller._pending_stale_cancel_actions = []
         return actions
 
-    def get_price_and_amount(self, level_id: str) -> Tuple[Decimal, Decimal]:
+    def get_price_and_amount(self, level_id: str) -> tuple[Decimal, Decimal]:
         controller = self._controller
         level = controller.get_level_from_level_id(level_id)
         trade_type = controller.get_trade_type_from_level_id(level_id)
@@ -236,7 +220,7 @@ class MarketMakingRuntimeAdapter:
         order_price = reference_price * (1 + side_multiplier * spread_in_pct)
         return order_price, amounts_quote[int(level)] / order_price
 
-    def _runtime_spreads_and_amounts_in_quote(self, trade_type: TradeType) -> Tuple[List[Decimal], List[Decimal]]:
+    def _runtime_spreads_and_amounts_in_quote(self, trade_type: TradeType) -> tuple[list[Decimal], list[Decimal]]:
         controller = self._controller
         buy_amounts_pct = controller._runtime_levels.buy_amounts_pct
         sell_amounts_pct = controller._runtime_levels.sell_amounts_pct

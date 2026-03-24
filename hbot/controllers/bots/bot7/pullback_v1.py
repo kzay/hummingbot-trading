@@ -36,10 +36,10 @@ from pydantic import Field
 from controllers.runtime.base import DirectionalStrategyRuntimeV24Config, DirectionalStrategyRuntimeV24Controller
 from controllers.runtime.data_context import RuntimeDataContext
 from controllers.runtime.execution_context import RuntimeExecutionPlan
-from controllers.runtime.market_making_types import MarketConditions, RegimeSpec, SpreadEdgeState, clip
 from controllers.runtime.risk_context import RuntimeRiskDecision
-from services.common.market_data_plane import CanonicalMarketDataReader, MarketTrade
-from services.common.utils import to_decimal
+from controllers.runtime.runtime_types import MarketConditions, RegimeSpec, SpreadEdgeState, clip
+from platform_lib.market_data.market_data_plane import CanonicalMarketDataReader, MarketTrade
+from platform_lib.core.utils import to_decimal
 
 _logger = logging.getLogger(__name__)
 
@@ -313,6 +313,9 @@ class PullbackV1Controller(DirectionalStrategyRuntimeV24Controller):
             "fail_closed": False,
         }
 
+    def _bot7_gate_metrics(self) -> dict[str, Any]:
+        return self._pb_gate_metrics()
+
     def _compute_alpha_policy(
         self,
         *,
@@ -521,14 +524,15 @@ class PullbackV1Controller(DirectionalStrategyRuntimeV24Controller):
         """Check that trade volume is declining during the pullback.
 
         Healthy pullbacks see decreasing volume as price retraces.
-        Splits recent trades into windows and checks monotonic decline
-        (with 10% noise tolerance).  Permissive when data insufficient.
+        Splits recent trades into windows and requires at least 2/3
+        of consecutive pairs to show decline (with 10% noise tolerance).
+        Permissive when data insufficient.
         """
         if not bool(getattr(self.config, "pb_vol_decline_enabled", True)):
             return True
         lookback = int(getattr(self.config, "pb_vol_decline_lookback", 5))
         if len(trades) < lookback * 2:
-            return True  # permissive during warmup
+            return True
         window_size = len(trades) // lookback
         if window_size < 1:
             return True
@@ -538,11 +542,14 @@ class PullbackV1Controller(DirectionalStrategyRuntimeV24Controller):
             end = start + window_size
             vol = sum((t.size for t in trades[start:end]), _ZERO)
             windows.append(vol)
-        # Check monotonic decline with 10% tolerance
-        for i in range(1, len(windows)):
-            if windows[i] > windows[i - 1] * Decimal("1.1"):
-                return False
-        return True
+        pairs = len(windows) - 1
+        if pairs <= 0:
+            return True
+        declining = sum(
+            1 for i in range(1, len(windows))
+            if windows[i] <= windows[i - 1] * Decimal("1.1")
+        )
+        return declining >= max(1, (pairs * 2 + 2) // 3)
 
     # ── Time-of-day quality filter ──────────────────────────────────────
 
@@ -554,7 +561,7 @@ class PullbackV1Controller(DirectionalStrategyRuntimeV24Controller):
         if not bool(getattr(self.config, "pb_session_filter_enabled", True)):
             return True, _ONE
         import datetime as _dt
-        utc_hour = _dt.datetime.fromtimestamp(now, tz=_dt.timezone.utc).hour
+        utc_hour = _dt.datetime.fromtimestamp(now, tz=_dt.UTC).hour
         hours_str = str(getattr(self.config, "pb_quality_hours_utc", "1-4,8-16,20-23"))
         in_quality = False
         for segment in hours_str.split(","):
@@ -785,7 +792,8 @@ class PullbackV1Controller(DirectionalStrategyRuntimeV24Controller):
         unfilled within pb_exit_limit_timeout_s.
         """
         try:
-            from hummingbot.core.data_type.common import OrderType as _HBOrderType, TradeType as _TradeType
+            from hummingbot.core.data_type.common import OrderType as _HBOrderType
+            from hummingbot.core.data_type.common import TradeType as _TradeType
             from hummingbot.strategy_v2.executors.position_executor.data_types import PositionExecutorConfig
             from hummingbot.strategy_v2.models.executor_actions import CreateExecutorAction
 
@@ -910,14 +918,12 @@ class PullbackV1Controller(DirectionalStrategyRuntimeV24Controller):
             return False, False
         zone_pct = self._effective_zone_pct(mid, atr)
         floor_pct = to_decimal(getattr(self.config, "pb_band_floor_pct", Decimal("0.0010")))
-        long_zone = (
-            mid <= bb_basis * (_ONE + zone_pct)
-            and mid >= bb_lower * (_ONE + floor_pct)
-        )
-        short_zone = (
-            mid >= bb_basis * (_ONE - zone_pct)
-            and mid <= bb_upper * (_ONE - floor_pct)
-        )
+        long_ceil = max(_ZERO, bb_basis * (_ONE + zone_pct))
+        long_floor = max(_ZERO, bb_lower * (_ONE + floor_pct))
+        short_floor = max(_ZERO, bb_basis * (_ONE - zone_pct))
+        short_ceil = max(_ZERO, bb_upper * (_ONE - floor_pct))
+        long_zone = mid <= long_ceil and mid >= long_floor
+        short_zone = mid >= short_floor and mid <= short_ceil
         return long_zone, short_zone
 
     def _detect_absorption(
@@ -1292,16 +1298,38 @@ class PullbackV1Controller(DirectionalStrategyRuntimeV24Controller):
             reason = "regime_inactive"
         elif not adx_in_range:
             reason = "adx_out_of_range"
-        elif regime_up and adx_in_range and not slope_long_ok:
+        elif (regime_up and adx_in_range and not slope_long_ok) or (regime_down and adx_in_range and not slope_short_ok):
             reason = "basis_slope_flat"
-        elif regime_down and adx_in_range and not slope_short_ok:
-            reason = "basis_slope_flat"
-        elif regime_up and adx_in_range and not sma_long_ok:
-            reason = "trend_sma_against"
-        elif regime_down and adx_in_range and not sma_short_ok:
+        elif (regime_up and adx_in_range and not sma_long_ok) or (regime_down and adx_in_range and not sma_short_ok):
             reason = "trend_sma_against"
         elif not vol_declining:
             reason = "vol_not_declining"
+
+        # ── no_entry sub-reason diagnostic ────────────────────────────────
+        no_entry_detail = ""
+        if reason == "no_entry":
+            missing: list[str] = []
+            if regime_up:
+                if not in_pullback_zone_long:
+                    missing.append("zone")
+                if not rsi_long_ok and not rsi_probe_long_ok:
+                    missing.append("rsi")
+                if not primary_long:
+                    if not absorption_long:
+                        missing.append("absorption")
+                    if not delta_trap_long:
+                        missing.append("delta_trap")
+            elif regime_down:
+                if not in_pullback_zone_short:
+                    missing.append("zone")
+                if not rsi_short_ok and not rsi_probe_short_ok:
+                    missing.append("rsi")
+                if not primary_short:
+                    if not absorption_short:
+                        missing.append("absorption")
+                    if not delta_trap_short:
+                        missing.append("delta_trap")
+            no_entry_detail = ",".join(missing) if missing else "conflict"
 
         # ── Contra-funding gate ─────────────────────────────────────────
         # Block entry when funding actively opposes trade direction:
@@ -1334,11 +1362,7 @@ class PullbackV1Controller(DirectionalStrategyRuntimeV24Controller):
                 side = "off"
                 probe_mode = False
                 reason = "adverse_selection_spread"
-            elif side == "buy" and depth_imbalance < -max_imbalance:
-                side = "off"
-                probe_mode = False
-                reason = "adverse_selection_depth"
-            elif side == "sell" and depth_imbalance > max_imbalance:
+            elif (side == "buy" and depth_imbalance < -max_imbalance) or (side == "sell" and depth_imbalance > max_imbalance):
                 side = "off"
                 probe_mode = False
                 reason = "adverse_selection_depth"
@@ -1396,6 +1420,8 @@ class PullbackV1Controller(DirectionalStrategyRuntimeV24Controller):
             ) if flag)
         else:
             signal_components = 0
+        # Denominator 4 = count of independent confirmation signals:
+        # absorption, delta_trap, secondary (depth+delta), funding_aligned
         signal_score = clip(Decimal(signal_components) / _FOUR, _ZERO, _ONE)
 
         # ── Adaptive grid spacing ────────────────────────────────────────
@@ -1477,6 +1503,7 @@ class PullbackV1Controller(DirectionalStrategyRuntimeV24Controller):
             "dynamic_sl": _ZERO,
             "dynamic_tp": _ZERO,
             "absorption_zscore": _ZERO,
+            "no_entry_detail": no_entry_detail,
             "vol_declining": vol_declining,
             "session_quality": session_quality,
             "session_size_mult": session_size_mult,
@@ -1570,6 +1597,13 @@ class PullbackV1Controller(DirectionalStrategyRuntimeV24Controller):
             _logger.debug("pullback force-cancel failed", exc_info=True)
             return 0
 
+    _BLOCKING_REASONS = frozenset({
+        "indicator_warmup", "regime_inactive", "trade_flow_stale",
+        "off_hours", "contra_funding",
+    })
+
+    _PB_CANCEL_SWEEP_COOLDOWN_S: float = 2.0
+
     def _resolve_quote_side_mode(
         self,
         *,
@@ -1587,9 +1621,21 @@ class PullbackV1Controller(DirectionalStrategyRuntimeV24Controller):
                 self._cancel_stale_side_executors(previous_mode, desired_mode)
             )
         if desired_mode == "off":
+            self._pb_off_ticks = getattr(self, "_pb_off_ticks", 0) + 1
             self._pending_stale_cancel_actions.extend(self._cancel_active_quote_executors())
-            self._force_cancel_orphaned_orders()
-            self._cancel_alpha_no_trade_orders()
+
+            now = float(getattr(getattr(self, "market_data_provider", None), "time", lambda: 0)() or 0) or _time_mod.time()
+            last_sweep = float(getattr(self, "_pb_cancel_sweep_last_ts", 0.0) or 0.0)
+            if (now - last_sweep) >= self._PB_CANCEL_SWEEP_COOLDOWN_S:
+                self._pb_cancel_sweep_last_ts = now
+                self._force_cancel_orphaned_orders()
+                self._cancel_alpha_no_trade_orders()
+                try:
+                    self._cancel_active_runtime_orders()
+                except Exception:
+                    _logger.debug("pullback: continuous cancel sweep failed", exc_info=True)
+        else:
+            self._pb_off_ticks = 0
         self._quote_side_mode = desired_mode
         self._quote_side_reason = f"pb_{reason}"
         return desired_mode
@@ -1823,6 +1869,7 @@ class PullbackV1Controller(DirectionalStrategyRuntimeV24Controller):
             "pb_signal_age_s": int(pb.get("signal_age_s", 0) or 0),
             "pb_adaptive_cooldown_s": int(pb.get("adaptive_cooldown_s", 180) or 180),
             "pb_absorption_zscore": to_decimal(pb.get("absorption_zscore", _ZERO)),
+            "pb_no_entry_detail": str(pb.get("no_entry_detail", "")),
         })
 
     def extend_runtime_processed_data(
@@ -1841,6 +1888,39 @@ class PullbackV1Controller(DirectionalStrategyRuntimeV24Controller):
             regime_name=data_context.regime_name,
             market=data_context.market,
             projected_total_quote=execution_plan.projected_total_quote,
+        )
+
+    def telemetry_fields(self) -> tuple[tuple[str, str, Any], ...]:
+        return (
+            ("bot7_gate_state", "pb_gate_state", "idle"),
+            ("bot7_gate_reason", "pb_gate_reason", "inactive"),
+            ("bot7_signal_side", "pb_signal_side", "off"),
+            ("bot7_signal_reason", "pb_signal_reason", "inactive"),
+            ("bot7_signal_score", "pb_signal_score", _ZERO),
+            ("bot7_adx", "pb_adx", _ZERO),
+            ("bot7_rsi", "pb_rsi", Decimal("50")),
+            ("bot7_price_buffer_bars", "pb_price_buffer_bars", 0),
+            ("bot7_bb_lower", "pb_bb_lower", _ZERO),
+            ("bot7_bb_basis", "pb_bb_basis", _ZERO),
+            ("bot7_bb_upper", "pb_bb_upper", _ZERO),
+            ("bot7_atr", "pb_dynamic_sl", _ZERO),
+            ("bot7_basis_slope", "pb_basis_slope", _ZERO),
+            ("bot7_trend_sma", "pb_trend_sma", _ZERO),
+            ("bot7_vol_declining", "pb_vol_declining", False),
+            ("bot7_in_zone_long", "pb_in_pullback_zone_long", False),
+            ("bot7_in_zone_short", "pb_in_pullback_zone_short", False),
+            ("bot7_absorption_long", "pb_absorption_long", False),
+            ("bot7_absorption_short", "pb_absorption_short", False),
+            ("bot7_delta_trap_long", "pb_delta_trap_long", False),
+            ("bot7_delta_trap_short", "pb_delta_trap_short", False),
+            ("bot7_cvd", "pb_cvd", _ZERO),
+            ("bot7_trend_confidence", "pb_trend_confidence", "1"),
+            ("bot7_session_quality", "pb_session_quality", True),
+            ("bot7_funding_bias", "pb_funding_bias", "neutral"),
+            ("bot7_dynamic_sl", "pb_dynamic_sl", _ZERO),
+            ("bot7_dynamic_tp", "pb_dynamic_tp", _ZERO),
+            ("bot7_no_entry_detail", "pb_no_entry_detail", ""),
+            ("bot7_signal_count_24h", "pb_signal_count_24h", 0),
         )
 
     def to_format_status(self) -> list[str]:

@@ -35,7 +35,7 @@ def test_parse_requirements_ignores_comments_and_flags(tmp_path: Path) -> None:
 
 
 def test_collect_outdated_filters_to_tracked_packages(tmp_path: Path) -> None:
-    def _runner(cmd):  # noqa: ANN001
+    def _runner(cmd):
         return (
             0,
             json.dumps(
@@ -64,7 +64,7 @@ def test_collect_pip_audit_parses_vulnerabilities(tmp_path: Path) -> None:
     req = tmp_path / "requirements.txt"
     req.write_text("redis==5.0.1\n", encoding="utf-8")
 
-    def _runner(cmd):  # noqa: ANN001
+    def _runner(cmd):
         return (
             0,
             json.dumps(
@@ -99,7 +99,7 @@ def test_run_writes_dependency_audit_artifact(tmp_path: Path, monkeypatch) -> No
     requirements.mkdir(parents=True, exist_ok=True)
     (requirements / "requirements-control-plane.txt").write_text("redis==5.0.1\n", encoding="utf-8")
 
-    def _fake_run_command(cmd, *, cwd):  # noqa: ANN001
+    def _fake_run_command(cmd, *, cwd):
         joined = " ".join(str(part) for part in cmd)
         if "pip list --outdated" in joined:
             return 0, "[]", ""

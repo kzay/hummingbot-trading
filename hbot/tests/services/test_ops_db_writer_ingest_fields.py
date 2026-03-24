@@ -3,13 +3,12 @@ from __future__ import annotations
 import csv
 import json
 from pathlib import Path
-from typing import List
 
 from services.ops_db_writer.main import _ingest_fills, _ingest_minutes
 from tests.services.conftest import _CaptureConn
 
 
-def _write_csv(path: Path, header: List[str], row: List[str]) -> None:
+def _write_csv(path: Path, header: list[str], row: list[str]) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     with path.open("w", encoding="utf-8", newline="") as fp:
         writer = csv.writer(fp)

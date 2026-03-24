@@ -21,14 +21,13 @@ import csv
 import json
 import logging
 import os
-import sys
 import time
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any
 
-from services.common.log_namespace import list_bot_log_dirs
-from services.common.logging_config import configure_logging
+from platform_lib.logging.log_namespace import list_bot_log_dirs
+from platform_lib.logging.logging_config import configure_logging
 
 configure_logging()
 logger = logging.getLogger(__name__)
@@ -62,7 +61,7 @@ _POLL_INTERVAL_S = float(os.environ.get("SNAPSHOT_POLL_INTERVAL_S", "30"))
 # ---------------------------------------------------------------------------
 
 def _now_utc() -> str:
-    return datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+    return datetime.now(UTC).strftime("%Y-%m-%dT%H:%M:%SZ")
 
 
 def _epoch_now() -> float:
@@ -80,11 +79,11 @@ def _safe_float(v: Any, default: float = 0.0) -> float:
         return default
 
 
-def _read_last_csv_row(path: Path) -> Optional[Dict[str, str]]:
+def _read_last_csv_row(path: Path) -> dict[str, str] | None:
     if not path.exists():
         return None
     try:
-        last: Optional[Dict[str, str]] = None
+        last: dict[str, str] | None = None
         with path.open("r", encoding="utf-8", newline="") as f:
             reader = csv.DictReader(f)
             for row in reader:
@@ -95,11 +94,11 @@ def _read_last_csv_row(path: Path) -> Optional[Dict[str, str]]:
         return None
 
 
-def _read_last_n_csv_rows(path: Path, n: int) -> List[Dict[str, str]]:
+def _read_last_n_csv_rows(path: Path, n: int) -> list[dict[str, str]]:
     if not path.exists():
         return []
     try:
-        rows: List[Dict[str, str]] = []
+        rows: list[dict[str, str]] = []
         with path.open("r", encoding="utf-8", newline="") as f:
             reader = csv.DictReader(f)
             for row in reader:
@@ -109,7 +108,7 @@ def _read_last_n_csv_rows(path: Path, n: int) -> List[Dict[str, str]]:
         return []
 
 
-def _read_json(path: Path) -> Optional[Dict]:
+def _read_json(path: Path) -> dict | None:
     if not path.exists():
         return None
     try:
@@ -119,7 +118,7 @@ def _read_json(path: Path) -> Optional[Dict]:
         return None
 
 
-def _read_daily_state(log_dir: Path) -> Optional[Dict]:
+def _read_daily_state(log_dir: Path) -> dict | None:
     """Try both daily state filenames used by the controller."""
     candidates = list(log_dir.glob("daily_state_*.json")) + [log_dir / "daily_state.json"]
     for p in sorted(candidates, reverse=True):
@@ -129,9 +128,9 @@ def _read_daily_state(log_dir: Path) -> Optional[Dict]:
     return None
 
 
-def _compute_fill_stats(fills_path: Path) -> Dict[str, Any]:
+def _compute_fill_stats(fills_path: Path) -> dict[str, Any]:
     """Summarize fills.csv into a compact dict."""
-    stats: Dict[str, Any] = {
+    stats: dict[str, Any] = {
         "total": 0, "buys": 0, "sells": 0,
         "maker_total": 0, "taker_total": 0,
         "buy_notional": 0.0, "sell_notional": 0.0,
@@ -184,7 +183,7 @@ def _compute_fill_stats(fills_path: Path) -> Dict[str, Any]:
     return stats
 
 
-def _read_open_orders(path: Path) -> List[Dict]:
+def _read_open_orders(path: Path) -> list[dict]:
     if not path.exists():
         return []
     payload = _read_json(path)
@@ -194,12 +193,12 @@ def _read_open_orders(path: Path) -> List[Dict]:
     return orders if isinstance(orders, list) else []
 
 
-def _read_portfolio(path: Path) -> Dict:
+def _read_portfolio(path: Path) -> dict:
     d = _read_json(path)
     return d if isinstance(d, dict) else {}
 
 
-def _read_gates() -> Dict[str, Any]:
+def _read_gates() -> dict[str, Any]:
     return {
         "promotion": _read_json(_REPORTS_ROOT / "promotion_gates" / "latest.json") or {},
         "strict_cycle": _read_json(_REPORTS_ROOT / "promotion_gates" / "strict_cycle_latest.json") or {},
@@ -209,7 +208,7 @@ def _read_gates() -> Dict[str, Any]:
     }
 
 
-def _completeness(minute: Optional[Dict[str, str]]) -> Tuple[float, List[str]]:
+def _completeness(minute: dict[str, str] | None) -> tuple[float, list[str]]:
     """Return (score 0-1, missing_fields list) based on required minute fields."""
     if not minute:
         return 0.0, list(REQUIRED_MINUTE_FIELDS)
@@ -222,30 +221,39 @@ def _completeness(minute: Optional[Dict[str, str]]) -> Tuple[float, List[str]]:
 # Core snapshot builder
 # ---------------------------------------------------------------------------
 
-def build_snapshot(bot_name: str, bot_data_dir: Path) -> Dict[str, Any]:
+def build_snapshot(bot_name: str, bot_data_dir: Path) -> dict[str, Any]:
     """Build a full canonical snapshot for one bot."""
     now_epoch = _epoch_now()
     log_dirs = list_bot_log_dirs(bot_data_dir)
 
-    minute_row: Optional[Dict[str, str]] = None
-    fills_stats: Dict[str, Any] = {}
-    open_orders: List[Dict] = []
-    daily_state: Optional[Dict] = None
-    portfolio: Dict = {}
+    minute_row: dict[str, str] | None = None
+    fills_stats: dict[str, Any] = {}
+    open_orders: list[dict] = []
+    daily_state: dict | None = None
+    portfolio: dict = {}
     minute_age_s = float("inf")
     fill_age_s = float("inf")
+    # Track which log_dir produced the freshest minute so that daily_state
+    # and portfolio are pulled from the same active directory, preventing a
+    # stale sub-directory (e.g. bot3_d from an old session) from overwriting
+    # fresh data sourced from the currently-running directory.
+    active_log_dir: Path | None = None
+    active_minute_epoch: float = -1.0
 
     for log_dir in log_dirs:
         m = _read_last_csv_row(log_dir / "minute.csv")
         if m:
-            minute_row = m
-            # Compute minute age
             ts_str = str(m.get("ts", ""))
+            candidate_epoch: float = -1.0
             try:
-                epoch = datetime.fromisoformat(ts_str.replace("Z", "+00:00")).timestamp()
-                minute_age_s = _non_negative_age(now_epoch, epoch)
+                candidate_epoch = datetime.fromisoformat(ts_str.replace("Z", "+00:00")).timestamp()
             except Exception:
                 pass
+            if candidate_epoch > active_minute_epoch:
+                active_minute_epoch = candidate_epoch
+                active_log_dir = log_dir
+                minute_row = m
+                minute_age_s = _non_negative_age(now_epoch, candidate_epoch) if candidate_epoch > 0 else float("inf")
 
         fs = _compute_fill_stats(log_dir / "fills.csv")
         if fs.get("total", 0) > fills_stats.get("total", 0):
@@ -257,11 +265,13 @@ def build_snapshot(bot_name: str, bot_data_dir: Path) -> Dict[str, Any]:
         if oo:
             open_orders = oo
 
-        ds = _read_daily_state(log_dir)
+    # Read daily_state and portfolio only from the active (freshest-minute) dir.
+    # Falling back to any other dir risks picking up stale data from old sessions.
+    if active_log_dir is not None:
+        ds = _read_daily_state(active_log_dir)
         if ds:
             daily_state = ds
-
-        pf = _read_portfolio(log_dir / "paper_desk_v2.json")
+        pf = _read_portfolio(active_log_dir / "paper_desk_v2.json")
         if pf:
             portfolio = pf
 
@@ -269,7 +279,7 @@ def build_snapshot(bot_name: str, bot_data_dir: Path) -> Dict[str, Any]:
 
     source_ts = str(minute_row.get("ts", "")) if minute_row else ""
 
-    snapshot: Dict[str, Any] = {
+    snapshot: dict[str, Any] = {
         "schema_version": SNAPSHOT_SCHEMA_VERSION,
         "bot": bot_name,
         "source_ts": source_ts,
@@ -292,7 +302,7 @@ def build_snapshot(bot_name: str, bot_data_dir: Path) -> Dict[str, Any]:
 # Writer
 # ---------------------------------------------------------------------------
 
-def write_snapshot(snapshot: Dict[str, Any]) -> Path:
+def write_snapshot(snapshot: dict[str, Any]) -> Path:
     bot = snapshot["bot"]
     out_dir = _REPORTS_ROOT / "desk_snapshot" / bot
     out_dir.mkdir(parents=True, exist_ok=True)
@@ -307,8 +317,8 @@ def write_snapshot(snapshot: Dict[str, Any]) -> Path:
 # Main loop
 # ---------------------------------------------------------------------------
 
-def _discover_bots() -> List[Tuple[str, Path]]:
-    bots: List[Tuple[str, Path]] = []
+def _discover_bots() -> list[tuple[str, Path]]:
+    bots: list[tuple[str, Path]] = []
     try:
         for d in sorted(_DATA_ROOT.iterdir()):
             if d.is_dir() and (d / "logs").exists():
@@ -318,9 +328,9 @@ def _discover_bots() -> List[Tuple[str, Path]]:
     return bots
 
 
-def run_once() -> Dict[str, Any]:
+def run_once() -> dict[str, Any]:
     bots = _discover_bots()
-    results: Dict[str, Any] = {}
+    results: dict[str, Any] = {}
     if not bots:
         logger.warning("No bot directories found under %s", _DATA_ROOT)
         return results

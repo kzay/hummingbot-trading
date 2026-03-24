@@ -1,8 +1,7 @@
 """Compatibility wrappers for legacy bot1 EPP lane names.
 
-Preferred implementation lives at `controllers.bots.bot1.baseline_v1`.
+Preferred implementation lives at ``controllers.bots.bot1.baseline_v1``.
 """
-
 from controllers.bots.bot1.baseline_v1 import Bot1BaselineV1Config, Bot1BaselineV1Controller
 
 

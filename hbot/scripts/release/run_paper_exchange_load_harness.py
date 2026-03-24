@@ -5,16 +5,16 @@ import argparse
 import json
 import os
 import time
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
-from typing import Any, Dict, Iterable, List, Optional, Tuple
+from typing import Any
 
 try:
     import redis  # type: ignore
 except Exception:  # pragma: no cover
     redis = None
 
-from services.contracts.stream_names import (
+from platform_lib.contracts.stream_names import (
     PAPER_EXCHANGE_COMMAND_STREAM,
     PAPER_EXCHANGE_EVENT_STREAM,
     PAPER_EXCHANGE_HEARTBEAT_STREAM,
@@ -22,7 +22,7 @@ from services.contracts.stream_names import (
 
 
 def _utc_now() -> str:
-    return datetime.now(timezone.utc).isoformat()
+    return datetime.now(UTC).isoformat()
 
 
 def _safe_int(value: object, default: int = 0) -> int:
@@ -50,7 +50,7 @@ def _stream_id_ms(stream_id: object) -> int:
     return _safe_int(text.split("-", 1)[0], 0)
 
 
-def _decode_stream_payload(data: Dict[str, object]) -> Dict[str, object]:
+def _decode_stream_payload(data: dict[str, object]) -> dict[str, object]:
     payload = data.get("payload")
     if isinstance(payload, dict):
         return payload
@@ -65,15 +65,15 @@ def _decode_stream_payload(data: Dict[str, object]) -> Dict[str, object]:
     return {}
 
 
-def _percentile(sorted_vals: List[float], p: float) -> float:
+def _percentile(sorted_vals: list[float], p: float) -> float:
     if not sorted_vals:
         return 0.0
     idx = int(max(0, min(len(sorted_vals) - 1, (len(sorted_vals) - 1) * p)))
     return float(sorted_vals[idx])
 
 
-def _csv_values(value: str) -> List[str]:
-    out: List[str] = []
+def _csv_values(value: str) -> list[str]:
+    out: list[str] = []
     for token in str(value or "").split(","):
         text = str(token or "").strip()
         if text:
@@ -91,7 +91,7 @@ def _default_harness_producer() -> str:
     return "hb.paper_engine_v2"
 
 
-def _heartbeat_info(r: Any, heartbeat_stream: str, now_ms: int) -> Dict[str, object]:
+def _heartbeat_info(r: Any, heartbeat_stream: str, now_ms: int) -> dict[str, object]:
     try:
         rows = r.xrevrange(heartbeat_stream, "+", "-", count=1)
     except Exception as exc:
@@ -124,7 +124,7 @@ def _build_sync_state_command(
     connector_name: str,
     trading_pair: str,
     run_id: str,
-) -> Dict[str, object]:
+) -> dict[str, object]:
     return {
         "schema_version": "1.0",
         "event_type": "paper_exchange_command",
@@ -146,15 +146,15 @@ def _publish_sync_state_burst(
     *,
     r: Any,
     command_stream: str,
-    maxlen: Optional[int],
+    maxlen: int | None,
     run_id: str,
     duration_sec: float,
     target_cmd_rate: float,
     producer: str,
-    instance_names: List[str],
+    instance_names: list[str],
     connector_name: str,
     trading_pair: str,
-) -> Dict[str, object]:
+) -> dict[str, object]:
     start_perf = time.perf_counter()
     end_perf = start_perf + max(0.1, float(duration_sec))
     interval_s = 1.0 / max(1.0, float(target_cmd_rate))
@@ -162,8 +162,8 @@ def _publish_sync_state_burst(
     if not active_instances:
         active_instances = ["bot1"]
 
-    sent_ts_by_event_id: Dict[str, int] = {}
-    published_count_by_instance: Dict[str, int] = {}
+    sent_ts_by_event_id: dict[str, int] = {}
+    published_count_by_instance: dict[str, int] = {}
     publish_failures = 0
     seq = 0
     next_emit = start_perf
@@ -187,7 +187,7 @@ def _publish_sync_state_burst(
             run_id=run_id,
         )
         body = {"payload": json.dumps(payload)}
-        kwargs: Dict[str, object] = {"name": command_stream, "fields": body}
+        kwargs: dict[str, object] = {"name": command_stream, "fields": body}
         if maxlen is not None:
             kwargs["maxlen"] = int(maxlen)
             kwargs["approximate"] = True
@@ -216,13 +216,13 @@ def _collect_result_ts_by_command_id(
     *,
     r: Any,
     event_stream: str,
-    sent_ts_by_event_id: Dict[str, int],
+    sent_ts_by_event_id: dict[str, int],
     timeout_sec: float,
     poll_interval_ms: int,
     scan_count: int,
-) -> Dict[str, int]:
+) -> dict[str, int]:
     pending = set(sent_ts_by_event_id.keys())
-    matched_ts_by_id: Dict[str, int] = {}
+    matched_ts_by_id: dict[str, int] = {}
     deadline = time.time() + max(0.0, float(timeout_sec))
     while pending and time.time() < deadline:
         try:
@@ -248,7 +248,7 @@ def _collect_result_ts_by_command_id(
 def build_report(
     root: Path,
     *,
-    redis_client: Optional[Any],
+    redis_client: Any | None,
     command_stream: str,
     event_stream: str,
     heartbeat_stream: str,
@@ -269,7 +269,7 @@ def build_report(
     min_instance_coverage: int,
     min_publish_success_rate_pct: float,
     min_result_match_rate_pct: float,
-) -> Dict[str, object]:
+) -> dict[str, object]:
     now_ms = int(time.time() * 1000)
     redis_ok = redis_client is not None
     heartbeat = (
@@ -278,14 +278,14 @@ def build_report(
         else {"present": False, "timestamp_ms": 0, "age_s": 1e9, "error": "redis_client_unavailable"}
     )
 
-    run_id = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%S%fZ")
+    run_id = datetime.now(UTC).strftime("%Y%m%dT%H%M%S%fZ")
     publish_result = {
         "sent_ts_by_event_id": {},
         "published_count_by_instance": {},
         "publish_failures": 0,
         "elapsed_sec": 0.0,
     }
-    result_ts_by_command_id: Dict[str, int] = {}
+    result_ts_by_command_id: dict[str, int] = {}
     configured_instance_names = _csv_values(str(instance_names or ""))
     if not configured_instance_names:
         configured_instance_names = _csv_values(str(instance_name or ""))
@@ -368,7 +368,7 @@ def build_report(
             "achieved_publish_rate_cmds_per_sec": float(achieved_publish_rate),
             "latency_p95_ms": float(_percentile(latencies_ms, 0.95)) if latencies_ms else 0.0,
             "latency_p99_ms": float(_percentile(latencies_ms, 0.99)) if latencies_ms else 0.0,
-            "latency_samples": int(len(latencies_ms)),
+            "latency_samples": len(latencies_ms),
         },
         "diagnostics": {
             "run_id": run_id,
@@ -432,7 +432,7 @@ def run_harness(
 ) -> int:
     root = Path("/workspace/hbot") if Path("/.dockerenv").exists() else Path(__file__).resolve().parents[2]
 
-    redis_client: Optional[Any] = None
+    redis_client: Any | None = None
     redis_error = ""
     if redis is None:
         redis_error = "redis_python_module_missing"
@@ -486,7 +486,7 @@ def run_harness(
 
     out_dir = root / "reports" / "verification"
     out_dir.mkdir(parents=True, exist_ok=True)
-    stamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
+    stamp = datetime.now(UTC).strftime("%Y%m%dT%H%M%SZ")
     out_path = out_dir / f"paper_exchange_load_harness_{stamp}.json"
     latest_path = out_dir / "paper_exchange_load_harness_latest.json"
     out_path.write_text(json.dumps(report, indent=2), encoding="utf-8")

@@ -1,0 +1,61 @@
+{
+  "portfolio": {
+    "balances": {
+      "USDT": "500.5409373756881206890902497"
+    },
+    "positions": {
+      "bitget:BTC-USDT:perp": {
+        "instrument_id": "bitget:BTC-USDT:perp",
+        "quantity": "0.001221061401934971775304957868",
+        "avg_entry_price": "68451.97465186637221881059133",
+        "realized_pnl": "0.6855629523289008164802374333",
+        "unrealized_pnl": "-0.9133840300898716630157143023",
+        "total_fees_paid": "0.1389554264141781787450086173",
+        "funding_paid": "0.005670150226601948644979182683",
+        "opened_at_ns": 1774202423416473600,
+        "last_fill_at_ns": 1774210899397410304,
+        "position_mode": "POSITIONMODE.ONEWAY",
+        "long_quantity": "0.001221061401934971775304957868",
+        "long_avg_entry_price": "68451.97465186637221881059133",
+        "long_realized_pnl": "0.6855629523289008164802374333",
+        "long_unrealized_pnl": "-0.9133840300898716630157143023",
+        "long_funding_paid": "0.005670150226601948644979182683",
+        "long_opened_at_ns": 1774202423416473600,
+        "short_quantity": "0",
+        "short_avg_entry_price": "0",
+        "short_realized_pnl": "0",
+        "short_unrealized_pnl": "0",
+        "short_funding_paid": "0",
+        "short_opened_at_ns": 0
+      }
+    },
+    "peak_equity": "501.9548250760758467259260072",
+    "daily_open_equity": "499.6259652483797101490987316",
+    "daily_open_day_key": "2026-03-23",
+    "leverage_by_key": {
+      "bitget:BTC-USDT:perp": 1
+    },
+    "position_margin_reserved": {
+      "bitget:BTC-USDT:perp": "4.133534005176761616332905112"
+    }
+  },
+  "funding_timestamps": {
+    "bitget:BTC-USDT:perp": 1774227247065009408
+  },
+  "order_counter": 118,
+  "risk_counters": {
+    "margin_call_events_total": 0,
+    "liquidation_events_total": 0,
+    "liquidation_actions_total": 0,
+    "last_margin_level": "safe"
+  },
+  "execution_quality": {
+    "fill_count": 125,
+    "maker_fill_count": 125,
+    "maker_fill_pct": "100.0",
+    "avg_slippage_bps": "0.00",
+    "avg_mid_slippage_bps": "1.60",
+    "expired_count": 0
+  },
+  "ts_utc": "2026-03-23T05:34:53.907135+00:00"
+}

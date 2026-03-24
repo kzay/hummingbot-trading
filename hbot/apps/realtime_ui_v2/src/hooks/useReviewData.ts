@@ -5,7 +5,7 @@ import type { DailyReviewPayload, JournalReviewPayload, JournalTrade, WeeklyRevi
 import { readLocalStorage, writeLocalStorage } from "../utils/browserStorage";
 import { parseDailyReviewResponse, parseJournalReviewResponse, parseWeeklyReviewResponse } from "../utils/realtimeParsers";
 
-export type ActiveView = "realtime" | "history" | "service" | "daily" | "weekly" | "journal";
+export type ActiveView = "realtime" | "history" | "service" | "daily" | "weekly" | "journal" | "backtest" | "research";
 
 interface ReviewState<TPayload> {
   source: string;
@@ -48,22 +48,18 @@ function buildHeaders(token: string): HeadersInit {
   return headers;
 }
 
-function readLocal(key: string, fallback: string): string {
-  return readLocalStorage(key, fallback);
-}
-
 export function useReviewData(): UseReviewDataResult {
   const apiBase = useDashboardStore((state) => state.settings.apiBase);
   const apiToken = useDashboardStore((state) => state.settings.apiToken);
   const instanceName = useDashboardStore((state) => state.settings.instanceName);
 
   const [activeView, setActiveViewState] = useState<ActiveView>(() => {
-    const raw = readLocal("hbV2ActiveView", "realtime");
-    return ["realtime", "history", "service", "daily", "weekly", "journal"].includes(raw) ? (raw as ActiveView) : "realtime";
+    const raw = readLocalStorage("hbV2ActiveView", "realtime");
+    return ["realtime", "history", "service", "daily", "weekly", "journal", "backtest", "research"].includes(raw) ? (raw as ActiveView) : "realtime";
   });
-  const [dailyDay, setDailyDayState] = useState<string>(() => readLocal("hbV2DailyDay", todayUtc()));
-  const [journalStartDay, setJournalStartDayState] = useState<string>(() => readLocal("hbV2JournalStartDay", ""));
-  const [journalEndDay, setJournalEndDayState] = useState<string>(() => readLocal("hbV2JournalEndDay", ""));
+  const [dailyDay, setDailyDayState] = useState<string>(() => readLocalStorage("hbV2DailyDay", todayUtc()));
+  const [journalStartDay, setJournalStartDayState] = useState<string>(() => readLocalStorage("hbV2JournalStartDay", ""));
+  const [journalEndDay, setJournalEndDayState] = useState<string>(() => readLocalStorage("hbV2JournalEndDay", ""));
 
   const [daily, setDaily] = useState<ReviewState<DailyReviewPayload>>({
     source: "",
@@ -84,10 +80,14 @@ export function useReviewData(): UseReviewDataResult {
     loading: false,
   });
   const [selectedTradeId, setSelectedTradeIdState] = useState<string>("");
+  const selectedTradeIdRef = useRef(selectedTradeId);
 
   const dailyRequestRef = useRef(0);
   const weeklyRequestRef = useRef(0);
   const journalRequestRef = useRef(0);
+  const dailyAbortRef = useRef<AbortController | null>(null);
+  const weeklyAbortRef = useRef<AbortController | null>(null);
+  const journalAbortRef = useRef<AbortController | null>(null);
 
   const setActiveView = useCallback((view: ActiveView) => {
     setActiveViewState(view);
@@ -111,12 +111,16 @@ export function useReviewData(): UseReviewDataResult {
 
   const setSelectedTradeId = useCallback((tradeId: string) => {
     setSelectedTradeIdState(tradeId);
+    selectedTradeIdRef.current = tradeId;
   }, []);
 
   const refreshDaily = useCallback(async () => {
     if (!instanceName.trim()) {
       return;
     }
+    dailyAbortRef.current?.abort();
+    const controller = new AbortController();
+    dailyAbortRef.current = controller;
     const requestId = dailyRequestRef.current + 1;
     dailyRequestRef.current = requestId;
     setDaily((state) => ({ ...state, loading: true, error: "" }));
@@ -128,12 +132,13 @@ export function useReviewData(): UseReviewDataResult {
     try {
       const response = await fetch(`${apiBase}/api/v1/review/daily?${params.toString()}`, {
         headers: buildHeaders(apiToken),
+        signal: controller.signal,
       });
       if (!response.ok) {
         throw new Error(`daily HTTP ${response.status}`);
       }
       const payload = parseDailyReviewResponse(await response.json());
-      if (requestId !== dailyRequestRef.current) {
+      if (controller.signal.aborted || requestId !== dailyRequestRef.current) {
         return;
       }
       setDaily({
@@ -146,7 +151,7 @@ export function useReviewData(): UseReviewDataResult {
         setDailyDay(String(payload.review.day));
       }
     } catch (error) {
-      if (requestId !== dailyRequestRef.current) {
+      if (controller.signal.aborted || requestId !== dailyRequestRef.current) {
         return;
       }
       const message = error instanceof Error ? error.message : String(error);
@@ -163,6 +168,9 @@ export function useReviewData(): UseReviewDataResult {
     if (!instanceName.trim()) {
       return;
     }
+    weeklyAbortRef.current?.abort();
+    const controller = new AbortController();
+    weeklyAbortRef.current = controller;
     const requestId = weeklyRequestRef.current + 1;
     weeklyRequestRef.current = requestId;
     setWeekly((state) => ({ ...state, loading: true, error: "" }));
@@ -171,12 +179,13 @@ export function useReviewData(): UseReviewDataResult {
     try {
       const response = await fetch(`${apiBase}/api/v1/review/weekly?${params.toString()}`, {
         headers: buildHeaders(apiToken),
+        signal: controller.signal,
       });
       if (!response.ok) {
         throw new Error(`weekly HTTP ${response.status}`);
       }
       const payload = parseWeeklyReviewResponse(await response.json());
-      if (requestId !== weeklyRequestRef.current) {
+      if (controller.signal.aborted || requestId !== weeklyRequestRef.current) {
         return;
       }
       setWeekly({
@@ -186,7 +195,7 @@ export function useReviewData(): UseReviewDataResult {
         loading: false,
       });
     } catch (error) {
-      if (requestId !== weeklyRequestRef.current) {
+      if (controller.signal.aborted || requestId !== weeklyRequestRef.current) {
         return;
       }
       const message = error instanceof Error ? error.message : String(error);
@@ -203,6 +212,9 @@ export function useReviewData(): UseReviewDataResult {
     if (!instanceName.trim()) {
       return;
     }
+    journalAbortRef.current?.abort();
+    const controller = new AbortController();
+    journalAbortRef.current = controller;
     const requestId = journalRequestRef.current + 1;
     journalRequestRef.current = requestId;
     setJournal((state) => ({ ...state, loading: true, error: "" }));
@@ -217,18 +229,22 @@ export function useReviewData(): UseReviewDataResult {
     try {
       const response = await fetch(`${apiBase}/api/v1/review/journal?${params.toString()}`, {
         headers: buildHeaders(apiToken),
+        signal: controller.signal,
       });
       if (!response.ok) {
         throw new Error(`journal HTTP ${response.status}`);
       }
       const payload = parseJournalReviewResponse(await response.json());
-      if (requestId !== journalRequestRef.current) {
+      if (controller.signal.aborted || requestId !== journalRequestRef.current) {
         return;
       }
       const review = payload.review || null;
       const trades = Array.isArray(review?.trades) ? review.trades : [];
-      const hasSelected = trades.some((trade) => String(trade.trade_id || "") === selectedTradeId);
-      setSelectedTradeIdState(hasSelected ? selectedTradeId : String(trades.at(-1)?.trade_id || ""));
+      const currentTradeId = selectedTradeIdRef.current;
+      const hasSelected = trades.some((trade) => String(trade.trade_id || "") === currentTradeId);
+      const nextTradeId = hasSelected ? currentTradeId : String(trades.at(-1)?.trade_id || "");
+      setSelectedTradeIdState(nextTradeId);
+      selectedTradeIdRef.current = nextTradeId;
       setJournal({
         source: String(payload.source || ""),
         review,
@@ -236,11 +252,12 @@ export function useReviewData(): UseReviewDataResult {
         loading: false,
       });
     } catch (error) {
-      if (requestId !== journalRequestRef.current) {
+      if (controller.signal.aborted || requestId !== journalRequestRef.current) {
         return;
       }
       const message = error instanceof Error ? error.message : String(error);
       setSelectedTradeIdState("");
+      selectedTradeIdRef.current = "";
       setJournal({
         source: "",
         review: null,
@@ -251,18 +268,29 @@ export function useReviewData(): UseReviewDataResult {
   }, [
     journalEndDay,
     journalStartDay,
-    selectedTradeId,
     apiBase,
     apiToken,
     instanceName,
   ]);
 
   useEffect(() => {
+    dailyAbortRef.current?.abort();
+    weeklyAbortRef.current?.abort();
+    journalAbortRef.current?.abort();
     setDaily({ source: "", review: null, error: "", loading: false });
     setWeekly({ source: "", review: null, error: "", loading: false });
     setJournal({ source: "", review: null, error: "", loading: false });
     setSelectedTradeIdState("");
+    selectedTradeIdRef.current = "";
   }, [instanceName]);
+
+  useEffect(() => {
+    return () => {
+      dailyAbortRef.current?.abort();
+      weeklyAbortRef.current?.abort();
+      journalAbortRef.current?.abort();
+    };
+  }, []);
 
   useEffect(() => {
     if (activeView === "daily") {

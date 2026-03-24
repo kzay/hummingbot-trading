@@ -20,10 +20,10 @@ from __future__ import annotations
 import argparse
 import json
 from pathlib import Path
-from typing import Any, Dict
+from typing import Any
 
 
-def _read_json(path: Path) -> Dict[str, Any]:
+def _read_json(path: Path) -> dict[str, Any]:
     if not path.exists():
         return {}
     try:
@@ -70,7 +70,7 @@ def run(
     label: str,
     visible_in_supervision: bool,
     create_marker: bool,
-) -> Dict[str, Any]:
+) -> dict[str, Any]:
     instance_name = str(instance or "").strip()
     if not instance_name:
         raise ValueError("instance is required")
@@ -81,7 +81,7 @@ def run(
 
     manifest_path = conf_dir / "instance_meta.json"
     current = _read_json(manifest_path)
-    payload: Dict[str, Any] = dict(current)
+    payload: dict[str, Any] = dict(current)
     payload["visible_in_supervision"] = bool(visible_in_supervision)
 
     if label:

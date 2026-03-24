@@ -22,9 +22,8 @@ import shutil
 import subprocess
 import sys
 import time
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
-from typing import Dict, List
 
 try:
     import psycopg
@@ -38,7 +37,7 @@ _CANONICAL_TABLES = ("bot_snapshot_minute", "fills", "event_envelope_raw")
 
 
 def _utc_now() -> str:
-    return datetime.now(timezone.utc).isoformat()
+    return datetime.now(UTC).isoformat()
 
 
 def _sha256_file(path: Path) -> str:
@@ -51,9 +50,9 @@ def _sha256_file(path: Path) -> str:
     return h.hexdigest()
 
 
-def _write_report(report_dir: Path, stem: str, payload: Dict[str, object]) -> None:
+def _write_report(report_dir: Path, stem: str, payload: dict[str, object]) -> None:
     report_dir.mkdir(parents=True, exist_ok=True)
-    stamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
+    stamp = datetime.now(UTC).strftime("%Y%m%dT%H%M%SZ")
     ts_path = report_dir / f"{stem}_{stamp}.json"
     latest_path = report_dir / f"{stem}_latest.json"
     raw = json.dumps(payload, indent=2)
@@ -72,8 +71,8 @@ def _verify_gzip(path: Path) -> bool:
         return False
 
 
-def _copy_parity_sidecar(parity_latest_path: Path, backup_dir: Path, stamp: str) -> Dict[str, object]:
-    result: Dict[str, object] = {
+def _copy_parity_sidecar(parity_latest_path: Path, backup_dir: Path, stamp: str) -> dict[str, object]:
+    result: dict[str, object] = {
         "path": "",
         "sha256": "",
         "ts_utc": "",
@@ -83,7 +82,7 @@ def _copy_parity_sidecar(parity_latest_path: Path, backup_dir: Path, stamp: str)
         return result
     sidecar = backup_dir / f"pg_backup_{stamp}.parity_latest.json"
     shutil.copy2(parity_latest_path, sidecar)
-    parity_payload: Dict[str, object] = {}
+    parity_payload: dict[str, object] = {}
     try:
         raw = json.loads(sidecar.read_text(encoding="utf-8"))
         if isinstance(raw, dict):
@@ -97,14 +96,14 @@ def _copy_parity_sidecar(parity_latest_path: Path, backup_dir: Path, stamp: str)
     return result
 
 
-def _fetch_canonical_counts(host: str, port: int, dbname: str, user: str, password: str) -> Dict[str, object]:
-    out: Dict[str, object] = {"available": False, "counts": {}, "error": ""}
+def _fetch_canonical_counts(host: str, port: int, dbname: str, user: str, password: str) -> dict[str, object]:
+    out: dict[str, object] = {"available": False, "counts": {}, "error": ""}
     if psycopg is None:
         out["error"] = "psycopg_not_installed"
         return out
     try:
         with psycopg.connect(host=host, port=port, dbname=dbname, user=user, password=password) as conn:
-            counts: Dict[str, int] = {}
+            counts: dict[str, int] = {}
             with conn.cursor() as cur:
                 for table in _CANONICAL_TABLES:
                     cur.execute(f"SELECT COUNT(*) FROM {table}")
@@ -118,7 +117,7 @@ def _fetch_canonical_counts(host: str, port: int, dbname: str, user: str, passwo
         return out
 
 
-def _latest_backup_age_hours(backups: List[Path]) -> float:
+def _latest_backup_age_hours(backups: list[Path]) -> float:
     if not backups:
         return 1e9
     latest = backups[-1]
@@ -140,16 +139,16 @@ def run_backup(
     report_dir: Path,
     parity_latest_path: Path,
     timeout_sec: int = 300,
-) -> Dict[str, object]:
+) -> dict[str, object]:
     """Run a backup and return structured evidence payload."""
     backup_dir.mkdir(parents=True, exist_ok=True)
-    stamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
+    stamp = datetime.now(UTC).strftime("%Y%m%dT%H%M%SZ")
     out_file = backup_dir / f"pg_backup_{stamp}.sql.gz"
     manifest_file = backup_dir / f"pg_backup_{stamp}.manifest.json"
     env = dict(os.environ)
     env["PGPASSWORD"] = password
 
-    report: Dict[str, object] = {
+    report: dict[str, object] = {
         "ts_utc": _utc_now(),
         "status": "fail",
         "host": host,

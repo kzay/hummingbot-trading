@@ -5,7 +5,7 @@
   "env_has_required_bitget_keys": true,
   "recon_exchange_source_enabled_env": true,
   "recon_exchange_source_enabled_report": true,
-  "exchange_snapshot_account_probe_status": "ok",
-  "exchange_snapshot_probe_ok": true,
-  "ready": true
+  "exchange_snapshot_account_probe_status": "missing_credentials",
+  "exchange_snapshot_probe_ok": false,
+  "ready": false
 }

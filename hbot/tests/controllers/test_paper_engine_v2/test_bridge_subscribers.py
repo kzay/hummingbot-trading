@@ -3,23 +3,19 @@
 Tests clean decoupled event routing without requiring HB imports.
 """
 from decimal import Decimal
-from typing import List
 
-import pytest
-
-from controllers.paper_engine_v2.hb_bridge import (
-    EventSubscriber,
-    _dispatch_to_subscribers,
+from simulation.bridge.hb_bridge import (
     _EVENT_SUBSCRIBERS,
+    _dispatch_to_subscribers,
     register_event_subscriber,
     unregister_event_subscriber,
 )
-from controllers.paper_engine_v2.types import (
+from simulation.types import (
+    _ZERO,
     InstrumentId,
     OrderCanceled,
     OrderFilled,
     OrderRejected,
-    _ZERO,
 )
 
 BTC_PERP = InstrumentId(venue="bitget", trading_pair="BTC-USDT", instrument_type="perp")
@@ -29,9 +25,9 @@ class _Recorder:
     """Test EventSubscriber that records all received events."""
 
     def __init__(self):
-        self.fills: List[OrderFilled] = []
-        self.cancels: List[OrderCanceled] = []
-        self.rejects: List[OrderRejected] = []
+        self.fills: list[OrderFilled] = []
+        self.cancels: list[OrderCanceled] = []
+        self.rejects: list[OrderRejected] = []
 
     def on_fill(self, event: OrderFilled, connector_name: str) -> None:
         self.fills.append(event)
@@ -57,6 +53,7 @@ def _fill_event() -> OrderFilled:
         timestamp_ns=0,
         instrument_id=BTC_PERP,
         order_id="ord1",
+        side="buy",
         fill_price=Decimal("100"),
         fill_quantity=Decimal("1"),
         fee=Decimal("0.01"),

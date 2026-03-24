@@ -2,6 +2,7 @@ export type ConnectionStatus = "idle" | "connecting" | "connected" | "reconnecti
 
 export interface UiMarket {
   mid_price?: number | string;
+  last_trade_price?: number | string;
   best_bid?: number | string;
   best_ask?: number | string;
   trading_pair?: string;
@@ -128,7 +129,14 @@ export interface SummaryAccount {
   quoting_status?: string;
   quoting_reason?: string;
   quote_gates?: Array<{ key?: string; label?: string; status?: string; detail?: string }>;
+  bot_gates?: BotGateGroup[];
   [key: string]: unknown;
+}
+
+export interface BotGateGroup {
+  bot_id: string;
+  strategy_type: string;
+  gates: Array<{ key?: string; label?: string; status?: string; detail?: string }>;
 }
 
 export interface SummaryPayload {

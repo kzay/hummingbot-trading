@@ -2,11 +2,12 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from decimal import Decimal
-from typing import Any, Dict, List, Protocol, Tuple, runtime_checkable
+from typing import Any, Protocol, runtime_checkable
 
 from controllers.runtime.data_context import RuntimeDataContext
 from controllers.runtime.execution_context import RuntimeExecutionPlan
 from controllers.runtime.risk_context import RuntimeRiskDecision
+from controllers.tick_types import TickSnapshot
 from controllers.types import ProcessedState
 
 
@@ -25,7 +26,11 @@ class RuntimeCompatibilitySurface:
 class RuntimeSnapshotExtension:
     """Additive telemetry metadata that must not break v1 consumers."""
 
-    metadata: Dict[str, str]
+    metadata: dict[str, str]
+
+
+TelemetryField = tuple[str, str, Any]
+"""(csv_column_name, processed_data_key, default_value)"""
 
 
 @runtime_checkable
@@ -42,9 +47,19 @@ class StrategyRuntimeHooks(Protocol):
         data_context: RuntimeDataContext,
         risk_decision: RuntimeRiskDecision,
         execution_plan: RuntimeExecutionPlan,
-        snapshot: Dict[str, Any],
+        snapshot: TickSnapshot,
     ) -> None:
         ...
+
+    def telemetry_fields(self) -> tuple[TelemetryField, ...]:
+        """Declare strategy-specific telemetry fields for CSV/dashboard.
+
+        Returns a tuple of (csv_column_name, processed_data_key, default_value).
+        The runtime will automatically forward these from processed_data to the
+        minute CSV and dashboard snapshot.  Strategies no longer need to be
+        hardcoded in tick_emitter.py or epp_logging.py.
+        """
+        return ()
 
 
 @runtime_checkable
@@ -67,13 +82,13 @@ class RuntimeFamilyAdapter(Protocol):
     def get_executor_config(self, level_id: str, price: Decimal, amount: Decimal) -> Any:
         ...
 
-    def executors_to_refresh(self) -> List[Any]:
+    def executors_to_refresh(self) -> list[Any]:
         ...
 
-    def get_price_and_amount(self, level_id: str) -> Tuple[Decimal, Decimal]:
+    def get_price_and_amount(self, level_id: str) -> tuple[Decimal, Decimal]:
         ...
 
-    def _runtime_spreads_and_amounts_in_quote(self, trade_type: Any) -> Tuple[List[Decimal], List[Decimal]]:
+    def _runtime_spreads_and_amounts_in_quote(self, trade_type: Any) -> tuple[list[Decimal], list[Decimal]]:
         ...
 
     def runtime_required_base_amount(self, reference_price: Decimal) -> Decimal:
@@ -84,8 +99,9 @@ class RuntimeFamilyAdapter(Protocol):
 
 
 __all__ = [
-    "RuntimeFamilyAdapter",
     "RuntimeCompatibilitySurface",
+    "RuntimeFamilyAdapter",
     "RuntimeSnapshotExtension",
     "StrategyRuntimeHooks",
+    "TelemetryField",
 ]

@@ -9,25 +9,29 @@ new code while preserving backward compatibility for existing deployments.
 - Data/feature ingestion:
   - `connector_runtime_adapter.py`
   - `price_buffer.py`
-- Shared market-making runtime:
+- Shared runtime kernel:
+  - `shared_runtime_v24.py` (SharedRuntimeKernel + EppV24Controller subclass)
+  - `runtime/kernel.py` (re-export of SharedRuntimeKernel)
   - `runtime/base.py` (shared v2.4 base aliases)
   - `runtime/contracts.py` (neutral lane/runtime hook contracts)
   - `runtime/core.py` (compatibility surface helpers for artifacts and telemetry)
   - `runtime/data_context.py` (neutral runtime input assembly)
   - `runtime/directional_core.py` (explicit directional execution-family adapter)
+  - `runtime/directional_config.py` (directional config with MM defaults locked)
+  - `runtime/directional_runtime.py` (directional runtime extending kernel)
   - `runtime/risk_context.py` (neutral risk decision contract)
   - `runtime/execution_context.py` (neutral execution plan contract)
   - `runtime/market_making_core.py` (explicit market-making family adapter)
-  - `runtime/market_making_types.py` (shared MM dataclasses and helpers)
+  - `runtime/runtime_types.py` (shared runtime dataclasses and helpers)
   - `runtime/logging.py` (CSV/WAL logger exports)
 - Strategy lanes (bot-specific behavior):
   - `bots/bot5/ift_jota_v1.py`
   - `bots/bot6/cvd_divergence_v1.py`
-  - `bots/bot7/adaptive_grid_v1.py`
+  - `bots/bot7/pullback_v1.py`
 - Neutral lane entrypoints:
   - `bot5_ift_jota_v1.py`
   - `bot6_cvd_divergence_v1.py`
-  - `bot7_adaptive_grid_v1.py`
+  - `bot7_pullback_v1.py`
 - Legacy compatibility entrypoints:
   - `epp_v2_4.py`
   - `epp_v2_4_bot5.py`
@@ -38,11 +42,17 @@ new code while preserving backward compatibility for existing deployments.
 
 ## Canonical Imports For New Code
 
+### Market-making lanes (bot1):
 - Use `from controllers.runtime.base import StrategyRuntimeV24Config, StrategyRuntimeV24Controller`
+
+### Directional lanes (bot5, bot6, bot7):
+- Use `from controllers.runtime.base import DirectionalStrategyRuntimeV24Config, DirectionalStrategyRuntimeV24Controller`
+
+### Shared across both:
 - Use `from controllers.runtime.data_context import RuntimeDataContext`
 - Use `from controllers.runtime.execution_context import RuntimeExecutionPlan`
 - Use `from controllers.runtime.risk_context import RuntimeRiskDecision`
-- Use `from controllers.runtime.market_making_types import RegimeSpec, SpreadEdgeState, ...`
+- Use `from controllers.runtime.runtime_types import RegimeSpec, SpreadEdgeState, ...`
 - Use `from controllers.runtime.logging import CsvSplitLogger`
 
 ## Strategy Isolation Contract
@@ -65,7 +75,7 @@ the lane behavior instead of legacy family labels. Example pattern:
 - controller name: `<lane_name>_v1`
 - market-making shim: `controllers/market_making/<lane_name>_v1.py`
 
-The `shared_mm_v24` entrypoint is available as a neutral base for new market-
+The `shared_runtime_v24` entrypoint is available as a neutral base for new market-
 making lanes that do not want to inherit EPP naming.
 
 Legacy `epp_v2_4_bot*` modules are now compatibility wrappers over the strategy

@@ -8,21 +8,17 @@ Covers:
 """
 from decimal import Decimal
 
-import pytest
-
-from controllers.paper_engine_v2.risk_engine import (
-    LiquidationAction,
+from simulation.risk_engine import (
     MarginLevel,
     RiskConfig,
     RiskEngine,
-    RiskDecision,
 )
-from controllers.paper_engine_v2.types import (
+from simulation.types import (
     InstrumentId,
     OrderSide,
+    OrderStatus,
     PaperOrder,
     PaperOrderType,
-    OrderStatus,
 )
 
 _Z = Decimal("0")
@@ -228,19 +224,19 @@ class TestLiquidationLadder:
 
 class TestPortfolioRiskIntegration:
     def test_safe_on_fresh_portfolio(self):
-        from controllers.paper_engine_v2.portfolio import PaperPortfolio, PortfolioConfig
+        from simulation.portfolio import PaperPortfolio, PortfolioConfig
         p = PaperPortfolio({"USDT": Decimal("1000")}, PortfolioConfig())
         level, actions = p.evaluate_risk()
         assert level == MarginLevel.SAFE
         assert actions == []
 
     def test_margin_level_accessible(self):
-        from controllers.paper_engine_v2.portfolio import PaperPortfolio, PortfolioConfig
+        from simulation.portfolio import PaperPortfolio, PortfolioConfig
         p = PaperPortfolio({"USDT": Decimal("1000")}, PortfolioConfig())
         _ = p.evaluate_risk()
         assert p.margin_level == MarginLevel.SAFE
 
     def test_risk_reasons_string_empty_when_safe(self):
-        from controllers.paper_engine_v2.portfolio import PaperPortfolio, PortfolioConfig
+        from simulation.portfolio import PaperPortfolio, PortfolioConfig
         p = PaperPortfolio({"USDT": Decimal("1000")}, PortfolioConfig())
         assert p.risk_reasons() == ""

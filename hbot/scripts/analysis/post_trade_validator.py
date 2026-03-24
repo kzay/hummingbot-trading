@@ -16,16 +16,15 @@ import argparse
 import csv
 import sys
 from pathlib import Path
-from typing import Dict, List
 
 _SCRIPT_DIR = Path(__file__).resolve().parent
 _PROJECT_ROOT = _SCRIPT_DIR.parents[1]
 sys.path.insert(0, str(_PROJECT_ROOT))
 
-from services.common.utils import safe_float, utc_now, write_json
+from platform_lib.core.utils import safe_float, utc_now, write_json
 
 
-def _read_csv(path: Path) -> List[Dict[str, str]]:
+def _read_csv(path: Path) -> list[dict[str, str]]:
     if not path.exists():
         return []
     with path.open("r", encoding="utf-8", newline="") as f:
@@ -33,21 +32,21 @@ def _read_csv(path: Path) -> List[Dict[str, str]]:
 
 
 def validate(
-    fills: List[Dict[str, str]],
-    minutes: List[Dict[str, str]],
+    fills: list[dict[str, str]],
+    minutes: list[dict[str, str]],
     config_fill_factor: float = 0.4,
     config_adverse_selection_bps: float = 1.5,
     config_queue_participation: float = 0.35,
-) -> Dict[str, object]:
+) -> dict[str, object]:
     """Validate edge model assumptions against realized data."""
     if not fills or not minutes:
         return {"status": "INSUFFICIENT_DATA", "fill_count": len(fills), "minute_count": len(minutes)}
 
-    captures: List[float] = []
-    expected_spreads: List[float] = []
-    post_fill_drifts: List[float] = []
+    captures: list[float] = []
+    expected_spreads: list[float] = []
+    post_fill_drifts: list[float] = []
 
-    minute_by_key: Dict[int, Dict[str, str]] = {}
+    minute_by_key: dict[int, dict[str, str]] = {}
     for m in minutes:
         try:
             from datetime import datetime
@@ -99,7 +98,7 @@ def validate(
     hours = len(minutes) / 60.0
     realized_queue_participation = fill_count / max(1, active_minutes) if active_minutes > 0 else 0
 
-    checks: List[Dict[str, object]] = []
+    checks: list[dict[str, object]] = []
 
     ff_ratio = realized_fill_factor / config_fill_factor if config_fill_factor > 0 else 0
     checks.append({

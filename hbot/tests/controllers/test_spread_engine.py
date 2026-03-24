@@ -1,5 +1,7 @@
 from decimal import Decimal
 
+import pytest
+
 from controllers.core import RegimeSpec, RuntimeLevelState
 from controllers.spread_engine import SpreadEngine
 
@@ -157,3 +159,65 @@ def test_apply_runtime_spreads_and_sizing_enforces_min_base_per_level():
         enabled=True,
     )
     assert runtime.total_amount_quote == Decimal("134")
+
+
+# ------------------------------------------------------------------
+# Parametrized boundary tests
+# ------------------------------------------------------------------
+
+@pytest.mark.parametrize("turnover_x,expect_min", [
+    (Decimal("0"), True),
+    (Decimal("0.001"), False),
+    (Decimal("1.5"), False),
+    (Decimal("3.0"), False),
+])
+def test_spread_at_turnover_boundaries(turnover_x, expect_min):
+    eng = _engine()
+    spread = eng.pick_spread_pct(NEUTRAL, turnover_x)
+    if expect_min:
+        assert spread == NEUTRAL.spread_min
+    else:
+        assert spread >= NEUTRAL.spread_min
+        assert spread <= NEUTRAL.spread_max
+
+
+@pytest.mark.parametrize("one_sided,expect_buy,expect_sell", [
+    ("off", 2, 2),
+    ("buy_only", 2, 0),
+    ("sell_only", 0, 2),
+])
+def test_build_side_spreads_one_sided_modes(one_sided, expect_buy, expect_sell):
+    eng = _engine()
+    buy, sell = eng.build_side_spreads(
+        Decimal("0.004"), Decimal("0"), 2, one_sided, Decimal("0.0001"),
+    )
+    assert len(buy) == expect_buy
+    assert len(sell) == expect_sell
+
+
+@pytest.mark.parametrize("base_spread,min_floor", [
+    (Decimal("0.0001"), Decimal("0.005")),
+    (Decimal("0.005"), Decimal("0.005")),
+    (Decimal("0.010"), Decimal("0.005")),
+])
+def test_build_side_spreads_floor_boundary(base_spread, min_floor):
+    eng = _engine()
+    buy, sell = eng.build_side_spreads(base_spread, Decimal("0"), 2, "off", min_floor)
+    for s in buy + sell:
+        assert s >= min_floor
+
+
+@pytest.mark.parametrize("skew", [
+    Decimal("0.001"),
+    Decimal("-0.001"),
+    Decimal("0"),
+])
+def test_skew_direction(skew):
+    eng = _engine()
+    buy, sell = eng.build_side_spreads(Decimal("0.004"), skew, 2, "off", Decimal("0.0001"))
+    if skew > 0:
+        assert buy[0] < sell[0]
+    elif skew < 0:
+        assert buy[0] > sell[0]
+    else:
+        assert buy[0] == sell[0]

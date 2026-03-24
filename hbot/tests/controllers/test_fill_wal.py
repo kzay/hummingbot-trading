@@ -40,11 +40,16 @@ def test_fill_wal_write_and_flush(tmp_path: Path):
         "is_maker": "True", "realized_pnl_quote": "0.5",
     })
 
+    wal_path = tmp_path / "epp_v24" / "test_a" / "fills.wal"
+    wal_before_flush = wal_path.read_text(encoding="utf-8").strip()
+    assert "o2" in wal_before_flush
+
+    logger.flush_all()
+
     csv_path = tmp_path / "epp_v24" / "test_a" / "fills.csv"
     content = csv_path.read_text(encoding="utf-8")
     assert "o2" in content
 
-    wal_path = tmp_path / "epp_v24" / "test_a" / "fills.wal"
     assert wal_path.read_text(encoding="utf-8").strip() == ""
 
 

@@ -17,20 +17,20 @@ import os
 import random
 from dataclasses import dataclass
 from decimal import Decimal
-from typing import Optional, Protocol
+from typing import Protocol
 
-from controllers.paper_engine_v2.types import (
+from simulation.types import (
+    _ONE,
+    _ZERO,
     BookLevel,
     OrderBookSnapshot,
     OrderSide,
     PaperOrder,
     PaperOrderType,
-    _ZERO,
-    _ONE,
 )
 
 _10K = Decimal("10000")
-_TRUE_VALUES = {"1", "true", "yes", "on"}
+_TRUE_VALUES = {"1", "true", "yes", "on"}  # CONCURRENCY: read-only after module load
 logger = logging.getLogger(__name__)
 
 
@@ -95,7 +95,7 @@ class QueuePositionFillModel:
     Seeded RNG ensures deterministic results for regression testing.
     """
 
-    def __init__(self, config: Optional[QueuePositionConfig] = None):
+    def __init__(self, config: QueuePositionConfig | None = None):
         self._cfg = config or QueuePositionConfig()
         self._rng = random.Random(self._cfg.seed)
         self._queue_ahead_by_order: dict[str, Decimal] = {}
@@ -138,7 +138,6 @@ class QueuePositionFillModel:
         if remaining <= _ZERO:
             return _NO_FILL
 
-        iid = order.instrument_id
         is_buy = order.side == OrderSide.BUY
 
         best_bid = book.best_bid
@@ -149,7 +148,7 @@ class QueuePositionFillModel:
 
         # Determine if market has reached the order price.
         is_touchable = False
-        top_level: Optional[BookLevel] = None
+        top_level: BookLevel | None = None
 
         if is_buy:
             top_level = best_ask
@@ -535,7 +534,7 @@ class LatencyAwareFillModel(QueuePositionFillModel):
     - Post-fill drift is a metric stored externally (not applied to fill price)
     """
 
-    def __init__(self, config: Optional[LatencyAwareConfig] = None):
+    def __init__(self, config: LatencyAwareConfig | None = None):
         cfg = config or LatencyAwareConfig()
         super().__init__(config=cfg)
         self._la_cfg: LatencyAwareConfig = cfg

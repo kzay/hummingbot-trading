@@ -1,0 +1,34 @@
+# Market-making baseline — uses the simple_adapter with spread capture
+strategy_class: ""
+strategy_config:
+  adapter_mode: "simple"
+  high_vol_band_pct: "0.008"
+  ema_period: 20
+  atr_period: 14
+  min_warmup_bars: 30
+
+data_source:
+  exchange: bitget
+  pair: BTC-USDT
+  resolution: 1m
+  instrument_type: perp
+  start_date: "2025-01-01"
+  end_date: "2025-01-31"
+  catalog_dir: data/historical
+
+initial_equity: 500
+fill_model: latency_aware
+seed: 42
+leverage: 1
+step_interval_s: 60
+warmup_bars: 60
+
+synthesis:
+  base_spread_bps: "5.0"
+  vol_spread_mult: "1.0"
+  depth_levels: 10
+  depth_decay: "0.70"
+  base_depth_size: "0.5"
+  steps_per_bar: 4
+
+output_dir: reports/backtest

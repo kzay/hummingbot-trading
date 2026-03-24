@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef } from "react";
+import { memo, useEffect, useMemo, useRef } from "react";
 import { ColorType, LineSeries, createChart, type IChartApi, type ISeriesApi, type LineData, type Time } from "lightweight-charts";
 
 import type { DailyReviewPayload } from "../types/realtime";
@@ -99,7 +99,7 @@ interface DailyReviewPanelProps {
   state: DailyReviewState;
 }
 
-export function DailyReviewPanel({ day, onDayChange, onRefresh, state }: DailyReviewPanelProps) {
+export const DailyReviewPanel = memo(function DailyReviewPanel({ day, onDayChange, onRefresh, state }: DailyReviewPanelProps) {
   const payload = state.review || {};
   const summary = payload.summary || {};
   const fills = Array.isArray(payload.fills) ? payload.fills : [];
@@ -190,12 +190,12 @@ export function DailyReviewPanel({ day, onDayChange, onRefresh, state }: DailyRe
           <table>
             <thead>
               <tr>
-                <th>Hour</th>
-                <th>Fills</th>
-                <th>Buy / Sell</th>
-                <th>Maker</th>
-                <th>Notional</th>
-                <th>Realized</th>
+                <th scope="col">Hour</th>
+                <th scope="col">Fills</th>
+                <th scope="col">Buy / Sell</th>
+                <th scope="col">Maker</th>
+                <th scope="col">Notional</th>
+                <th scope="col">Realized</th>
               </tr>
             </thead>
             <tbody>
@@ -227,14 +227,14 @@ export function DailyReviewPanel({ day, onDayChange, onRefresh, state }: DailyRe
           <table>
             <thead>
               <tr>
-                <th>Time</th>
-                <th>Side</th>
-                <th>Price</th>
-                <th>Amount</th>
-                <th>Notional</th>
-                <th>Fee</th>
-                <th>Realized</th>
-                <th>Order</th>
+                <th scope="col">Time</th>
+                <th scope="col">Side</th>
+                <th scope="col">Price</th>
+                <th scope="col">Amount</th>
+                <th scope="col">Notional</th>
+                <th scope="col">Fee</th>
+                <th scope="col">Realized</th>
+                <th scope="col">Order</th>
               </tr>
             </thead>
             <tbody>
@@ -277,4 +277,4 @@ export function DailyReviewPanel({ day, onDayChange, onRefresh, state }: DailyRe
       </Panel>
     </>
   );
-}
+});

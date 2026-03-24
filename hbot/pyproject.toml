@@ -1,10 +1,19 @@
+[build-system]
+requires = ["setuptools>=61", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["controllers*", "services*"]
+
 [project]
 name = "kzay-capital-desk"
 version = "0.1.0"
 description = "Semi-pro crypto trading desk automation built on Hummingbot"
-requires-python = ">=3.11"
+requires-python = ">=3.12"
 dependencies = [
     "redis>=7.2",
+    "orjson>=3.10",
     "pydantic>=2.12",
     "joblib>=1.5",
     "scikit-learn>=1.8",
@@ -12,15 +21,23 @@ dependencies = [
     "boto3>=1.42",
     "ccxt>=4.5",
     "psycopg[binary]>=3.2",
+    "pyarrow>=18.0",
+    "pandas>=2.2",
 ]
 
 [project.optional-dependencies]
 dev = [
     "pytest>=8.4",
     "pytest-cov>=7.0",
+    "pytest-forked>=1.6",
+    "pytest-xdist>=3.5",
     "hypothesis>=6.100",
     "mypy>=1.11",
     "ruff>=0.5",
+]
+llm = [
+    "anthropic",
+    "openai",
 ]
 
 [tool.pytest.ini_options]
@@ -29,13 +46,18 @@ python_files = ["test_*.py"]
 python_classes = ["Test*"]
 python_functions = ["test_*"]
 addopts = "--tb=short -q"
+markers = [
+    "heavyweight: tests that pull in the full simulation stack (pandas, pyarrow, ccxt, etc.)",
+    "lightweight: pure-logic tests with minimal imports",
+]
 
 [tool.mypy]
-python_version = "3.11"
+python_version = "3.12"
 warn_return_any = true
 warn_unused_configs = true
 disallow_untyped_defs = false
 check_untyped_defs = true
+ignore_missing_imports = true
 
 [[tool.mypy.overrides]]
 module = "controllers.*"
@@ -43,15 +65,33 @@ disallow_untyped_defs = true
 warn_unreachable = true
 
 [[tool.mypy.overrides]]
+module = "controllers.runtime.kernel.*"
+disallow_untyped_defs = true
+warn_unreachable = true
+warn_return_any = true
+disallow_any_explicit = false
+strict_equality = true
+
+[[tool.mypy.overrides]]
+module = "simulation.*"
+disallow_untyped_defs = true
+warn_unreachable = true
+warn_return_any = true
+strict_equality = true
+
+[[tool.mypy.overrides]]
+module = "platform_lib.*"
+disallow_untyped_defs = true
+warn_unreachable = true
+warn_return_any = true
+strict_equality = true
+
+[[tool.mypy.overrides]]
 module = "services.contracts.*"
 disallow_untyped_defs = true
 
-[[tool.mypy.overrides]]
-module = "hummingbot.*"
-ignore_missing_imports = true
-
 [tool.ruff]
-target-version = "py311"
+target-version = "py312"
 line-length = 120
 fix = true
 
@@ -67,10 +107,27 @@ select = [
     "RUF",   # ruff-specific
 ]
 ignore = [
-    "E501",  # line too long (handled by formatter)
-    "B008",  # do not perform function calls in argument defaults (pydantic Field)
+    "E501",   # line too long (handled by formatter)
+    "E402",   # module-import-not-at-top (common for conditional/deferred imports)
+    "B008",   # function calls in argument defaults (pydantic Field)
+    "B023",   # function-uses-loop-variable (false positives in lambda closures)
+    "SIM102", # collapsible-if (reduces readability for guarded branches)
+    "SIM105", # suppressible-exception (try/except pass is explicit and clear)
     "SIM108", # use ternary operator (reduces readability for complex conditions)
+    "RUF002", # ambiguous-unicode-character-docstring (legitimate Unicode in docs)
+    "RUF003", # ambiguous-unicode-character-comment (legitimate Unicode in comments)
+    "RUF001", # ambiguous-unicode-character-string (legitimate Unicode in strings)
+    "RUF005", # collection-literal-concatenation (readability preference)
+    "RUF012", # mutable-class-default (conflicts with pydantic model patterns)
+    "UP028",  # yield-in-for-loop (readability preference)
+    "UP031",  # printf-string-formatting (legacy code, migrate incrementally)
+    "SIM115", # open-file-with-context-handler (file handles in long-lived objects)
 ]
+
+[tool.ruff.lint.per-file-ignores]
+"__init__.py" = ["F401"]
+"controllers/paper_engine_v2/hb_bridge.py" = ["F401"]
+"services/realtime_ui_api/main.py" = ["F401"]
 
 [tool.ruff.lint.isort]
 known-first-party = ["controllers", "services", "scripts"]

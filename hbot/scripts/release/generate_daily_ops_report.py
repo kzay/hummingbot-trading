@@ -2,20 +2,19 @@ from __future__ import annotations
 
 import argparse
 import json
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
-from typing import Dict, List
 
 
 def _utc_now() -> str:
-    return datetime.now(timezone.utc).isoformat()
+    return datetime.now(UTC).isoformat()
 
 
 def _today() -> str:
-    return datetime.now(timezone.utc).strftime("%Y%m%d")
+    return datetime.now(UTC).strftime("%Y%m%d")
 
 
-def _read_json(path: Path, default: Dict[str, object]) -> Dict[str, object]:
+def _read_json(path: Path, default: dict[str, object]) -> dict[str, object]:
     if not path.exists():
         return default
     try:
@@ -25,7 +24,7 @@ def _read_json(path: Path, default: Dict[str, object]) -> Dict[str, object]:
         return default
 
 
-def _fmt_list(items: List[str]) -> str:
+def _fmt_list(items: list[str]) -> str:
     if not items:
         return "- (none)"
     return "\n".join(f"- {x}" for x in items)
@@ -33,7 +32,7 @@ def _fmt_list(items: List[str]) -> str:
 
 def main() -> int:
     parser = argparse.ArgumentParser(description="Generate daily ops report from latest gate artifacts.")
-    parser.add_argument("--date", default=_today(), help="UTC date label YYYYMMDD for output file naming.")
+    parser.add_argument("--date", default=_today(), help="timezone.utc date label YYYYMMDD for output file naming.")
     args = parser.parse_args()
 
     root = Path("/workspace/hbot") if Path("/.dockerenv").exists() else Path(__file__).resolve().parents[2]

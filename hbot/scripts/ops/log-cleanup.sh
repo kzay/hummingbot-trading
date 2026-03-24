@@ -6,7 +6,7 @@
 # Default: keep last 7 days of logs
 #
 # Recommended cron (weekly):
-#   0 3 * * 0 /path/to/hbot/scripts/log-cleanup.sh >> /var/log/kzay-capital-cleanup.log 2>&1
+#   0 3 * * 0 /path/to/hbot/scripts/ops/log-cleanup.sh >> /var/log/kzay-capital-cleanup.log 2>&1
 # ============================================
 set -euo pipefail
 

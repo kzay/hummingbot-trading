@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import json
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
 from scripts.release.check_reliability_slo import _dead_letter_stats, build_report
@@ -30,7 +30,7 @@ def _write_json(path: Path, payload: dict) -> None:
 
 
 def test_dead_letter_stats_marks_local_authority_reject_as_non_critical() -> None:
-    now_ms = int(datetime.now(timezone.utc).timestamp() * 1000)
+    now_ms = int(datetime.now(UTC).timestamp() * 1000)
     rows = [
         (
             "1-0",
@@ -70,7 +70,7 @@ def test_dead_letter_stats_marks_local_authority_reject_as_non_critical() -> Non
 
 
 def test_dead_letter_stats_marks_expired_intent_as_non_critical_when_configured() -> None:
-    now_ms = int(datetime.now(timezone.utc).timestamp() * 1000)
+    now_ms = int(datetime.now(UTC).timestamp() * 1000)
     rows = [
         (
             "1-0",
@@ -110,7 +110,7 @@ def test_dead_letter_stats_marks_expired_intent_as_non_critical_when_configured(
 
 
 def test_build_report_passes_when_all_slos_are_healthy(tmp_path: Path) -> None:
-    now = datetime.now(timezone.utc)
+    now = datetime.now(UTC)
     now_ts = now.timestamp()
     now_iso = now.isoformat()
 
@@ -151,7 +151,7 @@ def test_build_report_passes_when_all_slos_are_healthy(tmp_path: Path) -> None:
 
 
 def test_build_report_defaults_expired_intent_to_non_critical(tmp_path: Path) -> None:
-    now = datetime.now(timezone.utc)
+    now = datetime.now(UTC)
     now_ts = now.timestamp()
     now_iso = now.isoformat()
     now_ms = int(now_ts * 1000)
@@ -194,7 +194,7 @@ def test_build_report_defaults_expired_intent_to_non_critical(tmp_path: Path) ->
 
 
 def test_build_report_fails_when_heartbeat_stale(tmp_path: Path) -> None:
-    now = datetime.now(timezone.utc)
+    now = datetime.now(UTC)
     stale_iso = (now - timedelta(minutes=30)).isoformat()
     now_iso = now.isoformat()
 
@@ -226,7 +226,7 @@ def test_build_report_fails_when_heartbeat_stale(tmp_path: Path) -> None:
 
 
 def test_build_report_passes_with_paper_exchange_checks_enabled(tmp_path: Path) -> None:
-    now = datetime.now(timezone.utc)
+    now = datetime.now(UTC)
     now_ts = now.timestamp()
     now_iso = now.isoformat()
     now_ms = int(now_ts * 1000)
@@ -305,7 +305,7 @@ def test_build_report_passes_with_paper_exchange_checks_enabled(tmp_path: Path) 
 
 
 def test_build_report_fails_with_paper_exchange_slo_breaches(tmp_path: Path) -> None:
-    now = datetime.now(timezone.utc)
+    now = datetime.now(UTC)
     now_ts = now.timestamp()
     stale_iso = (now - timedelta(hours=2)).isoformat()
     now_ms = int(now_ts * 1000)

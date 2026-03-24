@@ -4,19 +4,25 @@ import base64
 import hashlib
 import hmac
 import json
+import logging
 import os
 import time
 from dataclasses import dataclass
 from decimal import Decimal
 from pathlib import Path
-from typing import Any, Dict, Optional, Tuple
+from typing import Any
 from urllib.parse import urlencode
 from urllib.request import Request, urlopen
 
+from platform_lib.core.rate_limiter import ExchangeRateLimiter
+from platform_lib.core.utils import to_decimal
 
-from services.common.rate_limiter import ExchangeRateLimiter
-from services.common.utils import to_decimal
+logger = logging.getLogger(__name__)
 
+# CONCURRENCY CONTRACT:
+# - Internal TokenBucket uses time-based refill (not thread-safe).
+# - Currently called only from the main bridge tick thread.
+# - If used from multiple threads, wrap get_or_create() and wait_if_needed() with a Lock.
 _RATE_LIMITER = ExchangeRateLimiter()
 
 
@@ -36,7 +42,7 @@ class FeeResolver:
         return name
 
     @staticmethod
-    def _pair_tokens(trading_pair: str) -> Tuple[str, str]:
+    def _pair_tokens(trading_pair: str) -> tuple[str, str]:
         raw = (trading_pair or "").replace("/", "-").upper()
         if "-" in raw:
             base, quote = raw.split("-", 1)
@@ -46,7 +52,7 @@ class FeeResolver:
         return raw, "USDT"
 
     @staticmethod
-    def _extract_bitget_credentials(connector: Any) -> Optional[Tuple[str, str, str]]:
+    def _extract_bitget_credentials(connector: Any) -> tuple[str, str, str] | None:
         if connector is None:
             return None
         candidates = [connector, getattr(connector, "auth", None), getattr(connector, "_auth", None)]
@@ -76,7 +82,7 @@ class FeeResolver:
         return None
 
     @classmethod
-    def from_exchange_api(cls, connector: Any, connector_name: str, trading_pair: str) -> Optional[FeeRates]:
+    def from_exchange_api(cls, connector: Any, connector_name: str, trading_pair: str) -> FeeRates | None:
         canonical = cls._canonical_connector(connector_name)
         if not canonical.startswith("bitget"):
             return None
@@ -119,10 +125,11 @@ class FeeResolver:
                 return None
             return FeeRates(maker=maker, taker=taker, source="api:bitget:user_fee_query")
         except Exception:
+            logger.warning("fee_provider: Bitget API fee query failed, falling back to profile/connector", exc_info=True)
             return None
 
     @staticmethod
-    def _candidate_profile_paths() -> Tuple[Path, ...]:
+    def _candidate_profile_paths() -> tuple[Path, ...]:
         env_path = os.getenv("HB_FEE_PROFILE_PATH", "").strip()
         paths = []
         if env_path:
@@ -132,14 +139,14 @@ class FeeResolver:
         return tuple(paths)
 
     @classmethod
-    def from_project_profile(cls, connector_name: str, profile: str) -> Optional[FeeRates]:
+    def from_project_profile(cls, connector_name: str, profile: str) -> FeeRates | None:
         canonical = cls._canonical_connector(connector_name)
         profile_key = (profile or "vip0").strip()
         for path in cls._candidate_profile_paths():
             if not path.exists():
                 continue
             try:
-                payload: Dict[str, Any] = json.loads(path.read_text(encoding="utf-8"))
+                payload: dict[str, Any] = json.loads(path.read_text(encoding="utf-8"))
                 table = (payload.get("profiles") or {}).get(profile_key, {})
                 row = table.get(canonical)
                 if not row:
@@ -150,11 +157,12 @@ class FeeResolver:
                     continue
                 return FeeRates(maker=maker, taker=taker, source=f"project:{path}")
             except Exception:
+                logger.warning("fee_provider: failed to read fee profile %s, trying next candidate", path, exc_info=True)
                 continue
         return None
 
     @staticmethod
-    def from_connector_runtime(connector: Any, trading_pair: str) -> Optional[FeeRates]:
+    def from_connector_runtime(connector: Any, trading_pair: str) -> FeeRates | None:
         if connector is None:
             return None
         try:
@@ -170,7 +178,7 @@ class FeeResolver:
                         if maker_d > 0 and taker_d > 0:
                             return FeeRates(maker=maker_d, taker=taker_d, source="connector:trading_fees")
         except Exception:
-            pass
+            logger.warning("fee_provider: connector trading_fees extraction failed, trying attribute fallback", exc_info=True)
 
         for maker_attr, taker_attr in (
             ("maker_fee_pct", "taker_fee_pct"),
@@ -187,5 +195,6 @@ class FeeResolver:
                 if maker_d > 0 and taker_d > 0:
                     return FeeRates(maker=maker_d, taker=taker_d, source=f"connector:{maker_attr}")
             except Exception:
+                logger.warning("fee_provider: connector attribute fallback failed for %s/%s", maker_attr, taker_attr, exc_info=True)
                 continue
         return None

@@ -1,0 +1,61 @@
+{
+  "portfolio": {
+    "balances": {
+      "USDT": "499.9654583216387250000000000"
+    },
+    "positions": {
+      "bitget:ETH-USDT:perp": {
+        "instrument_id": "bitget:ETH-USDT:perp",
+        "quantity": "0.03",
+        "avg_entry_price": "2104.309279166666666666666667",
+        "realized_pnl": "0",
+        "unrealized_pnl": "0.90437162499999999999999999",
+        "total_fees_paid": "0.0378775670250",
+        "funding_paid": "-0.003335888663725000000000000001",
+        "opened_at_ns": 1774149080155549440,
+        "last_fill_at_ns": 1774283010451561216,
+        "position_mode": "POSITIONMODE.ONEWAY",
+        "long_quantity": "0.03",
+        "long_avg_entry_price": "2104.309279166666666666666667",
+        "long_realized_pnl": "0",
+        "long_unrealized_pnl": "0.90437162499999999999999999",
+        "long_funding_paid": "-0.003335888663725000000000000001",
+        "long_opened_at_ns": 1774149080155549440,
+        "short_quantity": "0",
+        "short_avg_entry_price": "0",
+        "short_realized_pnl": "0",
+        "short_unrealized_pnl": "0",
+        "short_funding_paid": "0",
+        "short_opened_at_ns": 0
+      }
+    },
+    "peak_equity": "501.0831299466387250000000000",
+    "daily_open_equity": "498.911470253323300",
+    "daily_open_day_key": "2026-03-23",
+    "leverage_by_key": {
+      "bitget:ETH-USDT:perp": 1
+    },
+    "position_margin_reserved": {
+      "bitget:ETH-USDT:perp": "3.2016825"
+    }
+  },
+  "funding_timestamps": {
+    "bitget:ETH-USDT:perp": 1774283010451561216
+  },
+  "order_counter": 3,
+  "risk_counters": {
+    "margin_call_events_total": 0,
+    "liquidation_events_total": 0,
+    "liquidation_actions_total": 0,
+    "last_margin_level": "safe"
+  },
+  "execution_quality": {
+    "fill_count": 1,
+    "maker_fill_count": 0,
+    "maker_fill_pct": "0.0",
+    "avg_slippage_bps": "2.55",
+    "avg_mid_slippage_bps": "2.52",
+    "expired_count": 0
+  },
+  "ts_utc": "2026-03-23T16:54:02.693487+00:00"
+}

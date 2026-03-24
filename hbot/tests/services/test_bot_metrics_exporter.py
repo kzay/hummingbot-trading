@@ -1,7 +1,8 @@
 from __future__ import annotations
 
 import json
-from datetime import datetime, timezone
+from datetime import UTC, datetime
+
 from services.bot_metrics_exporter import BotMetricsExporter
 
 
@@ -324,7 +325,7 @@ def test_data_plane_consistency_fails_when_minute_age_is_stale(tmp_path) -> None
     snap_path.write_text(
         json.dumps(
             {
-                "generated_ts": datetime.now(timezone.utc).isoformat(),
+                "generated_ts": datetime.now(UTC).isoformat(),
                 "completeness": 1.0,
                 "minute_age_s": 181.0,
                 "fill_age_s": 10.0,

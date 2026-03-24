@@ -393,8 +393,9 @@ Rollback:
   - `ML_ENABLED=true`: requires fresh `reports/ml/latest.json` and passing baseline/drift/retirement checks.
 
 ## ClickHouse Event Analytics (Day 40)
-- Bring up ClickHouse stack:
-  - `docker compose --env-file infra/env/.env --profile ops -f infra/compose/docker-compose.yml up -d clickhouse clickhouse-ingest`
+> **Note:** ClickHouse services are not yet defined in `docker-compose.yml`. The commands below are planned but not operational.
+- Bring up ClickHouse stack (when available):
+  - `docker compose --env-file infra/env/.env -f infra/compose/docker-compose.yml up -d clickhouse clickhouse-ingest`
 - One-shot dry run (no DB writes):
   - `python services/clickhouse_ingest/main.py --once --dry-run`
 - One-shot real ingest:
@@ -757,21 +758,19 @@ PostgreSQL operational store:
 - Policy/runbook:
   - `docs/ops/postgres_ops_store_v1.md`
 
-Startup:
-1. `docker compose --env-file infra/env/.env --profile ops -f infra/compose/docker-compose.yml up -d postgres`
-2. `docker compose --env-file infra/env/.env --profile ops -f infra/compose/docker-compose.yml ps postgres`
-3. Optional `pgadmin`:
-   - `docker compose --env-file infra/env/.env --profile ops --profile ops-tools -f infra/compose/docker-compose.yml up -d pgadmin`
-4. Start writer:
-   - `docker compose --env-file infra/env/.env --profile ops -f infra/compose/docker-compose.yml up -d ops-db-writer`
+Startup (postgres is in the default profile — no `--profile` flag needed):
+1. `docker compose --env-file infra/env/.env -f infra/compose/docker-compose.yml up -d postgres`
+2. `docker compose --env-file infra/env/.env -f infra/compose/docker-compose.yml ps postgres`
+3. Start writer:
+   - `docker compose --env-file infra/env/.env -f infra/compose/docker-compose.yml up -d ops-db-writer`
 
 Sanity check:
-- `docker compose --env-file infra/env/.env --profile ops -f infra/compose/docker-compose.yml exec -T postgres psql -U kzay_capital -d kzay_capital_ops -c "select now() as ts_utc;"`
+- `docker compose --env-file infra/env/.env -f infra/compose/docker-compose.yml exec -T postgres psql -U kzay_capital -d kzay_capital_ops -c "select now() as ts_utc;"`
 - one-shot writer check:
-  - `docker compose --env-file infra/env/.env --profile ops -f infra/compose/docker-compose.yml run --rm ops-db-writer python /workspace/hbot/services/ops_db_writer/main.py --once`
+  - `docker compose --env-file infra/env/.env -f infra/compose/docker-compose.yml run --rm ops-db-writer python /workspace/hbot/services/ops_db_writer/main.py --once`
 
 Backup:
-- `docker compose --env-file infra/env/.env --profile ops -f infra/compose/docker-compose.yml exec -T postgres pg_dump -U kzay_capital kzay_capital_ops > reports/ops_db/postgres_dump_latest.sql`
+- `docker compose --env-file infra/env/.env -f infra/compose/docker-compose.yml exec -T postgres pg_dump -U kzay_capital kzay_capital_ops > reports/ops_db/postgres_dump_latest.sql`
 
 ### Incident Triage (Trading)
 

@@ -1,0 +1,293 @@
+# Bot7 Pullback replay configuration.
+# Usage:
+#   PYTHONPATH=hbot python -m controllers.backtesting.replay_harness --config data/backtest_configs/bot7_pullback_replay.yml
+#
+# Date semantics:
+# - `start_date` and `end_date` are UTC calendar dates.
+# - Replay includes the whole UTC day for `end_date`.
+# - `warmup_bars` must be available before `start_date` in the candle dataset.
+
+mode: replay
+strategy_module: controllers.bots.bot7.pullback_v1
+strategy_class: PullbackV1Controller
+
+data:
+  exchange: bitget
+  pair: BTC-USDT
+  instrument_type: perp
+  catalog_dir: data/historical
+  candles_resolution: 1m
+
+start_date: "2026-03-11"
+end_date: "2026-03-14"
+step_interval_s: 60
+warmup_bars: 180
+initial_equity: 5000
+seed: 27
+output_dir: reports/replay
+run_id: bot7_pullback_replay
+
+strategy_config:
+  id: replay_bot7_pullback
+  controller_name: bot7_pullback_v1
+  connector_name: bitget_perpetual
+  trading_pair: BTC-USDT
+  candles_connector: bitget_perpetual
+  candles_trading_pair: BTC-USDT
+  bot_mode: paper
+  log_dir: /tmp
+
+  total_amount_quote: 800
+  buy_spreads:
+    - 0.0015
+    - 0.0030
+    - 0.0045
+  sell_spreads:
+    - 0.0015
+    - 0.0030
+    - 0.0045
+  buy_amounts_pct:
+    - 34
+    - 33
+    - 33
+  sell_amounts_pct:
+    - 34
+    - 33
+    - 33
+  executor_refresh_time: 30
+  cooldown_time: 10
+  leverage: 1
+  position_mode: ONEWAY
+  max_order_notional_quote: 400
+  stop_loss: 0.0045
+  take_profit: 0.0090
+  time_limit: 2400
+  take_profit_order_type: LIMIT
+  skip_rebalance: true
+  position_rebalance_min_base_mult: 5.0
+  ghost_position_guard_enabled: true
+
+  variant: a
+  enabled: true
+  no_trade: false
+  instance_name: bot7
+
+  fee_mode: manual
+  fee_profile: vip0
+  require_fee_resolution: true
+  spot_fee_pct: 0.0002
+  slippage_est_pct: 0.00005
+  turnover_cap_x: 20.0
+  turnover_penalty_step: 0.0001
+
+  edge_state_hold_s: 75
+  trend_eps_pct: 0.0006
+  high_vol_band_pct: 0.0065
+  shock_drift_30s_pct: 0.0020
+  shock_drift_atr_multiplier: 1.10
+
+  pb_bb_period: 20
+  pb_bb_stddev: 2.0
+  pb_rsi_period: 14
+  pb_adx_period: 14
+  atr_period: 14
+
+  pb_rsi_long_min: 35
+  pb_rsi_long_max: 55
+  pb_rsi_short_min: 45
+  pb_rsi_short_max: 65
+  pb_rsi_probe_long_min: 38
+  pb_rsi_probe_long_max: 58
+  pb_rsi_probe_short_min: 42
+  pb_rsi_probe_short_max: 62
+  pb_adx_min: 18
+  pb_adx_max: 45
+
+  pb_pullback_zone_pct: 0.0015
+  pb_band_floor_pct: 0.0010
+  pb_zone_atr_mult: 0.25
+
+  pb_trade_window_count: 160
+  pb_trade_stale_after_ms: 20000
+  pb_trade_reader_enabled: true
+  pb_absorption_window: 20
+  pb_absorption_min_trade_mult: 2.5
+  pb_absorption_max_price_drift_pct: 0.0015
+  pb_delta_trap_window: 24
+  pb_delta_trap_reversal_share: 0.30
+  pb_delta_trap_max_price_drift_pct: 0.0020
+  pb_recent_delta_window: 20
+  pb_depth_imbalance_threshold: 0.20
+
+  pb_max_grid_legs: 3
+  pb_per_leg_risk_pct: 0.008
+  pb_total_grid_exposure_cap_pct: 0.025
+  pb_grid_spacing_atr_mult: 0.50
+  pb_grid_spacing_bb_fraction: 0.12
+  pb_grid_spacing_floor_pct: 0.0015
+  pb_grid_spacing_cap_pct: 0.0100
+
+  pb_hedge_ratio: 0.30
+  pb_funding_long_bias_threshold: -0.0003
+  pb_funding_short_bias_threshold: 0.0003
+  pb_funding_vol_reduce_threshold: 0.0010
+  pb_block_contra_funding: true
+
+  pb_probe_enabled: true
+  pb_probe_grid_legs: 1
+  pb_probe_size_mult: 0.50
+  pb_signal_cooldown_s: 180
+  pb_warmup_quote_levels: 0
+  pb_warmup_quote_max_bars: 3
+
+  pb_dynamic_barriers_enabled: true
+  pb_sl_atr_mult: 1.5
+  pb_tp_atr_mult: 3.0
+  pb_sl_floor_pct: 0.003
+  pb_sl_cap_pct: 0.01
+  pb_tp_floor_pct: 0.006
+  pb_tp_cap_pct: 0.02
+
+  pb_trend_quality_enabled: true
+  pb_basis_slope_bars: 5
+  pb_min_basis_slope_pct: 0.0002
+  pb_trend_sma_period: 50
+  pb_trailing_stop_enabled: true
+  pb_trail_activate_atr_mult: 1.0
+  pb_trail_offset_atr_mult: 0.5
+  pb_partial_take_pct: 0.33
+
+  pb_limit_entry_enabled: true
+  pb_entry_offset_pct: 0.001
+  pb_entry_timeout_s: 30
+  pb_adverse_selection_enabled: true
+  pb_max_entry_spread_pct: 0.0008
+  pb_max_entry_imbalance: 0.5
+  pb_absorption_zscore_enabled: true
+  pb_absorption_zscore_threshold: 1.5
+  pb_probe_sl_mult: 0.75
+  pb_trail_exit_order_type: LIMIT
+  pb_partial_exit_order_type: LIMIT
+  pb_exit_limit_timeout_s: 15
+  pb_vol_decline_enabled: true
+  pb_vol_decline_lookback: 5
+  pb_session_filter_enabled: true
+  pb_quality_hours_utc: "1-4,8-16,20-23"
+  pb_low_quality_size_mult: 0.5
+  pb_trend_confidence_enabled: true
+  pb_trend_confidence_min_mult: 0.5
+  pb_rsi_divergence_enabled: true
+  pb_rsi_divergence_lookback: 10
+  pb_signal_freshness_enabled: true
+  pb_signal_max_age_s: 120
+  pb_adaptive_cooldown_enabled: true
+  pb_cooldown_min_s: 90
+  pb_cooldown_max_s: 360
+  pb_signal_diagnostics_enabled: true
+  pb_min_signals_warn: 3
+
+  regime_specs_override:
+    up:
+      one_sided: buy_only
+      spread_min: "0.0012"
+      spread_max: "0.0045"
+      levels_min: 1
+      levels_max: 3
+      refresh_s: 30
+      target_base_pct: "0.0"
+      fill_factor: "0.90"
+      quote_size_pct_min: "0.0025"
+      quote_size_pct_max: "0.0035"
+    down:
+      one_sided: sell_only
+      spread_min: "0.0012"
+      spread_max: "0.0045"
+      levels_min: 1
+      levels_max: 3
+      refresh_s: 30
+      target_base_pct: "0.0"
+      fill_factor: "0.90"
+      quote_size_pct_min: "0.0025"
+      quote_size_pct_max: "0.0035"
+    neutral_low_vol:
+      one_sided: off
+      spread_min: "0.0015"
+      spread_max: "0.0050"
+      levels_min: 0
+      levels_max: 0
+      refresh_s: 30
+      target_base_pct: "0.0"
+      fill_factor: "0.0"
+      quote_size_pct_min: "0.0"
+      quote_size_pct_max: "0.0"
+    neutral_high_vol:
+      one_sided: off
+      spread_min: "0.0020"
+      spread_max: "0.0060"
+      levels_min: 0
+      levels_max: 0
+      refresh_s: 20
+      target_base_pct: "0.0"
+      fill_factor: "0.0"
+      quote_size_pct_min: "0.0"
+      quote_size_pct_max: "0.0"
+    high_vol_shock:
+      one_sided: off
+      spread_min: "0.0025"
+      spread_max: "0.0080"
+      levels_min: 0
+      levels_max: 0
+      refresh_s: 15
+      target_base_pct: "0.0"
+      fill_factor: "0.0"
+      quote_size_pct_min: "0.0"
+      quote_size_pct_max: "0.0"
+
+  perp_target_net_base_pct: 0.0
+  min_base_pct: 0.0
+  max_base_pct: 0.55
+  max_total_notional_quote: 800
+  max_daily_turnover_x_hard: 0
+  max_daily_loss_pct_hard: 0.020
+  max_drawdown_pct_hard: 0.035
+  max_active_executors: 8
+  adverse_fill_spread_multiplier: 1.25
+  adverse_fill_count_threshold: 16
+
+  paper_engine:
+    paper_equity_quote: 5000
+    paper_realism_profile: balanced
+    paper_seed: 27
+    paper_reset_state_on_startup: false
+    paper_fill_model: latency_aware
+    paper_latency_model: configured_latency_ms
+    paper_latency_ms: 120
+    paper_insert_latency_ms: 20
+    paper_cancel_latency_ms: 70
+    paper_liquidity_consumption: true
+    paper_queue_participation: 0.50
+    paper_slippage_bps: 1.0
+    paper_adverse_selection_bps: 1.2
+    paper_prob_fill_on_limit: 0.95
+    paper_prob_slippage: 0.0
+    paper_partial_fill_min_ratio: 0.10
+    paper_partial_fill_max_ratio: 0.45
+    paper_depth_levels: 5
+    paper_depth_decay: 0.70
+    paper_queue_position_enabled: true
+    paper_queue_ahead_ratio: 0.40
+    paper_queue_trade_through_ratio: 0.30
+    paper_price_protection_points: 8
+    paper_margin_model_type: leveraged
+    paper_max_fills_per_order: 3
+
+  sample_interval_s: 10
+  price_buffer_source: mark
+  spread_floor_recalc_s: 30
+  cancel_budget_per_min: 30
+  position_drift_soft_pause_pct: 2.0
+  max_clock_skew_s: 15
+  reconnect_cooldown_s: 20
+  order_book_stale_after_s: 75
+  order_book_stale_soft_pause_after_s: 360
+  order_book_reconnect_grace_s: 180

@@ -1,5 +1,5 @@
 import json
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 from decimal import Decimal
 from pathlib import Path
 from types import SimpleNamespace
@@ -9,7 +9,7 @@ import pytest
 pytest.importorskip("hummingbot")
 
 from controllers.core import RegimeSpec
-from controllers.daily_state_store import DailyStateStore
+from platform_lib.core.daily_state_store import DailyStateStore
 from controllers.epp_v2_4 import EppV24Controller
 
 
@@ -28,7 +28,7 @@ def _make_dummy(tmp_path: Path, now_ts: float) -> _DummyController:
         bot_mode="paper",
     )
     dummy.market_data_provider = SimpleNamespace(time=lambda: now_ts)
-    dummy._daily_key = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+    dummy._daily_key = datetime.now(UTC).strftime("%Y-%m-%d")
     dummy._daily_equity_open = Decimal("100")
     dummy._daily_equity_peak = Decimal("110")
     dummy._traded_notional_today = Decimal("50")
@@ -79,6 +79,7 @@ def test_save_throttled(tmp_path: Path):
     EppV24Controller._save_daily_state(dummy)
     dummy._position_base = Decimal("2")
     EppV24Controller._save_daily_state(dummy)
+    dummy._state_store._join_pending_save()
     state_path = Path(EppV24Controller._daily_state_path(dummy))
     payload = json.loads(state_path.read_text(encoding="utf-8"))
     assert payload["position_base"] == "0.25"
@@ -111,7 +112,7 @@ def test_cross_day_restart_preserves_position(tmp_path: Path):
 
     state_path = Path(EppV24Controller._daily_state_path(dummy))
     data = json.loads(state_path.read_text(encoding="utf-8"))
-    yesterday = (datetime.now(timezone.utc) - timedelta(days=1)).strftime("%Y-%m-%d")
+    yesterday = (datetime.now(UTC) - timedelta(days=1)).strftime("%Y-%m-%d")
     data["day_key"] = yesterday
     state_path.write_text(json.dumps(data), encoding="utf-8")
 
@@ -157,12 +158,21 @@ def _make_sync_dummy(tmp_path: Path, local_pos: Decimal, exchange_pos: Decimal):
     dummy._startup_sync_retries = 0
     dummy._STARTUP_SYNC_MAX_RETRIES = 3
     dummy._runtime_adapter = _FakeRuntimeAdapter()
+    dummy._startup_recon_attempt = 0
+    dummy._startup_recon_next_retry_ts = 0.0
+    dummy._startup_recon_soft_pause = False
+    dummy._STARTUP_RECON_MAX_ATTEMPTS = 3
+    dummy._STARTUP_RECON_BACKOFF_DELAYS = (2.0, 4.0, 8.0)
     connector = _FakeConnector(exchange_pos)
     dummy._connector = lambda: connector
-    dummy._get_mid_price = lambda: Decimal("65000")
+    dummy._get_reference_price = lambda: Decimal("65000")
     dummy._save_daily_state = lambda force=False: None
     dummy._compute_total_base_with_locked = lambda c: c.get_balance("BTC")
     dummy._ops_guard = SimpleNamespace(force_hard_stop=lambda reason: None)
+    import types as _types_mod
+    dummy._cancel_orphan_orders_on_startup = _types_mod.MethodType(
+        EppV24Controller._cancel_orphan_orders_on_startup, dummy,
+    )
     return dummy
 
 
@@ -200,47 +210,53 @@ def test_startup_sync_disabled(tmp_path: Path):
     assert dummy._startup_position_sync_done is True
 
 
-def test_startup_sync_auto_skipped_in_paper_mode(tmp_path: Path):
-    """Paper mode should auto-skip startup sync even when config flag is True."""
+def test_startup_sync_runs_in_paper_mode_like_live(tmp_path: Path):
+    """Paper mode runs startup position sync like live — unified data path."""
     dummy = _make_sync_dummy(tmp_path, local_pos=Decimal("0"), exchange_pos=Decimal("0.5"))
     dummy.config.startup_position_sync = True
     dummy.config.bot_mode = "paper"
     EppV24Controller._run_startup_position_sync(dummy)
     assert dummy._startup_position_sync_done is True
-    assert dummy._position_base == Decimal("0"), "paper-mode auto-skip must not mutate position"
+    assert dummy._position_base == Decimal("0.5"), "paper mode must adopt exchange position like live"
 
 
-def test_startup_sync_paper_mode_cancels_restored_orphan_orders(tmp_path: Path):
-    """Paper-mode startup should clear restored desk orders that have no live executors."""
+def test_startup_sync_cancels_restored_orphan_orders(tmp_path: Path):
+    """Startup should clear restored orders that have no live executors."""
     dummy = _make_sync_dummy(tmp_path, local_pos=Decimal("0"), exchange_pos=Decimal("0"))
     canceled: list[str] = []
-    order_a = SimpleNamespace(order_id="paper_v2_135", source_bot="bitget_perpetual")
-    order_b = SimpleNamespace(order_id="paper_v2_136", source_bot="bitget_perpetual")
-    engine = SimpleNamespace(open_orders=lambda: [order_a, order_b])
-    desk = SimpleNamespace(
-        _engines={"bitget:BTC-USDT:perp": engine},
-        cancel_order=lambda iid, order_id: canceled.append(f"{iid.key}:{order_id}") or object(),
+    order_a = SimpleNamespace(
+        client_order_id="paper_v2_135", trading_pair="BTC-USDT",
+        trade_type=SimpleNamespace(name="BUY"), source_bot="bitget_perpetual",
+    )
+    order_b = SimpleNamespace(
+        client_order_id="paper_v2_136", trading_pair="BTC-USDT",
+        trade_type=SimpleNamespace(name="SELL"), source_bot="bitget_perpetual",
     )
     connector = SimpleNamespace(
-        _paper_desk_v2=desk,
-        _paper_desk_v2_instrument_id=SimpleNamespace(key="bitget:BTC-USDT:perp"),
+        get_open_orders=lambda: [order_a, order_b],
+        get_balance=lambda asset: Decimal("0"),
+    )
+    strategy = SimpleNamespace(
+        cancel=lambda conn, pair, oid: canceled.append(f"{conn}:{pair}:{oid}"),
     )
     dummy.config.startup_position_sync = True
     dummy.config.bot_mode = "paper"
-    dummy.config.paper_state_reconcile_enabled = True
     dummy.config.connector_name = "bitget_perpetual"
+    dummy.config.trading_pair = "BTC-USDT"
     dummy.executors_info = []
     dummy.filter_executors = lambda executors, filter_func: [e for e in executors if filter_func(e)]
     dummy._recently_issued_levels = {"buy_0": 100.0}
     dummy._connector = lambda: connector
+    dummy.strategy = strategy
+    dummy._strategy = None
 
     EppV24Controller._run_startup_position_sync(dummy)
 
     assert dummy._startup_position_sync_done is True
     assert dummy._startup_orphan_check_done is True
     assert canceled == [
-        "bitget:BTC-USDT:perp:paper_v2_135",
-        "bitget:BTC-USDT:perp:paper_v2_136",
+        "bitget_perpetual:BTC-USDT:paper_v2_135",
+        "bitget_perpetual:BTC-USDT:paper_v2_136",
     ]
     assert dummy._recently_issued_levels == {}
 
@@ -288,21 +304,21 @@ def test_startup_sync_blocks_trading_while_pending(tmp_path: Path):
     assert "startup_position_sync_pending" in risk_reasons
 
 
-def test_startup_sync_repeated_exceptions_escalate_to_hard_stop(tmp_path: Path):
-    """Persistent connector exceptions should not keep sync pending forever."""
+def test_startup_sync_repeated_exceptions_escalate_to_soft_pause(tmp_path: Path):
+    """Persistent connector exceptions should enter SOFT_PAUSE after max recon attempts."""
     dummy = _make_sync_dummy(tmp_path, local_pos=Decimal("0"), exchange_pos=Decimal("0.5"))
 
     class _ExplodingConnector:
         def get_position(self, *_args, **_kwargs):
             raise RuntimeError("connector blew up")
 
-    called: list[str] = []
     dummy._is_perp = True
     dummy._connector = lambda: _ExplodingConnector()
-    dummy._ops_guard = SimpleNamespace(force_hard_stop=lambda reason: called.append(reason))
-
-    for _ in range(dummy._STARTUP_SYNC_MAX_RETRIES):
+    tick_ts = 1_700_000_000.0
+    for _ in range(dummy._STARTUP_RECON_MAX_ATTEMPTS):
+        tick_ts += 10.0
+        dummy.market_data_provider = SimpleNamespace(time=lambda t=tick_ts: t)
         EppV24Controller._run_startup_position_sync(dummy)
 
     assert dummy._startup_position_sync_done is True
-    assert "startup_sync_failed" in called
+    assert dummy._startup_recon_soft_pause is True

@@ -1,30 +1,29 @@
 from __future__ import annotations
 
 import json
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
-from typing import Dict, List, Set, Tuple
 
 
 def _utc_now() -> str:
-    return datetime.now(timezone.utc).isoformat()
+    return datetime.now(UTC).isoformat()
 
 
-def _read_json(path: Path) -> Dict[str, object]:
+def _read_json(path: Path) -> dict[str, object]:
     payload = json.loads(path.read_text(encoding="utf-8"))
     if not isinstance(payload, dict):
         raise ValueError(f"expected object in {path}")
     return payload
 
 
-def _set_from_list(value: object) -> Set[str]:
+def _set_from_list(value: object) -> set[str]:
     if not isinstance(value, list):
         return set()
     return {str(item) for item in value if str(item).strip()}
 
 
-def _extract_portfolio_action_scope(policy_bots: Dict[str, object]) -> Set[str]:
-    action_scope: Set[str] = set()
+def _extract_portfolio_action_scope(policy_bots: dict[str, object]) -> set[str]:
+    action_scope: set[str] = set()
     for bot, cfg in policy_bots.items():
         if not isinstance(cfg, dict):
             continue
@@ -33,8 +32,8 @@ def _extract_portfolio_action_scope(policy_bots: Dict[str, object]) -> Set[str]:
     return action_scope
 
 
-def _extract_disabled_bot_scope(policy_bots: Dict[str, object]) -> Set[str]:
-    disabled_scope: Set[str] = set()
+def _extract_disabled_bot_scope(policy_bots: dict[str, object]) -> set[str]:
+    disabled_scope: set[str] = set()
     for bot, cfg in policy_bots.items():
         if not isinstance(cfg, dict):
             continue
@@ -45,13 +44,13 @@ def _extract_disabled_bot_scope(policy_bots: Dict[str, object]) -> Set[str]:
     return disabled_scope
 
 
-def _check_policy(root: Path) -> Tuple[bool, List[str], Dict[str, object]]:
+def _check_policy(root: Path) -> tuple[bool, list[str], dict[str, object]]:
     policy_path = root / "config" / "multi_bot_policy_v1.json"
     account_map_path = root / "config" / "exchange_account_map.json"
     portfolio_path = root / "config" / "portfolio_limits_v1.json"
     recon_path = root / "config" / "reconciliation_thresholds.json"
 
-    errors: List[str] = []
+    errors: list[str] = []
     policy = _read_json(policy_path)
     account_map = _read_json(account_map_path)
     portfolio = _read_json(portfolio_path)
@@ -137,7 +136,7 @@ def main() -> int:
             "details": {},
         }
 
-    stamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
+    stamp = datetime.now(UTC).strftime("%Y%m%dT%H%M%SZ")
     out_file = reports_root / f"multi_bot_policy_check_{stamp}.json"
     out_file.write_text(json.dumps(payload, indent=2), encoding="utf-8")
     (reports_root / "latest.json").write_text(json.dumps(payload, indent=2), encoding="utf-8")

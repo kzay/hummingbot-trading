@@ -3,19 +3,19 @@ from __future__ import annotations
 import json
 import os
 import time
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
 
-from services.common.graceful_shutdown import ShutdownHandler
-from services.common.logging_config import configure_logging
-from services.common.models import RedisSettings, ServiceSettings
-from services.contracts.event_schemas import (
+from platform_lib.core.graceful_shutdown import ShutdownHandler
+from platform_lib.logging.logging_config import configure_logging
+from platform_lib.core.models import RedisSettings, ServiceSettings
+from platform_lib.contracts.event_schemas import (
     AuditEvent,
     MlSignalEvent,
     RiskDecisionEvent,
     StrategySignalEvent,
 )
-from services.contracts.stream_names import (
+from platform_lib.contracts.stream_names import (
     AUDIT_STREAM,
     DEFAULT_CONSUMER_GROUP,
     ML_SIGNAL_STREAM,
@@ -151,7 +151,7 @@ def run() -> None:
                 decisions_approved += 1
             else:
                 decisions_rejected += 1
-            last_decision_ts = datetime.now(timezone.utc).isoformat()
+            last_decision_ts = datetime.now(UTC).isoformat()
 
             if not approved:
                 audit = AuditEvent(
@@ -170,7 +170,7 @@ def run() -> None:
 
         _write_latest({
             "service": "risk_service",
-            "ts_utc": datetime.now(timezone.utc).isoformat(),
+            "ts_utc": datetime.now(UTC).isoformat(),
             "ml_enabled": ml_enabled,
             "source_stream": source_stream,
             "decisions_total": decisions_total,

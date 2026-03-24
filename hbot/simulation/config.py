@@ -8,7 +8,8 @@ from __future__ import annotations
 import os
 from dataclasses import asdict, dataclass
 from decimal import Decimal
-from typing import Any, Dict
+from typing import Any
+from urllib.parse import quote
 
 
 @dataclass(frozen=True)
@@ -45,7 +46,7 @@ class PaperEngineConfig:
     artifact_namespace: str = "epp_v24"
 
     @staticmethod
-    def _presets() -> Dict[str, Dict[str, Any]]:
+    def _presets() -> dict[str, dict[str, Any]]:
         return {
             "conservative": {
                 "paper_fill_model": "queue_position",
@@ -116,8 +117,8 @@ class PaperEngineConfig:
         }
 
     @classmethod
-    def from_controller_config(cls, cfg: Any) -> "PaperEngineConfig":
-        nested_payload: Dict[str, Any] = {}
+    def from_controller_config(cls, cfg: Any) -> PaperEngineConfig:
+        nested_payload: dict[str, Any] = {}
         nested = getattr(cfg, "paper_engine", None)
         if nested is not None:
             if isinstance(nested, PaperEngineConfig):
@@ -130,7 +131,7 @@ class PaperEngineConfig:
                 except Exception:
                     nested_payload = {}
             else:
-                for k in cls.__dataclass_fields__.keys():
+                for k in cls.__dataclass_fields__:
                     if hasattr(nested, k):
                         nested_payload[k] = getattr(nested, k)
             if nested_payload:
@@ -162,13 +163,24 @@ class PaperEngineConfig:
                 ).strip() or default_artifact_namespace
                 return cls(**merged)
             # Pydantic model or namespace-like object
-        raise ValueError("Missing nested paper_engine config")
+        from simulation.exceptions import ConfigurationError
+
+        raise ConfigurationError("Missing nested paper_engine config")
 
     @staticmethod
     def resolve_redis_url_from_env() -> str | None:
-        rh = os.environ.get("REDIS_HOST", "")
-        rp = os.environ.get("REDIS_PORT", "6379")
+        """Build redis URL from env; include REDIS_PASSWORD when set (matches requirepass)."""
+        explicit = (os.environ.get("REDIS_URL") or "").strip()
+        if explicit:
+            return explicit
+        rh = (os.environ.get("REDIS_HOST") or "").strip()
         if not rh:
             return None
-        return f"redis://{rh}:{rp}/0"
+        rp = (os.environ.get("REDIS_PORT") or "6379").strip()
+        db = (os.environ.get("REDIS_DB") or "0").strip()
+        pwd = (os.environ.get("REDIS_PASSWORD") or "").strip()
+        if pwd:
+            enc = quote(pwd, safe="")
+            return f"redis://:{enc}@{rh}:{rp}/{db}"
+        return f"redis://{rh}:{rp}/{db}"
 

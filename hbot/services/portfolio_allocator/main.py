@@ -6,20 +6,20 @@ import math
 import os
 import time
 import uuid
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
-from typing import Dict, List, Optional, Tuple
 
-from services.common.utils import safe_bool as _safe_bool, safe_float as _safe_float
-from services.contracts.stream_names import EXECUTION_INTENT_STREAM, STREAM_RETENTION_MAXLEN
+from platform_lib.core.utils import safe_bool as _safe_bool
+from platform_lib.core.utils import safe_float as _safe_float
+from platform_lib.contracts.stream_names import EXECUTION_INTENT_STREAM, STREAM_RETENTION_MAXLEN
 from services.hb_bridge.redis_client import RedisStreamClient
 
 
 def _utc_now() -> str:
-    return datetime.now(timezone.utc).isoformat()
+    return datetime.now(UTC).isoformat()
 
 
-def _read_json(path: Path) -> Dict[str, object]:
+def _read_json(path: Path) -> dict[str, object]:
     if not path.exists():
         return {}
     try:
@@ -29,7 +29,7 @@ def _read_json(path: Path) -> Dict[str, object]:
         return {}
 
 
-def _load_policy(path: Path) -> Dict[str, object]:
+def _load_policy(path: Path) -> dict[str, object]:
     default = {
         "version": 1,
         "allocator": {
@@ -57,7 +57,7 @@ def _load_policy(path: Path) -> Dict[str, object]:
     return merged
 
 
-def _symbol_bucket_from_cfg(cfg: Dict[str, object]) -> str:
+def _symbol_bucket_from_cfg(cfg: dict[str, object]) -> str:
     symbols = cfg.get("allowed_symbols", [])
     if isinstance(symbols, list):
         upper = {str(s).strip().upper() for s in symbols}
@@ -73,8 +73,8 @@ def _symbol_bucket_from_cfg(cfg: Dict[str, object]) -> str:
     return "other"
 
 
-def _eligible_bots(policy: Dict[str, object], snapshots: Dict[str, object]) -> Dict[str, Dict[str, object]]:
-    out: Dict[str, Dict[str, object]] = {}
+def _eligible_bots(policy: dict[str, object], snapshots: dict[str, object]) -> dict[str, dict[str, object]]:
+    out: dict[str, dict[str, object]] = {}
     allocator_cfg = policy.get("allocator", {}) if isinstance(policy.get("allocator"), dict) else {}
     included_modes_raw = allocator_cfg.get("included_modes", ["live", "paper_only"])
     included_modes = (
@@ -118,9 +118,9 @@ def _eligible_bots(policy: Dict[str, object], snapshots: Dict[str, object]) -> D
 
 
 def _apply_diversification_variance_overrides(
-    bots: Dict[str, Dict[str, object]],
-    report: Dict[str, object],
-) -> Tuple[Dict[str, Dict[str, object]], Dict[str, object]]:
+    bots: dict[str, dict[str, object]],
+    report: dict[str, object],
+) -> tuple[dict[str, dict[str, object]], dict[str, object]]:
     updated = {bot: dict(info) for bot, info in bots.items()}
     metrics = report.get("metrics", {}) if isinstance(report.get("metrics"), dict) else {}
     inputs = report.get("inputs", {}) if isinstance(report.get("inputs"), dict) else {}
@@ -133,7 +133,7 @@ def _apply_diversification_variance_overrides(
     corr_ok = (abs(corr_float) < max_abs_allowed) if corr_available else None
 
     overrides = 0
-    for bot, info in updated.items():
+    for _bot, info in updated.items():
         bucket = str(info.get("symbol_bucket", "other"))
         if bucket == "btc" and btc_var > 0.0:
             info["variance"] = btc_var
@@ -156,10 +156,10 @@ def _apply_diversification_variance_overrides(
     }
 
 
-def _compute_inverse_variance_allocations(bots: Dict[str, Dict[str, object]]) -> Dict[str, float]:
+def _compute_inverse_variance_allocations(bots: dict[str, dict[str, object]]) -> dict[str, float]:
     if not bots:
         return {}
-    raw: Dict[str, float] = {}
+    raw: dict[str, float] = {}
     denom = 0.0
     for bot, info in bots.items():
         variance = _safe_float(info.get("variance"), 1.0)
@@ -168,11 +168,11 @@ def _compute_inverse_variance_allocations(bots: Dict[str, Dict[str, object]]) ->
         denom += w
     if denom <= 0:
         n = len(bots)
-        return {k: 1.0 / n for k in bots.keys()}
+        return {k: 1.0 / n for k in bots}
     alloc = {bot: w / denom for bot, w in raw.items()}
 
     # Respect per-bot max caps; redistribute remainder among non-capped bots.
-    capped = {bot: False for bot in alloc.keys()}
+    capped = {bot: False for bot in alloc}
     for _ in range(len(alloc) + 2):
         changed = False
         overflow = 0.0
@@ -185,7 +185,7 @@ def _compute_inverse_variance_allocations(bots: Dict[str, Dict[str, object]]) ->
                 changed = True
         if not changed or overflow <= 0:
             break
-        receivers = [b for b in alloc.keys() if not capped[b]]
+        receivers = [b for b in alloc if not capped[b]]
         if not receivers:
             break
         total_recv = sum(alloc[b] for b in receivers)
@@ -203,10 +203,10 @@ def _compute_inverse_variance_allocations(bots: Dict[str, Dict[str, object]]) ->
 
 
 def _build_proposals(
-    bots: Dict[str, Dict[str, object]], allocations: Dict[str, float]
-) -> Tuple[List[Dict[str, object]], float]:
+    bots: dict[str, dict[str, object]], allocations: dict[str, float]
+) -> tuple[list[dict[str, object]], float]:
     total_equity = sum(_safe_float(info.get("equity_quote"), 0.0) for info in bots.values())
-    proposals: List[Dict[str, object]] = []
+    proposals: list[dict[str, object]] = []
     for bot, info in sorted(bots.items()):
         alloc_pct = allocations.get(bot, 0.0)
         target_notional = alloc_pct * total_equity
@@ -227,10 +227,10 @@ def _build_proposals(
 
 
 def _compute_daily_goal_plan(
-    allocator_cfg: Dict[str, object],
-    proposals: List[Dict[str, object]],
+    allocator_cfg: dict[str, object],
+    proposals: list[dict[str, object]],
     total_equity_quote: float,
-) -> Dict[str, object]:
+) -> dict[str, object]:
     daily_cfg = allocator_cfg.get("daily_goal", {}) if isinstance(allocator_cfg, dict) else {}
     if not isinstance(daily_cfg, dict):
         daily_cfg = {}
@@ -244,7 +244,7 @@ def _compute_daily_goal_plan(
     if max_bot_target_pct < min_bot_target_pct:
         max_bot_target_pct = min_bot_target_pct
 
-    out: Dict[str, object] = {
+    out: dict[str, object] = {
         "enabled": enabled,
         "status": "disabled" if not enabled else "pass",
         "reason": "disabled",
@@ -269,7 +269,7 @@ def _compute_daily_goal_plan(
         out["reason"] = "non_positive_total_equity"
         return out
 
-    candidates: List[Dict[str, object]] = []
+    candidates: list[dict[str, object]] = []
     for row in proposals:
         equity_quote = max(0.0, _safe_float(row.get("equity_quote"), 0.0))
         if equity_quote <= 0.0:
@@ -290,7 +290,7 @@ def _compute_daily_goal_plan(
         return out
 
     use_allocation_weights = distribution != "equity_weighted"
-    weighted_candidates: List[Tuple[Dict[str, object], float]] = []
+    weighted_candidates: list[tuple[dict[str, object], float]] = []
     if use_allocation_weights:
         weighted_candidates = [
             (c, max(0.0, _safe_float(c.get("allocation_pct"), 0.0)))
@@ -323,7 +323,7 @@ def _compute_daily_goal_plan(
     out["goal_scope_equity_quote"] = goal_scope_equity_quote
     out["target_quote_total_equity"] = target_quote_total
     out["reason"] = "ok"
-    rows: List[Dict[str, object]] = []
+    rows: list[dict[str, object]] = []
     clamp_count = 0
     target_quote_distributed = 0.0
     for c, weight_raw in sorted(weighted_candidates, key=lambda x: str(x[0].get("bot", ""))):
@@ -438,8 +438,8 @@ def _daily_goal_intent_signature(
     )
 
 
-def _rebalance_signature(proposals: List[Dict[str, object]]) -> str:
-    rows: List[Tuple[str, float, float]] = []
+def _rebalance_signature(proposals: list[dict[str, object]]) -> str:
+    rows: list[tuple[str, float, float]] = []
     for row in sorted(proposals, key=lambda r: str(r.get("bot", ""))):
         bot = str(row.get("bot", ""))
         allocation_pct = _safe_float(row.get("allocation_pct"), 0.0)
@@ -448,7 +448,7 @@ def _rebalance_signature(proposals: List[Dict[str, object]]) -> str:
     return json.dumps(rows, separators=(",", ":"), ensure_ascii=True)
 
 
-def _extract_last_rebalance_state(state: Dict[str, object]) -> Optional[Tuple[float, str]]:
+def _extract_last_rebalance_state(state: dict[str, object]) -> tuple[float, str] | None:
     ts = _safe_float(state.get("last_rebalance_ts_epoch_s"), -1.0)
     signature = str(state.get("last_rebalance_signature", "")).strip()
     if ts <= 0.0 or not signature:
@@ -460,7 +460,7 @@ def _should_publish_rebalance_intents(
     *,
     now_ts: float,
     signature: str,
-    last_state: Optional[Tuple[float, str]],
+    last_state: tuple[float, str] | None,
     cooldown_hours: float,
 ) -> bool:
     if not signature:
@@ -479,7 +479,7 @@ def _should_publish_daily_goal_intent(
     *,
     now_ts: float,
     signature: str,
-    last_state: Optional[Tuple[float, str]],
+    last_state: tuple[float, str] | None,
     republish_after_s: float,
 ) -> bool:
     if last_state is None:
@@ -521,7 +521,7 @@ def run(once: bool = False) -> None:
         password=os.getenv("REDIS_PASSWORD", "") or None,
         enabled=emit_intents,
     )
-    last_daily_goal_intent_state: Dict[str, Tuple[float, str]] = {}
+    last_daily_goal_intent_state: dict[str, tuple[float, str]] = {}
 
     while True:
         policy = _load_policy(policy_path)
@@ -550,7 +550,7 @@ def run(once: bool = False) -> None:
                 _safe_float(goal_row.get("daily_pnl_target_quote"), 0.0) if isinstance(goal_row, dict) else None
             )
         status = "pass"
-        reasons: List[str] = []
+        reasons: list[str] = []
         if not allocator_enabled:
             status = "disabled"
             reasons.append("allocator_disabled_in_policy")

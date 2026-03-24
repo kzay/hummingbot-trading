@@ -55,15 +55,35 @@ hbot/
 │   ├── bot3/                         # Paper trade smoke test instance
 │   └── ml/
 │       └── models/                   # ML model artifacts (was top-level models/)
+├── platform_lib/                     # Shared infra library (no deps on controllers/services)
+│   ├── market_data/                  # Canonical state, data plane, exchange profiles
+│   ├── execution/                    # Fee adapters and providers
+│   ├── logging/                      # Structured logging config, namespaces
+│   ├── contracts/                    # Inter-service event schemas, stream names
+│   └── core/                         # Utilities (Decimal, retry, rate limiter, models)
+├── simulation/                       # Paper trading simulation engine
+│   ├── desk.py, matching_engine.py   # Core simulation
+│   ├── portfolio.py, risk_engine.py  # Portfolio and risk
+│   └── bridge/                       # HB connector adapter (hb_bridge, event fire)
+├── controllers/                       # Trading logic
+│   ├── runtime/kernel/               # Decomposed runtime kernel (controller + 7 mixins)
+│   ├── bots/                         # Strategy lanes (bot1, bot5, bot6, bot7)
+│   ├── paper_engine_v2/              # Re-export shim for simulation/ (backward compat)
+│   ├── research/                     # Research and exploration tools
+│   └── backtesting/                  # Walk-forward backtesting harness
+├── services/                         # Supporting microservices
+│   ├── common/                       # Re-export shims for platform_lib/
+│   ├── hb_bridge/                    # Shared Redis client provider
+│   └── ...                           # kill_switch, reconciliation, signal, etc.
+├── tests/                            # pytest test suite
+│   ├── architecture/                 # Contract tests (import boundaries, coverage minimums)
+│   ├── controllers/test_kernel/      # Runtime kernel unit tests
+│   ├── test_simulation/              # Simulation/bridge error path tests
+│   └── ...                           # controllers, services, scripts, integration
 ├── scripts/                          # Operational scripts
+│   ├── ops/                          # Deploy, backup, update, rollback, status
 │   ├── utils/                        # Shared utilities
 │   │   └── health_check.py           # System health checker
-│   ├── deploy.sh                     # First-time VPS setup
-│   ├── backup.sh                     # Backup bot data (writes gitignored backups/ under hbot/)
-│   ├── update.sh                     # Safe update procedure
-│   ├── rollback.sh                   # Restore from backup
-│   ├── add-bot.sh                    # Add new bot instance
-│   └── status.sh                     # Quick status check
 ├── docs/                             # Centralized documentation hub
 │   ├── architecture/                 # System and data-flow views
 │   ├── strategy/                     # EPP and ML strategy specs
@@ -107,41 +127,50 @@ Comprehensive documentation is organized under:
 | `infra/firewall-rules.sh` | Firewall / UFW helper | Yes |
 | `docs/legal/` | Third-party / license notices | Yes |
 | `data/ml/models/` | ML model artifacts for services | Partial (often gitignored) |
-| `backups/` (under `hbot/`) | Archives from `scripts/backup.sh` | No (gitignored, not shipped in repo) |
+| `backups/` (under `hbot/`) | Archives from `scripts/ops/backup.sh` | No (gitignored, not shipped in repo) |
 
 ---
 
 ## 2. Architecture Overview
 
 ```
-┌─────────────────────────────────────────────────────┐
-│                     VPS (Ubuntu)                     │
-│                                                      │
-│  ┌──────────┐  ┌──────────┐  ┌──────────┐          │
-│  │  bot1    │  │  bot2    │  │  bot3    │  ...      │
-│  │ (hbot)   │  │ (hbot)   │  │ (hbot)   │          │
-│  └────┬─────┘  └────┬─────┘  └────┬─────┘          │
-│       │              │              │                 │
-│       └──────────────┼──────────────┘                │
-│                      │ trading network               │
-│                      │                               │
-│  ┌───────────────────┼──────────────────────┐       │
-│  │           monitoring network              │       │
-│  │                                           │       │
-│  │  ┌────────────┐  ┌──────────────┐        │       │
-│  │  │ Prometheus │  │   Grafana    │        │       │
-│  │  │  :9090     │──│   :3000      │        │       │
-│  │  └─────┬──────┘  └──────────────┘        │       │
-│  │        │                                  │       │
-│  │  ┌─────┴──────┐  ┌──────────────┐        │       │
-│  │  │  cAdvisor  │  │node-exporter │        │       │
-│  │  │  :8080     │  │  :9100       │        │       │
-│  │  └────────────┘  └──────────────┘        │       │
-│  └───────────────────────────────────────────┘       │
-│                                                      │
-│  Firewall: Only port 22 exposed                     │
-│  Monitoring: SSH tunnel only                        │
-└─────────────────────────────────────────────────────┘
+┌──────────────────────────────────────────────────────────┐
+│                        VPS (Ubuntu)                       │
+│                                                           │
+│  ┌──────────┐  ┌──────────┐  ┌──────────┐               │
+│  │  bot1    │  │  bot2    │  │  bot3    │  ...           │
+│  │ (hbot)   │  │ (hbot)   │  │ (hbot)   │               │
+│  └────┬─────┘  └────┬─────┘  └────┬─────┘               │
+│       │              │              │                      │
+│       └──────────────┼──────────────┘                     │
+│                      │ trading network                    │
+│                      │                                    │
+│  ┌───────────────────┼──────────────────────────────┐    │
+│  │          default profile (always on)              │    │
+│  │                                                   │    │
+│  │  ┌────────────────┐  ┌────────────────┐          │    │
+│  │  │metrics-exporter│  │  bot-watchdog  │          │    │
+│  │  │  :9400  :9401  │  │                │          │    │
+│  │  └────────────────┘  └────────────────┘          │    │
+│  └───────────────────────────────────────────────────┘    │
+│                                                           │
+│  ┌───────────────────────────────────────────────────┐    │
+│  │      --profile monitoring  (optional)             │    │
+│  │                                                   │    │
+│  │  ┌────────────┐  ┌──────────────┐                │    │
+│  │  │ Prometheus │  │   Grafana    │                │    │
+│  │  │  :9090     │──│   :3000      │                │    │
+│  │  └─────┬──────┘  └──────────────┘                │    │
+│  │        │                                          │    │
+│  │  ┌─────┴──────┐  ┌──────────────┐                │    │
+│  │  │  cAdvisor  │  │node-exporter │                │    │
+│  │  │  :8080     │  │  :9100       │                │    │
+│  │  └────────────┘  └──────────────┘                │    │
+│  └───────────────────────────────────────────────────┘    │
+│                                                           │
+│  Firewall: Only port 22 exposed                          │
+│  Monitoring: SSH tunnel only                             │
+└──────────────────────────────────────────────────────────┘
 ```
 
 ---
@@ -166,7 +195,7 @@ git clone <your-repo-url> ~/hbot
 cd ~/hbot/hbot
 
 # Run the deployment script (as root)
-sudo bash scripts/deploy.sh
+sudo bash scripts/ops/deploy.sh
 ```
 
 This script will:
@@ -186,15 +215,40 @@ nano infra/env/.env
 
 Required changes:
 - Set `BOT1_BITGET_API_KEY`, `BOT1_BITGET_API_SECRET`, `BOT1_BITGET_PASSPHRASE`
-- Set `GF_ADMIN_PASSWORD` to a strong password
+- Set `GF_ADMIN_USER` / `GF_ADMIN_PASSWORD` for Grafana access
 - Set `BOT1_PASSWORD` to your desired Hummingbot password
 
-### 4.3 First Start
+### 4.3 Compose Profiles
+
+The stack is organized into profiles so a plain `docker compose up` only starts the essential services. Add `--profile <name>` flags to bring up optional layers:
+
+| Profile | Services added | When you need it |
+|---------|---------------|-----------------|
+| *(default)* | `bot1`, `postgres`, `metrics-exporter`, `desk-snapshot-service`, `bot-watchdog`, `ops-db-writer` | Always — core trading |
+| `external` | Redis, control-plane services (signal, risk, coordination, event-store, market-data), UI stack, `ops-scheduler` | External signal/risk pipeline, realtime UI |
+| `monitoring` | Prometheus, Grafana, Node Exporter, cAdvisor | Full monitoring stack (optional) |
+| `multi` | `bot2` | Multi-bot desk |
+| `test` | `bot3`–`bot7` | Strategy test instances |
+| `paper-exchange` | `paper-exchange-service` | Centralized paper exchange |
+| `ml` | `ml-feature-service` | ML feature pipeline |
+| `alerts` | `alertmanager`, `alert-webhook-sink` | Alert routing (Slack/Telegram) |
+
+**Important:** Redis requires `--profile external`. A plain `docker compose up` does **not** start Redis, so any service depending on Redis streams needs `--profile external` (or an external Redis).
+
+Example — start everything for full-stack paper trading:
+
+```bash
+cd infra/compose/
+docker compose --env-file ../env/.env \
+  --profile external --profile paper-exchange up -d
+```
+
+### 4.4 First Start
 
 ```bash
 cd infra/compose/
 
-# Start bot1 + monitoring stack
+# Start bot1 + core services (default profile, no monitoring)
 docker compose --env-file ../env/.env up -d
 
 # Verify everything is running
@@ -305,15 +359,18 @@ The repository is intentionally clean of custom strategy/controller code.
 
 ## 7. Monitoring & Grafana
 
+> **Note:** The full monitoring stack (Prometheus, Grafana, Node Exporter, cAdvisor) is behind the `monitoring` profile and does **not** start by default. The `metrics-exporter` service runs in the default profile and exposes bot metrics (port 9400) and control-plane metrics (port 9401) for any external scraper.
+
 ### 7.1 Stack Components
 
-| Component | Purpose | Port (localhost only) |
-|-----------|---------|----------------------|
-| Prometheus | Metrics collection & alerting | 9090 |
-| Grafana | Dashboards & visualization | 3000 |
-| Node Exporter | Host metrics (CPU, RAM, disk, net) | 9100 |
-| cAdvisor | Container metrics | 8080 |
-| Alertmanager | Alert routing (optional) | 9093 |
+| Component | Purpose | Port (localhost only) | Profile |
+|-----------|---------|----------------------|---------|
+| metrics-exporter | Bot + control-plane Prometheus metrics | 9400, 9401 | *(default)* |
+| Prometheus | Metrics collection & alerting | 9090 | `monitoring` |
+| Grafana | Dashboards & visualization | 3000 | `monitoring` |
+| Node Exporter | Host metrics (CPU, RAM, disk, net) | 9100 | `monitoring` |
+| cAdvisor | Container metrics | 8080 | `monitoring` |
+| Alertmanager | Alert routing | 9093 | `alerts` |
 
 ### 7.2 Pre-installed Dashboards
 
@@ -368,7 +425,7 @@ docker compose --env-file ../env/.env --profile alerts up -d
 
 ```bash
 # Use the helper script
-bash scripts/add-bot.sh bot3
+bash scripts/ops/add-bot.sh bot3
 ```
 
 This will:
@@ -414,7 +471,7 @@ docker compose --env-file ../env/.env ps
 #    HUMMINGBOT_IMAGE=hummingbot/hummingbot:1.29.0
 
 # 3. Run safe update
-bash scripts/update.sh
+bash scripts/ops/update.sh
 ```
 
 The update script automatically:
@@ -430,7 +487,7 @@ Before updating production bots, test with a staging bot:
 
 ```bash
 # 1. Create a staging bot
-bash scripts/add-bot.sh bot-staging
+bash scripts/ops/add-bot.sh bot-staging
 
 # 2. Add to docker-compose.yml with the NEW image version
 #    image: hummingbot/hummingbot:1.29.0  # instead of ${HUMMINGBOT_IMAGE}
@@ -487,10 +544,10 @@ image: gcr.io/cadvisor/cadvisor:v0.49.1  # PINNED
 
 ```bash
 # Backup all bots
-bash scripts/backup.sh
+bash scripts/ops/backup.sh
 
 # Backup specific bot
-bash scripts/backup.sh bot1
+bash scripts/ops/backup.sh bot1
 ```
 
 ### 10.2 Automated Backups (cron)
@@ -500,7 +557,7 @@ bash scripts/backup.sh bot1
 crontab -e
 
 # Add this line:
-0 4 * * * /home/user/hbot/hbot/scripts/backup.sh >> /var/log/kzay-capital-backup.log 2>&1
+0 4 * * * /home/user/hbot/hbot/scripts/ops/backup.sh >> /var/log/kzay-capital-backup.log 2>&1
 ```
 
 ### 10.3 What Gets Backed Up
@@ -518,10 +575,10 @@ crontab -e
 
 ```bash
 # Rollback bot1 to latest backup
-bash scripts/rollback.sh bot1
+bash scripts/ops/rollback.sh bot1
 
 # Rollback to specific backup
-bash scripts/rollback.sh bot1 bot1_20240115_040000.tar.gz
+bash scripts/ops/rollback.sh bot1 bot1_20240115_040000.tar.gz
 
 # List available backups
 ls -lh backups/
@@ -618,7 +675,7 @@ sudo dpkg-reconfigure -plow unattended-upgrades
 
 ```bash
 # Quick status check
-bash scripts/status.sh
+bash scripts/ops/status.sh
 
 # Check Grafana dashboards via SSH tunnel
 # Look for:
@@ -754,8 +811,11 @@ ls -lt backups/bot1_*.tar.gz
 # ---- Lifecycle ----
 cd hbot/infra/compose
 
-# Start (bot1 + monitoring)
+# Start (bot1 + core services)
 docker compose --env-file ../env/.env up -d
+
+# Start with full monitoring stack
+docker compose --env-file ../env/.env --profile monitoring up -d
 
 # Start (all bots including bot2)
 docker compose --env-file ../env/.env --profile multi up -d
@@ -777,19 +837,19 @@ docker compose --env-file ../env/.env logs --tail 100 bot1
 
 # ---- Operations ----
 # Status check
-bash scripts/status.sh
+bash scripts/ops/status.sh
 
 # Backup
-bash scripts/backup.sh
+bash scripts/ops/backup.sh
 
 # Update
-bash scripts/update.sh
+bash scripts/ops/update.sh
 
 # Rollback
-bash scripts/rollback.sh bot1
+bash scripts/ops/rollback.sh bot1
 
 # Add new bot
-bash scripts/add-bot.sh bot3
+bash scripts/ops/add-bot.sh bot3
 
 # ---- Monitoring Access (from local machine) ----
 ssh -L 3000:127.0.0.1:3000 -L 9090:127.0.0.1:9090 user@vps-ip
@@ -1115,10 +1175,10 @@ Private infrastructure project. Not for redistribution.
 
 ## 15. Trading Desk Dashboards
 
-The monitoring stack now includes a bot KPI exporter plus centralized logs:
+The monitoring stack now includes a unified metrics exporter plus centralized logs:
 
-- Bot KPI exporter: `services/bot_metrics_exporter.py`
-- Prometheus scrape job: `bot-metrics`
+- Unified metrics exporter: `services/metrics_exporter/main.py` (bot on :9400, control-plane on :9401)
+- Prometheus scrape jobs: `bot-metrics` (:9400), `control-plane-metrics` (:9401)
 - Loki + Promtail for log aggregation in Grafana
 - Dashboards:
   - `infra/monitoring/grafana/dashboards/trading_overview.json`
@@ -1128,7 +1188,7 @@ The monitoring stack now includes a bot KPI exporter plus centralized logs:
 
 ```bash
 cd hbot/infra/compose
-docker compose --env-file ../env/.env up -d prometheus grafana node-exporter cadvisor bot-metrics-exporter loki promtail
+docker compose --env-file ../env/.env --profile monitoring up -d
 ```
 
 ### 15.2 Verify Targets

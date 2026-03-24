@@ -9,12 +9,11 @@ from __future__ import annotations
 
 import json
 import logging
-from dataclasses import dataclass
 from decimal import Decimal
 from pathlib import Path
-from typing import Dict, Optional, Protocol
+from typing import Protocol
 
-from controllers.paper_engine_v2.types import InstrumentSpec
+from simulation.types import InstrumentSpec
 
 logger = logging.getLogger(__name__)
 
@@ -47,7 +46,7 @@ class MakerTakerFeeModel:
         return max(_ZERO, notional * rate)
 
     @classmethod
-    def from_spec(cls, spec: InstrumentSpec) -> "MakerTakerFeeModel":
+    def from_spec(cls, spec: InstrumentSpec) -> MakerTakerFeeModel:
         return cls(maker_rate=spec.maker_fee_rate, taker_rate=spec.taker_fee_rate)
 
 
@@ -55,10 +54,12 @@ class MakerTakerFeeModel:
 # TieredFeeModel
 # ---------------------------------------------------------------------------
 
-_PROFILES_CACHE: Optional[Dict] = None
+# CONCURRENCY: write-once cache; populated on first call from main thread.
+# Subsequent reads are safe from any thread (dict reference is replaced atomically).
+_PROFILES_CACHE: dict | None = None
 
 
-def _load_fee_profiles(profiles_path: str) -> Dict:
+def _load_fee_profiles(profiles_path: str) -> dict:
     global _PROFILES_CACHE
     if _PROFILES_CACHE is not None:
         return _PROFILES_CACHE
@@ -86,7 +87,7 @@ class TieredFeeModel:
         profiles_path: str = "config/fee_profiles.json",
     ):
         data = _load_fee_profiles(profiles_path)
-        rates: Dict = {}
+        rates: dict = {}
         try:
             rates = data["profiles"][profile][venue]
         except (KeyError, TypeError):

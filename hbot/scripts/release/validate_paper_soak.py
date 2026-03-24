@@ -19,24 +19,22 @@ from __future__ import annotations
 
 import argparse
 import csv
-import json
 import sys
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
-from typing import Dict, List, Optional
 
 _SCRIPT_DIR = Path(__file__).resolve().parent
 _PROJECT_ROOT = _SCRIPT_DIR.parents[1]
 sys.path.insert(0, str(_PROJECT_ROOT))
 
-from services.common.utils import safe_float, utc_now, write_json
+from platform_lib.core.utils import safe_float, utc_now, write_json
 
 
-def _read_minute_rows(path: Path, window_hours: float) -> List[Dict[str, str]]:
+def _read_minute_rows(path: Path, window_hours: float) -> list[dict[str, str]]:
     if not path.exists():
         return []
-    cutoff_ts = datetime.now(timezone.utc).timestamp() - window_hours * 3600
-    rows: List[Dict[str, str]] = []
+    cutoff_ts = datetime.now(UTC).timestamp() - window_hours * 3600
+    rows: list[dict[str, str]] = []
     try:
         with path.open("r", encoding="utf-8", newline="") as f:
             reader = csv.DictReader(f)
@@ -55,11 +53,11 @@ def _read_minute_rows(path: Path, window_hours: float) -> List[Dict[str, str]]:
     return rows
 
 
-def _read_fills_rows(path: Path, window_hours: float) -> List[Dict[str, str]]:
+def _read_fills_rows(path: Path, window_hours: float) -> list[dict[str, str]]:
     if not path.exists():
         return []
-    cutoff_ts = datetime.now(timezone.utc).timestamp() - window_hours * 3600
-    rows: List[Dict[str, str]] = []
+    cutoff_ts = datetime.now(UTC).timestamp() - window_hours * 3600
+    rows: list[dict[str, str]] = []
     try:
         with path.open("r", encoding="utf-8", newline="") as f:
             reader = csv.DictReader(f)
@@ -79,10 +77,10 @@ def _read_fills_rows(path: Path, window_hours: float) -> List[Dict[str, str]]:
 
 
 def validate(
-    rows: List[Dict[str, str]],
-    fills_rows: Optional[List[Dict[str, str]]] = None,
+    rows: list[dict[str, str]],
+    fills_rows: list[dict[str, str]] | None = None,
     cancel_budget_per_min: int = 50,
-) -> Dict[str, object]:
+) -> dict[str, object]:
     """Evaluate all 7 KPIs against the rows and return per-KPI results."""
     if not rows:
         return {
@@ -193,7 +191,7 @@ def main() -> None:
 
     out_dir = _PROJECT_ROOT / "reports" / "paper_soak"
     out_dir.mkdir(parents=True, exist_ok=True)
-    stamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
+    stamp = datetime.now(UTC).strftime("%Y%m%dT%H%M%SZ")
     out_path = out_dir / f"paper_soak_{stamp}.json"
     write_json(out_path, result)
     write_json(out_dir / "latest.json", result)

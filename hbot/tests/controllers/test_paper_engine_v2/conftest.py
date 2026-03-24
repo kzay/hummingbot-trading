@@ -1,14 +1,20 @@
 """Shared fixtures for Paper Engine v2 tests."""
 import time
 from decimal import Decimal
+
 import pytest
 
-from controllers.paper_engine_v2.types import (
-    BookLevel, InstrumentId, InstrumentSpec, OrderBookSnapshot,
-    OrderSide, PaperOrder, PaperOrderType, OrderStatus, _ZERO,
+from simulation.data_feeds import StaticDataFeed
+from simulation.types import (
+    BookLevel,
+    InstrumentId,
+    InstrumentSpec,
+    OrderBookSnapshot,
+    OrderSide,
+    OrderStatus,
+    PaperOrder,
+    PaperOrderType,
 )
-from controllers.paper_engine_v2.data_feeds import StaticDataFeed
-
 
 BTC_SPOT = InstrumentId(venue="bitget", trading_pair="BTC-USDT", instrument_type="spot")
 BTC_PERP = InstrumentId(venue="bitget", trading_pair="BTC-USDT", instrument_type="perp")

@@ -1,7 +1,7 @@
 import time
 
-from services.contracts.event_schemas import ExecutionIntentEvent
-from services.contracts.stream_names import EXECUTION_INTENT_STREAM
+from platform_lib.contracts.event_schemas import ExecutionIntentEvent
+from platform_lib.contracts.stream_names import EXECUTION_INTENT_STREAM
 from services.hb_bridge.intent_consumer import HBIntentConsumer
 
 

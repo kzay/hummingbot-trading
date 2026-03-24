@@ -1,63 +1,77 @@
 {
-  "status": "warning",
-  "ts_utc": "2026-03-10T00:33:28.377925+00:00",
+  "status": "pass",
+  "ts_utc": "2026-03-11T00:12:26.666326+00:00",
   "checks": [
+    {
+      "name": "controller_source_fresh",
+      "pass": true,
+      "reason": "path=F:\\Environement\\git-repo\\hummingbot_custo\\hbot\\data\\bot3\\logs\\epp_v24\\bot3_a\\minute.csv age_min=0.342 max=20.000"
+    },
+    {
+      "name": "event_store_source_fresh",
+      "pass": true,
+      "reason": "path=F:\\Environement\\git-repo\\hummingbot_custo\\hbot\\reports\\event_store\\integrity_20260310.json age_min=0.001 max=20.000"
+    },
     {
       "name": "controller_tick_p95_budget",
       "pass": true,
-      "reason": "samples=18643 p95_ms=117.331 max=250.000"
+      "reason": "samples=27809 p95_ms=109.937 max=250.000"
     },
     {
       "name": "exporter_render_p95_budget",
       "pass": true,
-      "reason": "samples=5 p95_ms=91.808 max=500.000"
+      "reason": "samples=5 p95_ms=104.869 max=500.000"
     },
     {
       "name": "event_store_ingest_p95_budget",
-      "pass": false,
-      "reason": "samples=0 p95_ms=0.000 max=250.000"
+      "pass": true,
+      "reason": "samples=50 p95_ms=15.788 max=250.000"
     }
   ],
   "controller_tick_ms": {
-    "samples": 18643.0,
-    "p50_ms": 29.51626101275906,
-    "p95_ms": 117.331159004243,
-    "p99_ms": 312.3926749743986,
-    "max_ms": 7732.000135001726
+    "samples": 27809.0,
+    "p50_ms": 24.52363300108118,
+    "p95_ms": 109.93702639825638,
+    "p99_ms": 311.3192680736389,
+    "max_ms": 14794.473740999932
   },
   "indicator_ms": {
-    "samples": 18643.0,
-    "p50_ms": 0.22914601140655577,
-    "p95_ms": 32.72901670425199,
-    "p99_ms": 79.20188826334197,
-    "max_ms": 508.5343850078061
+    "samples": 27809.0,
+    "p50_ms": 0.23524000062025152,
+    "p95_ms": 29.929002201242838,
+    "p99_ms": 77.96173601935143,
+    "max_ms": 7778.312498999981
   },
   "connector_io_ms": {
-    "samples": 18643.0,
-    "p50_ms": 26.77766198758036,
-    "p95_ms": 105.43243650463393,
-    "p99_ms": 196.0491140041266,
-    "max_ms": 3711.3518430269323
+    "samples": 27809.0,
+    "p50_ms": 21.62559499265626,
+    "p95_ms": 99.18345417827362,
+    "p99_ms": 186.2018495553637,
+    "max_ms": 7784.200161999934
   },
   "exporter_render_ms": {
     "samples": 5.0,
-    "p50_ms": 88.2189999999996,
-    "p95_ms": 91.8077000000002,
-    "p99_ms": 92.50346000000032,
-    "max_ms": 92.67740000000035
+    "p50_ms": 95.42129999999993,
+    "p95_ms": 104.8690999999998,
+    "p99_ms": 105.9681399999998,
+    "max_ms": 106.2428999999998
   },
   "event_store_ingest_ms": {
-    "samples": 0.0,
-    "p50_ms": 0.0,
-    "p95_ms": 0.0,
-    "p99_ms": 0.0,
-    "max_ms": 0.0
+    "samples": 50.0,
+    "p50_ms": 6.4315,
+    "p95_ms": 15.788,
+    "p99_ms": 28.120759999999986,
+    "max_ms": 31.539
   },
+  "hot_path_metrics_ms": {},
   "diagnostics": {
-    "missing_families": [
-      "event_store_ingest"
-    ],
-    "event_store_stats_path": "F:\\Environement\\git-repo\\hummingbot_custo\\hbot\\reports\\event_store\\integrity_20260308.json",
+    "missing_families": [],
+    "stale_sources": [],
+    "max_source_age_min": 20.0,
+    "controller_source_path": "F:\\Environement\\git-repo\\hummingbot_custo\\hbot\\data\\bot3\\logs\\epp_v24\\bot3_a\\minute.csv",
+    "controller_source_age_min": 0.342,
+    "event_store_stats_path": "F:\\Environement\\git-repo\\hummingbot_custo\\hbot\\reports\\event_store\\integrity_20260310.json",
+    "event_store_stats_age_min": 0.001,
     "exporter_render_samples_requested": 5
   }
 }

@@ -3,13 +3,12 @@ from __future__ import annotations
 import argparse
 import csv
 import json
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
-from typing import Dict, List
 
 
 def _utc_now() -> str:
-    return datetime.now(timezone.utc).isoformat()
+    return datetime.now(UTC).isoformat()
 
 
 def _to_float(value: str, default: float = 0.0) -> float:
@@ -30,11 +29,11 @@ def _parse_iso_ts(value: str) -> datetime | None:
     except Exception:
         return None
     if parsed.tzinfo is None:
-        parsed = parsed.replace(tzinfo=timezone.utc)
-    return parsed.astimezone(timezone.utc)
+        parsed = parsed.replace(tzinfo=UTC)
+    return parsed.astimezone(UTC)
 
 
-def _row_timestamp(row: Dict[str, str], fieldnames: List[str]) -> datetime | None:
+def _row_timestamp(row: dict[str, str], fieldnames: list[str]) -> datetime | None:
     candidates = ["ts", "timestamp", "ts_utc", "timestamp_utc", "time", "datetime"]
     for key in candidates:
         if key in row:
@@ -71,8 +70,8 @@ def main() -> int:
         print(f"[notrade-validate] missing_file={minute_path}")
         return 2
 
-    rows: List[Dict[str, str]] = []
-    fieldnames: List[str] = []
+    rows: list[dict[str, str]] = []
+    fieldnames: list[str] = []
     with minute_path.open("r", encoding="utf-8") as f:
         reader = csv.DictReader(f)
         fieldnames = [name for name in (reader.fieldnames or []) if name]
@@ -92,8 +91,8 @@ def main() -> int:
         ]
 
     if int(args.since_minutes) > 0:
-        cutoff = datetime.now(timezone.utc).timestamp() - int(args.since_minutes) * 60
-        filtered_rows: List[Dict[str, str]] = []
+        cutoff = datetime.now(UTC).timestamp() - int(args.since_minutes) * 60
+        filtered_rows: list[dict[str, str]] = []
         for row in rows:
             row_ts = _row_timestamp(row, fieldnames=fieldnames)
             if row_ts is not None and row_ts.timestamp() >= cutoff:
@@ -139,7 +138,7 @@ def main() -> int:
 
     out_dir = Path("reports/notrade_validation")
     out_dir.mkdir(parents=True, exist_ok=True)
-    stamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
+    stamp = datetime.now(UTC).strftime("%Y%m%dT%H%M%SZ")
     out = out_dir / f"notrade_validation_{stamp}.json"
     out.write_text(json.dumps(payload, indent=2), encoding="utf-8")
     (out_dir / "latest.json").write_text(json.dumps(payload, indent=2), encoding="utf-8")

@@ -1,5 +1,12 @@
-import { useMemo } from "react";
-import { flexRender, getCoreRowModel, useReactTable, type ColumnDef } from "@tanstack/react-table";
+import { memo, useMemo, useState } from "react";
+import {
+  flexRender,
+  getCoreRowModel,
+  getSortedRowModel,
+  useReactTable,
+  type ColumnDef,
+  type SortingState,
+} from "@tanstack/react-table";
 import { useShallow } from "zustand/react/shallow";
 
 import { useDashboardStore } from "../store/useDashboardStore";
@@ -8,7 +15,8 @@ import { formatNumber } from "../utils/format";
 import { sideTone } from "../utils/presentation";
 import { Panel } from "./Panel";
 
-export function OrdersPanel() {
+export const OrdersPanel = memo(function OrdersPanel() {
+  const awaitingData = useDashboardStore((s) => s.connection.lastMessageTsMs === 0 && s.source === "");
   const { orderFilter, orders } = useDashboardStore(
     useShallow((state) => ({
       orderFilter: state.settings.orderFilter,
@@ -16,6 +24,7 @@ export function OrdersPanel() {
     })),
   );
   const updateSettings = useDashboardStore((state) => state.updateSettings);
+  const [sorting, setSorting] = useState<SortingState>([]);
 
   const filteredOrders = useMemo(() => {
     const query = orderFilter.trim().toLowerCase();
@@ -39,13 +48,23 @@ export function OrdersPanel() {
     );
   }, [orderFilter, orders]);
 
+  const estimatedCount = useMemo(() => orders.filter((o) => o.is_estimated).length, [orders]);
+  const liveCount = orders.length - estimatedCount;
+
   const columns = useMemo<ColumnDef<UiOrder>[]>(
     () => [
       {
         accessorFn: (row) => row.order_id || row.client_order_id || "",
         id: "order_id",
-        header: "Order ID",
-        cell: ({ row }) => <span className="mono">{String(row.getValue("order_id"))}</span>,
+        header: "ID",
+        cell: ({ row }) => {
+          const fullId = String(row.getValue("order_id"));
+          return (
+            <span className="order-id-cell" title={fullId}>
+              {fullId.length > 10 ? fullId.slice(0, 8) + "…" : fullId}
+            </span>
+          );
+        },
       },
       {
         accessorKey: "side",
@@ -58,31 +77,55 @@ export function OrdersPanel() {
       {
         accessorKey: "price",
         header: "Price",
-        cell: ({ row }) => formatNumber(row.getValue("price"), 4),
+        cell: ({ row }) => {
+          const estimated = row.original.is_estimated;
+          const value = formatNumber(row.getValue("price"), 2);
+          return estimated ? <span title="Estimated from book">~{value}</span> : value;
+        },
       },
       {
-        accessorFn: (row) => row.amount ?? row.quantity ?? row.amount_base ?? 0,
+        accessorFn: (row) => row.amount ?? row.quantity ?? row.amount_base ?? null,
         id: "amount",
-        header: "Amount",
-        cell: ({ row }) => formatNumber(row.getValue("amount"), 6),
+        header: "Qty",
+        cell: ({ row }) => {
+          const val = row.getValue("amount");
+          return val === null || val === undefined ? "—" : formatNumber(val, 6);
+        },
       },
       {
         accessorKey: "state",
         header: "State",
-        cell: ({ row }) => String(row.getValue("state") ?? "n/a"),
+        cell: ({ row }) => {
+          const state = String(row.getValue("state") ?? "n/a");
+          const estimated = row.original.is_estimated;
+          if (estimated) {
+            return <span className="pill warn" title={`Source: ${row.original.estimate_source || "runtime"}`}>est</span>;
+          }
+          return state;
+        },
       },
     ],
     [],
   );
 
+  const tableData = useMemo(() => filteredOrders.slice(0, 100), [filteredOrders]);
+
   const table = useReactTable({
-    data: filteredOrders.slice(0, 100),
+    data: tableData,
     columns,
+    state: { sorting },
+    onSortingChange: setSorting,
     getCoreRowModel: getCoreRowModel(),
+    getSortedRowModel: getSortedRowModel(),
   });
 
   return (
-    <Panel title="Open Orders" subtitle="Realtime working orders with dedicated order filtering." className="panel-span-6">
+    <Panel
+      title={<>Orders<span className="panel-count">({liveCount}{estimatedCount > 0 ? <span title="Estimated placeholder orders"> +{estimatedCount} est</span> : null})</span></>}
+      className="panel-span-4"
+      loading={awaitingData}
+      freshnessTsMs={undefined}
+    >
       <div className="panel-toolbar">
         <label>
           Filter
@@ -94,17 +137,22 @@ export function OrdersPanel() {
           />
         </label>
       </div>
-      <div className="panel-meta-row">
-        <span className="meta-pill">Shown {filteredOrders.length}</span>
-        <span className="meta-pill">Total {orders.length}</span>
-      </div>
       <div className="table-wrap">
-        <table>
+        <table role="table">
           <thead>
             {table.getHeaderGroups().map((headerGroup) => (
               <tr key={headerGroup.id}>
                 {headerGroup.headers.map((header) => (
-                  <th key={header.id}>{header.isPlaceholder ? null : flexRender(header.column.columnDef.header, header.getContext())}</th>
+                  <th
+                    scope="col"
+                    key={header.id}
+                    className={header.column.getCanSort() ? "sortable-header" : ""}
+                    onClick={header.column.getToggleSortingHandler()}
+                  >
+                    {header.isPlaceholder ? null : flexRender(header.column.columnDef.header, header.getContext())}
+                    {header.column.getIsSorted() === "asc" ? <span className="sort-indicator">▲</span> : null}
+                    {header.column.getIsSorted() === "desc" ? <span className="sort-indicator">▼</span> : null}
+                  </th>
                 ))}
               </tr>
             ))}
@@ -112,11 +160,11 @@ export function OrdersPanel() {
           <tbody>
             {table.getRowModel().rows.length === 0 ? (
               <tr>
-                <td colSpan={5}>No orders match the current filter.</td>
+                <td colSpan={5} className="empty-state-cell">No orders</td>
               </tr>
             ) : (
               table.getRowModel().rows.map((row) => (
-                <tr key={row.id}>
+                <tr key={row.id} className={row.original.is_estimated ? "row-estimated" : ""}>
                   {row.getVisibleCells().map((cell) => (
                     <td key={cell.id}>{flexRender(cell.column.columnDef.cell, cell.getContext())}</td>
                   ))}
@@ -128,4 +176,4 @@ export function OrdersPanel() {
       </div>
     </Panel>
   );
-}
+});

@@ -4,16 +4,15 @@ from __future__ import annotations
 import argparse
 import json
 import os
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
-from typing import Dict, Optional
 
 
 def _utc_now() -> str:
-    return datetime.now(timezone.utc).isoformat()
+    return datetime.now(UTC).isoformat()
 
 
-def _parse_ts(value: str) -> Optional[datetime]:
+def _parse_ts(value: str) -> datetime | None:
     text = str(value or "").strip()
     if not text:
         return None
@@ -25,7 +24,7 @@ def _parse_ts(value: str) -> Optional[datetime]:
         return None
 
 
-def _read_json(path: Path) -> Dict[str, object]:
+def _read_json(path: Path) -> dict[str, object]:
     if not path.exists():
         return {}
     try:
@@ -35,7 +34,7 @@ def _read_json(path: Path) -> Dict[str, object]:
         return {}
 
 
-def _to_float(value: object) -> Optional[float]:
+def _to_float(value: object) -> float | None:
     try:
         if value is None:
             return None
@@ -52,7 +51,7 @@ def _resolve_path(path_value: str, default_rel: str, root: Path) -> Path:
     return path
 
 
-def _metric(metrics: Dict[str, object], name: str) -> Optional[float]:
+def _metric(metrics: dict[str, object], name: str) -> float | None:
     return _to_float(metrics.get(name))
 
 
@@ -63,12 +62,12 @@ def _relative_regression_pct(current: float, baseline: float) -> float:
 
 
 def _waiver_info(
-    waiver_payload: Dict[str, object],
+    waiver_payload: dict[str, object],
     *,
-    now_ts: Optional[float],
+    now_ts: float | None,
     max_waiver_hours: float,
-) -> Dict[str, object]:
-    now_ts = float(now_ts if now_ts is not None else datetime.now(timezone.utc).timestamp())
+) -> dict[str, object]:
+    now_ts = float(now_ts if now_ts is not None else datetime.now(UTC).timestamp())
     if not waiver_payload:
         return {
             "present": False,
@@ -133,17 +132,17 @@ def _waiver_info(
 def build_report(
     root: Path,
     *,
-    now_ts: Optional[float] = None,
-    current_report_path: Optional[Path] = None,
-    baseline_report_path: Optional[Path] = None,
-    waiver_path: Optional[Path] = None,
+    now_ts: float | None = None,
+    current_report_path: Path | None = None,
+    baseline_report_path: Path | None = None,
+    waiver_path: Path | None = None,
     max_latency_regression_pct: float = 20.0,
     max_backlog_regression_pct: float = 25.0,
     min_throughput_ratio: float = 0.85,
     max_restart_regression: float = 0.0,
     max_waiver_hours: float = 24.0,
-) -> Dict[str, object]:
-    now_ts = float(now_ts if now_ts is not None else datetime.now(timezone.utc).timestamp())
+) -> dict[str, object]:
+    now_ts = float(now_ts if now_ts is not None else datetime.now(UTC).timestamp())
     current_path = current_report_path or (root / "reports" / "verification" / "paper_exchange_load_latest.json")
     baseline_path = baseline_report_path or (root / "reports" / "verification" / "paper_exchange_load_baseline_latest.json")
     resolved_waiver_path = waiver_path or (root / "reports" / "verification" / "paper_exchange_perf_regression_waiver_latest.json")
@@ -298,7 +297,7 @@ def run_check(
 
     out_dir = root / "reports" / "verification"
     out_dir.mkdir(parents=True, exist_ok=True)
-    stamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
+    stamp = datetime.now(UTC).strftime("%Y%m%dT%H%M%SZ")
     out_path = out_dir / f"paper_exchange_perf_regression_{stamp}.json"
     latest_path = out_dir / "paper_exchange_perf_regression_latest.json"
     out_path.write_text(json.dumps(report, indent=2), encoding="utf-8")

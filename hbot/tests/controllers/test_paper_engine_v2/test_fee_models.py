@@ -1,9 +1,11 @@
 """Tests for paper_engine_v2 fee models."""
 from decimal import Decimal
-import pytest
+from pathlib import Path
 
-from controllers.paper_engine_v2.fee_models import (
-    FixedFeeModel, MakerTakerFeeModel, TieredFeeModel,
+from simulation.fee_models import (
+    FixedFeeModel,
+    MakerTakerFeeModel,
+    TieredFeeModel,
 )
 from tests.controllers.test_paper_engine_v2.conftest import BTC_SPOT, make_spec
 
@@ -32,10 +34,11 @@ class TestMakerTakerFeeModel:
 
 class TestTieredFeeModel:
     def test_loads_from_fee_profiles(self):
+        profiles = Path(__file__).resolve().parent.parent.parent.parent / "config" / "fee_profiles.json"
         model = TieredFeeModel(
             venue="bitget_perpetual",
             profile="vip0",
-            profiles_path="config/fee_profiles.json",
+            profiles_path=str(profiles),
         )
         # Bitget perp vip0: maker=0.0002, taker=0.0006
         fee_maker = model.compute(Decimal("10000"), is_maker=True)

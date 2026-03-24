@@ -12,6 +12,7 @@ export interface LiveAccountMetrics {
   equityOpenQuote: number | null;
   equityPeakQuote: number | null;
   totalPnl: number | null;
+  totalPnlSource: "components" | "equity_delta" | null;
   deltaVsOpenQuote: number | null;
   deltaVsPeakQuote: number | null;
   returnVsOpen: number | null;
@@ -31,14 +32,19 @@ export interface DepthStats {
 export function depthMid(depth: UiDepth): number | null {
   const bestBid = toNum(depth.best_bid ?? depth.bids?.[0]?.price);
   const bestAsk = toNum(depth.best_ask ?? depth.asks?.[0]?.price);
-  if (bestBid !== null && bestAsk !== null) {
+  if (bestBid !== null && bestBid > 0 && bestAsk !== null && bestAsk > 0) {
     return (bestBid + bestAsk) / 2;
   }
-  return bestBid ?? bestAsk ?? null;
+  if (bestBid !== null && bestBid > 0) return bestBid;
+  if (bestAsk !== null && bestAsk > 0) return bestAsk;
+  return null;
 }
 
 export function currentMarkPrice(market: UiMarket, depth: UiDepth, latestMid: number | null): number | null {
-  return toNum(market.mid_price) ?? latestMid ?? depthMid(depth);
+  const mid = toNum(market.mid_price);
+  if (mid !== null && mid > 0) return mid;
+  if (latestMid !== null && latestMid > 0) return latestMid;
+  return depthMid(depth);
 }
 
 export function getLiveAccountMetrics(
@@ -76,12 +82,16 @@ export function getLiveAccountMetrics(
     equityQuote = quoteBalance + unrealizedPnl;
   }
 
-  const totalPnl =
-    realizedPnl !== null || unrealizedPnl !== null ? Number(realizedPnl || 0) + Number(unrealizedPnl || 0) : null;
   const deltaVsOpenQuote = equityQuote !== null && equityOpenQuote !== null ? equityQuote - equityOpenQuote : null;
   const deltaVsPeakQuote = equityQuote !== null && equityPeakQuote !== null ? equityQuote - equityPeakQuote : null;
   const returnVsOpen =
     deltaVsOpenQuote !== null && equityOpenQuote !== null && equityOpenQuote !== 0 ? deltaVsOpenQuote / equityOpenQuote : null;
+  const hasPnlComponents = realizedPnl !== null || unrealizedPnl !== null;
+  const totalPnl =
+    hasPnlComponents
+      ? Number(realizedPnl || 0) + Number(unrealizedPnl || 0)
+      : deltaVsOpenQuote;
+  const totalPnlSource = hasPnlComponents ? "components" : deltaVsOpenQuote !== null ? "equity_delta" : null;
 
   return {
     mark,
@@ -94,6 +104,7 @@ export function getLiveAccountMetrics(
     equityOpenQuote,
     equityPeakQuote,
     totalPnl,
+    totalPnlSource,
     deltaVsOpenQuote,
     deltaVsPeakQuote,
     returnVsOpen,

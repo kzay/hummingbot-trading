@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from scripts.utils.event_store_count_check import STREAMS, _group_lag_from_xinfo_groups
-from services.contracts.stream_names import MARKET_DEPTH_STREAM, MARKET_QUOTE_STREAM
+from platform_lib.contracts.stream_names import MARKET_DEPTH_STREAM, MARKET_QUOTE_STREAM
 
 
 def test_event_store_count_check_includes_high_volume_market_streams() -> None:

@@ -7,9 +7,8 @@ import json
 import math
 import os
 from collections import defaultdict
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
-from typing import Dict, List, Optional, Tuple
 
 try:
     import psycopg
@@ -17,7 +16,7 @@ except Exception:  # pragma: no cover - optional in lightweight environments.
     psycopg = None  # type: ignore[assignment]
 
 
-def _parse_ts(value: str) -> Optional[datetime]:
+def _parse_ts(value: str) -> datetime | None:
     s = (value or "").strip()
     if not s:
         return None
@@ -36,7 +35,7 @@ def _safe_float(v: object, d: float = 0.0) -> float:
         return d
 
 
-def _iter_csv(path: Path) -> List[Dict[str, str]]:
+def _iter_csv(path: Path) -> list[dict[str, str]]:
     if not path.exists():
         return []
     with path.open("r", newline="", encoding="utf-8") as f:
@@ -52,7 +51,7 @@ def _env_bool(name: str, default: bool) -> bool:
     return default
 
 
-def _infer_bot_variant(bot_log_root: Path) -> Tuple[Optional[str], Optional[str]]:
+def _infer_bot_variant(bot_log_root: Path) -> tuple[str | None, str | None]:
     # Expected layout: data/<bot>/logs/epp_v24/<variant_folder>
     try:
         return str(bot_log_root.parts[-5]).lower(), str(bot_log_root.parts[-1]).lower()
@@ -72,15 +71,15 @@ def _connect_ops_db():
     )
 
 
-def _fetch_rows_from_db(bot_log_root: Path) -> Tuple[List[Dict[str, str]], List[Dict[str, str]]]:
+def _fetch_rows_from_db(bot_log_root: Path) -> tuple[list[dict[str, str]], list[dict[str, str]]]:
     bot, variant = _infer_bot_variant(bot_log_root)
     if not bot or not variant:
         raise RuntimeError("cannot_infer_bot_variant_from_path")
 
     conn = _connect_ops_db()
     try:
-        fills_rows: List[Dict[str, str]] = []
-        minute_rows: List[Dict[str, str]] = []
+        fills_rows: list[dict[str, str]] = []
+        minute_rows: list[dict[str, str]] = []
         with conn.cursor() as cur:
             cur.execute(
                 """
@@ -93,11 +92,11 @@ def _fetch_rows_from_db(bot_log_root: Path) -> Tuple[List[Dict[str, str]], List[
             )
             fill_cols = [str(desc[0]) for desc in (cur.description or [])]
             for rec in cur.fetchall() or []:
-                row = dict(zip(fill_cols, rec))
+                row = dict(zip(fill_cols, rec, strict=True))
                 ts_utc = row.get("ts_utc")
                 fills_rows.append(
                     {
-                        "ts": ts_utc.astimezone(timezone.utc).isoformat() if hasattr(ts_utc, "astimezone") else str(ts_utc or ""),
+                        "ts": ts_utc.astimezone(UTC).isoformat() if hasattr(ts_utc, "astimezone") else str(ts_utc or ""),
                         "side": str(row.get("side") or ""),
                         "price": str(row.get("price") or ""),
                         "mid_ref": str(row.get("mid_ref") or ""),
@@ -119,11 +118,11 @@ def _fetch_rows_from_db(bot_log_root: Path) -> Tuple[List[Dict[str, str]], List[
             )
             minute_cols = [str(desc[0]) for desc in (cur.description or [])]
             for rec in cur.fetchall() or []:
-                row = dict(zip(minute_cols, rec))
+                row = dict(zip(minute_cols, rec, strict=True))
                 ts_utc = row.get("ts_utc")
                 minute_rows.append(
                     {
-                        "ts": ts_utc.astimezone(timezone.utc).isoformat() if hasattr(ts_utc, "astimezone") else str(ts_utc or ""),
+                        "ts": ts_utc.astimezone(UTC).isoformat() if hasattr(ts_utc, "astimezone") else str(ts_utc or ""),
                         "state": str(row.get("state") or ""),
                         "drawdown_pct": str(row.get("drawdown_pct") or ""),
                         "soft_pause_edge": str(row.get("soft_pause_edge") or ""),
@@ -135,7 +134,7 @@ def _fetch_rows_from_db(bot_log_root: Path) -> Tuple[List[Dict[str, str]], List[
         conn.close()
 
 
-def _load_rows_with_fallback(bot_log_root: Path) -> Tuple[List[Dict[str, str]], List[Dict[str, str]], str, Optional[str]]:
+def _load_rows_with_fallback(bot_log_root: Path) -> tuple[list[dict[str, str]], list[dict[str, str]], str, str | None]:
     if _env_bool("OPS_DB_READ_PREFERRED", False):
         try:
             fills, minute = _fetch_rows_from_db(bot_log_root)
@@ -150,7 +149,7 @@ def _load_rows_with_fallback(bot_log_root: Path) -> Tuple[List[Dict[str, str]], 
     return fills, minute, "csv", None
 
 
-def _read_json(path: Path) -> Dict[str, object]:
+def _read_json(path: Path) -> dict[str, object]:
     if not path.exists():
         return {}
     try:
@@ -171,14 +170,14 @@ def _slippage_bps(side: str, px: float, mid: float) -> float:
     return 0.0
 
 
-def _percentile(sorted_vals: List[float], p: float) -> float:
+def _percentile(sorted_vals: list[float], p: float) -> float:
     if not sorted_vals:
         return 0.0
     idx = int(max(0, min(len(sorted_vals) - 1, (len(sorted_vals) - 1) * p)))
     return sorted_vals[idx]
 
 
-def _mean_ci95(values: List[float]) -> Tuple[int, float, float, float]:
+def _mean_ci95(values: list[float]) -> tuple[int, float, float, float]:
     n = len(values)
     if n <= 0:
         return 0, 0.0, 0.0, 0.0
@@ -191,7 +190,7 @@ def _mean_ci95(values: List[float]) -> Tuple[int, float, float, float]:
     return n, mean, mean - half_width, mean + half_width
 
 
-def _rolling_values(values: List[float], window: int) -> List[float]:
+def _rolling_values(values: list[float], window: int) -> list[float]:
     if window <= 0:
         return list(values)
     if len(values) <= window:
@@ -199,7 +198,7 @@ def _rolling_values(values: List[float], window: int) -> List[float]:
     return values[-window:]
 
 
-def _cancel_before_fill_rate(rows: List[Dict[str, str]]) -> Tuple[int, float]:
+def _cancel_before_fill_rate(rows: list[dict[str, str]]) -> tuple[int, float]:
     count = sum(
         1
         for r in rows
@@ -209,8 +208,8 @@ def _cancel_before_fill_rate(rows: List[Dict[str, str]]) -> Tuple[int, float]:
     return count, rate
 
 
-def _expectancy_buckets(values_by_key: Dict[str, List[float]]) -> Dict[str, Dict[str, float]]:
-    buckets: Dict[str, Dict[str, float]] = {}
+def _expectancy_buckets(values_by_key: dict[str, list[float]]) -> dict[str, dict[str, float]]:
+    buckets: dict[str, dict[str, float]] = {}
     for raw_key, values in values_by_key.items():
         key = str(raw_key or "unknown").strip() or "unknown"
         n, mean, ci_low, ci_high = _mean_ci95(values)
@@ -223,7 +222,7 @@ def _expectancy_buckets(values_by_key: Dict[str, List[float]]) -> Dict[str, Dict
     return buckets
 
 
-def build_dossier(root: Path, bot_log_root: Path, lookback_days: int = 5) -> Dict[str, object]:
+def build_dossier(root: Path, bot_log_root: Path, lookback_days: int = 5) -> dict[str, object]:
     fills, minute, data_source_mode, data_source_fallback_reason = _load_rows_with_fallback(bot_log_root)
     rolling_window_fills = max(1, int(os.getenv("PERF_DOSSIER_EXPECTANCY_ROLLING_WINDOW_FILLS", "300")))
     expectancy_gate_min_fills = max(
@@ -232,15 +231,15 @@ def build_dossier(root: Path, bot_log_root: Path, lookback_days: int = 5) -> Dic
     )
 
     # Per-day rollups from fills (execution truth source).
-    by_day: Dict[str, Dict[str, float]] = defaultdict(lambda: defaultdict(float))
-    slippage_by_day: Dict[str, List[float]] = defaultdict(list)
-    maker_count_by_day: Dict[str, int] = defaultdict(int)
-    fills_count_by_day: Dict[str, int] = defaultdict(int)
-    net_per_fill_values: List[float] = []
-    maker_net_per_fill_values: List[float] = []
-    taker_net_per_fill_values: List[float] = []
-    alpha_policy_net_per_fill: Dict[str, List[float]] = defaultdict(list)
-    regime_net_per_fill: Dict[str, List[float]] = defaultdict(list)
+    by_day: dict[str, dict[str, float]] = defaultdict(lambda: defaultdict(float))
+    slippage_by_day: dict[str, list[float]] = defaultdict(list)
+    maker_count_by_day: dict[str, int] = defaultdict(int)
+    fills_count_by_day: dict[str, int] = defaultdict(int)
+    net_per_fill_values: list[float] = []
+    maker_net_per_fill_values: list[float] = []
+    taker_net_per_fill_values: list[float] = []
+    alpha_policy_net_per_fill: dict[str, list[float]] = defaultdict(list)
+    regime_net_per_fill: dict[str, list[float]] = defaultdict(list)
 
     for r in fills:
         ts = _parse_ts(r.get("ts", ""))
@@ -273,7 +272,7 @@ def build_dossier(root: Path, bot_log_root: Path, lookback_days: int = 5) -> Dic
         slippage_by_day[day].append(slip)
 
     days = sorted(by_day.keys())[-lookback_days:]
-    day_rows: List[Dict[str, object]] = []
+    day_rows: list[dict[str, object]] = []
     for day in days:
         notional = by_day[day]["notional"]
         fees = by_day[day]["fees"]
@@ -437,8 +436,8 @@ def build_dossier(root: Path, bot_log_root: Path, lookback_days: int = 5) -> Dic
     ]
     status = "pass" if all(bool(c["pass"]) for c in checks) else "warning"
 
-    payload: Dict[str, object] = {
-        "ts_utc": datetime.now(timezone.utc).isoformat(),
+    payload: dict[str, object] = {
+        "ts_utc": datetime.now(UTC).isoformat(),
         "status": status,
         "bot_log_root": str(bot_log_root),
         "lookback_days": lookback_days,
@@ -523,7 +522,7 @@ def build_dossier(root: Path, bot_log_root: Path, lookback_days: int = 5) -> Dic
     return payload
 
 
-def _to_markdown(dossier: Dict[str, object]) -> str:
+def _to_markdown(dossier: dict[str, object]) -> str:
     summary = dossier.get("summary", {})
     checks = dossier.get("checks", [])
     rows = dossier.get("daily_breakdown", [])
@@ -588,7 +587,7 @@ def _to_markdown(dossier: Dict[str, object]) -> str:
     return "\n".join(md) + "\n"
 
 
-def _resolve_output_paths(repo_root: Path, output_dir: str, output_stem: str) -> Tuple[Path, Path]:
+def _resolve_output_paths(repo_root: Path, output_dir: str, output_stem: str) -> tuple[Path, Path]:
     safe_stem = str(output_stem or "performance_dossier_latest").strip() or "performance_dossier_latest"
     out_dir = Path(output_dir) if str(output_dir).strip() else (repo_root / "reports" / "analysis")
     if not out_dir.is_absolute():

@@ -1,11 +1,10 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from enum import Enum
-from typing import List
+from enum import Enum, StrEnum
 
 
-class GuardState(str, Enum):
+class GuardState(StrEnum):
     RUNNING = "running"
     SOFT_PAUSE = "soft_pause"
     HARD_STOP = "hard_stop"
@@ -19,7 +18,7 @@ class OpsSnapshot:
     edge_gate_blocked: bool = False
     high_vol: bool = False
     market_spread_too_small: bool = False
-    risk_reasons: List[str] = field(default_factory=list)
+    risk_reasons: list[str] = field(default_factory=list)
     risk_hard_stop: bool = False
 
 
@@ -29,10 +28,10 @@ class OpsGuard:
     hard_stop_cancel_fail_streak: int = 8
     state: GuardState = GuardState.RUNNING
     _operational_pause_cycles: int = 0
-    reasons: List[str] = field(default_factory=list)
+    reasons: list[str] = field(default_factory=list)
 
     def update(self, snapshot: OpsSnapshot) -> GuardState:
-        reasons: List[str] = []
+        reasons: list[str] = []
         operational_failure = False
 
         if not snapshot.connector_ready:
@@ -54,10 +53,12 @@ class OpsGuard:
             reasons.append("cancel_fail_hard_limit")
             self.reasons = reasons
             self.state = GuardState.HARD_STOP
+            self._operational_pause_cycles = 0
             return self.state
         if snapshot.risk_hard_stop:
             self.reasons = reasons or ["risk_hard_stop"]
             self.state = GuardState.HARD_STOP
+            self._operational_pause_cycles = 0
             return self.state
 
         if operational_failure:
@@ -82,4 +83,5 @@ class OpsGuard:
     def force_hard_stop(self, reason: str) -> GuardState:
         self.state = GuardState.HARD_STOP
         self.reasons = [reason]
+        self._operational_pause_cycles = 0
         return self.state

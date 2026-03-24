@@ -7,7 +7,6 @@ from __future__ import annotations
 import logging
 import time
 from dataclasses import dataclass, field
-from typing import Dict
 
 logger = logging.getLogger(__name__)
 
@@ -71,7 +70,7 @@ class ExchangeRateLimiter:
     """
 
     def __init__(self) -> None:
-        self._buckets: Dict[str, TokenBucket] = {}
+        self._buckets: dict[str, TokenBucket] = {}
 
     def get_or_create(
         self,

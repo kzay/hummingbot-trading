@@ -4,15 +4,16 @@ import argparse
 import json
 import os
 from collections import deque
-from datetime import datetime, timezone
+from collections.abc import Iterable
+from datetime import UTC, datetime
 from pathlib import Path
-from typing import Any, Deque, Dict, Iterable, List, Optional, Tuple
+from typing import Any
 
-from services.contracts.stream_names import MARKET_DEPTH_STREAM
+from platform_lib.contracts.stream_names import MARKET_DEPTH_STREAM
 
 
 def _utc_now_iso() -> str:
-    return datetime.now(timezone.utc).isoformat()
+    return datetime.now(UTC).isoformat()
 
 
 def _safe_int(value: Any, default: int = 0) -> int:
@@ -29,7 +30,7 @@ def _safe_float(value: Any, default: float = 0.0) -> float:
         return float(default)
 
 
-def _stream_entry_id_to_ms(entry_id: str) -> Optional[int]:
+def _stream_entry_id_to_ms(entry_id: str) -> int | None:
     raw = str(entry_id or "").strip()
     if not raw:
         return None
@@ -42,7 +43,7 @@ def _stream_entry_id_to_ms(entry_id: str) -> Optional[int]:
         return None
 
 
-def _read_json(path: Path) -> Dict[str, Any]:
+def _read_json(path: Path) -> dict[str, Any]:
     if not path.exists():
         return {}
     try:
@@ -52,10 +53,10 @@ def _read_json(path: Path) -> Dict[str, Any]:
     return payload if isinstance(payload, dict) else {}
 
 
-def _iter_jsonl(path: Path) -> Iterable[Dict[str, Any]]:
+def _iter_jsonl(path: Path) -> Iterable[dict[str, Any]]:
     if not path.exists():
         return []
-    out: List[Dict[str, Any]] = []
+    out: list[dict[str, Any]] = []
     try:
         with path.open("r", encoding="utf-8", errors="ignore") as fp:
             for line in fp:
@@ -73,7 +74,7 @@ def _iter_jsonl(path: Path) -> Iterable[Dict[str, Any]]:
     return out
 
 
-def _check(ok: bool, name: str, reason: str) -> Dict[str, Any]:
+def _check(ok: bool, name: str, reason: str) -> dict[str, Any]:
     return {"name": name, "pass": bool(ok), "reason": reason}
 
 
@@ -86,15 +87,15 @@ def run(
     max_depth_stream_share: float,
     max_depth_event_bytes: int,
     lookback_depth_events: int,
-) -> Tuple[int, Dict[str, Any]]:
+) -> tuple[int, dict[str, Any]]:
     reports = root / "reports"
     event_store = reports / "event_store"
     verification = reports / "verification"
     verification.mkdir(parents=True, exist_ok=True)
 
-    now_s = datetime.now(timezone.utc).timestamp()
-    checks: List[Dict[str, Any]] = []
-    diagnostics: Dict[str, Any] = {}
+    now_s = datetime.now(UTC).timestamp()
+    checks: list[dict[str, Any]] = []
+    diagnostics: dict[str, Any] = {}
 
     integrity_candidates = sorted(event_store.glob("integrity_*.json"), key=lambda p: p.stat().st_mtime if p.exists() else 0)
     integrity_path = integrity_candidates[-1] if integrity_candidates else None
@@ -132,7 +133,7 @@ def run(
     sequence_large_gap_violations = 0
     sequence_max_gap_observed = 0
     max_payload_bytes_observed = 0
-    recent_depth_rows: Deque[Dict[str, Any]] = deque(maxlen=max(100, int(lookback_depth_events)))
+    recent_depth_rows: deque[dict[str, Any]] = deque(maxlen=max(100, int(lookback_depth_events)))
 
     for path in event_files:
         for row in _iter_jsonl(path):
@@ -140,12 +141,12 @@ def run(
                 continue
             recent_depth_rows.append(row)
 
-    seq_by_key: Dict[Tuple[str, str, str], int] = {}
-    latest_depth_age_sec: Optional[float] = None
+    seq_by_key: dict[tuple[str, str, str], int] = {}
+    latest_depth_age_sec: float | None = None
     sequence_rows_scanned = 0
     for row in recent_depth_rows:
         entry_ms = _stream_entry_id_to_ms(str(row.get("stream_entry_id", "")))
-        row_age_sec: Optional[float] = None
+        row_age_sec: float | None = None
         if entry_ms is not None:
             row_age_sec = max(0.0, now_s - (entry_ms / 1000.0))
             latest_depth_age_sec = row_age_sec if latest_depth_age_sec is None else min(latest_depth_age_sec, row_age_sec)
@@ -273,7 +274,7 @@ def run(
         "checks": checks,
         "diagnostics": diagnostics,
     }
-    stamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
+    stamp = datetime.now(UTC).strftime("%Y%m%dT%H%M%SZ")
     out_path = verification / f"realtime_l2_data_quality_{stamp}.json"
     out_path.write_text(json.dumps(report, indent=2), encoding="utf-8")
     (verification / "realtime_l2_data_quality_latest.json").write_text(json.dumps(report, indent=2), encoding="utf-8")

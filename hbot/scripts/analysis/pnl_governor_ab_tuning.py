@@ -4,17 +4,17 @@ from __future__ import annotations
 import argparse
 import csv
 import json
+from collections.abc import Iterable
 from dataclasses import dataclass
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
-from typing import Dict, Iterable, List, Optional
 
 
 def _utc_now() -> datetime:
-    return datetime.now(timezone.utc)
+    return datetime.now(UTC)
 
 
-def _parse_ts(value: str) -> Optional[datetime]:
+def _parse_ts(value: str) -> datetime | None:
     s = (value or "").strip()
     if not s:
         return None
@@ -37,15 +37,15 @@ def _safe_bool(value: object) -> bool:
     return str(value).strip().lower() in {"1", "true", "yes", "on"}
 
 
-def _iter_csv(path: Path) -> Iterable[Dict[str, str]]:
+def _iter_csv(path: Path) -> Iterable[dict[str, str]]:
     if not path.exists():
         return []
     with path.open("r", newline="", encoding="utf-8") as f:
         yield from csv.DictReader(f)
 
 
-def _filter_window(rows: Iterable[Dict[str, str]], since: datetime, until: datetime) -> List[Dict[str, str]]:
-    out: List[Dict[str, str]] = []
+def _filter_window(rows: Iterable[dict[str, str]], since: datetime, until: datetime) -> list[dict[str, str]]:
+    out: list[dict[str, str]] = []
     for row in rows:
         ts = _parse_ts(str(row.get("ts", "")))
         if ts is None:
@@ -69,21 +69,21 @@ class WindowMetrics:
     size_boost_active_rate: float
     avg_size_mult: float
     net_realized_delta_quote: float
-    governor_activation_reason_counts: Dict[str, int]
-    governor_size_boost_reason_counts: Dict[str, int]
+    governor_activation_reason_counts: dict[str, int]
+    governor_size_boost_reason_counts: dict[str, int]
     dominant_activation_block_reason: str
     dominant_size_boost_block_reason: str
 
 
-def _reason_counts(rows: List[Dict[str, str]], key: str) -> Dict[str, int]:
-    counts: Dict[str, int] = {}
+def _reason_counts(rows: list[dict[str, str]], key: str) -> dict[str, int]:
+    counts: dict[str, int] = {}
     for row in rows:
         reason = str(row.get(key, "")).strip() or "unknown"
         counts[reason] = counts.get(reason, 0) + 1
     return counts
 
 
-def _dominant_block_reason(counts: Dict[str, int]) -> str:
+def _dominant_block_reason(counts: dict[str, int]) -> str:
     blocked = {k: v for k, v in counts.items() if k not in {"active"}}
     if not blocked:
         return "none"
@@ -108,7 +108,7 @@ def _compute_metrics(root: Path, since: datetime, until: datetime) -> WindowMetr
     net_realized_start = _safe_float(minute_rows[0].get("net_realized_pnl_today_quote", 0.0)) if minute_rows else 0.0
     net_realized_end = _safe_float(minute_rows[-1].get("net_realized_pnl_today_quote", 0.0)) if minute_rows else 0.0
 
-    def _avg(samples: List[float], default: float = 0.0) -> float:
+    def _avg(samples: list[float], default: float = 0.0) -> float:
         return sum(samples) / len(samples) if samples else default
 
     return WindowMetrics(
@@ -139,7 +139,7 @@ def _build_report(
     hours: int,
     since: datetime,
     until: datetime,
-) -> Dict:
+) -> dict:
     return {
         "ts_utc": _utc_now().isoformat(),
         "window_hours": hours,

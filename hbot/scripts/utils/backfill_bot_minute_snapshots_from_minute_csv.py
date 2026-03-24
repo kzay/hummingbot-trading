@@ -7,7 +7,7 @@ Why:
   still be missing them for active bots.
 
 This script converts minute.csv rows into deterministic `bot_minute_snapshot`
-event envelopes and appends only the missing rows for the selected UTC day.
+event envelopes and appends only the missing rows for the selected timezone.utc day.
 """
 
 from __future__ import annotations
@@ -17,26 +17,25 @@ import csv
 import hashlib
 import json
 import logging
-from datetime import datetime, timezone
+from collections.abc import Iterable
+from datetime import UTC, datetime
 from pathlib import Path
-from typing import Dict, Iterable, Optional, Set, Tuple
-
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
 logger = logging.getLogger(__name__)
 
 
-def _parse_iso(ts: str) -> Optional[datetime]:
+def _parse_iso(ts: str) -> datetime | None:
     raw = str(ts or "").strip()
     if not raw:
         return None
     try:
-        return datetime.fromisoformat(raw.replace("Z", "+00:00")).astimezone(timezone.utc)
+        return datetime.fromisoformat(raw.replace("Z", "+00:00")).astimezone(UTC)
     except Exception:
         return None
 
 
-def _iter_minute_rows(path: Path) -> Iterable[Dict[str, str]]:
+def _iter_minute_rows(path: Path) -> Iterable[dict[str, str]]:
     if not path.exists():
         return []
     try:
@@ -53,7 +52,7 @@ def _variant_suffix(folder_name: str) -> str:
     return name.split("_")[-1]
 
 
-def _deterministic_event_id(bot: str, variant: str, row: Dict[str, str]) -> str:
+def _deterministic_event_id(bot: str, variant: str, row: dict[str, str]) -> str:
     raw = "|".join(
         [
             "minute_csv_backfill_v1",
@@ -67,8 +66,8 @@ def _deterministic_event_id(bot: str, variant: str, row: Dict[str, str]) -> str:
     return hashlib.sha256(raw.encode("utf-8")).hexdigest()
 
 
-def _load_existing_event_ids(path: Path) -> Set[str]:
-    ids: Set[str] = set()
+def _load_existing_event_ids(path: Path) -> set[str]:
+    ids: set[str] = set()
     if not path.exists():
         return ids
     try:
@@ -95,8 +94,8 @@ def _build_envelope(
     bot: str,
     variant: str,
     ts_utc: str,
-    row: Dict[str, str],
-) -> Dict[str, object]:
+    row: dict[str, str],
+) -> dict[str, object]:
     connector_name = str(row.get("connector_name", row.get("exchange", ""))).strip()
     trading_pair = str(row.get("trading_pair", "")).strip()
     payload = dict(row)
@@ -128,7 +127,7 @@ def _build_envelope(
         "stream": "local.backfill.minute_snapshot",
         "stream_entry_id": "",
         "payload": payload,
-        "ingest_ts_utc": datetime.now(timezone.utc).isoformat(),
+        "ingest_ts_utc": datetime.now(UTC).isoformat(),
         "schema_validation_status": "ok",
     }
 
@@ -136,10 +135,10 @@ def _build_envelope(
 def backfill(
     *,
     root: Path,
-    bot: Optional[str],
-    variant: Optional[str],
-    day: Optional[str],
-) -> Tuple[int, int]:
+    bot: str | None,
+    variant: str | None,
+    day: str | None,
+) -> tuple[int, int]:
     data_root = root / "data"
     store_dir = root / "reports" / "event_store"
     store_dir.mkdir(parents=True, exist_ok=True)
@@ -152,8 +151,8 @@ def backfill(
 
     total_rows = 0
     appended = 0
-    existing_by_day: Dict[str, Set[str]] = {}
-    handles_by_day: Dict[str, object] = {}
+    existing_by_day: dict[str, set[str]] = {}
+    handles_by_day: dict[str, object] = {}
 
     def _day_file(day_key: str) -> Path:
         return store_dir / f"events_{day_key}.jsonl"
@@ -207,7 +206,7 @@ def main() -> None:
     parser = argparse.ArgumentParser(description="Backfill bot_minute_snapshot events from minute.csv")
     parser.add_argument("--bot", default="", help="Filter by bot name (e.g. bot5)")
     parser.add_argument("--variant", default="", help="Filter by variant (e.g. a)")
-    parser.add_argument("--day", default="", help="Filter by UTC day YYYYMMDD (e.g. 20260309)")
+    parser.add_argument("--day", default="", help="Filter by timezone.utc day YYYYMMDD (e.g. 20260309)")
     args = parser.parse_args()
 
     root = Path("/workspace/hbot") if Path("/.dockerenv").exists() else Path(__file__).resolve().parents[2]

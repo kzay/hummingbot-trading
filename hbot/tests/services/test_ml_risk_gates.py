@@ -1,4 +1,4 @@
-from services.contracts.event_schemas import MlSignalEvent
+from platform_lib.contracts.event_schemas import MlSignalEvent
 from services.risk_service.main import evaluate_ml_signal
 
 

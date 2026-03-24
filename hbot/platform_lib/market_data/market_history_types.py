@@ -2,8 +2,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 from decimal import Decimal
-from typing import List, Literal, Optional
-
+from typing import Literal
 
 BarSource = Literal["quote_mid", "exchange_ohlcv"]
 HistoryStatus = Literal["fresh", "stale", "gapped", "degraded", "empty"]
@@ -24,8 +23,8 @@ class MarketBar:
     high: Decimal
     low: Decimal
     close: Decimal
-    volume_base: Optional[Decimal] = None
-    volume_quote: Optional[Decimal] = None
+    volume_base: Decimal | None = None
+    volume_quote: Decimal | None = None
     is_closed: bool = True
     bar_source: str = "quote_mid"
 
@@ -44,7 +43,7 @@ class MarketHistoryStatus:
 
 @dataclass
 class HistoryPolicy:
-    preferred_sources: List[str] = field(default_factory=lambda: ["quote_mid"])
+    preferred_sources: list[str] = field(default_factory=lambda: ["quote_mid"])
     allow_fallback: bool = True
     require_closed: bool = True
     min_acceptable_status: Literal["fresh", "degraded"] = "degraded"

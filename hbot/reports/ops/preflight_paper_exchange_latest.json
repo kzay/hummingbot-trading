@@ -1,7 +1,9 @@
 {
-  "ts_utc": "2026-03-05T21:27:47.395419+00:00",
-  "status": "pass",
-  "failed_checks": [],
+  "ts_utc": "2026-03-22T22:54:28.266496+00:00",
+  "status": "fail",
+  "failed_checks": [
+    "paper_exchange_compose_service_wired"
+  ],
   "checks": [
     {
       "name": "paper_exchange_service_script_exists",
@@ -13,8 +15,8 @@
     },
     {
       "name": "paper_exchange_compose_service_wired",
-      "pass": true,
-      "reason": "compose service block + command wiring present",
+      "pass": false,
+      "reason": "compose paper-exchange service block/command wiring missing",
       "evidence_paths": [
         "F:\\Environement\\git-repo\\hummingbot_custo\\hbot\\compose\\docker-compose.yml"
       ]

@@ -1,20 +1,31 @@
 {
-  "version": 2,
+  "version": 3,
   "global_daily_loss_cap_pct": 0.03,
   "cross_bot_net_exposure_cap_quote": 25000.0,
+  "cross_bot_gross_exposure_cap_quote": 50000.0,
+  "stress_scenario_drop_pct": 0.05,
+  "stress_max_portfolio_loss_pct": 0.10,
   "concentration_cap_pct": 0.70,
   "concentration_min_equity_quote": 100.0,
   "warn_buffer_ratio": 0.80,
   "portfolio_kill_switch_on_global_breach": true,
   "bot_action_scope": [
-    "bot1"
+    "bot1",
+    "bot6",
+    "bot7"
   ],
   "bot_overrides": {
     "bot2": {
       "enabled": false
     },
     "bot3": {
-      "enabled": true
+      "enabled": false
+    },
+    "bot4": {
+      "enabled": false
+    },
+    "bot5": {
+      "enabled": false
     }
   }
 }

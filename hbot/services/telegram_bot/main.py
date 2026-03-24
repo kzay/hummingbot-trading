@@ -27,16 +27,17 @@ Run::
 """
 from __future__ import annotations
 
+import asyncio
 import csv
+import html
 import json
 import logging
 import os
 import time
 from pathlib import Path
-from typing import Dict, List, Optional
 
-from services.common.log_namespace import list_bot_log_files
-from services.common.logging_config import configure_logging
+from platform_lib.logging.log_namespace import list_bot_log_files
+from platform_lib.logging.logging_config import configure_logging
 
 configure_logging()
 logger = logging.getLogger(__name__)
@@ -61,7 +62,7 @@ _SNAPSHOT_ROOT = _REPORTS_ROOT / "desk_snapshot"
 _SNAPSHOT_STALE_S = 180.0   # treat snapshot as stale after 3 minutes
 
 
-def _allowed_chat_id() -> Optional[int]:
+def _allowed_chat_id() -> int | None:
     raw = _CHAT_ID_RAW.strip()
     if not raw:
         return None
@@ -82,13 +83,13 @@ def _safe_float(v: object, default: float = 0.0) -> float:
         return default
 
 
-def _read_last_csv_row(path: Path) -> Optional[Dict[str, str]]:
+def _read_last_csv_row(path: Path) -> dict[str, str] | None:
     if not path.exists():
         return None
     try:
         with path.open("r", encoding="utf-8", newline="") as f:
             reader = csv.DictReader(f)
-            last: Optional[Dict[str, str]] = None
+            last: dict[str, str] | None = None
             for row in reader:
                 last = dict(row)
             return last
@@ -96,11 +97,11 @@ def _read_last_csv_row(path: Path) -> Optional[Dict[str, str]]:
         return None
 
 
-def _read_last_n_csv_rows(path: Path, n: int) -> List[Dict[str, str]]:
+def _read_last_n_csv_rows(path: Path, n: int) -> list[dict[str, str]]:
     if not path.exists():
         return []
     try:
-        rows: List[Dict[str, str]] = []
+        rows: list[dict[str, str]] = []
         with path.open("r", encoding="utf-8", newline="") as f:
             reader = csv.DictReader(f)
             for row in reader:
@@ -110,7 +111,7 @@ def _read_last_n_csv_rows(path: Path, n: int) -> List[Dict[str, str]]:
         return []
 
 
-def _read_json(path: Path) -> Optional[dict]:
+def _read_json(path: Path) -> dict | None:
     if not path.exists():
         return None
     try:
@@ -119,15 +120,15 @@ def _read_json(path: Path) -> Optional[dict]:
         return None
 
 
-def _find_minute_files() -> List[Path]:
+def _find_minute_files() -> list[Path]:
     return list_bot_log_files(_DATA_ROOT, "minute.csv")
 
 
-def _find_fills_files() -> List[Path]:
+def _find_fills_files() -> list[Path]:
     return list_bot_log_files(_DATA_ROOT, "fills.csv")
 
 
-def _find_open_orders_files() -> List[Path]:
+def _find_open_orders_files() -> list[Path]:
     return sorted(_DATA_ROOT.glob("*/logs/recovery/open_orders_latest.json"))
 
 
@@ -135,7 +136,7 @@ def _find_open_orders_files() -> List[Path]:
 # Canonical desk snapshot helpers (INFRA-5)
 # ---------------------------------------------------------------------------
 
-def _read_desk_snapshot(bot: str) -> Optional[dict]:
+def _read_desk_snapshot(bot: str) -> dict | None:
     """Return the canonical desk snapshot for *bot* if present and fresh."""
     path = _SNAPSHOT_ROOT / bot / "latest.json"
     d = _read_json(path)
@@ -145,7 +146,7 @@ def _read_desk_snapshot(bot: str) -> Optional[dict]:
     gen_ts = str(d.get("generated_ts", ""))
     if gen_ts:
         try:
-            from datetime import datetime, timezone
+            from datetime import datetime
             epoch = datetime.fromisoformat(gen_ts.replace("Z", "+00:00")).timestamp()
             if time.time() - epoch > _SNAPSHOT_STALE_S:
                 return None  # stale — fall back to raw files
@@ -154,9 +155,9 @@ def _read_desk_snapshot(bot: str) -> Optional[dict]:
     return d
 
 
-def _load_all_snapshots() -> Dict[str, dict]:
+def _load_all_snapshots() -> dict[str, dict]:
     """Return {bot_name: snapshot} for all bots with a valid fresh snapshot."""
-    result: Dict[str, dict] = {}
+    result: dict[str, dict] = {}
     if not _SNAPSHOT_ROOT.exists():
         return result
     for bot_dir in sorted(_SNAPSHOT_ROOT.iterdir()):
@@ -194,7 +195,7 @@ def _fmt_age(ts_str: str) -> str:
     if not ts_str:
         return "unknown"
     try:
-        from datetime import datetime, timezone
+        from datetime import datetime
         dt = datetime.fromisoformat(ts_str.replace("Z", "+00:00"))
         age_s = int(time.time() - dt.timestamp())
         if age_s < 120:
@@ -202,6 +203,39 @@ def _fmt_age(ts_str: str) -> str:
         return f"{age_s // 60}m ago"
     except Exception:
         return ts_str
+
+
+_TG_MAX_MSG_LEN = 4096
+_REPLY_MAX_RETRIES = 3
+_REPLY_RETRY_BASE_S = 1.0
+
+
+def _truncate(text: str, limit: int = _TG_MAX_MSG_LEN) -> str:
+    if len(text) <= limit:
+        return text
+    suffix = "\n… <i>(truncated)</i>"
+    return text[: limit - len(suffix)] + suffix
+
+
+def _esc(value: object) -> str:
+    """HTML-escape arbitrary user/data values for Telegram messages."""
+    return html.escape(str(value))
+
+
+async def _safe_reply_html(message, text: str) -> None:
+    """Send an HTML reply with truncation and bounded retry on transient errors."""
+    body = _truncate(text)
+    for attempt in range(1, _REPLY_MAX_RETRIES + 1):
+        try:
+            await message.reply_html(body)
+            return
+        except Exception:
+            if attempt == _REPLY_MAX_RETRIES:
+                logger.error("Failed to send Telegram reply after %d attempts", _REPLY_MAX_RETRIES, exc_info=True)
+                return
+            delay = _REPLY_RETRY_BASE_S * (2 ** (attempt - 1))
+            logger.warning("Telegram reply attempt %d failed, retrying in %.1fs", attempt, delay, exc_info=True)
+            await asyncio.sleep(delay)
 
 
 # ---------------------------------------------------------------------------
@@ -215,10 +249,10 @@ def _build_status() -> str:
     if snapshots:
         for bot, snap in snapshots.items():
             row = _snap_minute(snap)
-            state = row.get("state", "?")
-            regime = row.get("regime", "?")
+            state = _esc(row.get("state", "?"))
+            regime = _esc(row.get("regime", "?"))
             orders = int(_safe_float(row.get("orders_active")))
-            risk = row.get("risk_reasons", "") or "none"
+            risk = _esc(row.get("risk_reasons", "") or "none")
             age = _fmt_age(row.get("ts", ""))
             book_stale = str(row.get("order_book_stale", "")).lower() == "true"
             stale_warn = " ⚠️ book stale" if book_stale else ""
@@ -226,7 +260,7 @@ def _build_status() -> str:
             completeness = snap.get("completeness", 1.0)
             comp_warn = f" ⚠️ data {completeness:.0%}" if completeness < 0.8 else ""
             parts.append(
-                f"<b>{bot}</b> {_state_emoji(state)} <code>{state}</code>\n"
+                f"<b>{_esc(bot)}</b> {_state_emoji(state)} <code>{state}</code>\n"
                 f"  Regime: <code>{regime}</code>\n"
                 f"  Orders: {orders}  |  Tick: {age}{stale_warn}{age_warn}{comp_warn}\n"
                 f"  Risk: <code>{risk}</code>"
@@ -241,11 +275,11 @@ def _build_status() -> str:
         row = _read_last_csv_row(mf)
         if not row:
             continue
-        bot = mf.parts[-5]
-        state = row.get("state", "?")
-        regime = row.get("regime", "?")
+        bot = _esc(mf.parts[-5])
+        state = _esc(row.get("state", "?"))
+        regime = _esc(row.get("regime", "?"))
         orders = int(_safe_float(row.get("orders_active")))
-        risk = row.get("risk_reasons", "") or "none"
+        risk = _esc(row.get("risk_reasons", "") or "none")
         age = _fmt_age(row.get("ts", ""))
         book_stale = str(row.get("order_book_stale", "")).lower() == "true"
         stale_warn = " ⚠️ book stale" if book_stale else ""
@@ -270,7 +304,7 @@ def _build_pnl() -> str:
         pnl_sign = "+" if realized >= 0 else ""
         loss_sign = "+" if daily_loss >= 0 else ""
         return (
-            f"<b>{bot} PnL</b>\n"
+            f"<b>{_esc(bot)} PnL</b>\n"
             f"  Equity:    <code>{equity:.2f} USDT</code>\n"
             f"  Realized:  <code>{pnl_sign}{realized:.4f} USDT</code>\n"
             f"  Daily Δ:   <code>{loss_sign}{daily_loss * 100:.3f}%</code>\n"
@@ -304,10 +338,10 @@ def _build_position() -> str:
         margin = _safe_float(row.get("margin_ratio"), 1.0)
         mid = _safe_float(row.get("mid"))
         notional = abs(pos_base) * mid if mid > 0 else 0.0
-        pair = row.get("trading_pair", "?")
+        pair = _esc(row.get("trading_pair", "?"))
         direction = "LONG" if pos_base > 0 else ("SHORT" if pos_base < 0 else "FLAT")
         return (
-            f"<b>{bot} Position</b>\n"
+            f"<b>{_esc(bot)} Position</b>\n"
             f"  {pair}: <code>{pos_base:+.6f}</code> ({direction})\n"
             f"  Notional:  <code>{notional:.2f} USDT</code>\n"
             f"  Avg entry: <code>{avg_entry:.2f}</code>  |  Mid: <code>{mid:.2f}</code>\n"
@@ -337,19 +371,19 @@ def _build_fills(n: int = 5) -> str:
         return "No fills.csv found."
     parts = []
     for ff in fills_files:
-        bot = ff.parts[-5]
+        bot = _esc(ff.parts[-5])
         rows = _read_last_n_csv_rows(ff, n)
         if not rows:
             parts.append(f"<b>{bot}</b>: no fills yet.")
             continue
         lines = [f"<b>{bot}</b> — last {len(rows)} fills:"]
         for row in reversed(rows):
-            side = row.get("side", "?").upper()
+            side = _esc(row.get("side", "?").upper())
             price = _safe_float(row.get("price"))
             amount = _safe_float(row.get("amount_base"))
             pnl = _safe_float(row.get("realized_pnl_quote"))
             is_maker = str(row.get("is_maker", "")).lower() == "true"
-            ts = row.get("ts", "")[:16].replace("T", " ")
+            ts = _esc(row.get("ts", "")[:16].replace("T", " "))
             role = "M" if is_maker else "T"
             pnl_str = f"  pnl={pnl:+.4f}" if pnl != 0 else ""
             lines.append(f"  {ts}  <code>{side:4s}</code> {amount:.6f} @ {price:.2f} [{role}]{pnl_str}")
@@ -357,9 +391,9 @@ def _build_fills(n: int = 5) -> str:
     return "\n\n".join(parts) or "No data."
 
 
-def _build_orders(limit_per_bot: int = 20, bot_filter: Optional[str] = None) -> str:
+def _build_orders(limit_per_bot: int = 20, bot_filter: str | None = None) -> str:
     order_files = _find_open_orders_files()
-    minute_by_bot: Dict[str, Dict[str, str]] = {}
+    minute_by_bot: dict[str, dict[str, str]] = {}
     for mf in _find_minute_files():
         bot = mf.parts[-5]
         row = _read_last_csv_row(mf)
@@ -369,7 +403,7 @@ def _build_orders(limit_per_bot: int = 20, bot_filter: Optional[str] = None) -> 
     if not order_files and not minute_by_bot:
         return "No order/strategy data found."
 
-    parts: List[str] = []
+    parts: list[str] = []
     seen_bots: set[str] = set()
     for path in order_files:
         bot = path.parts[-4] if len(path.parts) >= 4 else "unknown"
@@ -382,11 +416,12 @@ def _build_orders(limit_per_bot: int = 20, bot_filter: Optional[str] = None) -> 
             orders = []
         ts_utc = str(payload.get("ts_utc", ""))
         minute = minute_by_bot.get(bot, {})
-        state = str(minute.get("state", "?"))
-        regime = str(minute.get("regime", "?"))
-        risk = str(minute.get("risk_reasons", "") or "none")
+        state = _esc(str(minute.get("state", "?")))
+        regime = _esc(str(minute.get("regime", "?")))
+        risk = _esc(str(minute.get("risk_reasons", "") or "none"))
+        bot_e = _esc(bot)
         header = (
-            f"<b>{bot} Orders</b> {_state_emoji(state)} <code>{state}</code>\n"
+            f"<b>{bot_e} Orders</b> {_state_emoji(state)} <code>{state}</code>\n"
             f"  Regime: <code>{regime}</code>  |  Snapshot: {_fmt_age(ts_utc)}\n"
             f"  Risk: <code>{risk}</code>\n"
             f"  Active: <code>{len(orders)}</code>"
@@ -396,28 +431,28 @@ def _build_orders(limit_per_bot: int = 20, bot_filter: Optional[str] = None) -> 
             continue
         rows = [header]
         for row in orders[:limit_per_bot]:
-            side = str(row.get("side", "?")).upper()
+            side = _esc(str(row.get("side", "?")).upper())
             price = _safe_float(row.get("price"))
             amount = _safe_float(row.get("amount"))
             age = _safe_float(row.get("age_sec"))
-            oid = str(row.get("order_id", ""))[:14]
-            pair = str(row.get("trading_pair", "?"))
+            oid = _esc(str(row.get("order_id", ""))[:14])
+            pair = _esc(str(row.get("trading_pair", "?")))
             rows.append(
                 f"  <code>{side:4s}</code> {amount:.6f} @ {price:.2f}  ({age:.0f}s)  {pair}  <code>{oid}</code>"
             )
         parts.append("\n".join(rows))
 
-    # Bots without snapshot files still get a meaningful status line.
     for bot, minute in minute_by_bot.items():
         if bot_filter and bot != bot_filter:
             continue
         if bot in seen_bots:
             continue
-        state = str(minute.get("state", "?"))
-        regime = str(minute.get("regime", "?"))
+        state = _esc(str(minute.get("state", "?")))
+        regime = _esc(str(minute.get("regime", "?")))
         orders_active = int(_safe_float(minute.get("orders_active")))
+        bot_e = _esc(bot)
         parts.append(
-            f"<b>{bot} Orders</b> {_state_emoji(state)} <code>{state}</code>\n"
+            f"<b>{bot_e} Orders</b> {_state_emoji(state)} <code>{state}</code>\n"
             f"  Regime: <code>{regime}</code>\n"
             f"  Active (minute.csv): <code>{orders_active}</code>\n"
             f"  <i>No open_orders snapshot file yet.</i>"
@@ -451,11 +486,11 @@ def _build_desk() -> str:
     soak = _gate("soak")
     recon = _gate("reconciliation")
 
-    prom_status = str(promotion.get("status", "unknown")).upper()
-    strict_status = str(strict_cycle.get("strict_gate_status", "unknown")).upper()
+    prom_status = _esc(str(promotion.get("status", "unknown")).upper())
+    strict_status = _esc(str(strict_cycle.get("strict_gate_status", "unknown")).upper())
     day2_go = bool(day2.get("go", False))
-    soak_status = str(soak.get("status", "unknown")).upper()
-    recon_status = str(recon.get("status", "unknown")).upper()
+    soak_status = _esc(str(soak.get("status", "unknown")).upper())
+    recon_status = _esc(str(recon.get("status", "unknown")).upper())
 
     critical_failures = promotion.get("critical_failures", [])
     if not isinstance(critical_failures, list):
@@ -472,7 +507,7 @@ def _build_desk() -> str:
     if critical_failures:
         lines.append("  Critical fails:")
         for name in critical_failures[:8]:
-            lines.append(f"   - <code>{name}</code>")
+            lines.append(f"   - <code>{_esc(name)}</code>")
     else:
         lines.append("  Critical fails: <code>none</code>")
     return "\n".join(lines)
@@ -496,16 +531,16 @@ def _build_go() -> str:
     if status == "PASS":
         return "✅ <b>GO</b> — all critical promotion gates PASS."
     if blockers:
-        joined = ", ".join(f"<code>{b}</code>" for b in blockers)
+        joined = ", ".join(f"<code>{_esc(b)}</code>" for b in blockers)
         return f"⛔ <b>HOLD</b> — blockers: {joined}"
-    return f"⛔ <b>HOLD</b> — promotion status: <code>{status}</code>"
+    return f"⛔ <b>HOLD</b> — promotion status: <code>{_esc(status)}</code>"
 
 
 def _build_risk() -> str:
     def _render(bot: str, row: dict) -> str:
         daily_loss = _safe_float(row.get("daily_loss_pct"))
         drawdown = _safe_float(row.get("drawdown_pct"))
-        risk_reasons = row.get("risk_reasons", "") or "none"
+        risk_reasons = _esc(row.get("risk_reasons", "") or "none")
         funding = _safe_float(row.get("funding_rate"))
         margin = _safe_float(row.get("margin_ratio"), 1.0)
         drift = _safe_float(row.get("position_drift_pct"))
@@ -513,7 +548,7 @@ def _build_risk() -> str:
         cancel_rate = _safe_float(row.get("cancel_per_min"))
         funding_bps = funding * 10000
         return (
-            f"<b>{bot} Risk</b>\n"
+            f"<b>{_esc(bot)} Risk</b>\n"
             f"  Daily loss:  <code>{daily_loss * 100:.3f}%</code>\n"
             f"  Drawdown:    <code>{drawdown * 100:.3f}%</code>\n"
             f"  Reasons:     <code>{risk_reasons}</code>\n"
@@ -587,47 +622,45 @@ def run() -> None:
     async def cmd_status(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         if not _guard(update.effective_chat.id):
             return
-        await update.message.reply_html(_build_status())
+        await _safe_reply_html(update.message, _build_status())
 
     async def cmd_pnl(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         if not _guard(update.effective_chat.id):
             return
-        await update.message.reply_html(_build_pnl())
+        await _safe_reply_html(update.message, _build_pnl())
 
     async def cmd_orders(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         if not _guard(update.effective_chat.id):
             return
         n = 20
-        bot_filter: Optional[str] = None
+        bot_filter: str | None = None
         if context.args:
-            # /orders 30
             if len(context.args) == 1:
                 arg = context.args[0].strip()
                 if arg.isdigit():
                     n = max(1, min(50, int(arg)))
                 else:
                     bot_filter = arg
-            # /orders bot1 30
             elif len(context.args) >= 2:
                 bot_filter = context.args[0].strip()
                 if context.args[1].strip().isdigit():
                     n = max(1, min(50, int(context.args[1].strip())))
-        await update.message.reply_html(_build_orders(limit_per_bot=n, bot_filter=bot_filter))
+        await _safe_reply_html(update.message, _build_orders(limit_per_bot=n, bot_filter=bot_filter))
 
     async def cmd_go(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         if not _guard(update.effective_chat.id):
             return
-        await update.message.reply_html(_build_go())
+        await _safe_reply_html(update.message, _build_go())
 
     async def cmd_desk(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         if not _guard(update.effective_chat.id):
             return
-        await update.message.reply_html(_build_desk())
+        await _safe_reply_html(update.message, _build_desk())
 
     async def cmd_position(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         if not _guard(update.effective_chat.id):
             return
-        await update.message.reply_html(_build_position())
+        await _safe_reply_html(update.message, _build_position())
 
     async def cmd_fills(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         if not _guard(update.effective_chat.id):
@@ -638,23 +671,32 @@ def run() -> None:
                 n = max(1, min(20, int(context.args[0])))
             except ValueError:
                 pass
-        await update.message.reply_html(_build_fills(n))
+        await _safe_reply_html(update.message, _build_fills(n))
 
     async def cmd_risk(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         if not _guard(update.effective_chat.id):
             return
-        await update.message.reply_html(_build_risk())
+        await _safe_reply_html(update.message, _build_risk())
 
     async def cmd_help(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         if not _guard(update.effective_chat.id):
             return
-        await update.message.reply_html(_build_help())
+        await _safe_reply_html(update.message, _build_help())
 
     app = (
         Application.builder()
         .token(_BOT_TOKEN)
         .build()
     )
+
+    import asyncio as _aio
+    try:
+        me = _aio.get_event_loop().run_until_complete(app.bot.get_me())
+        logger.info("Telegram token verified — bot identity: @%s (id=%s)", me.username, me.id)
+    except Exception:
+        logger.error("Telegram token validation failed (getMe). Check TELEGRAM_BOT_TOKEN.", exc_info=True)
+        return
+
     app.add_handler(CommandHandler("status", cmd_status))
     app.add_handler(CommandHandler("go", cmd_go))
     app.add_handler(CommandHandler("orders", cmd_orders))

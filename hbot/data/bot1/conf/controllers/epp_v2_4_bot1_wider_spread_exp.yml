@@ -1,0 +1,249 @@
+# EPP v2.4 — Bot 1 Wider-Spread Experiment (P2-QUANT-20260311-1)
+# Based on frozen epp_v2_4_bot_a.yml with wider spreads for positive edge.
+# DO NOT overwrite the frozen config — this is a separate experiment.
+#
+# Theoretical edge (conservative): +8.0 bps/fill effective, +2.0 bps minimum.
+# Observation window: 5 days / 200 fills minimum.
+id: epp_v2_4_bot1_wider_spread_exp
+controller_name: epp_v2_4_bot1
+controller_type: market_making
+
+# ── Connector ──────────────────────────────────────────────────────
+connector_name: bitget_perpetual
+connector_type: perp
+trading_pair: BTC-USDT
+
+# ── Order sizing ───────────────────────────────────────────────────
+total_amount_quote: 140
+buy_spreads: "0.00150,0.00300"
+sell_spreads: "0.00150,0.00300"
+buy_amounts_pct: "50,50"
+sell_amounts_pct: "50,50"
+executor_refresh_time: 120
+cooldown_time: 8
+leverage: 1
+position_mode: ONEWAY
+stop_loss: 0.0050
+take_profit: 0.000765
+time_limit: 1800
+take_profit_order_type: LIMIT
+skip_rebalance: false
+position_rebalance_min_base_mult: 3.75
+
+# ── Identity ───────────────────────────────────────────────────────
+variant: a
+enabled: true
+no_trade: false
+instance_name: bot1
+log_dir: /home/hummingbot/logs
+
+# ── Fee model ──────────────────────────────────────────────────────
+fee_mode: auto
+fee_profile: vip0
+require_fee_resolution: true
+spot_fee_pct: 0.0010
+slippage_est_pct: 0.0005
+turnover_cap_x: 6.0
+turnover_penalty_step: 0.0015
+ema_period: 20
+trend_eps_pct: 0.0004
+
+# ── Hard risk caps ────────────────────────────────────────────────
+max_daily_turnover_x_hard: 14.0
+min_close_notional_quote: 50
+startup_position_sync: true
+
+# ── Edge gate ──────────────────────────────────────────────────────
+min_net_edge_bps: 5.5
+edge_resume_bps: 6.0
+edge_state_hold_s: 45
+edge_gate_ewma_period: 8
+adaptive_edge_relax_max_bps: 2
+adaptive_edge_tighten_max_bps: 1.5
+adaptive_min_edge_bps_floor: 2.5
+adaptive_fill_target_age_s: 1800
+auto_calibration_enabled: true
+auto_calibration_shadow_mode: true
+auto_calibration_update_interval_s: 900
+auto_calibration_lookback_s: 1800
+auto_calibration_max_step_bps: 0.20
+auto_calibration_max_total_change_per_hour_bps: 0.60
+auto_calibration_required_consecutive_relax_cycles: 2
+auto_calibration_rollback_enabled: true
+auto_calibration_rollback_negative_windows: 3
+auto_calibration_freeze_drawdown_pct: 0.035
+auto_calibration_freeze_daily_loss_pct: 0.020
+auto_calibration_freeze_order_book_stale_ratio_gt: 0.20
+pnl_governor_enabled: false
+daily_pnl_target_pct: 0.3
+daily_pnl_target_quote: 0
+pnl_governor_activation_buffer_pct: 0.05
+pnl_governor_max_edge_bps_cut: 3
+pnl_governor_max_size_boost_pct: 0.00
+pnl_governor_size_activation_deficit_pct: 0.12
+pnl_governor_turnover_soft_cap_x: 2.5
+pnl_governor_drawdown_soft_cap_pct: 0.015
+adverse_fill_soft_pause_enabled: true
+adverse_fill_soft_pause_min_fills: 30
+adverse_fill_soft_pause_cost_floor_mult: 1.0
+edge_confidence_soft_pause_enabled: true
+edge_confidence_soft_pause_min_fills: 40
+edge_confidence_soft_pause_z_score: 1.96
+edge_confidence_soft_pause_cost_floor_mult: 1.0
+slippage_soft_pause_enabled: true
+slippage_soft_pause_window_fills: 300
+slippage_soft_pause_min_fills: 20
+slippage_soft_pause_p95_bps: 12
+selective_quoting_enabled: true
+selective_quality_min_fills: 12
+selective_quality_reduce_threshold: 0.30
+selective_quality_block_threshold: 0.55
+selective_quality_edge_tighten_max_bps: 3.5
+selective_neutral_extra_edge_bps: 2.0
+selective_side_bias_pct: 0.00025
+selective_max_levels_per_side: 1
+alpha_policy_enabled: true
+alpha_policy_no_trade_threshold: 0.35
+alpha_policy_aggressive_threshold: 0.92
+alpha_policy_inventory_relief_threshold: 0.80
+alpha_policy_cross_spread_mult: 1.40
+max_quote_to_market_spread_mult: 0.00
+min_side_spread_bps: 0.30
+reconnect_cooldown_s: 8.0
+max_clock_skew_s: 20.0
+order_book_stale_after_s: 60.0
+order_book_stale_soft_pause_after_s: 90.0
+order_book_reconnect_grace_s: 30.0
+
+# ── Execution safety ────────────────────────────────────────────────
+max_active_executors: 8
+
+# ── Derisk spread ───────────────────────────────────────────────────
+derisk_spread_pct: 0.0002
+derisk_force_taker_after_s: 300
+derisk_progress_reset_ratio: 0.005
+derisk_force_taker_min_base_mult: 12.0
+derisk_force_taker_expectancy_guard_enabled: true
+derisk_force_taker_expectancy_window_fills: 300
+derisk_force_taker_expectancy_min_taker_fills: 60
+derisk_force_taker_expectancy_min_quote: 0.05
+derisk_force_taker_expectancy_override_base_mult: 30.0
+
+# ── Perp inventory ────────────────────────────────────────────────
+perp_target_net_base_pct: 0.0
+min_base_pct: -0.10
+max_base_pct: 0.10
+
+# ── Drift protection ──────────────────────────────────────────────
+adverse_drift_ewma_alpha: 0.25
+drift_spike_threshold_bps: 8
+drift_spike_mult_max: 1.60
+neutral_trend_guard_pct: 0.0002
+spread_step_multiplier: 0.23
+trend_skew_factor: 0.40
+neutral_skew_factor: 0.20
+inventory_skew_cap_pct: 0.0010
+
+# ── Sampling ───────────────────────────────────────────────────────
+sample_interval_s: 10
+spread_floor_recalc_s: 30
+cancel_budget_per_min: 35
+
+# ── Paper simulation params ─────────────────────────────────────────
+paper_engine:
+  paper_equity_quote: 1000
+  paper_reset_state_on_startup: false
+  paper_realism_profile: custom
+  paper_seed: 7
+  paper_fill_model: latency_aware
+  paper_latency_model: configured_latency_ms
+  paper_latency_ms: 150
+  paper_insert_latency_ms: 20
+  paper_cancel_latency_ms: 80
+  paper_liquidity_consumption: true
+  paper_queue_participation: 0.60
+  paper_slippage_bps: 1.0
+  paper_adverse_selection_bps: 1.5
+  paper_prob_fill_on_limit: 0.95
+  paper_prob_slippage: 0.0
+  paper_partial_fill_min_ratio: 0.15
+  paper_partial_fill_max_ratio: 0.85
+  paper_depth_levels: 5
+  paper_depth_decay: 0.70
+  paper_queue_position_enabled: true
+  paper_queue_ahead_ratio: 0.02
+  paper_queue_trade_through_ratio: 0.35
+  paper_price_protection_points: 8
+  paper_margin_model_type: leveraged
+  paper_max_fills_per_order: 8
+
+# ── Regime overrides ────────────────────────────────────────────────
+# EXPERIMENT: Wider spreads (15-50 bps) with regime-aware fill_factor.
+# Trend regimes quote one-sided only (buy_only/sell_only) with 0.12 fill_factor.
+# Neutral/shock regimes quote both sides with higher fill_factor (0.15-0.22).
+regime_specs_override:
+  up:
+    one_sided: "buy_only"
+    spread_min: "0.0015"
+    spread_max: "0.0030"
+    levels_min: 1
+    levels_max: 1
+    refresh_s: 120
+    target_base_pct: "0.0"
+    fill_factor: "0.12"
+  down:
+    one_sided: "sell_only"
+    spread_min: "0.0015"
+    spread_max: "0.0030"
+    levels_min: 1
+    levels_max: 1
+    refresh_s: 120
+    target_base_pct: "0.0"
+    fill_factor: "0.12"
+  neutral_low_vol:
+    spread_min: "0.0015"
+    spread_max: "0.0030"
+    levels_min: 1
+    levels_max: 1
+    refresh_s: 150
+    target_base_pct: "0.0"
+    fill_factor: "0.22"
+  neutral_high_vol:
+    one_sided: "off"
+    spread_min: "0.0018"
+    spread_max: "0.0035"
+    levels_min: 1
+    levels_max: 1
+    refresh_s: 120
+    target_base_pct: "0.0"
+    fill_factor: "0.18"
+  high_vol_shock:
+    one_sided: "off"
+    spread_min: "0.0025"
+    spread_max: "0.0050"
+    levels_min: 1
+    levels_max: 1
+    refresh_s: 90
+    target_base_pct: "0.0"
+    fill_factor: "0.15"
+
+# ── Order book imbalance ─────────────────────────────────────────
+ob_imbalance_depth: 5
+ob_imbalance_skew_weight: 0.10
+
+# ── Kelly sizing ─────────────────────────────────────────────────
+use_kelly_sizing: false
+kelly_fraction: 0.25
+kelly_min_observations: 20
+kelly_max_order_quote: 200
+kelly_min_order_quote: 10
+
+# ── ML regime classifier ────────────────────────────────────────
+ml_regime_enabled: false
+ml_regime_override_ttl_s: 30.0
+
+# ── Adverse fill classifier ─────────────────────────────────────
+adverse_classifier_enabled: false
+adverse_classifier_model_path: ""
+adverse_threshold_widen: 0.70
+adverse_threshold_skip: 0.85

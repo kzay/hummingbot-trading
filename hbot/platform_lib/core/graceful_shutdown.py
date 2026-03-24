@@ -2,7 +2,7 @@
 
 Usage::
 
-    from services.common.graceful_shutdown import ShutdownHandler
+    from platform_lib.core.graceful_shutdown import ShutdownHandler
 
     shutdown = ShutdownHandler()
     while not shutdown.requested:

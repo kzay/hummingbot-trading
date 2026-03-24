@@ -26,93 +26,160 @@ delegates to them while preserving the original public API.
 """
 from __future__ import annotations
 
-import json
 import logging
 import os
 import time
 from decimal import Decimal
-from pathlib import Path
-from types import MethodType, SimpleNamespace
-from typing import Any, Dict, List, Optional, Protocol, Set, Tuple
+from types import MethodType
+from typing import Any
 
-from controllers.paper_engine_v2.data_feeds import HummingbotDataFeed
-from controllers.paper_engine_v2.desk import PaperDesk
-from controllers.paper_engine_v2.signal_consumer import _find_controller_by_instance
-from controllers.paper_engine_v2.types import (
-    EngineEvent,
+try:
+    import orjson as _orjson
+except ImportError:  # pragma: no cover
+    _orjson = None  # type: ignore[assignment]
+
+from concurrent.futures import ThreadPoolExecutor
+
+from simulation.bridge.signal_consumer import (  # noqa: F401
+    _check_hard_stop_transitions,
+    _consume_ml_features,
+    _consume_signals,
+    _find_controller_by_instance,
+)
+
+try:
+    from simulation.adverse_inference import _run_adverse_inference
+except ImportError:
+    _run_adverse_inference = None  # type: ignore[assignment,misc]
+
+# ---------------------------------------------------------------------------
+# Re-exports from split modules — backward compatibility
+# ---------------------------------------------------------------------------
+
+from simulation.bridge.bridge_utils import (  # noqa: F401
+    _CANONICAL_CACHE,
+    _canonical_name,
+    _fmt_contract_decimal,
+    _hb_order_type_to_v2,
+    _instance_env_suffix,
+    _normalize_position_action,
+    _normalize_position_action_hint,
+    _order_type_text,
+    _parse_env_bool,
+)
+from simulation.bridge.bridge_state import (  # noqa: F401
+    BridgeState,
+    _LATENCY_TRACKER,
+    _bridge_state,
+    _get_signal_redis,
+)
+from simulation.bridge.paper_exchange_protocol import (  # noqa: F401
+    _active_cancel_all_command_event_id,
+    _active_cancel_all_fingerprint,
+    _active_cancel_all_retry_ttl_s,
+    _active_cancel_command_event_id,
+    _active_cancel_fingerprint,
+    _active_cancel_retry_ttl_s,
+    _active_command_ttl_ms,
+    _active_submit_fingerprint,
+    _active_submit_order_id,
+    _active_submit_retry_ttl_s,
+    _bootstrap_paper_exchange_cursor,
+    _cancel_reconciled_ghost_orders,
+    _canonical_runtime_order_state,
+    _controller_accounting_contract_metadata,
+    _controller_tracked_order_ids,
+    _ensure_sync_state_command,
+    _get_runtime_order_for_executor,
+    _hydrate_runtime_orders_from_state_snapshot,
+    _paper_exchange_cursor_key,
+    _paper_exchange_state_snapshot_path,
+    _prune_runtime_orders,
+    _publish_paper_exchange_command,
+    _runtime_order_state_flags,
+    _runtime_order_trade_type,
+    _runtime_orders_bucket,
+    _runtime_orders_store,
+    _sync_fill_to_portfolio,
+    _sync_handshake_key,
+    _upsert_runtime_order,
+)
+from simulation.bridge.compat_helpers import (  # noqa: F401
+    _active_failure_hard_stop_streak,
+    _active_sync_gate,
+    _apply_active_failure_policy,
+    _apply_controller_resume,
+    _apply_controller_soft_pause,
+    _bridge_for_exchange_event,
+    _force_sync_hard_stop,
+    _mark_active_failure_recovered,
+    _normalize_paper_exchange_mode,
+    _paper_command_constraints_metadata,
+    _paper_exchange_auto_mode,
+    _paper_exchange_mode_for_instance,
+    _paper_exchange_mode_for_route,
+    _paper_exchange_service_heartbeat_is_fresh,
+    _paper_exchange_service_only_for_instance,
+    _patch_executor_base,
+    _patch_market_data_provider,
+    _resolve_controller_for_command,
+    enable_framework_paper_compat_fallbacks,
+)
+from simulation.bridge.hb_event_fire import (  # noqa: F401
+    EventSubscriber,
+    _EVENT_SUBSCRIBERS,
+    _dispatch_to_subscribers,
+    _find_controller_for_connector,
+    _fire_hb_events,
+    register_event_subscriber,
+    unregister_event_subscriber,
+)
+from simulation.bridge.connector_patches import (  # noqa: F401
+    _install_paper_stats,
+    _install_portfolio_snapshot,
+    _patch_connector_balances,
+    _patch_connector_open_orders,
+    _patch_connector_trading_rules,
+)
+from simulation.budget_checker import install_budget_checker as _install_budget_checker  # noqa: F401
+from simulation.data_feeds import HummingbotDataFeed
+from simulation.desk import PaperDesk
+from simulation.types import (
+    _ZERO,
     InstrumentId,
     InstrumentSpec,
-    OrderCanceled,
-    OrderFilled,
     OrderRejected,
     OrderSide,
     PaperOrderType,
     PositionAction,
-    _ZERO,
 )
-
-from controllers.paper_engine_v2.hb_event_fire import (
-    EventSubscriber,
-    _EVENT_SUBSCRIBERS,
-    register_event_subscriber,
-    unregister_event_subscriber,
-    _dispatch_to_subscribers,
-    _find_controller_for_connector,
-    _fire_hb_events,
-    _fire_cancel_event,
-    _fire_reject_event,
-)
-from services.execution_gateway.gateway import build_paper_execution_command
+from services.execution_gateway.gateway import build_paper_execution_command  # noqa: F401
 
 logger = logging.getLogger(__name__)
 
+# CONCURRENCY: shared thread pool for non-blocking Redis I/O.
+# Tasks submitted here must not mutate _bridge_state dicts/sets directly.
+_REDIS_IO_POOL: ThreadPoolExecutor = ThreadPoolExecutor(
+    max_workers=int(os.getenv("HB_BRIDGE_REDIS_IO_WORKERS", "3")),
+    thread_name_prefix="hb_bridge_redis",
+)
+
+import atexit as _atexit
+
+
+def _bridge_shutdown() -> None:
+    """Release bridge resources on process exit."""
+    from simulation.bridge.bridge_state import _bridge_state
+    _bridge_state._close_redis()
+    _REDIS_IO_POOL.shutdown(wait=False)
+
+
+_atexit.register(_bridge_shutdown)
+
 _PAPER_ORDER_TRACE_ENABLED: bool = os.getenv("HB_PAPER_ORDER_TRACE_ENABLED", "true").lower() in {"1", "true", "yes"}
 _PAPER_ORDER_TRACE_COOLDOWN_S: float = max(0.5, float(os.getenv("HB_PAPER_ORDER_TRACE_COOLDOWN_S", "1.0")))
+# CONCURRENCY: read-modify-write from main thread only; races benign (worst case: extra/skipped trace log).
 _LAST_PAPER_ORDER_TRACE_TS: float = 0.0
-
-
-def _paper_command_constraints_metadata(strategy: Any, connector_name: str, trading_pair: str) -> Dict[str, str]:
-    def _decimal_text(value: Any) -> str:
-        try:
-            text = str(value)
-        except Exception:
-            return ""
-        return text if text not in {"", "None"} else ""
-
-    rule = None
-    try:
-        get_trading_rules = getattr(strategy, "get_trading_rules", None)
-        if callable(get_trading_rules):
-            rules = get_trading_rules(connector_name)
-            if isinstance(rules, dict):
-                rule = rules.get(trading_pair)
-    except Exception:
-        rule = None
-    if rule is None:
-        try:
-            connectors = getattr(strategy, "connectors", {})
-            connector = connectors.get(connector_name) if isinstance(connectors, dict) else None
-            rules = getattr(connector, "trading_rules", {}) if connector is not None else {}
-            if isinstance(rules, dict):
-                rule = rules.get(trading_pair)
-        except Exception:
-            rule = None
-    if rule is None:
-        return {}
-
-    metadata: Dict[str, str] = {}
-    for key, attrs in (
-        ("min_quantity", ("min_order_size", "min_base_amount", "min_amount")),
-        ("size_increment", ("min_base_amount_increment", "min_order_size_increment", "amount_step")),
-        ("price_increment", ("min_price_increment", "min_price_tick_size", "price_step", "min_price_step")),
-        ("min_notional", ("min_notional_size", "min_notional", "min_order_value")),
-    ):
-        for attr in attrs:
-            text = _decimal_text(getattr(rule, attr, None))
-            if text and text not in {"0", "0.0", "0E-8"}:
-                metadata[key] = text
-                break
-    return metadata
 
 
 def _trace_paper_order(message: str, *args: Any, force: bool = False) -> None:
@@ -124,41 +191,6 @@ def _trace_paper_order(message: str, *args: Any, force: bool = False) -> None:
         return
     _LAST_PAPER_ORDER_TRACE_TS = now
     logger.warning("PAPER_ORDER_TRACE " + message, *args)
-
-
-def _order_type_text(order_type: Any) -> str:
-    return str(getattr(order_type, "name", order_type) or "").upper()
-
-
-def _normalize_position_action(position_action: Any, side: OrderSide) -> PositionAction:
-    if isinstance(position_action, PositionAction):
-        return position_action
-    text = str(getattr(position_action, "name", position_action) or "").strip().lower()
-    if text in {"open_long", "open"} and side == OrderSide.BUY:
-        return PositionAction.OPEN_LONG
-    if text in {"close_short", "close"} and side == OrderSide.BUY:
-        return PositionAction.CLOSE_SHORT
-    if text in {"open_short", "open"} and side == OrderSide.SELL:
-        return PositionAction.OPEN_SHORT
-    if text in {"close_long", "close"} and side == OrderSide.SELL:
-        return PositionAction.CLOSE_LONG
-    return PositionAction.AUTO
-
-
-def _normalize_position_action_hint(position_action: Any) -> Optional[PositionAction]:
-    if position_action is None:
-        return None
-    if isinstance(position_action, PositionAction):
-        return position_action
-    text = str(getattr(position_action, "name", position_action) or "").strip().lower()
-    mapping = {
-        "open_long": PositionAction.OPEN_LONG,
-        "close_long": PositionAction.CLOSE_LONG,
-        "open_short": PositionAction.OPEN_SHORT,
-        "close_short": PositionAction.CLOSE_SHORT,
-        "auto": PositionAction.AUTO,
-    }
-    return mapping.get(text)
 
 
 def _resolve_shadow_submit_price(
@@ -189,7 +221,7 @@ def _resolve_shadow_submit_price(
                 px = Decimal(str(mid_price))
                 if px > _ZERO:
                     return px
-    except Exception:
+    except (ValueError, TypeError, AttributeError, ArithmeticError):
         pass
 
     try:
@@ -200,1369 +232,15 @@ def _resolve_shadow_submit_price(
             px = Decimal(str(px_any))
             if px > _ZERO:
                 return px
-    except Exception:
+    except Exception:  # connector API: broad catch justified
         pass
 
     return Decimal("0")
 
 
-_CANONICAL_CACHE: Dict[str, str] = {}
-
-
 # ---------------------------------------------------------------------------
-# BridgeState — holds all mutable state that was previously module-level.
-# Testable, resettable, multi-bot safe.
+# Paper Exchange event consumption (core event loop)
 # ---------------------------------------------------------------------------
-
-class BridgeState:
-    """Encapsulates all mutable bridge state (Redis, signal cursor, guard state, ML model).
-
-    A single process-wide instance ``_bridge_state`` replaces the former
-    module-level globals. Tests can call ``reset()`` instead of reaching into
-    six separate module attributes.
-    """
-
-    __slots__ = (
-        "redis_client", "redis_init_done", "last_signal_id",
-        "prev_guard_states", "adverse_model", "adverse_model_path",
-        "adverse_model_loaded", "sync_state_published_keys",
-        "paper_exchange_mode_warned_instances",
-        "paper_exchange_auto_mode_by_instance",
-        "paper_exchange_auto_mode_updated_ms_by_instance",
-        "last_paper_exchange_event_id", "paper_exchange_seen_event_ids",
-        "paper_exchange_cursor_initialized",
-        "sync_requested_at_ms_by_key", "sync_confirmed_keys",
-        "sync_timeout_hard_stop_keys",
-        "active_failure_streak_by_key",
-        "active_submit_order_cache",
-        "active_cancel_command_cache",
-        "active_cancel_all_command_cache",
-    )
-
-    def __init__(self) -> None:
-        self.reset()
-
-    def reset(self) -> None:
-        self.redis_client: Optional[Any] = None
-        self.redis_init_done: bool = False
-        self.last_signal_id: str = "0-0"
-        self.prev_guard_states: Dict[str, str] = {}
-        self.adverse_model: Optional[Any] = None
-        self.adverse_model_path: str = ""
-        self.adverse_model_loaded: bool = False
-        self.sync_state_published_keys: Set[str] = set()
-        self.paper_exchange_mode_warned_instances: Set[str] = set()
-        self.paper_exchange_auto_mode_by_instance: Dict[str, str] = {}
-        self.paper_exchange_auto_mode_updated_ms_by_instance: Dict[str, int] = {}
-        self.last_paper_exchange_event_id: str = "0-0"
-        self.paper_exchange_seen_event_ids: Set[str] = set()
-        self.paper_exchange_cursor_initialized: bool = False
-        self.sync_requested_at_ms_by_key: Dict[str, int] = {}
-        self.sync_confirmed_keys: Set[str] = set()
-        self.sync_timeout_hard_stop_keys: Set[str] = set()
-        self.active_failure_streak_by_key: Dict[str, int] = {}
-        self.active_submit_order_cache: Dict[str, Tuple[str, float]] = {}
-        self.active_cancel_command_cache: Dict[str, Tuple[str, float]] = {}
-        self.active_cancel_all_command_cache: Dict[str, Tuple[str, float]] = {}
-
-    def get_redis(self) -> Optional[Any]:
-        """Lazy-init a Redis client for signal consumption. Returns None when unavailable."""
-        if self.redis_init_done:
-            return self.redis_client
-        self.redis_init_done = True
-        try:
-            import redis as _redis_lib
-            import os as _os
-            host = _os.environ.get("REDIS_HOST", "")
-            if not host:
-                return None
-            self.redis_client = _redis_lib.Redis(
-                host=host,
-                port=int(_os.environ.get("REDIS_PORT", "6379")),
-                db=int(_os.environ.get("REDIS_DB", "0")),
-                password=_os.environ.get("REDIS_PASSWORD") or None,
-                decode_responses=True,
-                socket_connect_timeout=2,
-                socket_timeout=2,
-                socket_keepalive=True,
-            )
-            logger.info("Signal consumer Redis client initialized (%s)", host)
-            return self.redis_client
-        except Exception as exc:
-            logger.warning("Signal consumer Redis init failed: %s", exc)
-            return None
-
-
-_bridge_state = BridgeState()
-
-
-def _get_signal_redis() -> Optional[Any]:
-    """Lazy-init a Redis client for signal consumption. Returns None when unavailable."""
-    return _bridge_state.get_redis()
-
-
-def _canonical_name(connector_name: str) -> str:
-    if connector_name in _CANONICAL_CACHE:
-        return _CANONICAL_CACHE[connector_name]
-    if not str(connector_name).endswith("_paper_trade"):
-        return connector_name
-    try:
-        from services.common.exchange_profiles import resolve_profile
-        profile = resolve_profile(connector_name)
-        if isinstance(profile, dict):
-            req = profile.get("requires_paper_trade_exchange")
-            if isinstance(req, str) and req:
-                _CANONICAL_CACHE[connector_name] = req
-                return req
-    except Exception:
-        pass
-    result = connector_name[:-12]
-    _CANONICAL_CACHE[connector_name] = result
-    return result
-
-
-def _instance_env_suffix(instance_name: str) -> str:
-    raw = str(instance_name or "").strip().upper()
-    return "".join(ch if ch.isalnum() else "_" for ch in raw)
-
-
-def _normalize_paper_exchange_mode(
-    raw_mode: str,
-    *,
-    default: str = "disabled",
-    allow_auto: bool = False,
-) -> str:
-    mode = str(raw_mode or "").strip().lower()
-    if mode in {"disabled", "shadow", "active"}:
-        return mode
-    if allow_auto and mode == "auto":
-        return mode
-    return str(default or "").strip().lower()
-
-
-def _parse_env_bool(raw_value: str, *, default: bool = False) -> bool:
-    value = str(raw_value or "").strip().lower()
-    if value in {"1", "true", "yes", "on"}:
-        return True
-    if value in {"0", "false", "no", "off"}:
-        return False
-    return bool(default)
-
-
-def _paper_exchange_service_only_for_instance(instance_name: str) -> bool:
-    import os as _os
-
-    global_value = _parse_env_bool(_os.getenv("PAPER_EXCHANGE_SERVICE_ONLY", "false"), default=False)
-    suffix = _instance_env_suffix(instance_name)
-    override_key = f"PAPER_EXCHANGE_SERVICE_ONLY_{suffix}" if suffix else ""
-    if override_key and override_key in _os.environ:
-        return _parse_env_bool(_os.getenv(override_key, ""), default=global_value)
-    return global_value
-
-
-def _paper_exchange_service_heartbeat_is_fresh(redis_client: Any) -> bool:
-    import os as _os
-
-    stream_name = str(
-        _os.getenv("PAPER_EXCHANGE_HEARTBEAT_STREAM", "hb.paper_exchange.heartbeat.v1")
-    ).strip() or "hb.paper_exchange.heartbeat.v1"
-    max_age_ms = max(
-        1_000,
-        int(float(_os.getenv("PAPER_EXCHANGE_AUTO_MAX_HEARTBEAT_AGE_MS", "15000"))),
-    )
-    try:
-        rows = redis_client.xrevrange(stream_name, count=1)
-    except Exception:
-        return False
-    if not isinstance(rows, list) or len(rows) == 0:
-        return False
-    first = rows[0]
-    if not isinstance(first, (list, tuple)) or len(first) < 1:
-        return False
-    try:
-        entry_ms = int(str(first[0]).split("-", 1)[0])
-    except Exception:
-        return False
-    now_ms = int(time.time() * 1000)
-    age_ms = now_ms - entry_ms
-    return age_ms >= 0 and age_ms <= max_age_ms
-
-
-def _paper_exchange_auto_mode(instance_name: str, *, strict_service_only: bool = False) -> str:
-    import os as _os
-
-    cache_ms = max(0, int(float(_os.getenv("PAPER_EXCHANGE_AUTO_CACHE_MS", "5000"))))
-    instance_key = f"{str(instance_name or 'default')}|strict:{1 if strict_service_only else 0}"
-    now_ms = int(time.time() * 1000)
-    last_updated_ms = int(
-        _bridge_state.paper_exchange_auto_mode_updated_ms_by_instance.get(instance_key, 0) or 0
-    )
-    cached_mode = str(_bridge_state.paper_exchange_auto_mode_by_instance.get(instance_key, "") or "")
-    if cached_mode and cache_ms > 0 and (now_ms - last_updated_ms) <= cache_ms:
-        return cached_mode
-
-    fallback_mode = _normalize_paper_exchange_mode(
-        _os.getenv("PAPER_EXCHANGE_AUTO_FALLBACK", "shadow"),
-        default="shadow",
-        allow_auto=False,
-    )
-    redis_client = _get_signal_redis()
-    resolved_mode = (
-        "active"
-        if (redis_client is not None and _paper_exchange_service_heartbeat_is_fresh(redis_client))
-        else ("active" if strict_service_only else fallback_mode)
-    )
-    _bridge_state.paper_exchange_auto_mode_by_instance[instance_key] = resolved_mode
-    _bridge_state.paper_exchange_auto_mode_updated_ms_by_instance[instance_key] = now_ms
-    return resolved_mode
-
-
-def _paper_exchange_cursor_key(strategy: Any) -> str:
-    """Return per-instance Redis key used to persist event-stream cursor."""
-    instance_name = "default"
-    controllers = getattr(strategy, "controllers", {})
-    if isinstance(controllers, dict):
-        for ctrl in controllers.values():
-            cfg = getattr(ctrl, "config", None)
-            if cfg is None:
-                continue
-            candidate = str(getattr(cfg, "instance_name", "") or "").strip()
-            if candidate:
-                instance_name = candidate
-                break
-    return f"paper_exchange:last_event_id:{instance_name}"
-
-
-def _bootstrap_paper_exchange_cursor(strategy: Any, redis_client: Any, stream_name: str) -> None:
-    """Initialize stream cursor once per process, preferring persisted offset.
-
-    If no persisted cursor exists, start from the latest stream entry to avoid
-    replaying historical events on process restarts.
-    """
-    if _bridge_state.paper_exchange_cursor_initialized:
-        return
-    _bridge_state.paper_exchange_cursor_initialized = True
-
-    cursor_key = _paper_exchange_cursor_key(strategy)
-    try:
-        saved_cursor = redis_client.get(cursor_key)
-    except Exception:
-        saved_cursor = None
-
-    if isinstance(saved_cursor, bytes):
-        try:
-            saved_cursor = saved_cursor.decode("utf-8")
-        except Exception:
-            saved_cursor = None
-
-    if isinstance(saved_cursor, str) and "-" in saved_cursor:
-        _bridge_state.last_paper_exchange_event_id = saved_cursor
-        return
-
-    latest_id: Optional[str] = None
-    try:
-        latest_entries = redis_client.xrevrange(stream_name, count=1)
-        if (
-            isinstance(latest_entries, list)
-            and len(latest_entries) > 0
-            and isinstance(latest_entries[0], (list, tuple))
-            and len(latest_entries[0]) >= 1
-        ):
-            latest_id = str(latest_entries[0][0])
-    except Exception:
-        latest_id = None
-
-    if latest_id:
-        _bridge_state.last_paper_exchange_event_id = latest_id
-        try:
-            redis_client.set(cursor_key, latest_id)
-        except Exception:
-            pass
-
-
-def _paper_exchange_mode_for_instance(instance_name: str) -> str:
-    import os as _os
-
-    strict_service_only = _paper_exchange_service_only_for_instance(instance_name)
-    default_mode = _normalize_paper_exchange_mode(
-        _os.getenv("PAPER_EXCHANGE_MODE", "disabled"),
-        default="disabled",
-        allow_auto=True,
-    )
-    suffix = _instance_env_suffix(instance_name)
-    override_key = f"PAPER_EXCHANGE_MODE_{suffix}" if suffix else ""
-    override_mode = (
-        _normalize_paper_exchange_mode(
-            _os.getenv(override_key, ""),
-            default="",
-            allow_auto=True,
-        )
-        if override_key
-        else ""
-    )
-    mode = override_mode or default_mode or "disabled"
-    if mode == "auto":
-        resolved_mode = _paper_exchange_auto_mode(
-            instance_name,
-            strict_service_only=strict_service_only,
-        )
-    else:
-        resolved_mode = _normalize_paper_exchange_mode(mode, default="disabled", allow_auto=False)
-    if strict_service_only and resolved_mode in {"disabled", "shadow"}:
-        return "active"
-    return resolved_mode
-
-
-def _resolve_controller_for_command(
-    strategy: Any,
-    connector_name: str,
-    trading_pair: str,
-) -> Tuple[Optional[Any], str, str]:
-    controllers = getattr(strategy, "controllers", {})
-    matches: List[Tuple[str, Any, str]] = []
-    target_connector = _canonical_name(str(connector_name or ""))
-    if isinstance(controllers, dict):
-        for controller_id, ctrl in controllers.items():
-            cfg = getattr(ctrl, "config", None)
-            if cfg is None:
-                continue
-            cfg_connector = str(getattr(cfg, "connector_name", "") or "")
-            cfg_pair = str(getattr(cfg, "trading_pair", "") or "")
-            if _canonical_name(cfg_connector) == target_connector and (not trading_pair or cfg_pair == str(trading_pair)):
-                instance_name = str(getattr(cfg, "instance_name", "") or controller_id)
-                matches.append((str(controller_id), ctrl, instance_name))
-    if len(matches) == 1:
-        controller_id, ctrl, instance_name = matches[0]
-        return ctrl, controller_id, instance_name
-    if len(matches) > 1:
-        logger.warning(
-            "Ambiguous controller command route for connector=%s pair=%s; dropping command/event mapping",
-            str(connector_name),
-            str(trading_pair),
-        )
-        return None, "", ""
-    ctrl = _find_controller_for_connector(
-        strategy,
-        connector_name,
-        trading_pair=str(trading_pair or ""),
-    )
-    if ctrl is None:
-        return None, "", ""
-    cfg = getattr(ctrl, "config", None)
-    instance_name = str(getattr(cfg, "instance_name", "") or "")
-    controller_id = str(getattr(ctrl, "id", "") or getattr(ctrl, "controller_id", "") or "")
-    return ctrl, controller_id, instance_name
-
-
-def _paper_exchange_mode_for_route(strategy: Any, connector_name: str, trading_pair: str) -> str:
-    _ctrl, _controller_id, instance_name = _resolve_controller_for_command(strategy, connector_name, trading_pair)
-    return _paper_exchange_mode_for_instance(instance_name)
-
-
-def _bridge_for_exchange_event(
-    strategy: Any, connector_name: str, trading_pair: str
-) -> Tuple[Optional[str], Optional[Dict[str, object]]]:
-    bridges = getattr(strategy, "_paper_desk_v2_bridges", {})
-    if not isinstance(bridges, dict):
-        return None, None
-
-    # Fast path: exact connector key hit.
-    bridge = bridges.get(connector_name)
-    if isinstance(bridge, dict):
-        iid = bridge.get("instrument_id")
-        iid_pair = str(getattr(iid, "trading_pair", "") or "")
-        if not trading_pair or iid_pair == trading_pair:
-            return connector_name, bridge
-
-    # Fallback: canonical connector + pair match.
-    target_canonical = _canonical_name(str(connector_name))
-    for conn_name, candidate in bridges.items():
-        if not isinstance(candidate, dict):
-            continue
-        iid = candidate.get("instrument_id")
-        iid_pair = str(getattr(iid, "trading_pair", "") or "")
-        if trading_pair and iid_pair != trading_pair:
-            continue
-        if _canonical_name(str(conn_name)) == target_canonical:
-            return str(conn_name), candidate
-
-    return None, None
-
-
-def _sync_handshake_key(instance_name: str, connector_name: str, trading_pair: str) -> str:
-    return f"{str(instance_name or '').strip()}|{_canonical_name(str(connector_name or ''))}|{str(trading_pair or '').strip().upper()}"
-
-
-def _active_submit_retry_ttl_s() -> float:
-    import os as _os
-
-    try:
-        ttl = float(_os.getenv("PAPER_EXCHANGE_SUBMIT_RETRY_TTL_S", "1.0"))
-    except Exception:
-        ttl = 1.0
-    return max(0.0, ttl)
-
-
-def _active_submit_fingerprint(
-    *,
-    instance_name: str,
-    connector_name: str,
-    trading_pair: str,
-    side: str,
-    order_type: Optional[Any],
-    amount: Optional[Any],
-    price: Optional[Any],
-) -> str:
-    def _fmt_decimal(value: Optional[Any]) -> str:
-        if value is None:
-            return ""
-        try:
-            parsed = Decimal(str(value))
-            if parsed.is_nan():
-                return "nan"
-            return format(parsed.normalize(), "f")
-        except Exception:
-            return str(value)
-
-    order_type_text = str(getattr(order_type, "name", order_type) or "").strip().lower()
-    return "|".join(
-        [
-            str(instance_name or "").strip().lower(),
-            _canonical_name(str(connector_name or "")),
-            str(trading_pair or "").strip().upper(),
-            str(side or "").strip().lower(),
-            order_type_text,
-            _fmt_decimal(amount),
-            _fmt_decimal(price),
-        ]
-    )
-
-
-def _active_submit_order_id(
-    strategy: Any,
-    *,
-    connector_name: str,
-    trading_pair: str,
-    side: str,
-    order_type: Optional[Any],
-    amount: Optional[Any],
-    price: Optional[Any],
-) -> str:
-    import uuid as _uuid_mod
-
-    _ctrl, _controller_id, instance_name = _resolve_controller_for_command(strategy, connector_name, trading_pair)
-    fingerprint = _active_submit_fingerprint(
-        instance_name=instance_name,
-        connector_name=connector_name,
-        trading_pair=trading_pair,
-        side=side,
-        order_type=order_type,
-        amount=amount,
-        price=price,
-    )
-    now = time.time()
-    ttl_s = _active_submit_retry_ttl_s()
-
-    cache = _bridge_state.active_submit_order_cache
-    if cache:
-        prune_after = max(1.0, ttl_s * 3.0)
-        stale_keys = [k for k, (_oid, ts) in cache.items() if (now - float(ts)) > prune_after]
-        for key in stale_keys:
-            cache.pop(key, None)
-
-    if ttl_s > 0.0:
-        cached = cache.get(fingerprint)
-        if cached is not None:
-            cached_order_id, cached_ts = cached
-            order_id_text = str(cached_order_id or "").strip()
-            if order_id_text and (now - float(cached_ts)) <= ttl_s:
-                runtime_order = _get_runtime_order_for_executor(strategy, connector_name, order_id_text)
-                runtime_state = str(getattr(runtime_order, "current_state", "") or "").strip().lower() if runtime_order else ""
-                if runtime_order is None or runtime_state in {
-                    "pending_create", "open", "pending_cancel", "partial", "failed", "rejected",
-                }:
-                    return order_id_text
-            else:
-                cache.pop(fingerprint, None)
-
-    order_id = f"pe-{_uuid_mod.uuid4().hex[:16]}"
-    cache[fingerprint] = (order_id, now)
-    return order_id
-
-
-def _active_cancel_retry_ttl_s() -> float:
-    import os as _os
-
-    try:
-        ttl = float(_os.getenv("PAPER_EXCHANGE_CANCEL_RETRY_TTL_S", "1.0"))
-    except Exception:
-        ttl = 1.0
-    return max(0.0, ttl)
-
-
-def _active_cancel_fingerprint(
-    *,
-    instance_name: str,
-    connector_name: str,
-    trading_pair: str,
-    order_id: str,
-) -> str:
-    return "|".join(
-        [
-            str(instance_name or "").strip().lower(),
-            _canonical_name(str(connector_name or "")),
-            str(trading_pair or "").strip().upper(),
-            str(order_id or "").strip(),
-        ]
-    )
-
-
-def _active_cancel_command_event_id(
-    strategy: Any,
-    *,
-    connector_name: str,
-    trading_pair: str,
-    order_id: str,
-) -> Optional[str]:
-    import uuid as _uuid_mod
-
-    order_key = str(order_id or "").strip()
-    if not order_key:
-        return None
-    _ctrl, _controller_id, instance_name = _resolve_controller_for_command(strategy, connector_name, trading_pair)
-    fingerprint = _active_cancel_fingerprint(
-        instance_name=instance_name,
-        connector_name=connector_name,
-        trading_pair=trading_pair,
-        order_id=order_key,
-    )
-    now = time.time()
-    ttl_s = _active_cancel_retry_ttl_s()
-
-    cache = _bridge_state.active_cancel_command_cache
-    if cache:
-        prune_after = max(1.0, ttl_s * 3.0)
-        stale_keys = [k for k, (_event_id, ts) in cache.items() if (now - float(ts)) > prune_after]
-        for key in stale_keys:
-            cache.pop(key, None)
-
-    if ttl_s > 0.0:
-        cached = cache.get(fingerprint)
-        if cached is not None:
-            cached_event_id, cached_ts = cached
-            event_id_text = str(cached_event_id or "").strip()
-            if event_id_text and (now - float(cached_ts)) <= ttl_s:
-                return event_id_text
-            cache.pop(fingerprint, None)
-
-    command_event_id = f"pe-cancel-{_uuid_mod.uuid4().hex}"
-    cache[fingerprint] = (command_event_id, now)
-    return command_event_id
-
-
-def _active_cancel_all_retry_ttl_s() -> float:
-    import os as _os
-
-    try:
-        ttl = float(_os.getenv("PAPER_EXCHANGE_CANCEL_ALL_RETRY_TTL_S", "1.0"))
-    except Exception:
-        ttl = 1.0
-    return max(0.0, ttl)
-
-
-def _active_cancel_all_fingerprint(
-    *,
-    instance_name: str,
-    connector_name: str,
-    trading_pair: str,
-    metadata: Optional[Dict[str, str]] = None,
-) -> str:
-    meta = metadata or {}
-    operator = str(meta.get("operator", "")).strip()
-    reason = str(meta.get("reason", "")).strip()
-    change_ticket = str(meta.get("change_ticket", "")).strip()
-    return "|".join(
-        [
-            str(instance_name or "").strip().lower(),
-            _canonical_name(str(connector_name or "")),
-            str(trading_pair or "").strip().upper(),
-            operator,
-            reason,
-            change_ticket,
-        ]
-    )
-
-
-def _active_cancel_all_command_event_id(
-    strategy: Any,
-    *,
-    connector_name: str,
-    trading_pair: str,
-    metadata: Optional[Dict[str, str]] = None,
-) -> str:
-    import uuid as _uuid_mod
-
-    _ctrl, _controller_id, instance_name = _resolve_controller_for_command(strategy, connector_name, trading_pair)
-    fingerprint = _active_cancel_all_fingerprint(
-        instance_name=instance_name,
-        connector_name=connector_name,
-        trading_pair=trading_pair,
-        metadata=metadata,
-    )
-    now = time.time()
-    ttl_s = _active_cancel_all_retry_ttl_s()
-
-    cache = _bridge_state.active_cancel_all_command_cache
-    if cache:
-        prune_after = max(1.0, ttl_s * 3.0)
-        stale_keys = [k for k, (_event_id, ts) in cache.items() if (now - float(ts)) > prune_after]
-        for key in stale_keys:
-            cache.pop(key, None)
-
-    if ttl_s > 0.0:
-        cached = cache.get(fingerprint)
-        if cached is not None:
-            cached_event_id, cached_ts = cached
-            event_id_text = str(cached_event_id or "").strip()
-            if event_id_text and (now - float(cached_ts)) <= ttl_s:
-                return event_id_text
-            cache.pop(fingerprint, None)
-
-    command_event_id = f"pe-cancel-all-{_uuid_mod.uuid4().hex}"
-    cache[fingerprint] = (command_event_id, now)
-    return command_event_id
-
-
-def _runtime_orders_store(strategy: Any) -> Dict[str, Dict[str, Any]]:
-    store = getattr(strategy, "_paper_exchange_runtime_orders", None)
-    if isinstance(store, dict):
-        return store
-    store = {}
-    try:
-        setattr(strategy, "_paper_exchange_runtime_orders", store)
-    except Exception:
-        pass
-    return store
-
-
-def _runtime_orders_bucket(strategy: Any, connector_name: str) -> Dict[str, Any]:
-    store = _runtime_orders_store(strategy)
-    key = str(connector_name or "")
-    bucket = store.get(key)
-    if isinstance(bucket, dict):
-        return bucket
-    bucket = {}
-    store[key] = bucket
-    return bucket
-
-
-def _runtime_order_trade_type(side: Optional[str]) -> str:
-    side_norm = str(side or "").strip().lower()
-    return "BUY" if side_norm == "buy" else "SELL"
-
-
-def _canonical_runtime_order_state(state: str) -> str:
-    normalized = str(state or "").strip().lower()
-    if normalized == "open":
-        return "working"
-    if normalized in {"partial", "partially-filled"}:
-        return "partially_filled"
-    if normalized == "cancelled":
-        return "canceled"
-    return normalized
-
-
-def _runtime_order_state_flags(state: str) -> Tuple[bool, bool]:
-    normalized = _canonical_runtime_order_state(state)
-    if normalized in {"filled", "canceled", "cancelled", "failed", "rejected", "expired"}:
-        return True, False
-    if normalized in {"working", "pending_create", "pending_cancel", "partially_filled"}:
-        return False, True
-    return False, False
-
-
-def _upsert_runtime_order(
-    strategy: Any,
-    *,
-    connector_name: str,
-    order_id: str,
-    trading_pair: Optional[str] = None,
-    side: Optional[str] = None,
-    order_type: Optional[Any] = None,
-    amount: Optional[Any] = None,
-    price: Optional[Any] = None,
-    state: Optional[str] = None,
-    failure_reason: str = "",
-) -> Optional[Any]:
-    order_key = str(order_id or "").strip()
-    if not order_key:
-        return None
-    now = time.time()
-    bucket = _runtime_orders_bucket(strategy, connector_name)
-    order = bucket.get(order_key)
-    if order is None:
-        order = SimpleNamespace(
-            client_order_id=order_key,
-            order_id=order_key,
-            exchange_order_id=None,
-            trading_pair=str(trading_pair or ""),
-            trade_type=_runtime_order_trade_type(side),
-            order_type=str(getattr(order_type, "name", order_type) or "").upper(),
-            amount=Decimal(str(amount)) if amount is not None else Decimal("0"),
-            price=Decimal(str(price)) if price is not None else Decimal("0"),
-            current_state="pending_create",
-            is_done=False,
-            is_open=True,
-            creation_timestamp=now,
-            last_update_timestamp=now,
-            executed_amount_base=Decimal("0"),
-            executed_amount_quote=Decimal("0"),
-            cumulative_fee_paid=Decimal("0"),
-            failure_reason="",
-            source="paper_exchange_service",
-        )
-        bucket[order_key] = order
-    else:
-        if trading_pair is not None:
-            order.trading_pair = str(trading_pair)
-        if side is not None:
-            order.trade_type = _runtime_order_trade_type(side)
-        if order_type is not None:
-            order.order_type = str(getattr(order_type, "name", order_type) or "").upper()
-        if amount is not None:
-            order.amount = Decimal(str(amount))
-        if price is not None:
-            order.price = Decimal(str(price))
-        order.last_update_timestamp = now
-
-    if state is not None:
-        state_text = _canonical_runtime_order_state(state)
-        is_done, is_open = _runtime_order_state_flags(state_text)
-        order.current_state = state_text
-        order.is_done = bool(is_done)
-        order.is_open = bool(is_open)
-        order.last_update_timestamp = now
-    if failure_reason:
-        order.failure_reason = str(failure_reason)
-    return order
-
-
-def _prune_runtime_orders(strategy: Any, *, done_ttl_sec: float = 120.0) -> None:
-    store = _runtime_orders_store(strategy)
-    now = time.time()
-    for connector_name in list(store.keys()):
-        bucket = store.get(connector_name)
-        if not isinstance(bucket, dict):
-            continue
-        for order_id in list(bucket.keys()):
-            order = bucket.get(order_id)
-            if order is None:
-                continue
-            is_done = bool(getattr(order, "is_done", False))
-            updated_ts = float(getattr(order, "last_update_timestamp", now))
-            if is_done and (now - updated_ts) > float(done_ttl_sec):
-                bucket.pop(order_id, None)
-        if not bucket:
-            store.pop(connector_name, None)
-
-
-def _paper_exchange_state_snapshot_path() -> str:
-    configured = str(os.getenv("PAPER_EXCHANGE_STATE_SNAPSHOT_PATH", "") or "").strip()
-    candidates = [
-        configured,
-        "/home/hummingbot/reports/verification/paper_exchange_state_snapshot_latest.json",
-        "/workspace/hbot/reports/verification/paper_exchange_state_snapshot_latest.json",
-        "reports/verification/paper_exchange_state_snapshot_latest.json",
-    ]
-    for candidate in candidates:
-        if not candidate:
-            continue
-        try:
-            if Path(candidate).exists():
-                return candidate
-        except Exception:
-            continue
-    return configured or "reports/verification/paper_exchange_state_snapshot_latest.json"
-
-
-def _active_command_ttl_ms(command: str) -> int:
-    command_name = str(command or "").strip().lower()
-    base_ttl_ms = max(1_000, int(float(os.getenv("PAPER_EXCHANGE_COMMAND_TTL_MS", "30000"))))
-    if command_name == "sync_state":
-        sync_timeout_ms = max(1_000, int(float(os.getenv("PAPER_EXCHANGE_SYNC_TIMEOUT_MS", "30000"))))
-        return max(
-            base_ttl_ms,
-            max(300_000, sync_timeout_ms * 4),
-        )
-    if command_name in {"submit_order", "cancel_order", "cancel_all"}:
-        active_ttl_ms = max(
-            1_000,
-            int(float(os.getenv("PAPER_EXCHANGE_ACTIVE_COMMAND_TTL_MS", "120000"))),
-        )
-        return max(base_ttl_ms, active_ttl_ms)
-    return base_ttl_ms
-
-
-def _hydrate_runtime_orders_from_state_snapshot(
-    strategy: Any,
-    *,
-    instance_name: str,
-    connector_name: str,
-    trading_pair: str,
-) -> List[str]:
-    snapshot_path = _paper_exchange_state_snapshot_path()
-    try:
-        with open(snapshot_path, "r", encoding="utf-8") as snapshot_file:
-            payload = json.load(snapshot_file)
-    except Exception as exc:
-        logger.warning(
-            "paper_exchange state snapshot hydration failed (instance=%s connector=%s pair=%s path=%s error=%s)",
-            instance_name,
-            connector_name,
-            trading_pair,
-            snapshot_path,
-            exc,
-        )
-        return []
-
-    orders = payload.get("orders", {})
-    if not isinstance(orders, dict):
-        return []
-
-    hydrated_order_ids: List[str] = []
-    target_instance = str(instance_name or "").strip().lower()
-    target_pair = str(trading_pair or "").strip().upper()
-    target_connector = _canonical_name(str(connector_name or ""))
-    for record in orders.values():
-        if not isinstance(record, dict):
-            continue
-        order_id = str(record.get("order_id", "") or "").strip()
-        if not order_id:
-            continue
-        record_instance = str(record.get("instance_name", "") or "").strip().lower()
-        record_connector = _canonical_name(str(record.get("connector_name", "") or ""))
-        record_pair = str(record.get("trading_pair", "") or "").strip().upper()
-        record_state = str(record.get("state", "working") or "").strip().lower()
-        if record_instance != target_instance or record_connector != target_connector or record_pair != target_pair:
-            continue
-        if record_state in {"filled", "canceled", "cancelled", "failed", "rejected", "expired"}:
-            continue
-        _upsert_runtime_order(
-            strategy,
-            connector_name=connector_name,
-            order_id=order_id,
-            trading_pair=record_pair,
-            side=str(record.get("side", "") or "").lower() or None,
-            order_type=str(record.get("order_type", "") or "").lower() or None,
-            amount=record.get("amount_base"),
-            price=record.get("price"),
-            state="partially_filled" if record_state in {"partially_filled", "partial"} else "working",
-        )
-        hydrated_order_ids.append(order_id)
-    return hydrated_order_ids
-
-
-def _controller_tracked_order_ids(controller: Optional[Any]) -> Optional[Set[str]]:
-    if controller is None:
-        return None
-    executors = getattr(controller, "executors_info", None)
-    if not isinstance(executors, list):
-        return None
-    tracked_ids: Set[str] = set()
-    for executor in executors:
-        order_id = getattr(executor, "order_id", None) or getattr(executor, "id", None)
-        if order_id:
-            tracked_ids.add(str(order_id))
-    return tracked_ids
-
-
-def _cancel_reconciled_ghost_orders(
-    strategy: Any,
-    *,
-    controller: Optional[Any],
-    instance_name: str,
-    connector_name: str,
-    trading_pair: str,
-    order_ids: List[str],
-) -> int:
-    tracked_ids = _controller_tracked_order_ids(controller)
-    if tracked_ids is None:
-        return 0
-
-    canceled = 0
-    for order_id in order_ids:
-        if order_id in tracked_ids:
-            continue
-        publish_entry_id = _publish_paper_exchange_command(
-            strategy,
-            connector_name=connector_name,
-            trading_pair=trading_pair,
-            command="cancel_order",
-            order_id=order_id,
-            metadata={
-                "bridge_method": "startup_reconcile_cancel",
-                "compat_adapter": "active",
-                "reconcile_reason": "ghost_order",
-                "instance_name": instance_name,
-            },
-        )
-        if publish_entry_id is None:
-            continue
-        _upsert_runtime_order(
-            strategy,
-            connector_name=connector_name,
-            order_id=order_id,
-            trading_pair=trading_pair,
-            state="pending_cancel",
-        )
-        canceled += 1
-    return canceled
-
-
-def _get_runtime_order_for_executor(strategy: Any, connector_name: str, order_id: str) -> Optional[Any]:
-    if strategy is None:
-        return None
-    _prune_runtime_orders(strategy)
-    order_key = str(order_id or "").strip()
-    if not order_key:
-        return None
-
-    store = _runtime_orders_store(strategy)
-    direct_bucket = store.get(str(connector_name or ""))
-    if isinstance(direct_bucket, dict):
-        direct = direct_bucket.get(order_key)
-        if direct is not None:
-            return direct
-
-    target_canonical = _canonical_name(str(connector_name or ""))
-    for key, bucket in store.items():
-        if not isinstance(bucket, dict):
-            continue
-        if _canonical_name(str(key)) != target_canonical:
-            continue
-        order = bucket.get(order_key)
-        if order is not None:
-            return order
-    return None
-
-
-def _force_sync_hard_stop(
-    strategy: Any,
-    *,
-    controller: Optional[Any],
-    controller_id: str,
-    instance_name: str,
-    connector_name: str,
-    trading_pair: str,
-    sync_key: str,
-    reason: str,
-) -> None:
-    if sync_key in _bridge_state.sync_timeout_hard_stop_keys:
-        return
-    _bridge_state.sync_timeout_hard_stop_keys.add(sync_key)
-
-    try:
-        ops_guard = getattr(controller, "_ops_guard", None)
-        if ops_guard is not None and hasattr(ops_guard, "force_hard_stop"):
-            ops_guard.force_hard_stop(str(reason))
-            logger.error(
-                "paper_exchange sync hard-stop forced | instance=%s controller=%s connector=%s pair=%s reason=%s",
-                instance_name,
-                controller_id,
-                connector_name,
-                trading_pair,
-                reason,
-            )
-    except Exception as exc:
-        logger.warning("paper_exchange sync hard-stop escalation failed: %s", exc)
-
-    try:
-        import json as _json
-        from services.contracts.event_identity import validate_event_identity as _validate_event_identity
-        from services.contracts.event_schemas import AuditEvent
-        from services.contracts.stream_names import AUDIT_STREAM, STREAM_RETENTION_MAXLEN
-
-        r = _get_signal_redis()
-        if r is not None:
-            audit = AuditEvent(
-                producer="hb.paper_engine_v2",
-                instance_name=instance_name or connector_name,
-                severity="error",
-                category="paper_exchange_sync",
-                message="active_mode_sync_hard_stop",
-                metadata={
-                    "reason": str(reason),
-                    "controller_id": str(controller_id),
-                    "connector_name": str(connector_name),
-                    "trading_pair": str(trading_pair),
-                },
-            )
-            audit_payload = audit.model_dump()
-            identity_ok, identity_reason = _validate_event_identity(audit_payload)
-            if not identity_ok:
-                logger.warning(
-                    "paper_exchange sync hard-stop audit dropped by identity preflight reason=%s",
-                    identity_reason,
-                )
-                return
-            r.xadd(
-                AUDIT_STREAM,
-                {"payload": _json.dumps(audit_payload, default=str)},
-                maxlen=STREAM_RETENTION_MAXLEN.get(AUDIT_STREAM, 100_000),
-                approximate=True,
-            )
-    except Exception:
-        logger.debug("paper_exchange sync hard-stop audit publish failed", exc_info=True)
-
-
-def _active_failure_hard_stop_streak() -> int:
-    import os as _os
-
-    try:
-        parsed = int(float(_os.getenv("PAPER_EXCHANGE_FAILURE_HARD_STOP_STREAK", "3")))
-    except Exception:
-        parsed = 3
-    return max(2, parsed)
-
-
-def _apply_controller_soft_pause(controller: Optional[Any], reason: str) -> None:
-    if controller is None:
-        return
-    try:
-        if hasattr(controller, "apply_execution_intent"):
-            controller.apply_execution_intent({"action": "soft_pause", "metadata": {"reason": str(reason)}})
-            return
-    except Exception:
-        logger.debug("paper_exchange soft-pause intent apply failed", exc_info=True)
-    try:
-        if hasattr(controller, "set_external_soft_pause"):
-            controller.set_external_soft_pause(True, str(reason))
-    except Exception:
-        logger.debug("paper_exchange soft-pause fallback failed", exc_info=True)
-
-
-def _apply_controller_resume(controller: Optional[Any], reason: str) -> None:
-    if controller is None:
-        return
-    try:
-        if hasattr(controller, "apply_execution_intent"):
-            controller.apply_execution_intent({"action": "resume", "metadata": {"reason": str(reason)}})
-            return
-    except Exception:
-        logger.debug("paper_exchange resume intent apply failed", exc_info=True)
-    try:
-        if hasattr(controller, "set_external_soft_pause"):
-            controller.set_external_soft_pause(False, "")
-    except Exception:
-        logger.debug("paper_exchange resume fallback failed", exc_info=True)
-
-
-def _apply_active_failure_policy(
-    strategy: Any,
-    *,
-    connector_name: str,
-    trading_pair: str,
-    failure_class: str,
-    reason: str,
-) -> str:
-    controller, controller_id, instance_name = _resolve_controller_for_command(strategy, connector_name, trading_pair)
-    sync_key = _sync_handshake_key(instance_name, connector_name, trading_pair)
-    current_streak = int(_bridge_state.active_failure_streak_by_key.get(sync_key, 0))
-    next_streak = current_streak + 1
-    _bridge_state.active_failure_streak_by_key[sync_key] = next_streak
-
-    hard_stop_streak = _active_failure_hard_stop_streak()
-    failure_class_norm = str(failure_class or "").strip().lower() or "unknown"
-    reason_norm = str(reason or "").strip().lower() or "unknown"
-    if next_streak >= hard_stop_streak:
-        hard_stop_reason = f"paper_exchange_recovery_loop:{failure_class_norm}:{reason_norm}"
-        _force_sync_hard_stop(
-            strategy,
-            controller=controller,
-            controller_id=controller_id,
-            instance_name=instance_name,
-            connector_name=connector_name,
-            trading_pair=trading_pair,
-            sync_key=sync_key,
-            reason=hard_stop_reason,
-        )
-        return "hard_stop"
-
-    soft_pause_reason = f"paper_exchange_soft_pause:{failure_class_norm}:{reason_norm}"
-    _apply_controller_soft_pause(controller, soft_pause_reason)
-    logger.warning(
-        "paper_exchange active failure policy soft-pause | instance=%s connector=%s pair=%s class=%s reason=%s streak=%s",
-        instance_name,
-        connector_name,
-        trading_pair,
-        failure_class_norm,
-        reason_norm,
-        next_streak,
-    )
-    return "soft_pause"
-
-
-def _mark_active_failure_recovered(strategy: Any, *, connector_name: str, trading_pair: str) -> None:
-    controller, _controller_id, instance_name = _resolve_controller_for_command(strategy, connector_name, trading_pair)
-    sync_key = _sync_handshake_key(instance_name, connector_name, trading_pair)
-    previous_streak = int(_bridge_state.active_failure_streak_by_key.pop(sync_key, 0))
-    if previous_streak > 0:
-        _apply_controller_resume(controller, f"paper_exchange_recovered:streak={previous_streak}")
-
-
-def _active_sync_gate(strategy: Any, connector_name: str, trading_pair: str) -> Tuple[bool, str]:
-    import os as _os
-
-    mode = _paper_exchange_mode_for_route(strategy, connector_name, trading_pair)
-    if mode != "active":
-        return True, "not_active_mode"
-
-    controller, controller_id, instance_name = _resolve_controller_for_command(strategy, connector_name, trading_pair)
-    if instance_name and instance_name not in _bridge_state.paper_exchange_mode_warned_instances:
-        logger.info(
-            "paper_exchange active sync gate enabled | instance=%s connector=%s pair=%s",
-            instance_name,
-            connector_name,
-            trading_pair,
-        )
-        _bridge_state.paper_exchange_mode_warned_instances.add(instance_name)
-    sync_key = _sync_handshake_key(instance_name, connector_name, trading_pair)
-    if sync_key in _bridge_state.sync_confirmed_keys:
-        return True, "sync_confirmed"
-
-    _ensure_sync_state_command(strategy, connector_name, trading_pair)
-
-    now_ms = int(time.time() * 1000)
-    requested_at_ms = _bridge_state.sync_requested_at_ms_by_key.get(sync_key, now_ms)
-    timeout_ms = max(1_000, int(float(_os.getenv("PAPER_EXCHANGE_SYNC_TIMEOUT_MS", "30000"))))
-    if now_ms - requested_at_ms >= timeout_ms:
-        _force_sync_hard_stop(
-            strategy,
-            controller=controller,
-            controller_id=controller_id,
-            instance_name=instance_name,
-            connector_name=connector_name,
-            trading_pair=trading_pair,
-            sync_key=sync_key,
-            reason="paper_exchange_sync_timeout",
-        )
-        return False, "paper_exchange_sync_timeout"
-    return False, "paper_exchange_sync_pending"
-
-
-def _fmt_contract_decimal(value: Any) -> str:
-    try:
-        if value is None:
-            return ""
-        parsed = Decimal(str(value))
-        if parsed.is_nan():
-            return ""
-        return format(parsed, "f")
-    except Exception:
-        return ""
-
-
-def _controller_accounting_contract_metadata(controller: Optional[Any]) -> Dict[str, str]:
-    if controller is None:
-        return {}
-
-    out: Dict[str, str] = {}
-    maker_fee = _fmt_contract_decimal(getattr(controller, "_maker_fee_pct", None))
-    taker_fee = _fmt_contract_decimal(getattr(controller, "_taker_fee_pct", None))
-    funding_rate = _fmt_contract_decimal(getattr(controller, "_funding_rate", None))
-    fee_source = str(getattr(controller, "_fee_source", "") or "").strip()
-
-    cfg = getattr(controller, "config", None)
-    leverage_text = _fmt_contract_decimal(getattr(cfg, "leverage", None))
-
-    margin_mode = ""
-    try:
-        portfolio = getattr(controller, "_portfolio", None)
-        portfolio_cfg = getattr(portfolio, "_config", None)
-        margin_mode = str(getattr(portfolio_cfg, "margin_model_type", "") or "").strip().lower()
-    except Exception:
-        margin_mode = ""
-    if margin_mode not in {"leveraged", "standard"}:
-        margin_mode = "leveraged"
-
-    if maker_fee:
-        out["maker_fee_pct"] = maker_fee
-    if taker_fee:
-        out["taker_fee_pct"] = taker_fee
-    if funding_rate:
-        out["funding_rate"] = funding_rate
-    if fee_source:
-        out["fee_source"] = fee_source
-    if leverage_text:
-        out["leverage"] = leverage_text
-    out["margin_mode"] = margin_mode
-    out["accounting_contract_version"] = "paper_exchange_v1"
-    return out
-
-
-def _publish_paper_exchange_command(
-    strategy: Any,
-    *,
-    connector_name: str,
-    trading_pair: str,
-    command: str,
-    order_id: Optional[str] = None,
-    side: Optional[str] = None,
-    order_type: Optional[Any] = None,
-    amount_base: Optional[Any] = None,
-    price: Optional[Any] = None,
-    metadata: Optional[Dict[str, str]] = None,
-    command_event_id: Optional[str] = None,
-    ttl_ms_override: Optional[int] = None,
-) -> Optional[str]:
-    import json as _json
-    import os as _os
-    import uuid as _uuid_mod
-
-    _ctrl, controller_id, instance_name = _resolve_controller_for_command(strategy, connector_name, trading_pair)
-    mode = _paper_exchange_mode_for_instance(instance_name)
-    if mode not in {"shadow", "active"}:
-        return None
-
-    r = _get_signal_redis()
-    if r is None:
-        if mode == "active":
-            _apply_active_failure_policy(
-                strategy,
-                connector_name=connector_name,
-                trading_pair=trading_pair,
-                failure_class="service_down",
-                reason="redis_unavailable",
-            )
-        return None
-
-    try:
-        from services.contracts.stream_names import PAPER_EXCHANGE_COMMAND_STREAM, STREAM_RETENTION_MAXLEN
-        from services.contracts.event_identity import validate_event_identity as _validate_event_identity
-
-        order_type_raw = getattr(order_type, "name", order_type)
-        order_type_value = str(order_type_raw).strip().lower() if order_type_raw is not None else None
-        amount_value = float(amount_base) if amount_base is not None else None
-        price_value: Optional[float] = None
-        if price is not None:
-            try:
-                # Decimal("NaN") check
-                if price == price:
-                    price_value = float(price)
-            except Exception:
-                price_value = None
-
-        ttl_ms = _active_command_ttl_ms(command)
-        if ttl_ms_override is not None:
-            ttl_ms = max(ttl_ms, int(ttl_ms_override))
-        command_meta = {
-            "source": "hb_bridge_active_adapter" if mode == "active" else "hb_bridge_shadow_adapter",
-            "paper_exchange_mode": mode,
-            "controller_id": controller_id,
-        }
-        command_meta.update(_controller_accounting_contract_metadata(_ctrl))
-        command_producer = "hb_bridge_active_adapter" if mode == "active" else "hb_bridge_shadow_adapter"
-        if metadata:
-            for key, value in metadata.items():
-                command_meta[str(key)] = str(value)
-
-        resolved_command_event_id = str(command_event_id or "").strip() or None
-        if resolved_command_event_id is None and mode == "active" and str(command or "").strip().lower() == "cancel_all":
-            resolved_command_event_id = _active_cancel_all_command_event_id(
-                strategy,
-                connector_name=connector_name,
-                trading_pair=trading_pair,
-                metadata=command_meta,
-            )
-
-        event = build_paper_execution_command(
-            event_id=resolved_command_event_id or str(_uuid_mod.uuid4()),
-            producer=command_producer,
-            instance_name=instance_name or str(connector_name),
-            command=command,
-            connector_name=str(connector_name),
-            trading_pair=str(trading_pair),
-            order_id=str(order_id) if order_id else None,
-            side=side.lower() if isinstance(side, str) else None,
-            order_type=order_type_value,
-            amount_base=amount_value,
-            price=price_value,
-            reduce_only=str(command_meta.get("reduce_only", "")).strip().lower() in {"1", "true", "yes"},
-            position_action=str(command_meta.get("position_action", "") or "").strip().lower() or None,
-            position_mode=str(command_meta.get("position_mode", "") or "").strip().upper() or None,
-            ttl_ms=ttl_ms,
-            metadata=command_meta,
-        )
-        event_payload = event.model_dump()
-        identity_ok, identity_reason = _validate_event_identity(event_payload)
-        if not identity_ok:
-            if mode == "active":
-                _apply_active_failure_policy(
-                    strategy,
-                    connector_name=connector_name,
-                    trading_pair=trading_pair,
-                    failure_class="service_down",
-                    reason=f"command_identity_invalid:{identity_reason}",
-                )
-            logger.warning(
-                "paper_exchange command dropped due to identity contract: %s (command=%s connector=%s pair=%s)",
-                identity_reason,
-                str(command),
-                str(connector_name),
-                str(trading_pair),
-            )
-            return None
-        entry_id = r.xadd(
-            PAPER_EXCHANGE_COMMAND_STREAM,
-            {"payload": _json.dumps(event_payload, default=str)},
-            maxlen=STREAM_RETENTION_MAXLEN.get(PAPER_EXCHANGE_COMMAND_STREAM, 100_000),
-            approximate=True,
-        )
-        if entry_id is None and mode == "active":
-            _apply_active_failure_policy(
-                strategy,
-                connector_name=connector_name,
-                trading_pair=trading_pair,
-                failure_class="service_down",
-                reason="command_publish_failed",
-            )
-        return entry_id
-    except Exception as exc:
-        if mode == "active":
-            _apply_active_failure_policy(
-                strategy,
-                connector_name=connector_name,
-                trading_pair=trading_pair,
-                failure_class="service_down",
-                reason=f"command_publish_exception:{type(exc).__name__}",
-            )
-        logger.debug("paper_exchange command publish failed: %s", exc, exc_info=True)
-        return None
-
-
-def _ensure_sync_state_command(strategy: Any, connector_name: str, trading_pair: str) -> None:
-    _ctrl, _controller_id, instance_name = _resolve_controller_for_command(strategy, connector_name, trading_pair)
-    mode = _paper_exchange_mode_for_instance(instance_name)
-    if mode not in {"shadow", "active"}:
-        return
-    sync_key = _sync_handshake_key(instance_name, connector_name, trading_pair)
-    if sync_key in _bridge_state.sync_confirmed_keys:
-        return
-    if sync_key in _bridge_state.sync_state_published_keys:
-        _bridge_state.sync_requested_at_ms_by_key.setdefault(sync_key, int(time.time() * 1000))
-        return
-    entry_id = _publish_paper_exchange_command(
-        strategy,
-        connector_name=connector_name,
-        trading_pair=trading_pair,
-        command="sync_state",
-        metadata={"sync_reason": "bridge_startup"},
-        ttl_ms_override=_active_command_ttl_ms("sync_state"),
-    )
-    if entry_id:
-        _bridge_state.sync_state_published_keys.add(sync_key)
-        _bridge_state.sync_requested_at_ms_by_key[sync_key] = int(time.time() * 1000)
-
 
 def _consume_paper_exchange_events(strategy: Any) -> None:
     """Consume paper_exchange_event stream and map outcomes to HB callbacks.
@@ -1575,17 +253,15 @@ def _consume_paper_exchange_events(strategy: Any) -> None:
         return
     try:
         import json as _json
-        from services.contracts.event_schemas import PaperExchangeEvent
-        from controllers.paper_engine_v2.types import OrderCanceled as _OrderCanceled
-        from controllers.paper_engine_v2.types import OrderFilled as _OrderFilled
-        from controllers.paper_engine_v2.types import OrderRejected as _OrderRejected
-        from services.contracts.stream_names import PAPER_EXCHANGE_EVENT_STREAM
+
+        from simulation.types import OrderCanceled as _OrderCanceled
+        from simulation.types import OrderFilled as _OrderFilled
+        from simulation.types import OrderRejected as _OrderRejected
+        from platform_lib.contracts.event_schemas import PaperExchangeEvent
+        from platform_lib.contracts.stream_names import PAPER_EXCHANGE_EVENT_STREAM
 
         _bootstrap_paper_exchange_cursor(strategy, r, PAPER_EXCHANGE_EVENT_STREAM)
         cursor_key = _paper_exchange_cursor_key(strategy)
-        # NOTE: In Redis, BLOCK 0 means "block forever" (not non-blocking).
-        # This runs inside strategy on_tick(), so it must never stall the tick loop.
-        # Use a short near-non-blocking wait to drain ready rows without gating cadence.
         result = r.xread(
             {PAPER_EXCHANGE_EVENT_STREAM: _bridge_state.last_paper_exchange_event_id},
             count=200,
@@ -1594,7 +270,7 @@ def _consume_paper_exchange_events(strategy: Any) -> None:
         if not result:
             return
 
-        latest_seen_entry_id: Optional[str] = None
+        latest_seen_entry_id: str | None = None
         for _stream_name, entries in result:
             for entry_id, data in entries:
                 _bridge_state.last_paper_exchange_event_id = str(entry_id)
@@ -1603,16 +279,15 @@ def _consume_paper_exchange_events(strategy: Any) -> None:
                 if not isinstance(raw, str):
                     continue
                 try:
-                    payload = _json.loads(raw)
+                    payload = _orjson.loads(raw) if _orjson else _json.loads(raw)
                     event = PaperExchangeEvent(**payload)
-                except Exception:
+                except (ValueError, TypeError, KeyError):
                     continue
 
                 if event.event_id in _bridge_state.paper_exchange_seen_event_ids:
                     continue
                 _bridge_state.paper_exchange_seen_event_ids.add(event.event_id)
                 if len(_bridge_state.paper_exchange_seen_event_ids) > 20_000:
-                    # Keep memory bounded; stream-id cursor still prevents replay in normal flow.
                     _bridge_state.paper_exchange_seen_event_ids.clear()
 
                 _ctrl_local, _controller_id_local, local_instance_name = _resolve_controller_for_command(
@@ -1833,6 +508,7 @@ def _consume_paper_exchange_events(strategy: Any) -> None:
                                 remaining = max(_ZERO, total_qty - fill_qty)
                             is_maker_text = str(metadata.get("is_maker", "0")).strip().lower()
                             is_maker = is_maker_text in {"1", "true", "yes", "y", "on"}
+                            from simulation.types import OrderFilled as _OrderFilled
                             fill_event = _OrderFilled(
                                 event_id=f"pe-fill-{event.event_id}",
                                 timestamp_ns=timestamp_ns,
@@ -1846,10 +522,18 @@ def _consume_paper_exchange_events(strategy: Any) -> None:
                                 source_bot=resolved_connector_name,
                                 instance_name=resolved_instance_name,
                             )
+                            _sync_fill_to_portfolio(
+                                strategy, instrument_id,
+                                side_str=str(metadata.get("side", "buy")).lower(),
+                                fill_price=fill_price, fill_qty=fill_qty, fill_fee=fill_fee,
+                                position_action_str=str(metadata.get("position_action", "")),
+                                position_mode_str=str(metadata.get("position_mode", "ONEWAY")),
+                                now_ns=timestamp_ns,
+                            )
                             _fire_hb_events(strategy, resolved_connector_name, fill_event, _bridge_state)
                     continue
 
-                if command in {"order_fill", "fill", "fill_order"} and event.order_id:
+                if command in {"order_fill", "fill", "fill_order", "market_fill"} and event.order_id:
                     metadata = event.metadata if isinstance(event.metadata, dict) else {}
                     order_state = str(metadata.get("order_state", "partially_filled")).strip().lower()
                     runtime_state = "partially_filled" if order_state in {"partial", "partially_filled"} else "filled"
@@ -1866,9 +550,9 @@ def _consume_paper_exchange_events(strategy: Any) -> None:
                     )
                     try:
                         fill_price = Decimal(str(metadata.get("fill_price", metadata.get("price", "0"))))
-                        fill_qty = Decimal(str(metadata.get("fill_amount_base", "0")))
-                        fill_fee = Decimal(str(metadata.get("fill_fee_quote", "0")))
-                        remaining = Decimal(str(metadata.get("remaining_amount_base", "0")))
+                        fill_qty = Decimal(str(metadata.get("fill_amount_base", metadata.get("fill_quantity", "0"))))
+                        fill_fee = Decimal(str(metadata.get("fill_fee_quote", metadata.get("fee", "0"))))
+                        remaining = Decimal(str(metadata.get("remaining_amount_base", metadata.get("remaining_quantity", "0"))))
                     except Exception:
                         fill_price = Decimal("0")
                         fill_qty = Decimal("0")
@@ -1878,6 +562,7 @@ def _consume_paper_exchange_events(strategy: Any) -> None:
                         continue
                     is_maker_text = str(metadata.get("is_maker", "0")).strip().lower()
                     is_maker = is_maker_text in {"1", "true", "yes", "y", "on"}
+                    from simulation.types import OrderFilled as _OrderFilled
                     fill_event = _OrderFilled(
                         event_id=f"pe-fill-lifecycle-{event.event_id}",
                         timestamp_ns=timestamp_ns,
@@ -1891,6 +576,16 @@ def _consume_paper_exchange_events(strategy: Any) -> None:
                         source_bot=resolved_connector_name,
                         instance_name=resolved_instance_name,
                     )
+                    pa_str = str(metadata.get("position_action", "") or event.position_action or "")
+                    pm_str = str(metadata.get("position_mode", "") or event.position_mode or "ONEWAY")
+                    _sync_fill_to_portfolio(
+                        strategy, instrument_id,
+                        side_str=str(metadata.get("side", "buy")).lower(),
+                        fill_price=fill_price, fill_qty=fill_qty, fill_fee=fill_fee,
+                        position_action_str=pa_str,
+                        position_mode_str=pm_str,
+                        now_ns=timestamp_ns,
+                    )
                     _fire_hb_events(strategy, resolved_connector_name, fill_event, _bridge_state)
         if latest_seen_entry_id is not None:
             try:
@@ -1902,166 +597,8 @@ def _consume_paper_exchange_events(strategy: Any) -> None:
 
 
 # ---------------------------------------------------------------------------
-# PaperBudgetChecker
+# Bridge installation
 # ---------------------------------------------------------------------------
-
-class PaperBudgetChecker:
-    """Drop-in replacement for HB's BudgetChecker.
-
-    Patches HB's collateral/budget check system so order candidates
-    pass validation regardless of real exchange balance. All methods
-    return candidates unchanged (paper has unlimited budget within
-    the configured paper_equity_quote).
-    """
-
-    def __init__(self, exchange: Any, paper_equity_quote: Decimal = Decimal("10000")):
-        self._exchange = exchange
-        self._paper_equity = paper_equity_quote
-
-    def reset_locked_collateral(self):
-        pass
-
-    def adjust_candidates(self, order_candidates, all_or_none=True):
-        return list(order_candidates)
-
-    def adjust_candidate_and_lock_available_collateral(self, order_candidate, all_or_none=True):
-        return order_candidate
-
-    def adjust_candidate(self, order_candidate, all_or_none=True):
-        return order_candidate
-
-    def populate_collateral_entries(self, order_candidate):
-        return order_candidate
-
-
-def _install_budget_checker(connector: Any, equity_quote: Decimal) -> None:
-    """Install PaperBudgetChecker on a connector if it has a _budget_checker."""
-    try:
-        for attr in ("_budget_checker", "budget_checker"):
-            if hasattr(connector, attr):
-                setattr(connector, attr, PaperBudgetChecker(connector, equity_quote))
-                logger.info("PaperBudgetChecker installed on %s", getattr(connector, "name", "connector"))
-                return
-    except Exception as exc:
-        logger.debug("PaperBudgetChecker install failed (non-critical): %s", exc)
-
-
-# ---------------------------------------------------------------------------
-# Framework compatibility shims
-# ---------------------------------------------------------------------------
-
-def enable_framework_paper_compat_fallbacks() -> None:
-    """Install HB framework compatibility patches for paper mode.
-
-    Equivalent to paper_engine.py::enable_framework_paper_compat_fallbacks().
-    Must be called once at process startup before any controller initializes.
-
-    Patches:
-    1. MarketDataProvider._create_non_trading_connector: canonical name mapping
-    2. ExecutorBase.get_trading_rules: fallback when paper connector has no rules
-    3. ExecutorBase.get_in_flight_order: fallback for paper order tracker
-    """
-    _patch_market_data_provider()
-    _patch_executor_base()
-
-
-def _patch_market_data_provider() -> None:
-    try:
-        from hummingbot.data_feed.market_data_provider import MarketDataProvider as _MDP  # type: ignore
-    except Exception:
-        return
-    if getattr(_MDP, "_epp_v2_paper_create_fallback_enabled", False):
-        return
-    try:
-        _orig = _MDP._create_non_trading_connector
-
-        def _safe_create(self, connector_name: str):
-            return _orig(self, _canonical_name(connector_name))
-
-        _MDP._create_non_trading_connector = _safe_create
-        _MDP._epp_v2_paper_create_fallback_enabled = True
-        logger.debug("MarketDataProvider._create_non_trading_connector patched (v2)")
-    except Exception as exc:
-        logger.debug("MDP patch failed (non-critical): %s", exc)
-
-
-def _patch_executor_base() -> None:
-    try:
-        from hummingbot.strategy_v2.executors.executor_base import ExecutorBase as _EB  # type: ignore
-    except Exception:
-        return
-
-    if not getattr(_EB, "_epp_v2_trading_rules_fallback_enabled", False):
-        def _extract_rule(obj, pair):
-            if obj is None:
-                return None
-            try:
-                for attr in ("trading_rules", "_trading_rules"):
-                    rules = getattr(obj, attr, None)
-                    if isinstance(rules, dict) and pair in rules:
-                        return rules[pair]
-            except Exception:
-                pass
-            return None
-
-        def _safe_get_trading_rules(self, connector_name: str, trading_pair: str):
-            connector = self.connectors.get(connector_name)
-            rule = _extract_rule(connector, trading_pair)
-            if rule is not None:
-                return rule
-            can = _canonical_name(connector_name)
-            rule = _extract_rule(self.connectors.get(can), trading_pair)
-            if rule is not None:
-                return rule
-            try:
-                provider = getattr(self.strategy, "market_data_provider", None)
-                if provider:
-                    rule = _extract_rule(provider.get_connector(can), trading_pair)
-                    if rule is not None:
-                        return rule
-            except Exception:
-                pass
-            for attr in ("_exchange", "exchange", "_connector", "connector"):
-                rule = _extract_rule(getattr(connector, attr, None), trading_pair)
-                if rule is not None:
-                    return rule
-            return SimpleNamespace(
-                trading_pair=trading_pair,
-                min_order_size=Decimal("0"), min_base_amount=Decimal("0"),
-                min_amount=Decimal("0"), min_notional_size=Decimal("0"),
-                min_notional=Decimal("0"), min_order_value=Decimal("0"),
-                min_base_amount_increment=Decimal("0"),
-                min_order_size_increment=Decimal("0"),
-                amount_step=Decimal("0"), min_price_increment=Decimal("0"),
-                min_price_tick_size=Decimal("0"), price_step=Decimal("0"),
-                min_price_step=Decimal("0"),
-            )
-
-        _EB.get_trading_rules = _safe_get_trading_rules
-        _EB._epp_v2_trading_rules_fallback_enabled = True
-
-    if not getattr(_EB, "_epp_v2_inflight_fallback_enabled", False):
-        _orig_inflight = _EB.get_in_flight_order
-
-        def _safe_inflight(self, connector_name: str, order_id: str):
-            connector = self.connectors.get(connector_name)
-            runtime_order = _get_runtime_order_for_executor(getattr(self, "strategy", None), connector_name, order_id)
-            if runtime_order is not None:
-                return runtime_order
-            if connector is None:
-                return _orig_inflight(self, connector_name, order_id)
-            tracker = getattr(connector, "_order_tracker", None)
-            if tracker is None:
-                return None
-            try:
-                return tracker.fetch_order(client_order_id=order_id)
-            except Exception:
-                return None
-
-        _EB.get_in_flight_order = _safe_inflight
-        _EB._epp_v2_inflight_fallback_enabled = True
-        logger.debug("ExecutorBase fallbacks patched (v2)")
-
 
 def install_paper_desk_bridge(
     strategy: Any,
@@ -2069,7 +606,7 @@ def install_paper_desk_bridge(
     connector_name: str,
     instrument_id: InstrumentId,
     trading_pair: str,
-    instrument_spec: Optional[InstrumentSpec] = None,
+    instrument_spec: InstrumentSpec | None = None,
 ) -> bool:
     """Full v2 bridge installation — replaces paper_engine.py (v1) entirely.
 
@@ -2093,7 +630,7 @@ def install_paper_desk_bridge(
                 provider = getattr(strategy, "market_data_provider", None)
                 if provider:
                     connector = provider.get_connector(connector_name)
-            except Exception:
+            except (AttributeError, TypeError, KeyError):
                 pass
 
         if instrument_id.key not in desk._engines:
@@ -2110,7 +647,7 @@ def install_paper_desk_bridge(
                 )
             feed = HummingbotDataFeed(connector, trading_pair) if connector else None
             if feed is None:
-                from controllers.paper_engine_v2.data_feeds import NullDataFeed
+                from simulation.data_feeds import NullDataFeed
                 feed = NullDataFeed()
             desk.register_instrument(spec, feed)
 
@@ -2129,6 +666,15 @@ def install_paper_desk_bridge(
         if connector is not None:
             _install_paper_stats(connector, desk, instrument_id)
 
+        if connector is not None:
+            _patch_connector_open_orders(connector, desk, instrument_id)
+
+        if connector is not None:
+            _patch_connector_trading_rules(connector, desk, instrument_id)
+
+        if connector is not None:
+            _install_portfolio_snapshot(connector, desk, instrument_id)
+
         logger.info(
             "PaperDesk v2 bridge fully installed: %s/%s engine_registered=%s",
             connector_name,
@@ -2141,6 +687,10 @@ def install_paper_desk_bridge(
         logger.error("PaperDesk bridge install failed: %s", exc, exc_info=True)
         return False
 
+
+# ---------------------------------------------------------------------------
+# Order delegation
+# ---------------------------------------------------------------------------
 
 def _install_order_delegation(
     strategy: Any,
@@ -2172,7 +722,20 @@ def _install_order_delegation(
         logger.debug("strategy buy/sell/cancel not callable, skipping delegation patch")
         return
 
-    def _patched_buy(self, conn_name, trading_pair, amount, order_type, price=Decimal("NaN"), position_action=None, **kwargs):
+    def _patched_order(
+        self,
+        order_side: OrderSide,
+        side_str: str,
+        close_position_action: PositionAction,
+        original_fn,
+        conn_name,
+        trading_pair,
+        amount,
+        order_type,
+        price=Decimal("NaN"),
+        position_action=None,
+        **kwargs,
+    ):
         resolved_conn_name, bridge = _bridge_for_exchange_event(self, conn_name, trading_pair)
         if bridge is not None:
             route_connector_name = str(resolved_conn_name or conn_name)
@@ -2182,172 +745,102 @@ def _install_order_delegation(
             order_type_text = _order_type_text(order_type)
             force_trace = "MARKET" in order_type_text or str(position_action or "").strip() != ""
             _trace_paper_order(
-                "stage=bridge_buy_enter connector=%s pair=%s mode=%s amount=%s price=%s order_type=%s position_action=%s",
-                route_connector_name,
-                trading_pair,
-                mode,
-                str(amount),
-                str(price),
-                order_type_text,
-                str(position_action or ""),
+                "stage=bridge_%s_enter connector=%%s pair=%%s mode=%%s amount=%%s price=%%s order_type=%%s position_action=%%s" % side_str,
+                route_connector_name, trading_pair, mode,
+                str(amount), str(price), order_type_text, str(position_action or ""),
                 force=force_trace,
             )
             if force_trace:
                 logger.warning(
-                    "PAPER_ROUTE_PROBE stage=bridge_buy_enter connector=%s pair=%s mode=%s amount=%s order_type=%s",
-                    route_connector_name,
-                    trading_pair,
-                    mode,
-                    str(amount),
-                    order_type_text,
+                    "PAPER_ROUTE_PROBE stage=bridge_%s_enter connector=%s pair=%s mode=%s amount=%s order_type=%s",
+                    side_str, route_connector_name, trading_pair, mode, str(amount), order_type_text,
                 )
             if mode == "active":
-                normalized_position_action = _normalize_position_action(position_action, OrderSide.BUY)
+                normalized_position_action = _normalize_position_action(position_action, order_side)
                 position_mode = str(
                     getattr(
                         getattr(
-                            _find_controller_for_connector(
-                                self,
-                                route_connector_name,
-                                trading_pair=str(trading_pair or ""),
-                            ),
-                            "config",
-                            None,
+                            _find_controller_for_connector(self, route_connector_name, trading_pair=str(trading_pair or "")),
+                            "config", None,
                         ),
-                        "position_mode",
-                        "ONEWAY",
-                    )
-                    or "ONEWAY"
+                        "position_mode", "ONEWAY",
+                    ) or "ONEWAY"
                 ).upper()
                 sync_ready, sync_reason = _active_sync_gate(self, route_connector_name, trading_pair)
                 generated_order_id = _active_submit_order_id(
-                    self,
-                    connector_name=route_connector_name,
-                    trading_pair=trading_pair,
-                    side="buy",
-                    order_type=order_type,
-                    amount=amount,
-                    price=price,
+                    self, connector_name=route_connector_name, trading_pair=trading_pair,
+                    side=side_str, order_type=order_type, amount=amount, price=price,
                 )
                 _upsert_runtime_order(
-                    self,
-                    connector_name=route_connector_name,
-                    order_id=generated_order_id,
-                    trading_pair=trading_pair,
-                    side="buy",
-                    order_type=order_type,
-                    amount=amount,
-                    price=price,
-                    state="pending_create",
+                    self, connector_name=route_connector_name, order_id=generated_order_id,
+                    trading_pair=trading_pair, side=side_str, order_type=order_type,
+                    amount=amount, price=price, state="pending_create",
                 )
                 if not sync_ready:
-                    _upsert_runtime_order(
-                        self,
-                        connector_name=route_connector_name,
-                        order_id=generated_order_id,
-                        state="failed",
-                        failure_reason=sync_reason,
-                    )
+                    _upsert_runtime_order(self, connector_name=route_connector_name,
+                                          order_id=generated_order_id, state="failed", failure_reason=sync_reason)
                     reject_event = OrderRejected(
                         event_id=f"pe-sync-reject-{generated_order_id}",
-                        timestamp_ns=int(time.time() * 1e9),
-                        instrument_id=_iid,
-                        order_id=generated_order_id,
-                        reason=sync_reason,
-                        source_bot=route_connector_name,
+                        timestamp_ns=int(time.time() * 1e9), instrument_id=_iid,
+                        order_id=generated_order_id, reason=sync_reason, source_bot=route_connector_name,
                     )
                     _fire_hb_events(self, route_connector_name, reject_event, _bridge_state)
                     _trace_paper_order(
-                        "stage=bridge_buy_sync_reject connector=%s pair=%s order_id=%s reason=%s",
-                        route_connector_name,
-                        trading_pair,
-                        generated_order_id,
-                        sync_reason,
-                        force=True,
+                        "stage=bridge_%s_sync_reject connector=%%s pair=%%s order_id=%%s reason=%%s" % side_str,
+                        route_connector_name, trading_pair, generated_order_id, sync_reason, force=True,
                     )
                     return generated_order_id
 
                 publish_entry_id = _publish_paper_exchange_command(
-                    self,
-                    connector_name=route_connector_name,
-                    trading_pair=trading_pair,
-                    command="submit_order",
-                    order_id=generated_order_id,
-                    side="buy",
-                    order_type=order_type,
-                    amount_base=amount,
-                    price=price,
+                    self, connector_name=route_connector_name, trading_pair=trading_pair,
+                    command="submit_order", order_id=generated_order_id, side=side_str,
+                    order_type=order_type, amount_base=amount, price=price,
                     metadata={
-                        "bridge_method": "buy",
-                        "compat_adapter": "active",
+                        "bridge_method": side_str, "compat_adapter": "active",
                         "position_action": normalized_position_action.value,
                         "position_mode": position_mode,
-                        "reduce_only": "1" if normalized_position_action == PositionAction.CLOSE_SHORT else "0",
+                        "reduce_only": "1" if normalized_position_action == close_position_action else "0",
                         **_paper_command_constraints_metadata(self, route_connector_name, trading_pair),
                     },
                 )
                 if publish_entry_id is None:
-                    _upsert_runtime_order(
-                        self,
-                        connector_name=route_connector_name,
-                        order_id=generated_order_id,
-                        state="failed",
-                        failure_reason="paper_exchange_command_publish_failed",
-                    )
+                    _upsert_runtime_order(self, connector_name=route_connector_name,
+                                          order_id=generated_order_id, state="failed",
+                                          failure_reason="paper_exchange_command_publish_failed")
                     reject_event = OrderRejected(
                         event_id=f"pe-local-reject-{generated_order_id}",
-                        timestamp_ns=int(time.time() * 1e9),
-                        instrument_id=_iid,
-                        order_id=generated_order_id,
-                        reason="paper_exchange_command_publish_failed",
+                        timestamp_ns=int(time.time() * 1e9), instrument_id=_iid,
+                        order_id=generated_order_id, reason="paper_exchange_command_publish_failed",
                         source_bot=route_connector_name,
                     )
                     _fire_hb_events(self, route_connector_name, reject_event, _bridge_state)
                     _trace_paper_order(
-                        "stage=bridge_buy_publish_failed connector=%s pair=%s order_id=%s",
-                        route_connector_name,
-                        trading_pair,
-                        generated_order_id,
-                        force=True,
+                        "stage=bridge_%s_publish_failed connector=%%s pair=%%s order_id=%%s" % side_str,
+                        route_connector_name, trading_pair, generated_order_id, force=True,
                     )
                 else:
                     _trace_paper_order(
-                        "stage=bridge_buy_published connector=%s pair=%s order_id=%s stream_entry_id=%s",
-                        route_connector_name,
-                        trading_pair,
-                        generated_order_id,
-                        str(publish_entry_id),
+                        "stage=bridge_%s_published connector=%%s pair=%%s order_id=%%s stream_entry_id=%%s" % side_str,
+                        route_connector_name, trading_pair, generated_order_id, str(publish_entry_id),
                         force=force_trace,
                     )
                 return generated_order_id
 
             _price = price if price == price else _resolve_shadow_submit_price(
-                self,
-                _desk,
-                _iid,
-                route_connector_name,
-                trading_pair,
-                OrderSide.BUY,
+                self, _desk, _iid, route_connector_name, trading_pair, order_side,
             )
-            normalized_position_action = _normalize_position_action(position_action, OrderSide.BUY)
+            normalized_position_action = _normalize_position_action(position_action, order_side)
             position_mode = str(
                 getattr(
                     getattr(
-                        _find_controller_for_connector(
-                            self,
-                            route_connector_name,
-                            trading_pair=str(trading_pair or ""),
-                        ),
-                        "config",
-                        None,
+                        _find_controller_for_connector(self, route_connector_name, trading_pair=str(trading_pair or "")),
+                        "config", None,
                     ),
-                    "position_mode",
-                    "ONEWAY",
-                )
-                or "ONEWAY"
+                    "position_mode", "ONEWAY",
+                ) or "ONEWAY"
             ).upper()
             event = _desk.submit_order(
-                _iid, OrderSide.BUY, _hb_order_type_to_v2(order_type),
+                _iid, order_side, _hb_order_type_to_v2(order_type),
                 Decimal(str(_price)), Decimal(str(amount)),
                 source_bot=route_connector_name,
                 position_action=normalized_position_action,
@@ -2355,266 +848,46 @@ def _install_order_delegation(
             )
             if force_trace:
                 logger.warning(
-                    "PAPER_ROUTE_PROBE stage=bridge_buy_submit connector=%s pair=%s order_id=%s event=%s reason=%s",
-                    route_connector_name,
-                    trading_pair,
+                    "PAPER_ROUTE_PROBE stage=bridge_%s_submit connector=%s pair=%s order_id=%s event=%s reason=%s",
+                    side_str, route_connector_name, trading_pair,
                     str(getattr(event, "order_id", "") or ""),
-                    type(event).__name__,
-                    str(getattr(event, "reason", "") or ""),
+                    type(event).__name__, str(getattr(event, "reason", "") or ""),
                 )
             _publish_paper_exchange_command(
-                self,
-                connector_name=route_connector_name,
-                trading_pair=trading_pair,
+                self, connector_name=route_connector_name, trading_pair=trading_pair,
                 command="submit_order",
                 order_id=str(getattr(event, "order_id", "") or "") or None,
-                side="buy",
-                order_type=order_type,
-                amount_base=amount,
-                price=_price,
+                side=side_str, order_type=order_type, amount_base=amount, price=_price,
                 metadata={
-                    "bridge_method": "buy",
-                    "compat_adapter": "shadow",
+                    "bridge_method": side_str, "compat_adapter": "shadow",
                     "position_action": normalized_position_action.value,
                     "position_mode": position_mode,
-                    "reduce_only": "1" if normalized_position_action == PositionAction.CLOSE_SHORT else "0",
+                    "reduce_only": "1" if normalized_position_action == close_position_action else "0",
                     **_paper_command_constraints_metadata(self, route_connector_name, trading_pair),
                 },
             )
             _trace_paper_order(
-                "stage=bridge_buy_desk_submit connector=%s pair=%s order_id=%s event=%s reason=%s",
-                route_connector_name,
-                trading_pair,
+                "stage=bridge_%s_desk_submit connector=%%s pair=%%s order_id=%%s event=%%s reason=%%s" % side_str,
+                route_connector_name, trading_pair,
                 str(getattr(event, "order_id", "") or ""),
-                type(event).__name__,
-                str(getattr(event, "reason", "") or ""),
+                type(event).__name__, str(getattr(event, "reason", "") or ""),
                 force=force_trace or type(event).__name__ != "OrderAccepted",
             )
             _fire_hb_events(self, route_connector_name, event, _bridge_state)
             return getattr(event, "order_id", None)
-        return original_buy(conn_name, trading_pair, amount, order_type, price, position_action=position_action, **kwargs)
+        return original_fn(conn_name, trading_pair, amount, order_type, price, position_action=position_action, **kwargs)
+
+    def _patched_buy(self, conn_name, trading_pair, amount, order_type, price=Decimal("NaN"), position_action=None, **kwargs):
+        return _patched_order(
+            self, OrderSide.BUY, "buy", PositionAction.CLOSE_SHORT, original_buy,
+            conn_name, trading_pair, amount, order_type, price, position_action, **kwargs,
+        )
 
     def _patched_sell(self, conn_name, trading_pair, amount, order_type, price=Decimal("NaN"), position_action=None, **kwargs):
-        resolved_conn_name, bridge = _bridge_for_exchange_event(self, conn_name, trading_pair)
-        if bridge is not None:
-            route_connector_name = str(resolved_conn_name or conn_name)
-            _desk: PaperDesk = bridge["desk"]
-            _iid: InstrumentId = bridge["instrument_id"]
-            mode = _paper_exchange_mode_for_route(self, route_connector_name, trading_pair)
-            order_type_text = _order_type_text(order_type)
-            force_trace = "MARKET" in order_type_text or str(position_action or "").strip() != ""
-            _trace_paper_order(
-                "stage=bridge_sell_enter connector=%s pair=%s mode=%s amount=%s price=%s order_type=%s position_action=%s",
-                route_connector_name,
-                trading_pair,
-                mode,
-                str(amount),
-                str(price),
-                order_type_text,
-                str(position_action or ""),
-                force=force_trace,
-            )
-            if force_trace:
-                logger.warning(
-                    "PAPER_ROUTE_PROBE stage=bridge_sell_enter connector=%s pair=%s mode=%s amount=%s order_type=%s",
-                    route_connector_name,
-                    trading_pair,
-                    mode,
-                    str(amount),
-                    order_type_text,
-                )
-            if mode == "active":
-                normalized_position_action = _normalize_position_action(position_action, OrderSide.SELL)
-                position_mode = str(
-                    getattr(
-                        getattr(
-                            _find_controller_for_connector(
-                                self,
-                                route_connector_name,
-                                trading_pair=str(trading_pair or ""),
-                            ),
-                            "config",
-                            None,
-                        ),
-                        "position_mode",
-                        "ONEWAY",
-                    )
-                    or "ONEWAY"
-                ).upper()
-                sync_ready, sync_reason = _active_sync_gate(self, route_connector_name, trading_pair)
-                generated_order_id = _active_submit_order_id(
-                    self,
-                    connector_name=route_connector_name,
-                    trading_pair=trading_pair,
-                    side="sell",
-                    order_type=order_type,
-                    amount=amount,
-                    price=price,
-                )
-                _upsert_runtime_order(
-                    self,
-                    connector_name=route_connector_name,
-                    order_id=generated_order_id,
-                    trading_pair=trading_pair,
-                    side="sell",
-                    order_type=order_type,
-                    amount=amount,
-                    price=price,
-                    state="pending_create",
-                )
-                if not sync_ready:
-                    _upsert_runtime_order(
-                        self,
-                        connector_name=route_connector_name,
-                        order_id=generated_order_id,
-                        state="failed",
-                        failure_reason=sync_reason,
-                    )
-                    reject_event = OrderRejected(
-                        event_id=f"pe-sync-reject-{generated_order_id}",
-                        timestamp_ns=int(time.time() * 1e9),
-                        instrument_id=_iid,
-                        order_id=generated_order_id,
-                        reason=sync_reason,
-                        source_bot=route_connector_name,
-                    )
-                    _fire_hb_events(self, route_connector_name, reject_event, _bridge_state)
-                    _trace_paper_order(
-                        "stage=bridge_sell_sync_reject connector=%s pair=%s order_id=%s reason=%s",
-                        route_connector_name,
-                        trading_pair,
-                        generated_order_id,
-                        sync_reason,
-                        force=True,
-                    )
-                    return generated_order_id
-
-                publish_entry_id = _publish_paper_exchange_command(
-                    self,
-                    connector_name=route_connector_name,
-                    trading_pair=trading_pair,
-                    command="submit_order",
-                    order_id=generated_order_id,
-                    side="sell",
-                    order_type=order_type,
-                    amount_base=amount,
-                    price=price,
-                    metadata={
-                        "bridge_method": "sell",
-                        "compat_adapter": "active",
-                        "position_action": normalized_position_action.value,
-                        "position_mode": position_mode,
-                        "reduce_only": "1" if normalized_position_action == PositionAction.CLOSE_LONG else "0",
-                        **_paper_command_constraints_metadata(self, route_connector_name, trading_pair),
-                    },
-                )
-                if publish_entry_id is None:
-                    _upsert_runtime_order(
-                        self,
-                        connector_name=route_connector_name,
-                        order_id=generated_order_id,
-                        state="failed",
-                        failure_reason="paper_exchange_command_publish_failed",
-                    )
-                    reject_event = OrderRejected(
-                        event_id=f"pe-local-reject-{generated_order_id}",
-                        timestamp_ns=int(time.time() * 1e9),
-                        instrument_id=_iid,
-                        order_id=generated_order_id,
-                        reason="paper_exchange_command_publish_failed",
-                        source_bot=route_connector_name,
-                    )
-                    _fire_hb_events(self, route_connector_name, reject_event, _bridge_state)
-                    _trace_paper_order(
-                        "stage=bridge_sell_publish_failed connector=%s pair=%s order_id=%s",
-                        route_connector_name,
-                        trading_pair,
-                        generated_order_id,
-                        force=True,
-                    )
-                else:
-                    _trace_paper_order(
-                        "stage=bridge_sell_published connector=%s pair=%s order_id=%s stream_entry_id=%s",
-                        route_connector_name,
-                        trading_pair,
-                        generated_order_id,
-                        str(publish_entry_id),
-                        force=force_trace,
-                    )
-                return generated_order_id
-
-            _price = price if price == price else _resolve_shadow_submit_price(
-                self,
-                _desk,
-                _iid,
-                route_connector_name,
-                trading_pair,
-                OrderSide.SELL,
-            )
-            normalized_position_action = _normalize_position_action(position_action, OrderSide.SELL)
-            position_mode = str(
-                getattr(
-                    getattr(
-                        _find_controller_for_connector(
-                            self,
-                            route_connector_name,
-                            trading_pair=str(trading_pair or ""),
-                        ),
-                        "config",
-                        None,
-                    ),
-                    "position_mode",
-                    "ONEWAY",
-                )
-                or "ONEWAY"
-            ).upper()
-            event = _desk.submit_order(
-                _iid, OrderSide.SELL, _hb_order_type_to_v2(order_type),
-                Decimal(str(_price)), Decimal(str(amount)),
-                source_bot=route_connector_name,
-                position_action=normalized_position_action,
-                position_mode=position_mode,
-            )
-            if force_trace:
-                logger.warning(
-                    "PAPER_ROUTE_PROBE stage=bridge_sell_submit connector=%s pair=%s order_id=%s event=%s reason=%s",
-                    route_connector_name,
-                    trading_pair,
-                    str(getattr(event, "order_id", "") or ""),
-                    type(event).__name__,
-                    str(getattr(event, "reason", "") or ""),
-                )
-            _publish_paper_exchange_command(
-                self,
-                connector_name=route_connector_name,
-                trading_pair=trading_pair,
-                command="submit_order",
-                order_id=str(getattr(event, "order_id", "") or "") or None,
-                side="sell",
-                order_type=order_type,
-                amount_base=amount,
-                price=_price,
-                metadata={
-                    "bridge_method": "sell",
-                    "compat_adapter": "shadow",
-                    "position_action": normalized_position_action.value,
-                    "position_mode": position_mode,
-                    "reduce_only": "1" if normalized_position_action == PositionAction.CLOSE_LONG else "0",
-                    **_paper_command_constraints_metadata(self, route_connector_name, trading_pair),
-                },
-            )
-            _trace_paper_order(
-                "stage=bridge_sell_desk_submit connector=%s pair=%s order_id=%s event=%s reason=%s",
-                route_connector_name,
-                trading_pair,
-                str(getattr(event, "order_id", "") or ""),
-                type(event).__name__,
-                str(getattr(event, "reason", "") or ""),
-                force=force_trace or type(event).__name__ != "OrderAccepted",
-            )
-            _fire_hb_events(self, route_connector_name, event, _bridge_state)
-            return getattr(event, "order_id", None)
-        return original_sell(conn_name, trading_pair, amount, order_type, price, position_action=position_action, **kwargs)
+        return _patched_order(
+            self, OrderSide.SELL, "sell", PositionAction.CLOSE_LONG, original_sell,
+            conn_name, trading_pair, amount, order_type, price, position_action, **kwargs,
+        )
 
     def _patched_cancel(self, conn_name, trading_pair, order_id, *args, **kwargs):
         resolved_conn_name, bridge = _bridge_for_exchange_event(self, conn_name, trading_pair)
@@ -2695,7 +968,8 @@ def _install_order_delegation(
                 order_id=str(order_id) if order_id else None,
                 metadata={"bridge_method": "cancel", "compat_adapter": "shadow"},
             )
-            if event:
+            from simulation.types import CancelRejected as _CancelRejected
+            if event and not isinstance(event, _CancelRejected):
                 _fire_hb_events(self, route_connector_name, event, _bridge_state)
             return
         return original_cancel(conn_name, trading_pair, order_id, *args, **kwargs)
@@ -2710,172 +984,77 @@ def _install_order_delegation(
         logger.error("Order delegation patch failed: %s", exc, exc_info=True)
 
 
-def _patch_connector_balances(connector: Any, desk: PaperDesk, iid: InstrumentId) -> None:
-    """Patch connector.get_balance / get_available_balance to return paper portfolio values."""
-    if getattr(connector, "_epp_v2_balance_patched", False):
-        return
-    try:
-        if not hasattr(connector, "_paper_desk_v2"):
-            connector._paper_desk_v2 = desk
-        if not hasattr(connector, "_paper_desk_v2_instrument_id"):
-            connector._paper_desk_v2_instrument_id = iid
-
-        if not hasattr(connector, "_epp_v2_orig_get_balance") and hasattr(connector, "get_balance"):
-            connector._epp_v2_orig_get_balance = connector.get_balance
-        if not hasattr(connector, "_epp_v2_orig_get_available_balance") and hasattr(connector, "get_available_balance"):
-            connector._epp_v2_orig_get_available_balance = connector.get_available_balance
-        if not hasattr(connector, "_epp_v2_orig_ready") and hasattr(connector, "ready"):
-            connector._epp_v2_orig_ready = connector.ready
-        if not hasattr(connector, "_epp_v2_orig_get_position") and hasattr(connector, "get_position"):
-            connector._epp_v2_orig_get_position = connector.get_position
-        if not hasattr(connector, "_epp_v2_orig_account_positions") and hasattr(connector, "account_positions"):
-            connector._epp_v2_orig_account_positions = connector.account_positions
-
-        def _paper_balance(asset: str) -> Decimal:
-            return desk.portfolio.balance(asset)
-
-        def _paper_available(asset: str) -> Decimal:
-            return desk.portfolio.available(asset)
-
-        def _patched_get_balance(self, asset: str) -> Decimal:
-            try:
-                return _paper_balance(asset)
-            except Exception:
-                orig = getattr(self, "_epp_v2_orig_get_balance", None)
-                return orig(asset) if callable(orig) else Decimal("0")
-
-        def _patched_get_available_balance(self, asset: str) -> Decimal:
-            try:
-                return _paper_available(asset)
-            except Exception:
-                orig = getattr(self, "_epp_v2_orig_get_available_balance", None)
-                return orig(asset) if callable(orig) else Decimal("0")
-
-        def _patched_ready(self) -> bool:
-            return True
-
-        def _paper_position_obj(position_action: Any = None):
-            resolved_action = _normalize_position_action_hint(position_action)
-            pos = desk.portfolio.get_position(iid, position_action=resolved_action)
-            amount = pos.quantity
-            entry_price = pos.avg_entry_price
-            if resolved_action in {PositionAction.OPEN_LONG, PositionAction.CLOSE_LONG}:
-                amount = pos.long_quantity
-                entry_price = pos.long_avg_entry_price
-            elif resolved_action in {PositionAction.OPEN_SHORT, PositionAction.CLOSE_SHORT}:
-                amount = -pos.short_quantity
-                entry_price = pos.short_avg_entry_price
-            return SimpleNamespace(
-                trading_pair=iid.trading_pair,
-                amount=amount,
-                entry_price=entry_price,
-            )
-
-        def _patched_get_position(self, trading_pair: Optional[str] = None, *args, **kwargs):
-            try:
-                if trading_pair and str(trading_pair) != str(iid.trading_pair):
-                    orig = getattr(self, "_epp_v2_orig_get_position", None)
-                    return orig(trading_pair, *args, **kwargs) if callable(orig) else None
-                position_action = kwargs.get("position_action") or kwargs.get("position_side")
-                return _paper_position_obj(position_action)
-            except Exception:
-                orig = getattr(self, "_epp_v2_orig_get_position", None)
-                return orig(trading_pair, *args, **kwargs) if callable(orig) else None
-
-        def _patched_account_positions(self, *args, **kwargs):
-            try:
-                net_pos = desk.portfolio.get_position(iid)
-                return {
-                    iid.trading_pair: {
-                        "amount": net_pos.quantity,
-                        "long_amount": net_pos.long_quantity,
-                        "short_amount": -net_pos.short_quantity,
-                    }
-                }
-            except Exception:
-                orig = getattr(self, "_epp_v2_orig_account_positions", None)
-                return orig(*args, **kwargs) if callable(orig) else {}
-
-        if hasattr(connector, "get_balance"):
-            connector.get_balance = MethodType(_patched_get_balance, connector)
-        if hasattr(connector, "get_available_balance"):
-            connector.get_available_balance = MethodType(_patched_get_available_balance, connector)
-        if hasattr(connector, "ready"):
-            connector.ready = MethodType(_patched_ready, connector)
-        if hasattr(connector, "get_position"):
-            connector.get_position = MethodType(_patched_get_position, connector)
-        if hasattr(connector, "account_positions"):
-            connector.account_positions = MethodType(_patched_account_positions, connector)
-
-        connector._paper_desk_v2_get_balance = _paper_balance
-        connector._paper_desk_v2_get_available = _paper_available
-        connector._epp_v2_balance_patched = True
-        logger.debug("Connector balance reads patched for v2 portfolio")
-    except Exception as exc:
-        logger.debug("Balance patch failed (non-critical): %s", exc)
-
-
-def _install_paper_stats(connector: Any, desk: PaperDesk, iid: InstrumentId) -> None:
-    """Add paper_stats property to connector so ProcessedState can read fill counts."""
-    if getattr(connector, "_epp_v2_paper_stats_installed", False):
-        return
-    try:
-        def _paper_stats() -> Dict[str, Decimal]:
-            return desk.paper_stats(iid)
-
-        connector.paper_stats = _paper_stats
-        connector._epp_v2_paper_stats_installed = True
-        logger.debug("paper_stats property installed on connector")
-    except Exception as exc:
-        logger.debug("paper_stats install failed (non-critical): %s", exc)
-
-
-def _hb_order_type_to_v2(hb_order_type: Any) -> PaperOrderType:
-    """Convert HB OrderType to PaperOrderType."""
-    ot_str = str(getattr(hb_order_type, "name", str(hb_order_type))).upper()
-    if "MAKER" in ot_str or "LIMIT_MAKER" in ot_str:
-        return PaperOrderType.LIMIT_MAKER
-    if "MARKET" in ot_str:
-        return PaperOrderType.MARKET
-    return PaperOrderType.LIMIT
-
+# ---------------------------------------------------------------------------
+# Tick orchestration
+# ---------------------------------------------------------------------------
 
 def drive_desk_tick(
     strategy: Any,
     desk: PaperDesk,
-    now_ns: Optional[int] = None,
+    now_ns: int | None = None,
 ) -> None:
     """Call from strategy on_tick() to drive the desk.
 
     Drives all engines, then converts fill/cancel/reject events into
     HB events and fires them on the correct controller. This is what
-    makes fills appear in fills.csv and Grafana.
+    makes fills appear in fills.csv and the metrics pipeline.
     """
+    started = time.perf_counter()
+
+    _t_io = time.perf_counter()
+    _fut_sig = _REDIS_IO_POOL.submit(_consume_signals, strategy, _bridge_state)
+    _fut_guard = _REDIS_IO_POOL.submit(_check_hard_stop_transitions, strategy, _bridge_state)
+    _fut_pe = _REDIS_IO_POOL.submit(_consume_paper_exchange_events, strategy)
+    _fut_ml = _REDIS_IO_POOL.submit(_consume_ml_features, strategy, _bridge_state)
+    if _run_adverse_inference is not None:
+        _fut_adverse = _REDIS_IO_POOL.submit(_run_adverse_inference, strategy, _bridge_state)
+    else:
+        _fut_adverse = None
+
+    for label, fut in [
+        ("signal_consumption", _fut_sig),
+        ("guard_state_check", _fut_guard),
+        ("paper_exchange_events", _fut_pe),
+        ("ml_features", _fut_ml),
+        ("adverse_inference", _fut_adverse),
+    ]:
+        if fut is None:
+            continue
+        try:
+            fut.result(timeout=0.5)
+        except TimeoutError:
+            _LATENCY_TRACKER.observe("bridge_io_timeout_count", 1)
+            logger.warning("%s timed out after 0.5s", label)
+        except Exception as exc:
+            logger.warning("%s failed (non-critical): %s", label, exc)
+    _LATENCY_TRACKER.observe("bridge_parallel_io_ms", (time.perf_counter() - _t_io) * 1000.0)
+
     try:
-        _consume_signals(strategy)
-    except Exception as exc:
-        logger.warning("Signal consumption failed (non-critical): %s", exc)
-    try:
-        _check_hard_stop_transitions(strategy)
-    except Exception as exc:
-        logger.warning("Guard state check failed (non-critical): %s", exc)
-    try:
-        _run_adverse_inference(strategy)
-    except Exception as exc:
-        logger.warning("Adverse inference failed (non-critical): %s", exc)
-    try:
-        bridges: Dict = getattr(strategy, "_paper_desk_v2_bridges", {})
+        bridges: dict = getattr(strategy, "_paper_desk_v2_bridges", {})
+        _t_sync = time.perf_counter()
         for conn_name, bridge in bridges.items():
             bridge_iid = bridge.get("instrument_id")
             trading_pair = str(getattr(bridge_iid, "trading_pair", "") or "")
             if trading_pair:
                 _ensure_sync_state_command(strategy, conn_name, trading_pair)
+        _LATENCY_TRACKER.observe("bridge_sync_state_ms", (time.perf_counter() - _t_sync) * 1000.0)
 
-        _consume_paper_exchange_events(strategy)
-
+        _t_desk = time.perf_counter()
         all_events = desk.tick(now_ns)
+        desk_tick_ms = (time.perf_counter() - _t_desk) * 1000.0
+        _LATENCY_TRACKER.observe("bridge_desk_tick_only_ms", desk_tick_ms)
+        if all_events and any(type(ev).__name__ == "OrderFilled" for ev in all_events):
+            _LATENCY_TRACKER.observe("fill_io_ms", desk_tick_ms)
+        _LATENCY_TRACKER.observe("hb_bridge_desk_tick_ms", (time.perf_counter() - started) * 1000.0)
+        _LATENCY_TRACKER.flush(
+            extra={
+                "bridges": len(getattr(strategy, "_paper_desk_v2_bridges", {}) or {}),
+                "desk_events": len(all_events or []),
+            }
+        )
         if not all_events:
             return
+        _t_fire = time.perf_counter()
         for event in all_events:
             event_iid = getattr(event, "instrument_id", None)
             if event_iid is None:
@@ -2902,5 +1081,8 @@ def drive_desk_tick(
                 if bridge_iid and bridge_iid == event_iid:
                     _fire_hb_events(strategy, conn_name, event, _bridge_state)
                     break
+        _LATENCY_TRACKER.observe("bridge_fire_hb_events_ms", (time.perf_counter() - _t_fire) * 1000.0)
     except Exception as exc:
+        _LATENCY_TRACKER.observe("hb_bridge_desk_tick_ms", (time.perf_counter() - started) * 1000.0)
+        _LATENCY_TRACKER.flush(extra={"last_error": type(exc).__name__})
         logger.error("drive_desk_tick failed: %s", exc, exc_info=True)

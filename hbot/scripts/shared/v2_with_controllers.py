@@ -1,30 +1,34 @@
+import asyncio
 import importlib
 import json
 import logging
 import os
 import sys
 import time
-import asyncio
 from decimal import Decimal
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Set
+from typing import Any
 
 from hummingbot.client import hummingbot_application as hb_app_module
 from hummingbot.client.hummingbot_application import HummingbotApplication
 from hummingbot.client.ui import interface_utils as hb_interface_utils
-from hummingbot.core import connector_manager as hb_connector_manager
 from hummingbot.connector.connector_base import ConnectorBase
+from hummingbot.core import connector_manager as hb_connector_manager
 from hummingbot.core.event.events import MarketOrderFailureEvent
 from hummingbot.data_feed.candles_feed.data_types import CandlesConfig
 from hummingbot.strategy.strategy_v2_base import StrategyV2Base, StrategyV2ConfigBase
 from hummingbot.strategy_v2.models.base import RunnableStatus
 from hummingbot.strategy_v2.models.executor_actions import CreateExecutorAction, StopExecutorAction
-from controllers.paper_engine_v2.hb_bridge import (
+
+from simulation.bridge.hb_bridge import (
     _canonical_name,
     _paper_exchange_mode_for_instance,
     enable_framework_paper_compat_fallbacks,
+)
+from simulation.bridge.hb_bridge import (
     install_paper_desk_bridge as _install_paper_desk_bridge_v2,
 )
+from services.common.latency_tracker import JsonLatencyTracker
 from services.common.preflight import run_controller_preflight
 
 try:
@@ -38,8 +42,8 @@ except Exception:  # pragma: no cover
     PydanticCoreValidationError = None
 
 try:
-    from services.contracts.event_schemas import AuditEvent, MarketDepthSnapshotEvent, MarketSnapshotEvent
-    from services.contracts.stream_names import DEFAULT_CONSUMER_GROUP, MARKET_DEPTH_STREAM
+    from platform_lib.contracts.event_schemas import AuditEvent, MarketDepthSnapshotEvent, MarketSnapshotEvent
+    from platform_lib.contracts.stream_names import DEFAULT_CONSUMER_GROUP, MARKET_DEPTH_STREAM
     from services.hb_bridge.intent_consumer import HBIntentConsumer
     from services.hb_bridge.publisher import HBEventPublisher
     from services.hb_bridge.redis_client import RedisStreamClient
@@ -120,7 +124,7 @@ def _install_transient_bitget_ws_timeout_guard():
         "Unexpected error while listening to user stream. Retrying after 5 seconds...",
     }
     min_emit_interval_s = max(1.0, float(os.getenv("HB_TRANSIENT_WS_TIMEOUT_LOG_INTERVAL_S", "120")))
-    last_emit_by_logger: Dict[str, float] = {}
+    last_emit_by_logger: dict[str, float] = {}
 
     class _TransientBitgetWsTimeoutFilter(logging.Filter):
         def filter(self, record: logging.LogRecord) -> bool:
@@ -159,7 +163,7 @@ def _install_transient_bitget_ws_timeout_guard():
     logging._hbot_transient_bitget_ws_timeout_guard_installed = True
 
 
-def _to_positive_decimal(value: Any) -> Optional[Decimal]:
+def _to_positive_decimal(value: Any) -> Decimal | None:
     try:
         if value is None:
             return None
@@ -171,7 +175,7 @@ def _to_positive_decimal(value: Any) -> Optional[Decimal]:
         return None
 
 
-def _extract_depth_level(entry: Any) -> Optional[Dict[str, float]]:
+def _extract_depth_level(entry: Any) -> dict[str, float] | None:
     price_raw = None
     size_raw = None
     if isinstance(entry, dict):
@@ -207,8 +211,8 @@ def _extract_order_book_depth_snapshot(
     connector_obj: Any,
     pair: str,
     max_levels: int,
-) -> Dict[str, Any]:
-    out: Dict[str, Any] = {
+) -> dict[str, Any]:
+    out: dict[str, Any] = {
         "bids": [],
         "asks": [],
         "best_bid": None,
@@ -223,7 +227,7 @@ def _extract_order_book_depth_snapshot(
     except Exception:
         return out
 
-    def _iter_entries(book_obj: Any, side: str) -> List[Any]:
+    def _iter_entries(book_obj: Any, side: str) -> list[Any]:
         method_name = f"{side}_entries"
         method = getattr(book_obj, method_name, None)
         if callable(method):
@@ -327,7 +331,7 @@ def _install_bitget_ws_stability_patch():
         )
         return any(token in exc_text for token in transient_tokens)
 
-    def _to_positive_decimal(value: Any) -> Optional[Decimal]:
+    def _to_positive_decimal(value: Any) -> Decimal | None:
         try:
             if value is None:
                 return None
@@ -338,7 +342,7 @@ def _install_bitget_ws_stability_patch():
         except Exception:
             return None
 
-    def _mid_from_connector_snapshot(connector_obj: Any, pair: str) -> Optional[Decimal]:
+    def _mid_from_connector_snapshot(connector_obj: Any, pair: str) -> Decimal | None:
         get_mid_fn = getattr(connector_obj, "get_mid_price", None)
         if callable(get_mid_fn):
             try:
@@ -377,7 +381,7 @@ def _install_bitget_ws_stability_patch():
                 pass
         return None
 
-    def _extract_depth_level(entry: Any) -> Optional[Dict[str, float]]:
+    def _extract_depth_level(entry: Any) -> dict[str, float] | None:
         price_raw = None
         size_raw = None
         if isinstance(entry, dict):
@@ -412,8 +416,8 @@ def _install_bitget_ws_stability_patch():
         connector_obj: Any,
         pair: str,
         max_levels: int,
-    ) -> Dict[str, Any]:
-        out: Dict[str, Any] = {
+    ) -> dict[str, Any]:
+        out: dict[str, Any] = {
             "bids": [],
             "asks": [],
             "best_bid": None,
@@ -428,7 +432,7 @@ def _install_bitget_ws_stability_patch():
         except Exception:
             return out
 
-        def _iter_entries(book_obj: Any, side: str) -> List[Any]:
+        def _iter_entries(book_obj: Any, side: str) -> list[Any]:
             method_name = f"{side}_entries"
             method = getattr(book_obj, method_name, None)
             if callable(method):
@@ -497,7 +501,7 @@ def _install_bitget_ws_stability_patch():
             try:
                 return await original_get_last_traded_prices(self, trading_pairs)
             except Exception:
-                fallback_prices: Dict[str, float] = {}
+                fallback_prices: dict[str, float] = {}
                 for pair in list(trading_pairs or []):
                     mid = _mid_from_connector_snapshot(self, str(pair))
                     if mid is not None:
@@ -507,7 +511,7 @@ def _install_bitget_ws_stability_patch():
                     last_log_ts = float(getattr(self, "_hb_last_trade_price_fallback_log_ts", 0.0) or 0.0)
                     min_log_interval_s = max(10.0, float(os.getenv("HB_BITGET_LAST_TRADE_FALLBACK_LOG_INTERVAL_S", "120")))
                     if now_ts - last_log_ts >= min_log_interval_s:
-                        setattr(self, "_hb_last_trade_price_fallback_log_ts", now_ts)
+                        self._hb_last_trade_price_fallback_log_ts = now_ts
                         logger_obj = getattr(self, "logger", None)
                         if callable(logger_obj):
                             logger_obj().warning(
@@ -544,8 +548,8 @@ def _install_bitget_ws_stability_patch():
             try:
                 tasks = [_safe_get_last_traded_price_no_spam(self, connector, pair) for pair in pairs]
                 prices = await asyncio.wait_for(asyncio.gather(*tasks), timeout=timeout)
-                resolved: Dict[str, Decimal] = {}
-                for pair, price in zip(pairs, prices):
+                resolved: dict[str, Decimal] = {}
+                for pair, price in zip(pairs, prices, strict=True):
                     dec = _to_positive_decimal(price)
                     if dec is not None:
                         resolved[pair] = dec
@@ -562,7 +566,7 @@ def _install_bitget_ws_stability_patch():
                         float(os.getenv("HB_BITGET_LAST_TRADE_FALLBACK_LOG_INTERVAL_S", "120")),
                     )
                     if now_ts - last_log_ts >= min_log_interval_s:
-                        setattr(self, "_hb_last_trade_price_provider_fallback_log_ts", now_ts)
+                        self._hb_last_trade_price_provider_fallback_log_ts = now_ts
                         logging.getLogger(__name__).warning(
                             "MarketDataProvider last-traded-price fallback used "
                             "(pairs=%s, missing=%s, throttled to >= %ss).",
@@ -572,7 +576,7 @@ def _install_bitget_ws_stability_patch():
                         )
                 return resolved
             except Exception:
-                resolved: Dict[str, Decimal] = {}
+                resolved: dict[str, Decimal] = {}
                 for pair in pairs:
                     mid = _mid_from_connector_snapshot(connector, pair)
                     if mid is not None:
@@ -597,7 +601,7 @@ def _install_bitget_ws_stability_patch():
                     last_ts = float(getattr(self, "_hb_last_ping_transient_log_ts", 0.0) or 0.0)
                     min_log_interval_s = max(10.0, float(os.getenv("HB_BITGET_PING_ERROR_LOG_INTERVAL_S", "120")))
                     if (now_ts - last_ts) >= min_log_interval_s:
-                        setattr(self, "_hb_last_ping_transient_log_ts", now_ts)
+                        self._hb_last_ping_transient_log_ts = now_ts
                         self.logger().warning(
                             "Transient websocket ping send failure; keeping ping task alive "
                             "(throttled to >= %ss).",
@@ -612,7 +616,7 @@ def _install_bitget_ws_stability_patch():
         last_ts = float(getattr(self, "_hb_last_timeout_retry_log_ts", 0.0) or 0.0)
         min_log_interval_s = max(10.0, float(os.getenv("HB_BITGET_TIMEOUT_RETRY_LOG_INTERVAL_S", "120")))
         if (now_ts - last_ts) >= min_log_interval_s:
-            setattr(self, "_hb_last_timeout_retry_log_ts", now_ts)
+            self._hb_last_timeout_retry_log_ts = now_ts
             self.logger().warning(
                 "Transient websocket read timeout on %s stream; attempting in-place keepalive retry "
                 "(timeout_retry=%d/%d, throttled to >= %ss).",
@@ -628,7 +632,7 @@ def _install_bitget_ws_stability_patch():
             try:
                 async for ws_response in websocket_assistant.iter_messages():
                     consecutive_timeouts = 0
-                    data: Dict[str, Any] = ws_response.data
+                    data: dict[str, Any] = ws_response.data
                     if data is None:
                         continue
                     channel: str = self._channel_originating_message(event_message=data)
@@ -826,18 +830,18 @@ if _runtime_bot_mode() != "live":
 
 class V2WithControllersConfig(StrategyV2ConfigBase):
     script_file_name: str = os.path.basename(__file__)
-    candles_config: List[CandlesConfig] = []
-    markets: Dict[str, Set[str]] = {}
-    max_global_drawdown_quote: Optional[float] = None
-    max_controller_drawdown_quote: Optional[float] = None
+    candles_config: list[CandlesConfig] = []
+    markets: dict[str, set[str]] = {}
+    max_global_drawdown_quote: float | None = None
+    max_controller_drawdown_quote: float | None = None
     external_signal_risk_enabled: bool = os.getenv("EXT_SIGNAL_RISK_ENABLED", "false").lower() in {"1", "true", "yes"}
     redis_host: str = os.getenv("REDIS_HOST", "redis")
     redis_port: int = int(os.getenv("REDIS_PORT", "6379"))
     redis_db: int = int(os.getenv("REDIS_DB", "0"))
-    redis_password: Optional[str] = os.getenv("REDIS_PASSWORD")
+    redis_password: str | None = os.getenv("REDIS_PASSWORD")
     redis_consumer_group: str = os.getenv("REDIS_CONSUMER_GROUP", DEFAULT_CONSUMER_GROUP)
     event_poll_ms: int = int(os.getenv("EVENT_POLL_MS", "1000"))
-    bus_soft_pause_on_outage: bool = os.getenv("BUS_SOFT_PAUSE_ON_OUTAGE", "true").lower() in {"1", "true", "yes"}
+    bus_soft_pause_on_outage: bool = os.getenv("BUS_SOFT_PAUSE_ON_OUTAGE", "false").lower() in {"1", "true", "yes"}
 
 
 class V2WithControllers(StrategyV2Base):
@@ -853,7 +857,7 @@ class V2WithControllers(StrategyV2Base):
     """
     performance_report_interval: int = 1
 
-    def __init__(self, connectors: Dict[str, ConnectorBase], config: V2WithControllersConfig):
+    def __init__(self, connectors: dict[str, ConnectorBase], config: V2WithControllersConfig):
         super().__init__(connectors, config)
         self.config = config
         self.max_pnl_by_controller = {}
@@ -868,11 +872,11 @@ class V2WithControllers(StrategyV2Base):
         self._last_bus_ok_ts = 0.0
         # Depth snapshots can carry sparse/repeated exchange-side sequence IDs.
         # Keep a local monotonic sequence for downstream stream-integrity checks.
-        self._depth_market_sequence_by_key: Dict[str, int] = {}
+        self._depth_market_sequence_by_key: dict[str, int] = {}
         self._preflight_checked = False
         self._preflight_failed = False
-        self._paper_adapter_installed: Set[str] = set()
-        self._paper_adapter_pending_logged: Set[str] = set()
+        self._paper_adapter_installed: set[str] = set()
+        self._paper_adapter_pending_logged: set[str] = set()
         self._paper_desk_v2 = None  # PaperDesk v2 -- created on first paper adapter install
         self._heartbeat_write_interval_s: float = float(os.getenv("HB_HEARTBEAT_INTERVAL_S", "5"))
         self._last_heartbeat_write_ts: float = 0.0
@@ -884,7 +888,7 @@ class V2WithControllers(StrategyV2Base):
         self._open_orders_snapshot_path: Path = Path(
             os.getenv("HB_OPEN_ORDERS_SNAPSHOT_PATH", "/home/hummingbot/logs/recovery/open_orders_latest.json")
         )
-        self._artifact_write_failures: Dict[str, int] = {}
+        self._artifact_write_failures: dict[str, int] = {}
         self._config_reload_retry_interval_s: float = float(os.getenv("HB_CONFIG_RELOAD_RETRY_S", "30"))
         self._config_reload_retry_after_ts: float = 0.0
         self._config_reload_error_count: int = 0
@@ -895,19 +899,30 @@ class V2WithControllers(StrategyV2Base):
         self._config_reload_validation_error_types = tuple(
             cls for cls in (PydanticValidationError, PydanticCoreValidationError) if cls is not None
         )
-        self._controller_module_mtime_by_name: Dict[str, float] = {}
-        self._hard_stop_kill_switch_last_reason_by_controller: Dict[str, str] = {}
-        self._hard_stop_kill_switch_last_ts_by_controller: Dict[str, float] = {}
-        self._hard_stop_kill_switch_latched_by_controller: Dict[str, bool] = {}
+        self._controller_module_mtime_by_name: dict[str, float] = {}
+        self._hard_stop_kill_switch_last_reason_by_controller: dict[str, str] = {}
+        self._hard_stop_kill_switch_last_ts_by_controller: dict[str, float] = {}
+        self._hard_stop_kill_switch_latched_by_controller: dict[str, bool] = {}
         self._hard_stop_kill_switch_republish_s: float = float(
             os.getenv("HB_HARD_STOP_KILL_SWITCH_REPUBLISH_S", "300")
         )
-        self._hard_stop_clear_candidate_since_by_controller: Dict[str, float] = {}
-        self._hard_stop_resume_last_ts_by_controller: Dict[str, float] = {}
+        self._hard_stop_clear_candidate_since_by_controller: dict[str, float] = {}
+        self._hard_stop_resume_last_ts_by_controller: dict[str, float] = {}
         self._hard_stop_clear_cooldown_s: float = float(
             os.getenv("HB_HARD_STOP_CLEAR_COOLDOWN_S", "30")
         )
-        self._controller_actions_buffer: List[Any] = []
+        self._last_on_tick_exit_ts: float = 0.0
+        self._latency_tracker = JsonLatencyTracker(
+            Path(
+                os.getenv(
+                    "HB_STRATEGY_HOT_PATH_REPORT_PATH",
+                    "/workspace/hbot/reports/verification/strategy_hot_path_latest.json",
+                )
+            ),
+            max_samples=int(os.getenv("HB_STRATEGY_HOT_PATH_MAX_SAMPLES", "720")),
+            flush_interval_s=float(os.getenv("HB_STRATEGY_HOT_PATH_FLUSH_S", "5")),
+        )
+        self._controller_actions_buffer: list[Any] = []
         self._action_trace_enabled: bool = os.getenv("HB_ACTION_TRACE_ENABLED", "true").lower() in {"1", "true", "yes"}
         self._action_trace_cooldown_s: float = max(1.0, float(os.getenv("HB_ACTION_TRACE_COOLDOWN_S", "10")))
         self._action_trace_last_ts: float = 0.0
@@ -938,6 +953,10 @@ class V2WithControllers(StrategyV2Base):
         self._startup_sync_report_path: Path = Path(
             os.getenv("HB_STARTUP_SYNC_REPORT_PATH", "/home/hummingbot/logs/recovery/startup_sync_latest.json")
         )
+        self._tick_consecutive_error_count: int = 0
+        self._tick_error_total: int = 0
+        self._tick_circuit_breaker_tripped: bool = False
+        self._tick_circuit_breaker_threshold: int = int(os.getenv("HB_TICK_CIRCUIT_BREAKER_THRESHOLD", "5"))
         self._install_executor_dispatch_trace()
         self._init_external_bus()
         self._install_internal_paper_adapters()
@@ -970,10 +989,10 @@ class V2WithControllers(StrategyV2Base):
         self,
         *,
         stage: str,
-        actions: List[Any],
+        actions: list[Any],
         before_count: int,
         after_count: int,
-        new_executor_ids: List[str],
+        new_executor_ids: list[str],
         force: bool = False,
     ) -> None:
         if not self._executor_dispatch_trace_enabled:
@@ -1010,9 +1029,9 @@ class V2WithControllers(StrategyV2Base):
         original_execute_action = getattr(orchestrator, "execute_action", None)
         original_create_executor = getattr(orchestrator, "create_executor", None)
 
-        def _runtime_executors() -> List[Any]:
+        def _runtime_executors() -> list[Any]:
             active_map = getattr(orchestrator, "active_executors", {}) or {}
-            flattened: List[Any] = []
+            flattened: list[Any] = []
             for executor_list in active_map.values():
                 if isinstance(executor_list, list):
                     flattened.extend(executor_list)
@@ -1046,7 +1065,7 @@ class V2WithControllers(StrategyV2Base):
             )
             if rebalance_present and not new_ids:
                 # Rebalance creates can be intentionally deduplicated if one is already active.
-                rebalance_action_summaries: List[str] = []
+                rebalance_action_summaries: list[str] = []
                 for action in action_list:
                     if not self._is_position_rebalance_create(action):
                         continue
@@ -1496,27 +1515,143 @@ class V2WithControllers(StrategyV2Base):
         self.logger().info("Executor dispatch trace installed.")
 
     def on_tick(self):
+        try:
+            self._on_tick_inner()
+            self._tick_consecutive_error_count = 0
+        except (SystemExit, KeyboardInterrupt):
+            raise
+        except Exception:
+            self._tick_consecutive_error_count += 1
+            self._tick_error_total += 1
+            self.logger().exception(
+                "on_tick unhandled exception (consecutive=%d, total=%d)",
+                self._tick_consecutive_error_count,
+                self._tick_error_total,
+            )
+            if (
+                not self._tick_circuit_breaker_tripped
+                and self._tick_consecutive_error_count >= self._tick_circuit_breaker_threshold
+            ):
+                self._tick_circuit_breaker_tripped = True
+                self.logger().critical(
+                    "on_tick circuit breaker TRIPPED after %d consecutive failures — "
+                    "requesting emergency soft-pause via controllers",
+                    self._tick_consecutive_error_count,
+                )
+                self._apply_tick_circuit_breaker_pause()
+            self._write_watchdog_heartbeat(reason="tick_error")
+
+    def _apply_tick_circuit_breaker_pause(self) -> None:
+        """Ask each active controller to enter soft-pause when the tick circuit breaker trips."""
+        controllers = getattr(self, "controllers", {}) or {}
+        for name, ctrl in controllers.items():
+            pause_fn = getattr(ctrl, "set_external_soft_pause", None)
+            if callable(pause_fn):
+                try:
+                    pause_fn(True, reason="tick_circuit_breaker")
+                except Exception:
+                    self.logger().warning("Failed to set soft-pause on controller %s", name, exc_info=True)
+
+    def _on_tick_inner(self):
+        _t_tick = time.perf_counter()
+        if self._last_on_tick_exit_ts > 0:
+            tick_interval_ms = (_t_tick - self._last_on_tick_exit_ts) * 1000.0
+            self._latency_tracker.observe("tick_interval_ms", tick_interval_ms)
         self._write_watchdog_heartbeat(reason="tick_start")
         self._install_internal_paper_adapters()
+        _t_desk1 = time.perf_counter()
         self._tick_paper_adapters()
+        self._latency_tracker.observe("paper_desk_tick_1_ms", (time.perf_counter() - _t_desk1) * 1000.0)
         if not self._preflight_checked:
             self._run_preflight_once()
             if self._preflight_failed:
                 self._write_watchdog_heartbeat(reason="preflight_failed")
                 return
+        _t_super = time.perf_counter()
         super().on_tick()
+        super_on_tick_ms = (time.perf_counter() - _t_super) * 1000.0
+        self._latency_tracker.observe("strategy_super_on_tick_ms", super_on_tick_ms)
+        self._observe_controller_hot_path_metrics()
+        self._observe_hb_framework_overhead(super_on_tick_ms)
+        _t_desk2 = time.perf_counter()
         self._tick_paper_adapters()
+        self._latency_tracker.observe("paper_desk_tick_2_ms", (time.perf_counter() - _t_desk2) * 1000.0)
         self._log_paper_engine_probe()
+        _t_publish = time.perf_counter()
         self._publish_market_state_to_bus()
+        self._latency_tracker.observe("bus_publish_market_state_ms", (time.perf_counter() - _t_publish) * 1000.0)
+        _t_intent = time.perf_counter()
         self._consume_execution_intents()
+        self._latency_tracker.observe("bus_consume_execution_intents_ms", (time.perf_counter() - _t_intent) * 1000.0)
         if not self._is_stop_triggered:
+            _t_supervisory = time.perf_counter()
             self.check_manual_kill_switch()
             self.control_max_drawdown()
             self.send_performance_report()
             self._handle_bus_outage_soft_pause()
             self._check_hard_stop_kill_switch()
+            self._latency_tracker.observe("strategy_supervisory_ms", (time.perf_counter() - _t_supervisory) * 1000.0)
         self._write_open_orders_snapshot(reason="tick_end")
         self._write_watchdog_heartbeat(reason="tick_end")
+        self._latency_tracker.observe("strategy_on_tick_total_ms", (time.perf_counter() - _t_tick) * 1000.0)
+        self._last_on_tick_exit_ts = time.perf_counter()
+        self._latency_tracker.flush(
+            extra={
+                "controller_count": len(getattr(self, "controllers", {}) or {}),
+                "external_signal_risk_enabled": bool(self.config.external_signal_risk_enabled),
+                "bus_soft_pause_on_outage": bool(self.config.bus_soft_pause_on_outage),
+                "bus_connected": bool(self._bus_client is not None),
+            }
+        )
+
+    def _observe_controller_hot_path_metrics(self) -> None:
+        controllers = getattr(self, "controllers", {}) or {}
+        metric_map = {
+            "_tick_duration_ms": "controller_tick_ms",
+            "_indicator_duration_ms": "controller_indicator_ms",
+            "_connector_io_duration_ms": "controller_connector_io_ms",
+            "_preflight_hot_path_duration_ms": "controller_preflight_hot_path_ms",
+            "_execution_plan_duration_ms": "controller_execution_plan_ms",
+            "_risk_duration_ms": "controller_risk_eval_ms",
+            "_emit_tick_duration_ms": "controller_emit_tick_ms",
+            "_governance_duration_ms": "controller_governance_ms",
+        }
+        for controller in controllers.values():
+            processed_data = getattr(controller, "processed_data", {})
+            if not isinstance(processed_data, dict):
+                continue
+            for field_name, metric_name in metric_map.items():
+                value = processed_data.get(field_name)
+                try:
+                    if value is not None:
+                        self._latency_tracker.observe(metric_name, float(value))
+                except Exception:
+                    continue
+            ob_age_s = getattr(controller, "_order_book_stale_age_s", None)
+            if callable(ob_age_s):
+                try:
+                    now_ts = float(getattr(controller, "market_data_provider", None).time())
+                    age = ob_age_s(now_ts)
+                    if age > 0:
+                        self._latency_tracker.observe("order_book_age_ms", age * 1000.0)
+                except Exception:
+                    pass
+
+    def _observe_hb_framework_overhead(self, super_on_tick_ms: float) -> None:
+        """HB framework overhead = super().on_tick() minus sum of controller tick durations."""
+        controllers = getattr(self, "controllers", {}) or {}
+        total_controller_ms = 0.0
+        for controller in controllers.values():
+            processed_data = getattr(controller, "processed_data", {})
+            if isinstance(processed_data, dict):
+                val = processed_data.get("_tick_duration_ms")
+                if val is not None:
+                    try:
+                        total_controller_ms += float(val)
+                    except Exception:
+                        pass
+        overhead = max(0.0, super_on_tick_ms - total_controller_ms)
+        self._latency_tracker.observe("hb_framework_overhead_ms", overhead)
 
     def _log_paper_engine_probe(self) -> None:
         if not self._paper_engine_probe_enabled or not self._order_exec_trace_all_levels:
@@ -1543,7 +1678,7 @@ class V2WithControllers(StrategyV2Base):
             inflight = list(getattr(engine, "_inflight", []) or [])
             open_ids = [str(getattr(o, "order_id", "")) for o in open_orders[:5]]
             inflight_ids = [str(getattr(getattr(t, "__getitem__", lambda *_: None)(2), "order_id", "")) for t in inflight[:5]]
-            active_runtime_ids: List[str] = []
+            active_runtime_ids: list[str] = []
             try:
                 controller_instance_name = ""
                 target_connector = _canonical_name(str(connector_name))
@@ -1575,7 +1710,7 @@ class V2WithControllers(StrategyV2Base):
             book = getattr(engine, "_book", None)
             best_bid = str(getattr(getattr(book, "best_bid", None), "price", ""))
             best_ask = str(getattr(getattr(book, "best_ask", None), "price", ""))
-            order_samples: List[str] = []
+            order_samples: list[str] = []
             for order in open_orders[:4]:
                 side = str(getattr(getattr(order, "side", None), "value", ""))
                 price = str(getattr(order, "price", ""))
@@ -1593,7 +1728,7 @@ class V2WithControllers(StrategyV2Base):
                 except Exception:
                     touchable = ""
                 order_samples.append(
-                    f"{str(getattr(order, 'order_id', ''))}:{side}@{price} rem={remaining} fills={fill_count}{touchable}"
+                    f"{getattr(order, 'order_id', '')!s}:{side}@{price} rem={remaining} fills={fill_count}{touchable}"
                 )
             self.logger().warning(
                 "PAPER_ENGINE_PROBE connector=%s engine_key=%s open=%d inflight=%d active_runtime_open=%d best_bid=%s best_ask=%s "
@@ -1663,8 +1798,8 @@ class V2WithControllers(StrategyV2Base):
         self._config_reload_last_error_ts = 0.0
         self._config_reload_retry_after_ts = 0.0
 
-    def _collect_controller_module_paths(self) -> List[str]:
-        module_paths: Set[str] = set()
+    def _collect_controller_module_paths(self) -> list[str]:
+        module_paths: set[str] = set()
         for controller in self.controllers.values():
             controller_module = str(getattr(controller.__class__, "__module__", "") or "").strip()
             if controller_module:
@@ -1736,6 +1871,9 @@ class V2WithControllers(StrategyV2Base):
                 else ""
             ),
             "artifact_write_failures": dict(getattr(self, "_artifact_write_failures", {})),
+            "tick_consecutive_error_count": int(getattr(self, "_tick_consecutive_error_count", 0)),
+            "tick_error_total": int(getattr(self, "_tick_error_total", 0)),
+            "tick_circuit_breaker_tripped": bool(getattr(self, "_tick_circuit_breaker_tripped", False)),
         }
         self._write_runtime_json_artifact(
             path=self._heartbeat_path,
@@ -1743,7 +1881,7 @@ class V2WithControllers(StrategyV2Base):
             artifact_name="watchdog_heartbeat",
         )
 
-    def _write_startup_sync_report(self, status: str, errors: List[str], scan_summary: Dict[str, object]) -> None:
+    def _write_startup_sync_report(self, status: str, errors: list[str], scan_summary: dict[str, object]) -> None:
         payload = {
             "ts_utc": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(time.time())),
             "status": status,
@@ -1756,7 +1894,7 @@ class V2WithControllers(StrategyV2Base):
             artifact_name="startup_sync_report",
         )
 
-    def _write_runtime_json_artifact(self, *, path: Path, payload: Dict[str, object], artifact_name: str) -> None:
+    def _write_runtime_json_artifact(self, *, path: Path, payload: dict[str, object], artifact_name: str) -> None:
         try:
             path.parent.mkdir(parents=True, exist_ok=True)
             path.write_text(json.dumps(payload, indent=2), encoding="utf-8")
@@ -1775,8 +1913,8 @@ class V2WithControllers(StrategyV2Base):
     def _append_open_order_snapshot_entry(
         self,
         *,
-        orders: List[Dict[str, object]],
-        seen_order_ids: Set[str],
+        orders: list[dict[str, object]],
+        seen_order_ids: set[str],
         controller_id: str,
         connector_name: str,
         trading_pair: str,
@@ -1834,7 +1972,7 @@ class V2WithControllers(StrategyV2Base):
         if order_id:
             seen_order_ids.add(order_id)
 
-    def _iter_connector_open_orders(self, connector: Any) -> List[Any]:
+    def _iter_connector_open_orders(self, connector: Any) -> list[Any]:
         try:
             open_orders_fn = getattr(connector, "get_open_orders", None)
             if not callable(open_orders_fn):
@@ -1843,34 +1981,22 @@ class V2WithControllers(StrategyV2Base):
         except Exception:
             return []
 
-    def _iter_bridge_open_orders(self, connector: Any, connector_name: str) -> List[Any]:
-        try:
-            bridges = getattr(self, "_paper_desk_v2_bridges", {})
-            bridge = bridges.get(connector_name, {}) if isinstance(bridges, dict) else {}
-            if not isinstance(bridge, dict):
-                bridge = {}
-            desk = bridge.get("desk")
-            iid = bridge.get("instrument_id")
-            if desk is None or iid is None:
-                desk = getattr(connector, "_paper_desk_v2", None)
-                iid = getattr(connector, "_paper_desk_v2_instrument_id", None)
-            if desk is None or iid is None:
-                return []
-            engine = getattr(desk, "_engines", {}).get(getattr(iid, "key", ""))
-            open_orders_fn = getattr(engine, "open_orders", None)
-            if not callable(open_orders_fn):
-                return []
-            return list(open_orders_fn() or [])
-        except Exception:
-            return []
+    def _iter_runtime_open_orders(self, instance_name: str, connector_name: str) -> list[Any]:
+        """Supplementary paper instrumentation: returns open orders from the Paper Exchange Service.
 
-    def _iter_runtime_open_orders(self, instance_name: str, connector_name: str) -> List[Any]:
+        These orders live in ``_paper_exchange_runtime_orders`` (populated by
+        ``hb_event_fire`` / ``hb_bridge._consume_paper_exchange_events``) and are
+        distinct from PaperDesk engine orders exposed via
+        ``connector.get_open_orders()``.  They provide additional visibility in
+        the open-orders snapshot for ops/debugging when the Paper Exchange
+        Service routing layer is active.  In live mode this method is a no-op.
+        """
         try:
             if _paper_exchange_mode_for_instance(instance_name) != "active":
                 return []
             runtime_store = getattr(self, "_paper_exchange_runtime_orders", {}) or {}
             target_connector = _canonical_name(connector_name)
-            out: List[Any] = []
+            out: list[Any] = []
             for bucket_name, bucket in runtime_store.items():
                 if _canonical_name(str(bucket_name or "")) != target_connector:
                     continue
@@ -1883,13 +2009,13 @@ class V2WithControllers(StrategyV2Base):
         except Exception:
             return []
 
-    def _collect_open_orders_snapshot(self) -> Dict[str, object]:
-        payload: Dict[str, object] = {
+    def _collect_open_orders_snapshot(self) -> dict[str, object]:
+        payload: dict[str, object] = {
             "ts_utc": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(time.time())),
             "controllers_checked": 0,
             "orders": [],
         }
-        orders: List[Dict[str, object]] = []
+        orders: list[dict[str, object]] = []
         for controller_id, controller in self.controllers.items():
             payload["controllers_checked"] = int(payload["controllers_checked"]) + 1
             connector_name = str(getattr(controller.config, "connector_name", "") or "")
@@ -1897,21 +2023,9 @@ class V2WithControllers(StrategyV2Base):
             connector = self.connectors.get(connector_name) if connector_name else None
             if connector is None:
                 continue
-            seen_order_ids: Set[str] = set()
+            seen_order_ids: set[str] = set()
             instance_name = str(getattr(controller.config, "instance_name", "") or controller_id)
             for order in self._iter_connector_open_orders(connector):
-                self._append_open_order_snapshot_entry(
-                    orders=orders,
-                    seen_order_ids=seen_order_ids,
-                    controller_id=controller_id,
-                    connector_name=connector_name,
-                    trading_pair=trading_pair,
-                    order=order,
-                )
-            for order in self._iter_bridge_open_orders(connector, connector_name):
-                source_bot = str(getattr(order, "source_bot", "") or "")
-                if connector_name and source_bot and source_bot != connector_name:
-                    continue
                 self._append_open_order_snapshot_entry(
                     orders=orders,
                     seen_order_ids=seen_order_ids,
@@ -2039,7 +2153,7 @@ class V2WithControllers(StrategyV2Base):
                 [StopExecutorAction(executor_id=executor.id,
                                     controller_id=executor.controller_id) for executor in non_trading_executors])
 
-    def _log_action_trace(self, stage: str, actions: List[Any], force: bool = False) -> None:
+    def _log_action_trace(self, stage: str, actions: list[Any], force: bool = False) -> None:
         if not self._action_trace_enabled:
             return
         now = time.time()
@@ -2048,7 +2162,7 @@ class V2WithControllers(StrategyV2Base):
         self._action_trace_last_ts = now
         create_actions = [a for a in actions if isinstance(a, CreateExecutorAction)]
         stop_actions = [a for a in actions if isinstance(a, StopExecutorAction)]
-        level_ids: List[str] = []
+        level_ids: list[str] = []
         for action in create_actions:
             cfg = getattr(action, "executor_config", None)
             level_id = getattr(cfg, "level_id", None) if cfg is not None else None
@@ -2065,7 +2179,7 @@ class V2WithControllers(StrategyV2Base):
             ",".join(stop_ids[:6]),
         )
 
-    def create_actions_proposal(self) -> List[CreateExecutorAction]:
+    def create_actions_proposal(self) -> list[CreateExecutorAction]:
         self._controller_actions_buffer = []
         for controller in self.controllers.values():
             if controller.status != RunnableStatus.RUNNING:
@@ -2086,7 +2200,7 @@ class V2WithControllers(StrategyV2Base):
         self._log_action_trace("buffered", self._controller_actions_buffer, force=force_log)
         return [a for a in self._controller_actions_buffer if isinstance(a, CreateExecutorAction)]
 
-    def stop_actions_proposal(self) -> List[StopExecutorAction]:
+    def stop_actions_proposal(self) -> list[StopExecutorAction]:
         if not self._controller_actions_buffer:
             return []
         stop_actions = [a for a in self._controller_actions_buffer if isinstance(a, StopExecutorAction)]
@@ -2105,11 +2219,23 @@ class V2WithControllers(StrategyV2Base):
                     if "position_mode" in config_dict:
                         connectors_position_mode[config_dict["connector_name"]] = config_dict["position_mode"]
                     if "leverage" in config_dict and "trading_pair" in config_dict:
-                        self.connectors[config_dict["connector_name"]].set_leverage(
-                            leverage=config_dict["leverage"],
-                            trading_pair=config_dict["trading_pair"])
+                        try:
+                            self.connectors[config_dict["connector_name"]].set_leverage(
+                                leverage=config_dict["leverage"],
+                                trading_pair=config_dict["trading_pair"])
+                        except Exception as e:
+                            self.logger().warning(
+                                "Non-fatal: set_leverage(%s, %s) failed: %s",
+                                config_dict["leverage"], config_dict["trading_pair"], e,
+                            )
         for connector_name, position_mode in connectors_position_mode.items():
-            self.connectors[connector_name].set_position_mode(position_mode)
+            try:
+                self.connectors[connector_name].set_position_mode(position_mode)
+            except Exception as e:
+                self.logger().warning(
+                    "Non-fatal: set_position_mode(%s) failed for %s: %s",
+                    position_mode, connector_name, e,
+                )
 
     def _install_internal_paper_adapters(self):
         bot_mode = _runtime_bot_mode()
@@ -2157,9 +2283,9 @@ class V2WithControllers(StrategyV2Base):
         - Balance reporting: get_balance returns PaperPortfolio values
         """
         try:
-            from controllers.paper_engine_v2.desk import PaperDesk
-            from controllers.paper_engine_v2.config import PaperEngineConfig
-            from controllers.paper_engine_v2.types import InstrumentId
+            from simulation.config import PaperEngineConfig
+            from simulation.desk import PaperDesk
+            from simulation.types import InstrumentId
 
             connector_type = str(getattr(cfg, "resolved_connector_type", "spot"))
             instrument_type = "perp" if connector_type == "perp" else "spot"
@@ -2189,7 +2315,7 @@ class V2WithControllers(StrategyV2Base):
         """Drive Paper Engine v2 tick on each HB on_tick cycle."""
         if self._paper_desk_v2 is not None:
             try:
-                from controllers.paper_engine_v2.hb_bridge import drive_desk_tick
+                from simulation.bridge.hb_bridge import drive_desk_tick
                 drive_desk_tick(self, self._paper_desk_v2)
             except Exception as exc:
                 self.logger().debug(f"Paper desk tick failed: {exc}")
@@ -2243,9 +2369,9 @@ class V2WithControllers(StrategyV2Base):
         controller_id: str,
         connector_name: str,
         trading_pair: str,
-        source_market_sequence: Optional[int],
+        source_market_sequence: int | None,
     ) -> int:
-        def _safe_int(value: Any) -> Optional[int]:
+        def _safe_int(value: Any) -> int | None:
             try:
                 return int(float(value))
             except Exception:
@@ -2261,7 +2387,7 @@ class V2WithControllers(StrategyV2Base):
         )
         prev = self._depth_market_sequence_by_key.get(key)
         if prev is None:
-            seed: Optional[int] = None
+            seed: int | None = None
             bus_client = getattr(self, "_bus_client", None)
             read_latest = getattr(bus_client, "read_latest", None)
             if callable(read_latest):
@@ -2300,7 +2426,7 @@ class V2WithControllers(StrategyV2Base):
             "yes",
         }
 
-        def _opt_float(value: Any) -> Optional[float]:
+        def _opt_float(value: Any) -> float | None:
             if value is None:
                 return None
             if isinstance(value, str):
@@ -2312,7 +2438,7 @@ class V2WithControllers(StrategyV2Base):
             except Exception:
                 return None
 
-        def _opt_int(value: Any) -> Optional[int]:
+        def _opt_int(value: Any) -> int | None:
             if value is None:
                 return None
             if isinstance(value, str):
@@ -2518,7 +2644,7 @@ class V2WithControllers(StrategyV2Base):
                 )
                 self._bus_consumer.reject(entry_id, intent.event_id, reason=reason)
 
-    def _intent_passes_local_authority(self, controller, intent: Dict[str, object]) -> bool:
+    def _intent_passes_local_authority(self, controller, intent: dict[str, object]) -> bool:
         connector_ready_fn = getattr(controller, "_connector_ready", None)
         if callable(connector_ready_fn):
             try:
@@ -2552,7 +2678,7 @@ class V2WithControllers(StrategyV2Base):
                 return False
         return True
 
-    def _publish_audit(self, instance_name: str, severity: str, category: str, message: str, metadata: Dict[str, str]):
+    def _publish_audit(self, instance_name: str, severity: str, category: str, message: str, metadata: dict[str, str]):
         if self._bus_publisher is None or AuditEvent is None:
             return
         event = AuditEvent(
@@ -2591,8 +2717,8 @@ class V2WithControllers(StrategyV2Base):
                     continue
                 reason_key = risk_reasons.strip() or "hard_stop_triggered"
                 try:
-                    from services.contracts.event_schemas import ExecutionIntentEvent
-                    from services.contracts.stream_names import EXECUTION_INTENT_STREAM, STREAM_RETENTION_MAXLEN
+                    from platform_lib.contracts.event_schemas import ExecutionIntentEvent
+                    from platform_lib.contracts.stream_names import EXECUTION_INTENT_STREAM, STREAM_RETENTION_MAXLEN
                     intent = ExecutionIntentEvent(
                         producer=f"hb:{self.config.script_file_name}",
                         instance_name=str(getattr(controller.config, "instance_name", "bot1")),
@@ -2630,8 +2756,8 @@ class V2WithControllers(StrategyV2Base):
             if (now - last_resume_ts) < self._hard_stop_kill_switch_republish_s:
                 continue
             try:
-                from services.contracts.event_schemas import ExecutionIntentEvent
-                from services.contracts.stream_names import EXECUTION_INTENT_STREAM, STREAM_RETENTION_MAXLEN
+                from platform_lib.contracts.event_schemas import ExecutionIntentEvent
+                from platform_lib.contracts.stream_names import EXECUTION_INTENT_STREAM, STREAM_RETENTION_MAXLEN
                 resume_intent = ExecutionIntentEvent(
                     producer=f"hb:{self.config.script_file_name}",
                     instance_name=str(getattr(controller.config, "instance_name", "bot1")),
@@ -2682,7 +2808,7 @@ class V2WithControllers(StrategyV2Base):
 
     def _run_preflight_once(self):
         self._preflight_checked = True
-        errors: List[str] = []
+        errors: list[str] = []
         for controller_id, controller in self.controllers.items():
             controller_errors = run_controller_preflight(controller.config)
             for err in controller_errors:
@@ -2700,9 +2826,9 @@ class V2WithControllers(StrategyV2Base):
         summary = self._scan_orphan_orders()
         self._write_startup_sync_report("pass", [], summary)
 
-    def _scan_orphan_orders(self) -> Dict[str, object]:
+    def _scan_orphan_orders(self) -> dict[str, object]:
         """Cancel any open orders on the exchange that are not tracked by executors."""
-        summary: Dict[str, object] = {
+        summary: dict[str, object] = {
             "scan_executed": True,
             "controllers_checked": 0,
             "orphans_canceled": 0,

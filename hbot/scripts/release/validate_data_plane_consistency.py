@@ -26,10 +26,9 @@ import argparse
 import json
 import sys
 import time
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Tuple
-
+from typing import Any
 
 # ---------------------------------------------------------------------------
 # Defaults
@@ -59,10 +58,10 @@ def _now_epoch() -> float:
 
 
 def _now_utc() -> str:
-    return datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+    return datetime.now(UTC).strftime("%Y-%m-%dT%H:%M:%SZ")
 
 
-def _parse_epoch(ts_str: str) -> Optional[float]:
+def _parse_epoch(ts_str: str) -> float | None:
     if not ts_str:
         return None
     try:
@@ -71,13 +70,13 @@ def _parse_epoch(ts_str: str) -> Optional[float]:
         return None
 
 
-def _age(epoch: Optional[float]) -> Optional[float]:
+def _age(epoch: float | None) -> float | None:
     if epoch is None:
         return None
     return _now_epoch() - epoch
 
 
-def _read_json(path: Path) -> Optional[Dict]:
+def _read_json(path: Path) -> dict | None:
     if not path.exists():
         return None
     try:
@@ -99,9 +98,9 @@ def _check_bot(
     max_minute_age_s: float,
     max_internal_drift_s: float,
     skip_inactive_s: float = 0.0,
-) -> Tuple[bool, List[Dict[str, Any]]]:
+) -> tuple[bool, list[dict[str, Any]]]:
     """Return (passed, list_of_check_dicts) for one bot."""
-    checks: List[Dict[str, Any]] = []
+    checks: list[dict[str, Any]] = []
 
     # 1. Snapshot exists
     if not snap_path.exists():
@@ -232,14 +231,14 @@ def run(
     max_minute_age_s: float = DEFAULT_MAX_MINUTE_AGE_S,
     max_internal_drift_s: float = DEFAULT_MAX_INTERNAL_DRIFT_S,
     skip_inactive_s: float = DEFAULT_SKIP_INACTIVE_H * 3600,
-) -> Dict[str, Any]:
+) -> dict[str, Any]:
     snapshot_root = reports_root / "desk_snapshot"
-    all_checks: List[Dict[str, Any]] = []
-    bot_results: Dict[str, Any] = {}
+    all_checks: list[dict[str, Any]] = []
+    bot_results: dict[str, Any] = {}
     all_passed = True
 
     # Discover bots from data directory
-    bots: List[str] = []
+    bots: list[str] = []
     if data_root.exists():
         bots = sorted(d.name for d in data_root.iterdir() if d.is_dir() and (d / "logs").exists())
 
@@ -279,7 +278,7 @@ def run(
     critical_failures = [c["name"] for c in all_checks if c.get("severity") == "critical" and not c["pass"]]
     warnings = [c["name"] for c in all_checks if c.get("severity") == "warning" and not c["pass"]]
 
-    output: Dict[str, Any] = {
+    output: dict[str, Any] = {
         "status": "PASS" if all_passed else "FAIL",
         "generated_ts": _now_utc(),
         "bots_checked": bots,

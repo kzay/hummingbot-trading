@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from services.contracts.event_identity import required_identity_fields, validate_event_identity
+from platform_lib.contracts.event_identity import required_identity_fields, validate_event_identity
 
 
 def test_required_identity_fields_for_bot_fill() -> None:

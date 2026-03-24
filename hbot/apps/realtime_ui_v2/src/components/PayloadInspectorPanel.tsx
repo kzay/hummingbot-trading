@@ -1,10 +1,10 @@
-import { useMemo } from "react";
+import { memo, useMemo } from "react";
 
 import { useDashboardStore } from "../store/useDashboardStore";
 import { formatRelativeTs } from "../utils/format";
 import { Panel } from "./Panel";
 
-export function PayloadInspectorPanel() {
+export const PayloadInspectorPanel = memo(function PayloadInspectorPanel() {
   const payloads = useDashboardStore((state) => state.payloads);
   const selectedPayloadId = useDashboardStore((state) => state.selectedPayloadId);
   const setSelectedPayloadId = useDashboardStore((state) => state.setSelectedPayloadId);
@@ -19,6 +19,7 @@ export function PayloadInspectorPanel() {
     () => (selectedPayload ? JSON.stringify(selectedPayload.payload, null, 2) : "Select a payload to inspect JSON."),
     [selectedPayload],
   );
+  const reversedPayloads = useMemo(() => payloads.slice().reverse(), [payloads]);
 
   return (
     <Panel
@@ -27,13 +28,10 @@ export function PayloadInspectorPanel() {
       className="panel-span-12 payload-panel"
     >
       <div className="payload-list">
-        {payloads.length === 0 ? (
+        {reversedPayloads.length === 0 ? (
           <div className="empty-state">No payloads received yet.</div>
         ) : (
-          payloads
-            .slice()
-            .reverse()
-            .map((payload) => (
+          reversedPayloads.map((payload) => (
               <button
                 type="button"
                 key={payload.id}
@@ -50,4 +48,4 @@ export function PayloadInspectorPanel() {
       <pre className="payload-json">{selectedPayloadJson}</pre>
     </Panel>
   );
-}
+});

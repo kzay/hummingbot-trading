@@ -1,9 +1,6 @@
-import os
-import sys
+"""Entrypoint shim for bot-metrics-exporter Docker service."""
 
-sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
-
-from bot_metrics_exporter import main  # noqa: E402
+from services.bot_metrics_exporter import main
 
 if __name__ == "__main__":
     main()

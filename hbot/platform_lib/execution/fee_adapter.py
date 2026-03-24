@@ -6,11 +6,10 @@ implementing ``ExchangeFeeAdapter.fetch_fees()`` — no changes to caller code.
 from __future__ import annotations
 
 import logging
-from decimal import Decimal
-from typing import Any, Dict, Optional, Protocol
+from typing import Any, Protocol
 
-from services.common.fee_provider import FeeRates
-from services.common.utils import to_decimal
+from platform_lib.execution.fee_provider import FeeRates
+from platform_lib.core.utils import to_decimal
 
 logger = logging.getLogger(__name__)
 
@@ -20,7 +19,7 @@ class ExchangeFeeAdapter(Protocol):
 
     def fetch_fees(
         self, connector: Any, connector_name: str, trading_pair: str
-    ) -> Optional[FeeRates]:
+    ) -> FeeRates | None:
         """Fetch maker/taker fee rates from the exchange API.
 
         Returns ``None`` if credentials are missing or the API call fails.
@@ -33,8 +32,8 @@ class BitgetFeeAdapter:
 
     def fetch_fees(
         self, connector: Any, connector_name: str, trading_pair: str
-    ) -> Optional[FeeRates]:
-        from services.common.fee_provider import FeeResolver
+    ) -> FeeRates | None:
+        from platform_lib.execution.fee_provider import FeeResolver
         return FeeResolver.from_exchange_api(connector, connector_name, trading_pair)
 
 
@@ -47,7 +46,7 @@ class BinanceFeeAdapter:
 
     def fetch_fees(
         self, connector: Any, connector_name: str, trading_pair: str
-    ) -> Optional[FeeRates]:
+    ) -> FeeRates | None:
         if connector is None:
             return None
         try:
@@ -68,14 +67,14 @@ class FeeAdapterRegistry:
     """Registry mapping exchange name prefixes to fee adapters."""
 
     def __init__(self) -> None:
-        self._adapters: Dict[str, ExchangeFeeAdapter] = {}
+        self._adapters: dict[str, ExchangeFeeAdapter] = {}
 
     def register(self, exchange_prefix: str, adapter: ExchangeFeeAdapter) -> None:
         self._adapters[exchange_prefix] = adapter
 
     def resolve(
         self, connector: Any, connector_name: str, trading_pair: str
-    ) -> Optional[FeeRates]:
+    ) -> FeeRates | None:
         """Try each registered adapter whose prefix matches *connector_name*."""
         canonical = connector_name.replace("_paper_trade", "")
         for prefix, adapter in self._adapters.items():
@@ -86,6 +85,9 @@ class FeeAdapterRegistry:
         return None
 
 
+# CONCURRENCY CONTRACT:
+# - Populated once at import time. register() must not be called after startup.
+# - resolve() is read-only iteration — safe for concurrent callers.
 _default_registry = FeeAdapterRegistry()
 _default_registry.register("bitget", BitgetFeeAdapter())
 _default_registry.register("binance", BinanceFeeAdapter())

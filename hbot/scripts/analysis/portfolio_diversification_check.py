@@ -5,14 +5,14 @@ import argparse
 import csv
 import json
 import math
-from datetime import datetime, timezone
+from collections.abc import Iterable
+from datetime import UTC, datetime
 from pathlib import Path
 from statistics import mean
-from typing import Dict, Iterable, List, Tuple
 
 
 def _utc_now() -> str:
-    return datetime.now(timezone.utc).isoformat()
+    return datetime.now(UTC).isoformat()
 
 
 def _repo_root() -> Path:
@@ -40,7 +40,7 @@ def _safe_float(value: object, default: float = 0.0) -> float:
         return default
 
 
-def _iter_rows(path: Path) -> Iterable[Dict[str, str]]:
+def _iter_rows(path: Path) -> Iterable[dict[str, str]]:
     if not path.exists():
         return []
     with path.open("r", newline="", encoding="utf-8") as f:
@@ -48,12 +48,12 @@ def _iter_rows(path: Path) -> Iterable[Dict[str, str]]:
 
 
 def _minute_bucket_iso(ts: datetime) -> str:
-    ts_utc = ts.astimezone(timezone.utc).replace(second=0, microsecond=0)
+    ts_utc = ts.astimezone(UTC).replace(second=0, microsecond=0)
     return ts_utc.isoformat()
 
 
-def _returns_by_ts(minute_path: Path) -> Dict[str, float]:
-    rows: List[Tuple[datetime, float]] = []
+def _returns_by_ts(minute_path: Path) -> dict[str, float]:
+    rows: list[tuple[datetime, float]] = []
     for row in _iter_rows(minute_path):
         ts = _parse_ts(str(row.get("ts", "")))
         mid = _safe_float(row.get("mid"), 0.0)
@@ -64,12 +64,12 @@ def _returns_by_ts(minute_path: Path) -> Dict[str, float]:
 
     # Collapse sub-minute rows into minute buckets so cross-bot comparisons
     # do not fail when sources are offset by a few seconds.
-    minute_close: Dict[str, float] = {}
+    minute_close: dict[str, float] = {}
     for ts, mid in rows:
         minute_close[_minute_bucket_iso(ts)] = mid
 
-    ordered: List[Tuple[str, float]] = sorted(minute_close.items(), key=lambda x: x[0])
-    out: Dict[str, float] = {}
+    ordered: list[tuple[str, float]] = sorted(minute_close.items(), key=lambda x: x[0])
+    out: dict[str, float] = {}
     prev_mid = 0.0
     for ts, mid in ordered:
         if prev_mid > 0.0:
@@ -78,24 +78,24 @@ def _returns_by_ts(minute_path: Path) -> Dict[str, float]:
     return out
 
 
-def _aligned_values(a: Dict[str, float], b: Dict[str, float]) -> Tuple[List[float], List[float]]:
+def _aligned_values(a: dict[str, float], b: dict[str, float]) -> tuple[list[float], list[float]]:
     common = sorted(set(a.keys()) & set(b.keys()))
     return [a[k] for k in common], [b[k] for k in common]
 
 
-def _variance(xs: List[float]) -> float:
+def _variance(xs: list[float]) -> float:
     if len(xs) < 2:
         return 0.0
     mu = mean(xs)
     return sum((x - mu) ** 2 for x in xs) / len(xs)
 
 
-def _pearson_corr(xs: List[float], ys: List[float]) -> float | None:
+def _pearson_corr(xs: list[float], ys: list[float]) -> float | None:
     if len(xs) < 2 or len(xs) != len(ys):
         return None
     mx = mean(xs)
     my = mean(ys)
-    num = sum((x - mx) * (y - my) for x, y in zip(xs, ys))
+    num = sum((x - mx) * (y - my) for x, y in zip(xs, ys, strict=True))
     den_x = math.sqrt(sum((x - mx) ** 2 for x in xs))
     den_y = math.sqrt(sum((y - my) ** 2 for y in ys))
     den = den_x * den_y
@@ -104,7 +104,7 @@ def _pearson_corr(xs: List[float], ys: List[float]) -> float | None:
     return num / den
 
 
-def _inverse_variance_weights(var_a: float, var_b: float) -> Dict[str, float]:
+def _inverse_variance_weights(var_a: float, var_b: float) -> dict[str, float]:
     if var_a <= 0.0 and var_b <= 0.0:
         return {"btc": 0.5, "eth": 0.5}
     if var_a <= 0.0:
@@ -124,7 +124,7 @@ def build_diversification_report(
     eth_minute_path: Path,
     max_abs_correlation: float = 0.70,
     min_overlap_points: int = 120,
-) -> Dict[str, object]:
+) -> dict[str, object]:
     btc_returns = _returns_by_ts(btc_minute_path)
     eth_returns = _returns_by_ts(eth_minute_path)
     btc_vals, eth_vals = _aligned_values(btc_returns, eth_returns)
@@ -136,7 +136,7 @@ def build_diversification_report(
     weights = _inverse_variance_weights(btc_var, eth_var)
 
     status = "insufficient_data"
-    checks: List[Dict[str, object]] = []
+    checks: list[dict[str, object]] = []
     if overlap >= min_overlap_points and corr is not None:
         corr_abs = abs(corr)
         corr_ok = corr_abs < max_abs_correlation

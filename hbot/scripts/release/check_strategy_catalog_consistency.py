@@ -1,28 +1,27 @@
 from __future__ import annotations
 
 import json
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
-from typing import Dict, List, Tuple
 
 
 def _utc_now() -> str:
-    return datetime.now(timezone.utc).isoformat()
+    return datetime.now(UTC).isoformat()
 
 
-def _read_json(path: Path) -> Dict[str, object]:
+def _read_json(path: Path) -> dict[str, object]:
     payload = json.loads(path.read_text(encoding="utf-8"))
     if not isinstance(payload, dict):
         raise ValueError(f"expected object in {path}")
     return payload
 
 
-def _read_yaml_like(path: Path) -> Dict[str, object]:
+def _read_yaml_like(path: Path) -> dict[str, object]:
     """
     Minimal parser for key-value + list blocks used in local bot conf files.
     It intentionally supports only the subset needed by consistency checks.
     """
-    out: Dict[str, object] = {}
+    out: dict[str, object] = {}
     current_list_key = ""
     for raw in path.read_text(encoding="utf-8").splitlines():
         line = raw.strip()
@@ -47,13 +46,13 @@ def _read_yaml_like(path: Path) -> Dict[str, object]:
     return out
 
 
-def _check_catalog(root: Path) -> Tuple[bool, List[str], Dict[str, object]]:
+def _check_catalog(root: Path) -> tuple[bool, list[str], dict[str, object]]:
     catalog_path = root / "config" / "strategy_catalog" / "catalog_v1.json"
     template_controller = root / "config" / "strategy_catalog" / "templates" / "controller_template.yml"
     template_script = root / "config" / "strategy_catalog" / "templates" / "script_template.yml"
     controllers_root = root / "controllers"
 
-    errors: List[str] = []
+    errors: list[str] = []
     catalog = _read_json(catalog_path)
     bundles = catalog.get("approved_bundles", [])
     if not isinstance(bundles, list) or not bundles:
@@ -66,7 +65,7 @@ def _check_catalog(root: Path) -> Tuple[bool, List[str], Dict[str, object]]:
     if not controllers_root.exists():
         errors.append("missing controllers root directory")
 
-    checked_bundles: List[str] = []
+    checked_bundles: list[str] = []
     for item in bundles:
         if not isinstance(item, dict):
             errors.append("invalid bundle entry: expected object")
@@ -139,7 +138,7 @@ def main() -> int:
             "details": {},
         }
 
-    stamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
+    stamp = datetime.now(UTC).strftime("%Y%m%dT%H%M%SZ")
     out_file = reports_root / f"strategy_catalog_check_{stamp}.json"
     out_file.write_text(json.dumps(payload, indent=2), encoding="utf-8")
     (reports_root / "latest.json").write_text(json.dumps(payload, indent=2), encoding="utf-8")

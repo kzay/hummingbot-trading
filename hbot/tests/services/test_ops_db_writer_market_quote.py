@@ -2,27 +2,27 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import Any
 
 from services.ops_db_writer.main import _ingest_market_quote_layers
 
 
 class _QuoteCursor:
     def __init__(self) -> None:
-        self.calls: List[Dict[str, Any]] = []
-        self.sql_calls: List[str] = []
+        self.calls: list[dict[str, Any]] = []
+        self.sql_calls: list[str] = []
         self._last_select_checkpoint = False
-        self._fetchall_result: List[tuple] = []
-        self.raw_rows: Dict[tuple, Dict[str, Any]] = {}
+        self._fetchall_result: list[tuple] = []
+        self.raw_rows: dict[tuple, dict[str, Any]] = {}
         self.rowcount = 0
 
-    def __enter__(self) -> "_QuoteCursor":
+    def __enter__(self) -> _QuoteCursor:
         return self
 
-    def __exit__(self, exc_type, exc, tb) -> bool:  # noqa: ANN001
+    def __exit__(self, exc_type, exc, tb) -> bool:
         return False
 
-    def execute(self, sql: str, params: Optional[Dict[str, Any]] = None) -> None:
+    def execute(self, sql: str, params: dict[str, Any] | None = None) -> None:
         self.sql_calls.append(sql)
         self.calls.append(params or {})
         self._last_select_checkpoint = "FROM market_quote_ingest_checkpoint" in sql
@@ -67,7 +67,7 @@ class _QuoteConn:
         return self.cur
 
 
-def _write_jsonl(path: Path, rows: List[Dict[str, Any]]) -> None:
+def _write_jsonl(path: Path, rows: list[dict[str, Any]]) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     with path.open("w", encoding="utf-8") as fp:
         for row in rows:
@@ -174,7 +174,7 @@ def test_ingest_market_quote_layers_bar_remains_exact_after_replay(tmp_path: Pat
     _ingest_market_quote_layers(conn, reports_root, "2026-03-05T12:02:00+00:00")  # type: ignore[arg-type]
 
     bar_params = [
-        params for sql, params in zip(conn.cur.sql_calls, conn.cur.calls)
+        params for sql, params in zip(conn.cur.sql_calls, conn.cur.calls, strict=True)
         if "INSERT INTO market_quote_bar_minute" in sql
     ]
     assert len(bar_params) == 2

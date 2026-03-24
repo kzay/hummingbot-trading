@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
 from scripts.release.check_paper_exchange_thresholds import (
@@ -10,7 +10,7 @@ from scripts.release.check_paper_exchange_thresholds import (
 
 
 def test_build_report_passes_with_complete_metric_payload(tmp_path: Path) -> None:
-    now = datetime.now(timezone.utc)
+    now = datetime.now(UTC)
     payload = {
         "ts_utc": now.isoformat(),
         "metrics": default_pass_metrics(),
@@ -29,7 +29,7 @@ def test_build_report_passes_with_complete_metric_payload(tmp_path: Path) -> Non
 
 
 def test_build_report_fails_on_threshold_breach(tmp_path: Path) -> None:
-    now = datetime.now(timezone.utc)
+    now = datetime.now(UTC)
     metrics = default_pass_metrics()
     metrics["p1_8_command_latency_p95_ms"] = 999.0  # breach: must be <= 250
     payload = {
@@ -55,14 +55,14 @@ def test_build_report_fails_on_threshold_breach(tmp_path: Path) -> None:
 
 
 def test_build_report_fails_when_input_is_stale(tmp_path: Path) -> None:
-    stale = datetime.now(timezone.utc) - timedelta(hours=2)
+    stale = datetime.now(UTC) - timedelta(hours=2)
     payload = {
         "ts_utc": stale.isoformat(),
         "metrics": default_pass_metrics(),
     }
     report = build_report(
         tmp_path,
-        now_ts=datetime.now(timezone.utc).timestamp(),
+        now_ts=datetime.now(UTC).timestamp(),
         max_input_age_min=20.0,
         require_input_fresh=True,
         inputs_payload=payload,
@@ -72,7 +72,7 @@ def test_build_report_fails_when_input_is_stale(tmp_path: Path) -> None:
 
 
 def test_build_report_fails_when_missing_metric_clause(tmp_path: Path) -> None:
-    now = datetime.now(timezone.utc)
+    now = datetime.now(UTC)
     metrics = default_pass_metrics()
     metrics.pop("p1_8_command_latency_p95_ms", None)
     payload = {
@@ -92,7 +92,7 @@ def test_build_report_fails_when_missing_metric_clause(tmp_path: Path) -> None:
 
 
 def test_build_report_fails_when_input_diagnostics_sources_not_ready(tmp_path: Path) -> None:
-    now = datetime.now(timezone.utc)
+    now = datetime.now(UTC)
     payload = {
         "ts_utc": now.isoformat(),
         "metrics": default_pass_metrics(),
@@ -114,7 +114,7 @@ def test_build_report_fails_when_input_diagnostics_sources_not_ready(tmp_path: P
 
 
 def test_build_report_fails_when_blocking_metrics_are_manual(tmp_path: Path) -> None:
-    now = datetime.now(timezone.utc)
+    now = datetime.now(UTC)
     payload = {
         "ts_utc": now.isoformat(),
         "metrics": default_pass_metrics(),

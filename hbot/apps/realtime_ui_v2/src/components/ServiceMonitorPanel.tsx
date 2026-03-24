@@ -1,45 +1,26 @@
-import { useEffect, useMemo, useState } from "react";
+import { memo, useEffect, useMemo, useState } from "react";
 
 import { useDashboardStore } from "../store/useDashboardStore";
+import { buildHeaders } from "../utils/fetch";
 import { formatAgeMs, formatNumber } from "../utils/format";
 import { gatePriority, gateTone } from "../utils/presentation";
-import type { HealthPayload, InstancesPayload } from "../utils/realtimeParsers";
-import { parseHealthPayload, parseInstancesPayload } from "../utils/realtimeParsers";
+import type { HealthPayload } from "../utils/realtimeParsers";
+import { parseHealthPayload } from "../utils/realtimeParsers";
 import { Panel } from "./Panel";
 
 const REQUEST_TIMEOUT_MS = 8_000;
 const REFRESH_INTERVAL_MS = 30_000;
 
-function buildHeaders(token: string): HeadersInit {
-  const headers: Record<string, string> = { "Content-Type": "application/json" };
-  if (token.trim()) {
-    headers.Authorization = `Bearer ${token.trim()}`;
-  }
-  return headers;
-}
-
-async function fetchJsonWithTimeout<T>(
-  url: string,
-  headers: HeadersInit,
-  signal: AbortSignal,
-  parser: (value: unknown) => T,
-): Promise<T> {
-  const response = await fetch(url, { headers, signal });
-  if (!response.ok) {
-    throw new Error(`${new URL(url).pathname} HTTP ${response.status}`);
-  }
-  return parser(await response.json());
-}
-
-export function ServiceMonitorPanel() {
+export const ServiceMonitorPanel = memo(function ServiceMonitorPanel() {
   const apiBase = useDashboardStore((state) => state.settings.apiBase);
   const apiToken = useDashboardStore((state) => state.settings.apiToken);
   const selectedInstanceName = useDashboardStore((state) => state.settings.instanceName);
   const timeframeS = useDashboardStore((state) => state.settings.timeframeS);
   const sharedHealthStatus = useDashboardStore((state) => state.health.status);
   const updateSettings = useDashboardStore((state) => state.updateSettings);
+  const instanceStatuses = useDashboardStore((state) => state.instanceStatuses);
+  const instanceStatusesError = useDashboardStore((state) => state.instanceStatusesError);
   const [health, setHealth] = useState<HealthPayload | null>(null);
-  const [instances, setInstances] = useState<InstancesPayload | null>(null);
   const [error, setError] = useState<string>("");
   const [refreshNonce, setRefreshNonce] = useState(0);
 
@@ -55,32 +36,20 @@ export function ServiceMonitorPanel() {
       const timeoutId = window.setTimeout(() => controller.abort(), REQUEST_TIMEOUT_MS);
       try {
         const headers = buildHeaders(apiToken);
-        const healthJson = await fetchJsonWithTimeout<HealthPayload>(
-          `${apiBase}/health`,
+        const response = await fetch(`${apiBase}/health`, {
           headers,
-          controller.signal,
-          parseHealthPayload,
-        );
+          signal: controller.signal,
+        });
+        if (!response.ok) {
+          throw new Error(`/health HTTP ${response.status}`);
+        }
+        const healthJson = parseHealthPayload(await response.json());
         if (cancelled) return;
         setHealth(healthJson);
-        if (String(healthJson.status ?? healthJson.mode ?? "").trim().toLowerCase() === "disabled") {
-          setInstances(null);
-          setError("Realtime UI API mode is disabled.");
-          return;
-        }
-        const instancesJson = await fetchJsonWithTimeout<InstancesPayload>(
-          `${apiBase}/api/v1/instances`,
-          headers,
-          controller.signal,
-          parseInstancesPayload,
-        );
-        if (cancelled) return;
-        setInstances(instancesJson);
         setError("");
       } catch (err) {
         if (cancelled || (err instanceof DOMException && err.name === "AbortError")) return;
         setHealth(null);
-        setInstances(null);
         setError(err instanceof Error ? err.message : String(err));
       } finally {
         window.clearTimeout(timeoutId);
@@ -103,16 +72,17 @@ export function ServiceMonitorPanel() {
     };
   }, [refreshNonce, apiBase, apiToken]);
 
+  const combinedError = error || instanceStatusesError;
   const rows = useMemo(
     () =>
-      (Array.isArray(instances?.statuses) ? instances.statuses : []).slice().sort((left, right) => {
+      [...instanceStatuses].sort((left, right) => {
         const priorityDelta = gatePriority(String(left.freshness ?? "")) - gatePriority(String(right.freshness ?? ""));
         if (priorityDelta !== 0) {
           return priorityDelta;
         }
         return String(left.instance_name ?? "").localeCompare(String(right.instance_name ?? ""));
       }),
-    [instances?.statuses],
+    [instanceStatuses],
   );
   const metrics = health?.metrics ?? {};
   const liveCount = rows.filter((row) => String(row.freshness ?? "").toLowerCase() === "live").length;
@@ -131,7 +101,7 @@ export function ServiceMonitorPanel() {
           </button>
         }
       >
-        {error ? <div className="empty-state">Service monitor unavailable: {error}</div> : null}
+        {combinedError ? <div className="empty-state">Service monitor unavailable: {combinedError}</div> : null}
         <div className="metric-grid">
           <article className="metric-card">
             <h3>Service Status</h3>
@@ -152,7 +122,7 @@ export function ServiceMonitorPanel() {
             <div className="metric-value">{formatAgeMs(health?.stream_age_ms ?? null)}</div>
             <dl>
               <dt>Tracked instances</dt>
-              <dd>{Array.isArray(instances?.instances) ? instances?.instances.length : 0}</dd>
+              <dd>{instanceStatuses.length}</dd>
               <dt>Live instances</dt>
               <dd>{liveCount}</dd>
               <dt>Subscribers</dt>
@@ -202,7 +172,7 @@ export function ServiceMonitorPanel() {
               <dt>Live rows</dt>
               <dd>{liveCount}</dd>
               <dt>Fetch status</dt>
-              <dd>{error ? "error" : "ok"}</dd>
+              <dd>{combinedError ? "error" : "ok"}</dd>
             </dl>
           </article>
         </div>
@@ -217,17 +187,17 @@ export function ServiceMonitorPanel() {
           <table>
             <thead>
               <tr>
-                <th>Instance</th>
-                <th>Freshness</th>
-                <th>Source</th>
-                <th>Controller</th>
-                <th>Pair</th>
-                <th>Stream Age</th>
-                <th>Quote</th>
-                <th>Orders</th>
-                <th>Day PnL</th>
-                <th>Equity</th>
-                <th>Action</th>
+                <th scope="col">Instance</th>
+                <th scope="col">Freshness</th>
+                <th scope="col">Source</th>
+                <th scope="col">Controller</th>
+                <th scope="col">Pair</th>
+                <th scope="col">Stream Age</th>
+                <th scope="col">Quote</th>
+                <th scope="col">Orders</th>
+                <th scope="col">Realized</th>
+                <th scope="col">Equity</th>
+                <th scope="col">Action</th>
               </tr>
             </thead>
             <tbody>
@@ -280,4 +250,4 @@ export function ServiceMonitorPanel() {
       </Panel>
     </>
   );
-}
+});

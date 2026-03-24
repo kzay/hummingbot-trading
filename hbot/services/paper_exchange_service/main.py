@@ -8,24 +8,23 @@ import time
 from dataclasses import dataclass, field
 from decimal import Decimal
 from pathlib import Path
-from typing import Dict, List, Optional, Set, Tuple
 
-from services.common.canonical_market_state import (
+from platform_lib.market_data.canonical_market_state import (
     market_payload_freshness_ts_ms,
     market_payload_order_key,
     parse_canonical_market_state,
 )
-from services.contracts.event_schemas import (
+from platform_lib.core.latency_tracker import JsonLatencyTracker
+from platform_lib.contracts.event_identity import validate_event_identity
+from platform_lib.contracts.event_schemas import (
     AuditEvent,
     PaperExchangeCommandEvent,
     PaperExchangeEvent,
     PaperExchangeHeartbeatEvent,
 )
-from services.contracts.event_identity import validate_event_identity
-from services.contracts.stream_names import (
+from platform_lib.contracts.stream_names import (
     AUDIT_STREAM,
     MARKET_DATA_STREAM,
-    MARKET_QUOTE_STREAM,
     PAPER_EXCHANGE_COMMAND_STREAM,
     PAPER_EXCHANGE_EVENT_STREAM,
     PAPER_EXCHANGE_HEARTBEAT_STREAM,
@@ -34,7 +33,11 @@ from services.contracts.stream_names import (
 from services.hb_bridge.redis_client import RedisStreamClient
 from services.paper_exchange_service.order_fsm import (
     ACTIVE_ORDER_STATES as _ACTIVE_ORDER_STATES,
+)
+from services.paper_exchange_service.order_fsm import (
     TERMINAL_ORDER_STATES as _TERMINAL_ORDER_STATES,
+)
+from services.paper_exchange_service.order_fsm import (
     can_transition_state,
     is_immediate_tif,
     resolve_crossing_limit_order_outcome,
@@ -56,7 +59,7 @@ def _canonical_connector_name(value: str) -> str:
     if not raw.endswith("_paper_trade"):
         return raw
     try:
-        from services.common.exchange_profiles import resolve_profile
+        from platform_lib.market_data.exchange_profiles import resolve_profile
 
         profile = resolve_profile(raw)
         if isinstance(profile, dict):
@@ -64,7 +67,7 @@ def _canonical_connector_name(value: str) -> str:
             if required_exchange:
                 return required_exchange
     except Exception:
-        pass
+        logger.exception("Failed to resolve canonical connector name for %s", raw)
     return raw[:-12]
 
 
@@ -72,7 +75,7 @@ def _normalize_connector_name(value: str) -> str:
     return _normalize(_canonical_connector_name(value))
 
 
-def _csv_set(value: str) -> Set[str]:
+def _csv_set(value: str) -> set[str]:
     return {_normalize(x) for x in str(value or "").split(",") if _normalize(x)}
 
 
@@ -93,11 +96,11 @@ def _pair_key(instance_name: str, connector_name: str, trading_pair: str) -> str
 
 
 def _get_pair_snapshot(
-    state: "PaperExchangeState",
+    state: PaperExchangeState,
     instance_name: str,
     connector_name: str,
     trading_pair: str,
-) -> Optional["PairSnapshot"]:
+) -> PairSnapshot | None:
     exact = state.pairs.get(_pair_key(instance_name, connector_name, trading_pair))
     shared = state.pairs.get(_pair_key("", connector_name, trading_pair))
     if exact is None:
@@ -114,7 +117,7 @@ def _resolve_path(path_value: str, root: Path) -> Path:
     return path
 
 
-def _read_json(path: Path) -> Dict[str, object]:
+def _read_json(path: Path) -> dict[str, object]:
     if not path.exists():
         return {}
     try:
@@ -124,23 +127,23 @@ def _read_json(path: Path) -> Dict[str, object]:
         return {}
 
 
-def _load_command_journal(path: Path) -> Dict[str, Dict[str, object]]:
+def _load_command_journal(path: Path) -> dict[str, dict[str, object]]:
     payload = _read_json(path)
     commands = payload.get("commands", {})
     if not isinstance(commands, dict):
         return {}
-    out: Dict[str, Dict[str, object]] = {}
+    out: dict[str, dict[str, object]] = {}
     for command_event_id, record in commands.items():
         if isinstance(record, dict):
             out[str(command_event_id)] = dict(record)
     return out
 
 
-def _write_json_atomic(path: Path, payload: Dict[str, object], *, retries: int = 3) -> None:
+def _write_json_atomic(path: Path, payload: dict[str, object], *, retries: int = 3) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     body = json.dumps(payload, indent=2)
     attempts = max(1, int(retries))
-    last_error: Optional[Exception] = None
+    last_error: Exception | None = None
     for attempt in range(attempts):
         nonce = f"{os.getpid()}-{int(time.time() * 1_000_000)}-{attempt}"
         temp_path = path.with_name(f".{path.name}.{nonce}.tmp")
@@ -154,7 +157,7 @@ def _write_json_atomic(path: Path, payload: Dict[str, object], *, retries: int =
                 if temp_path.exists():
                     temp_path.unlink()
             except Exception:
-                pass
+                pass  # best-effort temp cleanup — nothing to do if unlink fails
             if isinstance(exc, (PermissionError, FileNotFoundError)) and attempt + 1 < attempts:
                 path.parent.mkdir(parents=True, exist_ok=True)
                 time.sleep(0.01 * float(attempt + 1))
@@ -164,7 +167,7 @@ def _write_json_atomic(path: Path, payload: Dict[str, object], *, retries: int =
         raise last_error
 
 
-def _persist_command_journal(path: Path, command_results_by_id: Dict[str, Dict[str, object]]) -> None:
+def _persist_command_journal(path: Path, command_results_by_id: dict[str, dict[str, object]]) -> None:
     payload = {
         "ts_utc": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
         "command_count": len(command_results_by_id),
@@ -173,12 +176,12 @@ def _persist_command_journal(path: Path, command_results_by_id: Dict[str, Dict[s
     _write_json_atomic(path, payload)
 
 
-def _load_market_fill_journal(path: Path) -> Dict[str, int]:
+def _load_market_fill_journal(path: Path) -> dict[str, int]:
     payload = _read_json(path)
     raw_events = payload.get("events", {})
     if not isinstance(raw_events, dict):
         return {}
-    out: Dict[str, int] = {}
+    out: dict[str, int] = {}
     for event_id, marker in raw_events.items():
         event_key = str(event_id or "").strip()
         if not event_key:
@@ -191,7 +194,7 @@ def _load_market_fill_journal(path: Path) -> Dict[str, int]:
     return out
 
 
-def _trim_market_fill_journal(events_by_id: Dict[str, int], max_entries: int) -> None:
+def _trim_market_fill_journal(events_by_id: dict[str, int], max_entries: int) -> None:
     limit = max(1, int(max_entries))
     overflow = len(events_by_id) - limit
     if overflow <= 0:
@@ -201,7 +204,7 @@ def _trim_market_fill_journal(events_by_id: Dict[str, int], max_entries: int) ->
         events_by_id.pop(str(event_id), None)
 
 
-def _persist_market_fill_journal(path: Path, market_fill_events_by_id: Dict[str, int], max_entries: int) -> None:
+def _persist_market_fill_journal(path: Path, market_fill_events_by_id: dict[str, int], max_entries: int) -> None:
     trimmed_events = dict(market_fill_events_by_id)
     _trim_market_fill_journal(trimmed_events, max_entries=max_entries)
     payload = {
@@ -218,10 +221,10 @@ def _command_result_record(
     *,
     audit_required: bool = False,
     audit_published: bool = True,
-    command_metadata: Optional[Dict[str, str]] = None,
+    command_metadata: dict[str, str] | None = None,
     command_producer: str = "",
     producer_authorized: bool = True,
-) -> Dict[str, object]:
+) -> dict[str, object]:
     namespace_key = _namespace_base_key(event.instance_name, event.connector_name, event.trading_pair)
     namespace_order_key = (
         _namespace_order_key(event.instance_name, event.connector_name, event.trading_pair, str(event.order_id or ""))
@@ -247,7 +250,7 @@ def _command_result_record(
     }
 
 
-def _order_record_to_dict(order: OrderRecord) -> Dict[str, object]:
+def _order_record_to_dict(order: OrderRecord) -> dict[str, object]:
     namespace_key = _namespace_base_key(order.instance_name, order.connector_name, order.trading_pair)
     namespace_order_key = _namespace_order_key(
         order.instance_name,
@@ -291,7 +294,7 @@ def _order_record_to_dict(order: OrderRecord) -> Dict[str, object]:
     }
 
 
-def _position_record_to_dict(position: "PositionRecord") -> Dict[str, object]:
+def _position_record_to_dict(position: PositionRecord) -> dict[str, object]:
     return {
         "instance_name": position.instance_name,
         "connector_name": position.connector_name,
@@ -310,7 +313,7 @@ def _position_record_to_dict(position: "PositionRecord") -> Dict[str, object]:
     }
 
 
-def _position_record_from_payload(payload: Dict[str, object]) -> Optional["PositionRecord"]:
+def _position_record_from_payload(payload: dict[str, object]) -> PositionRecord | None:
     try:
         return PositionRecord(
             instance_name=str(payload.get("instance_name", "")),
@@ -332,7 +335,7 @@ def _position_record_from_payload(payload: Dict[str, object]) -> Optional["Posit
         return None
 
 
-def _order_record_from_payload(order_id: str, payload: Dict[str, object]) -> Optional[OrderRecord]:
+def _order_record_from_payload(order_id: str, payload: dict[str, object]) -> OrderRecord | None:
     try:
         return OrderRecord(
             order_id=str(payload.get("order_id", order_id)),
@@ -370,12 +373,12 @@ def _order_record_from_payload(order_id: str, payload: Dict[str, object]) -> Opt
         return None
 
 
-def _load_state_snapshot(path: Path) -> Dict[str, OrderRecord]:
+def _load_state_snapshot(path: Path) -> dict[str, OrderRecord]:
     payload = _read_json(path)
     raw_orders = payload.get("orders", {})
     if not isinstance(raw_orders, dict):
         return {}
-    out: Dict[str, OrderRecord] = {}
+    out: dict[str, OrderRecord] = {}
     for order_id, record in raw_orders.items():
         if not isinstance(record, dict):
             continue
@@ -385,12 +388,12 @@ def _load_state_snapshot(path: Path) -> Dict[str, OrderRecord]:
     return out
 
 
-def _load_position_snapshot(path: Path) -> Dict[str, "PositionRecord"]:
+def _load_position_snapshot(path: Path) -> dict[str, PositionRecord]:
     payload = _read_json(path)
     raw_positions = payload.get("positions", {})
     if not isinstance(raw_positions, dict):
         return {}
-    out: Dict[str, PositionRecord] = {}
+    out: dict[str, PositionRecord] = {}
     for position_key, record in raw_positions.items():
         if not isinstance(record, dict):
             continue
@@ -402,10 +405,10 @@ def _load_position_snapshot(path: Path) -> Dict[str, "PositionRecord"]:
 
 def _persist_state_snapshot(
     path: Path,
-    orders_by_id: Dict[str, OrderRecord],
-    positions_by_key: Optional[Dict[str, "PositionRecord"]] = None,
+    orders_by_id: dict[str, OrderRecord],
+    positions_by_key: dict[str, PositionRecord] | None = None,
     *,
-    funding_summary: Optional[Dict[str, object]] = None,
+    funding_summary: dict[str, object] | None = None,
 ) -> None:
     positions_payload = {
         position_key: _position_record_to_dict(position)
@@ -422,7 +425,7 @@ def _persist_state_snapshot(
     _write_json_atomic(path, payload)
 
 
-def _pair_snapshot_to_dict(snapshot: PairSnapshot) -> Dict[str, object]:
+def _pair_snapshot_to_dict(snapshot: PairSnapshot) -> dict[str, object]:
     namespace_key = _namespace_base_key(snapshot.instance_name, snapshot.connector_name, snapshot.trading_pair)
     return {
         "connector_name": snapshot.connector_name,
@@ -449,7 +452,7 @@ def _pair_snapshot_to_dict(snapshot: PairSnapshot) -> Dict[str, object]:
     }
 
 
-def _persist_pair_snapshot(path: Path, pairs: Dict[str, PairSnapshot]) -> None:
+def _persist_pair_snapshot(path: Path, pairs: dict[str, PairSnapshot]) -> None:
     payload = {
         "ts_utc": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
         "pairs_total": len(pairs),
@@ -466,20 +469,20 @@ class PairSnapshot:
     timestamp_ms: int
     freshness_ts_ms: int
     mid_price: float
-    best_bid: Optional[float]
-    best_ask: Optional[float]
-    best_bid_size: Optional[float]
-    best_ask_size: Optional[float]
-    last_trade_price: Optional[float]
-    mark_price: Optional[float]
-    funding_rate: Optional[float]
-    exchange_ts_ms: Optional[int]
-    ingest_ts_ms: Optional[int]
-    market_sequence: Optional[int]
+    best_bid: float | None
+    best_ask: float | None
+    best_bid_size: float | None
+    best_ask_size: float | None
+    last_trade_price: float | None
+    mark_price: float | None
+    funding_rate: float | None
+    exchange_ts_ms: int | None
+    ingest_ts_ms: int | None
+    market_sequence: int | None
     event_id: str
     source_event_type: str
-    bid_levels: Tuple[Tuple[float, float], ...] = ()
-    ask_levels: Tuple[Tuple[float, float], ...] = ()
+    bid_levels: tuple[tuple[float, float], ...] = ()
+    ask_levels: tuple[tuple[float, float], ...] = ()
 
 
 @dataclass
@@ -536,9 +539,9 @@ class PositionRecord:
 
 @dataclass
 class PaperExchangeState:
-    pairs: Dict[str, PairSnapshot] = field(default_factory=dict)
-    orders_by_id: Dict[str, OrderRecord] = field(default_factory=dict)
-    positions_by_key: Dict[str, PositionRecord] = field(default_factory=dict)
+    pairs: dict[str, PairSnapshot] = field(default_factory=dict)
+    orders_by_id: dict[str, OrderRecord] = field(default_factory=dict)
+    positions_by_key: dict[str, PositionRecord] = field(default_factory=dict)
     accepted_snapshots: int = 0
     rejected_snapshots: int = 0
     processed_commands: int = 0
@@ -569,9 +572,9 @@ class PaperExchangeState:
     market_fill_invalid_transition_drops: int = 0
     market_fill_journal_write_failures: int = 0
     market_fill_journal_next_seq: int = 0
-    market_fill_events_by_id: Dict[str, int] = field(default_factory=dict)
+    market_fill_events_by_id: dict[str, int] = field(default_factory=dict)
     market_row_fill_cap_hits: int = 0
-    command_results_by_id: Dict[str, Dict[str, object]] = field(default_factory=dict)
+    command_results_by_id: dict[str, dict[str, object]] = field(default_factory=dict)
     funding_events_generated: int = 0
     funding_debit_events: int = 0
     funding_credit_events: int = 0
@@ -588,13 +591,13 @@ class ServiceSettings:
     service_instance_name: str = "paper_exchange"
     consumer_group: str = "hb_group_paper_exchange"
     consumer_name: str = "paper-exchange-consumer"
-    market_data_stream: str = MARKET_QUOTE_STREAM
+    market_data_stream: str = MARKET_DATA_STREAM
     command_stream: str = PAPER_EXCHANGE_COMMAND_STREAM
     event_stream: str = PAPER_EXCHANGE_EVENT_STREAM
     heartbeat_stream: str = PAPER_EXCHANGE_HEARTBEAT_STREAM
     audit_stream: str = AUDIT_STREAM
-    allowed_connectors: Set[str] = field(default_factory=set)
-    allowed_command_producers: Set[str] = field(default_factory=set)
+    allowed_connectors: set[str] = field(default_factory=set)
+    allowed_command_producers: set[str] = field(default_factory=set)
     market_stale_after_ms: int = 15_000
     resting_fill_latency_ms: int = 0
     maker_queue_participation: float = 1.0
@@ -620,12 +623,108 @@ class ServiceSettings:
     terminal_order_ttl_ms: int = 86_400_000
     max_orders_tracked: int = 200_000
     persist_sync_state_results: bool = True
+    persistence_flush_interval_ms: int = 250
+    pair_snapshot_flush_interval_ms: int = 1_000
+    latency_report_path: str = "reports/verification/paper_exchange_hot_path_latest.json"
+
+
+@dataclass
+class PersistenceCoordinator:
+    state: PaperExchangeState
+    settings: ServiceSettings
+    command_journal_path: Path | None = None
+    state_snapshot_path: Path | None = None
+    pair_snapshot_path: Path | None = None
+    market_fill_journal_path: Path | None = None
+    latency_tracker: JsonLatencyTracker | None = None
+    command_journal_dirty: bool = False
+    state_snapshot_dirty: bool = False
+    pair_snapshot_dirty: bool = False
+    market_fill_journal_dirty: bool = False
+    _last_general_flush_ms: int = 0
+    _last_pair_flush_ms: int = 0
+
+    def mark_command_journal_dirty(self) -> None:
+        self.command_journal_dirty = self.command_journal_path is not None
+
+    def mark_state_snapshot_dirty(self) -> None:
+        self.state_snapshot_dirty = self.state_snapshot_path is not None
+
+    def mark_pair_snapshot_dirty(self) -> None:
+        self.pair_snapshot_dirty = self.pair_snapshot_path is not None
+
+    def mark_market_fill_journal_dirty(self) -> None:
+        self.market_fill_journal_dirty = self.market_fill_journal_path is not None
+
+    def flush_due(self, now_ms: int | None = None, *, force: bool = False) -> None:
+        current_ms = int(now_ms if now_ms is not None else _now_ms())
+        general_interval_ms = max(1, int(self.settings.persistence_flush_interval_ms))
+        pair_interval_ms = max(general_interval_ms, int(self.settings.pair_snapshot_flush_interval_ms))
+        flush_general = force or (current_ms - self._last_general_flush_ms) >= general_interval_ms
+        flush_pair = force or (current_ms - self._last_pair_flush_ms) >= pair_interval_ms
+
+        if flush_general and self.command_journal_dirty and self.command_journal_path is not None:
+            started = time.perf_counter()
+            _persist_command_journal(self.command_journal_path, self.state.command_results_by_id)
+            self.command_journal_dirty = False
+            self._last_general_flush_ms = current_ms
+            if self.latency_tracker is not None:
+                self.latency_tracker.observe(
+                    "paper_exchange_persist_command_journal_ms",
+                    (time.perf_counter() - started) * 1000.0,
+                )
+        if flush_general and self.market_fill_journal_dirty and self.market_fill_journal_path is not None:
+            started = time.perf_counter()
+            _persist_market_fill_journal(
+                self.market_fill_journal_path,
+                self.state.market_fill_events_by_id,
+                max_entries=self.settings.market_fill_journal_max_entries,
+            )
+            self.market_fill_journal_dirty = False
+            self._last_general_flush_ms = current_ms
+            if self.latency_tracker is not None:
+                self.latency_tracker.observe(
+                    "paper_exchange_persist_market_fill_journal_ms",
+                    (time.perf_counter() - started) * 1000.0,
+                )
+        if flush_general and self.state_snapshot_dirty and self.state_snapshot_path is not None:
+            started = time.perf_counter()
+            _persist_state_snapshot(
+                self.state_snapshot_path,
+                self.state.orders_by_id,
+                self.state.positions_by_key,
+                funding_summary=_funding_summary(self.state),
+            )
+            self.state_snapshot_dirty = False
+            self._last_general_flush_ms = current_ms
+            if self.latency_tracker is not None:
+                self.latency_tracker.observe(
+                    "paper_exchange_persist_state_snapshot_ms",
+                    (time.perf_counter() - started) * 1000.0,
+                )
+        if flush_pair and self.pair_snapshot_dirty and self.pair_snapshot_path is not None:
+            started = time.perf_counter()
+            _persist_pair_snapshot(self.pair_snapshot_path, self.state.pairs)
+            self.pair_snapshot_dirty = False
+            self._last_pair_flush_ms = current_ms
+            if self.latency_tracker is not None:
+                self.latency_tracker.observe(
+                    "paper_exchange_persist_pair_snapshot_ms",
+                    (time.perf_counter() - started) * 1000.0,
+                )
 
 
 _SUPPORTED_ORDER_TYPES = {"limit", "market", "post_only"}
 _SUPPORTED_TIME_IN_FORCE = {"gtc", "ioc", "fok"}
 _MIN_FILL_EPSILON = 1e-12
 _PRIVILEGED_COMMANDS = {"cancel_all"}
+
+
+def _D(v: object) -> Decimal:
+    """Convert to Decimal via string for exact intermediate arithmetic."""
+    if isinstance(v, Decimal):
+        return v
+    return Decimal(str(v))
 _PRIVILEGED_METADATA_FIELDS = ("operator", "reason", "change_ticket", "trace_id")
 
 
@@ -633,11 +732,11 @@ def _is_privileged_command(command_name: str) -> bool:
     return _normalize(command_name) in _PRIVILEGED_COMMANDS
 
 
-def _missing_privileged_metadata(metadata: Dict[str, str]) -> List[str]:
+def _missing_privileged_metadata(metadata: dict[str, str]) -> list[str]:
     return [key for key in _PRIVILEGED_METADATA_FIELDS if not str(metadata.get(key, "")).strip()]
 
 
-def _bool_from_record(record: Dict[str, object], key: str, default: bool) -> bool:
+def _bool_from_record(record: dict[str, object], key: str, default: bool) -> bool:
     raw = record.get(key)
     if isinstance(raw, bool):
         return raw
@@ -651,7 +750,7 @@ def _build_privileged_audit_event(
     command: PaperExchangeCommandEvent,
     result_status: str,
     result_reason: str,
-    command_metadata: Dict[str, str],
+    command_metadata: dict[str, str],
 ) -> AuditEvent:
     status_norm = _normalize(result_status or "")
     severity = "warning" if status_norm != "processed" else "info"
@@ -695,7 +794,7 @@ def _entry_sequence_from_stream_id(entry_id: str) -> int:
     return max(0, ms) * 1_000_000 + max(0, seq)
 
 
-def _positive_or_none(value: Optional[float]) -> Optional[float]:
+def _positive_or_none(value: float | None) -> float | None:
     if value is None:
         return None
     try:
@@ -705,19 +804,19 @@ def _positive_or_none(value: Optional[float]) -> Optional[float]:
     return parsed if parsed > 0 else None
 
 
-def _snapshot_best_bid(snapshot: Optional[PairSnapshot]) -> Optional[float]:
+def _snapshot_best_bid(snapshot: PairSnapshot | None) -> float | None:
     return _positive_or_none(None if snapshot is None else snapshot.best_bid)
 
 
-def _snapshot_best_ask(snapshot: Optional[PairSnapshot]) -> Optional[float]:
+def _snapshot_best_ask(snapshot: PairSnapshot | None) -> float | None:
     return _positive_or_none(None if snapshot is None else snapshot.best_ask)
 
 
-def _snapshot_best_bid_size(snapshot: Optional[PairSnapshot]) -> Optional[float]:
+def _snapshot_best_bid_size(snapshot: PairSnapshot | None) -> float | None:
     return _positive_or_none(None if snapshot is None else snapshot.best_bid_size)
 
 
-def _snapshot_best_ask_size(snapshot: Optional[PairSnapshot]) -> Optional[float]:
+def _snapshot_best_ask_size(snapshot: PairSnapshot | None) -> float | None:
     return _positive_or_none(None if snapshot is None else snapshot.best_ask_size)
 
 
@@ -758,9 +857,9 @@ def _open_long(position: PositionRecord, quantity: float, price: float) -> None:
         position.long_base = qty
         position.long_avg_entry_price = px
         return
-    total_qty = existing_qty + qty
-    position.long_avg_entry_price = ((existing_qty * position.long_avg_entry_price) + (qty * px)) / total_qty
-    position.long_base = total_qty
+    d_total = _D(existing_qty) + _D(qty)
+    position.long_avg_entry_price = float((_D(existing_qty) * _D(position.long_avg_entry_price) + _D(qty) * _D(px)) / d_total)
+    position.long_base = float(d_total)
 
 
 def _open_short(position: PositionRecord, quantity: float, price: float) -> None:
@@ -773,21 +872,21 @@ def _open_short(position: PositionRecord, quantity: float, price: float) -> None
         position.short_base = qty
         position.short_avg_entry_price = px
         return
-    total_qty = existing_qty + qty
-    position.short_avg_entry_price = ((existing_qty * position.short_avg_entry_price) + (qty * px)) / total_qty
-    position.short_base = total_qty
+    d_total = _D(existing_qty) + _D(qty)
+    position.short_avg_entry_price = float((_D(existing_qty) * _D(position.short_avg_entry_price) + _D(qty) * _D(px)) / d_total)
+    position.short_base = float(d_total)
 
 
 def _close_long(position: PositionRecord, quantity: float, price: float) -> float:
     qty = min(_round_positive(quantity), _round_positive(position.long_base))
     if qty <= _MIN_FILL_EPSILON:
         return 0.0
-    realized = qty * (float(price) - float(position.long_avg_entry_price))
-    position.long_base = max(0.0, float(position.long_base) - qty)
+    realized = float(_D(qty) * (_D(price) - _D(position.long_avg_entry_price)))
+    position.long_base = max(0.0, float(_D(position.long_base) - _D(qty)))
     if position.long_base <= _MIN_FILL_EPSILON:
         position.long_base = 0.0
         position.long_avg_entry_price = 0.0
-    position.realized_pnl_quote += realized
+    position.realized_pnl_quote = float(_D(position.realized_pnl_quote) + _D(realized))
     return qty
 
 
@@ -795,17 +894,95 @@ def _close_short(position: PositionRecord, quantity: float, price: float) -> flo
     qty = min(_round_positive(quantity), _round_positive(position.short_base))
     if qty <= _MIN_FILL_EPSILON:
         return 0.0
-    realized = qty * (float(position.short_avg_entry_price) - float(price))
-    position.short_base = max(0.0, float(position.short_base) - qty)
+    realized = float(_D(qty) * (_D(position.short_avg_entry_price) - _D(price)))
+    position.short_base = max(0.0, float(_D(position.short_base) - _D(qty)))
     if position.short_base <= _MIN_FILL_EPSILON:
         position.short_base = 0.0
         position.short_avg_entry_price = 0.0
-    position.realized_pnl_quote += realized
+    position.realized_pnl_quote = float(_D(position.realized_pnl_quote) + _D(realized))
     return qty
 
 
 def _is_flat_position(position: PositionRecord) -> bool:
     return _round_positive(position.long_base) <= _MIN_FILL_EPSILON and _round_positive(position.short_base) <= _MIN_FILL_EPSILON
+
+
+def _sanitize_oneway_positions(positions: dict[str, PositionRecord]) -> int:
+    """Collapse dual-leg ONEWAY positions to a single net leg on startup.
+
+    Returns the number of positions repaired.
+    """
+    repaired = 0
+    for key, pos in positions.items():
+        mode = str(pos.position_mode or "ONEWAY").strip().upper()
+        if "HEDGE" in mode:
+            continue
+        long_qty = _round_positive(pos.long_base)
+        short_qty = _round_positive(pos.short_base)
+        if long_qty <= _MIN_FILL_EPSILON or short_qty <= _MIN_FILL_EPSILON:
+            continue
+        net = float(_D(long_qty) - _D(short_qty))
+        if net > _MIN_FILL_EPSILON:
+            pos.long_base = net
+            pos.short_base = 0.0
+            pos.short_avg_entry_price = 0.0
+        elif net < -_MIN_FILL_EPSILON:
+            pos.short_base = abs(net)
+            pos.long_base = 0.0
+            pos.long_avg_entry_price = 0.0
+        else:
+            pos.long_base = 0.0
+            pos.short_base = 0.0
+            pos.long_avg_entry_price = 0.0
+            pos.short_avg_entry_price = 0.0
+        logger.warning(
+            "ONEWAY_SANITIZE key=%s: collapsed dual-leg (long=%.8f short=%.8f) -> net=%.8f",
+            key, long_qty, short_qty, net,
+        )
+        repaired += 1
+    return repaired
+
+
+def _preview_fill_realized_pnl(
+    state: PaperExchangeState,
+    order: OrderRecord,
+    fill_amount_base: float,
+    fill_price: float,
+) -> float:
+    """Pre-compute the realized PnL a fill would produce without mutating state."""
+    key = _position_key(order.instance_name, order.connector_name, order.trading_pair)
+    position = state.positions_by_key.get(key)
+    if position is None:
+        return 0.0
+    qty = _round_positive(fill_amount_base)
+    if qty <= _MIN_FILL_EPSILON:
+        return 0.0
+    side = _normalize(order.side)
+    action = _normalize(order.position_action or "auto")
+    mode = str(order.position_mode or "ONEWAY").strip().upper() or "ONEWAY"
+    reduce_only = bool(order.reduce_only)
+    if mode != "HEDGE" and action in ("open_long", "open_short", "close_long", "close_short"):
+        action = "auto"
+    realized = 0.0
+    if mode == "HEDGE":
+        if side == "buy" and (action == "close_short" or reduce_only):
+            close_qty = min(qty, _round_positive(position.short_base))
+            if close_qty > _MIN_FILL_EPSILON:
+                realized = float(_D(close_qty) * (_D(position.short_avg_entry_price) - _D(fill_price)))
+        elif side == "sell" and (action == "close_long" or reduce_only):
+            close_qty = min(qty, _round_positive(position.long_base))
+            if close_qty > _MIN_FILL_EPSILON:
+                realized = float(_D(close_qty) * (_D(fill_price) - _D(position.long_avg_entry_price)))
+    else:
+        if side == "buy" and action != "open_long":
+            close_qty = min(qty, _round_positive(position.short_base))
+            if close_qty > _MIN_FILL_EPSILON:
+                realized = float(_D(close_qty) * (_D(position.short_avg_entry_price) - _D(fill_price)))
+        elif side == "sell" and action != "open_short":
+            close_qty = min(qty, _round_positive(position.long_base))
+            if close_qty > _MIN_FILL_EPSILON:
+                realized = float(_D(close_qty) * (_D(fill_price) - _D(position.long_avg_entry_price)))
+    return realized
 
 
 def _apply_position_fill(
@@ -825,6 +1002,8 @@ def _apply_position_fill(
     action = _normalize(order.position_action or "auto")
     mode = str(order.position_mode or "ONEWAY").strip().upper() or "ONEWAY"
     reduce_only = bool(order.reduce_only)
+    if mode != "HEDGE" and action in ("open_long", "open_short", "close_long", "close_short"):
+        action = "auto"
 
     if mode == "HEDGE":
         if side == "buy":
@@ -870,7 +1049,7 @@ def _apply_position_fill(
         position.last_funding_ts_ms = max(0, int(now_ms))
 
 
-def _funding_summary(state: PaperExchangeState) -> Dict[str, object]:
+def _funding_summary(state: PaperExchangeState) -> dict[str, object]:
     return {
         "positions_with_exposure": sum(1 for position in state.positions_by_key.values() if not _is_flat_position(position)),
         "funding_events_generated": int(state.funding_events_generated),
@@ -900,7 +1079,7 @@ def _funding_events_for_snapshot(
     snapshot: PairSnapshot,
     funding_interval_ms: int,
     now_ms: int,
-) -> List[FundingSettlementCandidate]:
+) -> list[FundingSettlementCandidate]:
     interval_ms = max(1_000, int(funding_interval_ms))
     price_reference = max(
         0.0,
@@ -911,7 +1090,7 @@ def _funding_events_for_snapshot(
     funding_rate = float(snapshot.funding_rate or 0.0)
     if funding_rate == 0.0:
         return []
-    candidates: List[FundingSettlementCandidate] = []
+    candidates: list[FundingSettlementCandidate] = []
     matching_positions = [
         (position_key, position)
         for position_key, position in state.positions_by_key.items()
@@ -942,11 +1121,11 @@ def _funding_events_for_snapshot(
             reference_price = max(0.0, price_reference or avg_entry_price)
             if reference_price <= 0.0:
                 continue
-            notional_quote = qty * reference_price
-            charge_quote = funding_rate * notional_quote * direction
+            notional_quote = float(_D(qty) * _D(reference_price))
+            charge_quote = float(_D(funding_rate) * _D(notional_quote) * _D(direction))
             if abs(charge_quote) <= _MIN_FILL_EPSILON:
                 continue
-            cumulative_funding_quote = float(position.funding_paid_quote) + float(charge_quote)
+            cumulative_funding_quote = float(_D(position.funding_paid_quote) + _D(charge_quote))
             event_id = (
                 f"pe-funding-{position.instance_name}-{snapshot.connector_name}-{snapshot.trading_pair}-"
                 f"{leg_side}-{int(now_ms)}"
@@ -1001,7 +1180,7 @@ def _commit_funding_settlement(state: PaperExchangeState, candidate: FundingSett
     position = state.positions_by_key.get(candidate.position_key)
     if position is None:
         return
-    position.funding_paid_quote += float(candidate.charge_quote)
+    position.funding_paid_quote = float(_D(position.funding_paid_quote) + _D(candidate.charge_quote))
     position.last_funding_rate = float(candidate.funding_rate)
     position.funding_event_count += 1
     position.last_funding_ts_ms = int(candidate.current_funding_ts_ms)
@@ -1010,7 +1189,7 @@ def _commit_funding_settlement(state: PaperExchangeState, candidate: FundingSett
         state.funding_debit_events += 1
     else:
         state.funding_credit_events += 1
-    state.funding_paid_quote_total += float(candidate.charge_quote)
+    state.funding_paid_quote_total = float(_D(state.funding_paid_quote_total) + _D(candidate.charge_quote))
 
 
 @dataclass
@@ -1048,12 +1227,12 @@ def _parse_bool(value: object, *, default: bool = False) -> bool:
     return default
 
 
-def _coerce_time_in_force(metadata: Dict[str, str]) -> str:
+def _coerce_time_in_force(metadata: dict[str, str]) -> str:
     tif = str(metadata.get("time_in_force", "gtc")).strip().lower()
     return tif if tif in _SUPPORTED_TIME_IN_FORCE else ""
 
 
-def _try_float(value: object) -> Optional[float]:
+def _try_float(value: object) -> float | None:
     try:
         if value is None:
             return None
@@ -1062,7 +1241,7 @@ def _try_float(value: object) -> Optional[float]:
         return None
 
 
-def _decimal_from_metadata(metadata: Dict[str, str], key: str) -> Optional[Decimal]:
+def _decimal_from_metadata(metadata: dict[str, str], key: str) -> Decimal | None:
     raw = metadata.get(key)
     if raw is None:
         return None
@@ -1087,12 +1266,12 @@ def _is_multiple_of_increment(value: Decimal, increment: Decimal) -> bool:
 
 def _validate_order_constraints(
     *,
-    metadata: Dict[str, str],
+    metadata: dict[str, str],
     order_type: str,
     amount_base: float,
-    price: Optional[float],
-    market_reference_price: Optional[float],
-) -> Optional[Tuple[str, Dict[str, str]]]:
+    price: float | None,
+    market_reference_price: float | None,
+) -> tuple[str, dict[str, str]] | None:
     min_quantity = _decimal_from_metadata(metadata, "min_quantity") or Decimal("0")
     size_increment = _decimal_from_metadata(metadata, "size_increment") or Decimal("0")
     price_increment = _decimal_from_metadata(metadata, "price_increment") or Decimal("0")
@@ -1142,10 +1321,10 @@ def _coerce_margin_mode(value: object) -> str:
 
 
 def _resolve_accounting_contract(
-    metadata: Dict[str, str],
+    metadata: dict[str, str],
     *,
-    pair_snapshot: Optional[PairSnapshot],
-) -> Tuple[float, float, float, str, float]:
+    pair_snapshot: PairSnapshot | None,
+) -> tuple[float, float, float, str, float]:
     maker_fee_pct = _try_float(metadata.get("maker_fee_pct"))
     taker_fee_pct = _try_float(metadata.get("taker_fee_pct"))
     fallback_fee_pct = _try_float(metadata.get("fee_pct"))
@@ -1196,13 +1375,13 @@ def _calc_fill_fee_quote(
     is_maker: bool,
     maker_fee_pct: float,
     taker_fee_pct: float,
-) -> Tuple[float, float]:
+) -> tuple[float, float]:
     fee_rate_pct = _fee_rate_for_fill(
         is_maker=is_maker,
         maker_fee_pct=maker_fee_pct,
         taker_fee_pct=taker_fee_pct,
     )
-    fee_quote = max(0.0, abs(float(fill_notional_quote)) * fee_rate_pct)
+    fee_quote = float(max(Decimal(0), abs(_D(fill_notional_quote)) * _D(fee_rate_pct)))
     return fee_quote, fee_rate_pct
 
 
@@ -1212,14 +1391,14 @@ def _calc_margin_reserve_quote(
     leverage: float,
     margin_mode: str,
 ) -> float:
-    notional = max(0.0, abs(float(filled_notional_quote_total)))
+    notional = max(Decimal(0), abs(_D(filled_notional_quote_total)))
     if _coerce_margin_mode(margin_mode) == "standard":
-        return notional
-    lev = max(1.0, float(leverage))
-    return notional / lev
+        return float(notional)
+    lev = max(Decimal(1), _D(leverage))
+    return float(notional / lev)
 
 
-def _order_metadata(order: OrderRecord) -> Dict[str, str]:
+def _order_metadata(order: OrderRecord) -> dict[str, str]:
     remaining = _remaining_amount_base(order)
     return {
         "order_state": order.state,
@@ -1252,7 +1431,7 @@ def _event_for_command(
     command: PaperExchangeCommandEvent,
     status: str,
     reason: str,
-    metadata: Optional[Dict[str, str]] = None,
+    metadata: dict[str, str] | None = None,
 ) -> PaperExchangeEvent:
     return PaperExchangeEvent(
         producer="paper_exchange_service",
@@ -1271,7 +1450,7 @@ def _event_for_command(
     )
 
 
-def _crosses_book(side: str, order_price: float, best_bid: Optional[float], best_ask: Optional[float]) -> bool:
+def _crosses_book(side: str, order_price: float, best_bid: float | None, best_ask: float | None) -> bool:
     if side == "buy":
         return best_ask is not None and order_price >= best_ask
     if side == "sell":
@@ -1279,7 +1458,7 @@ def _crosses_book(side: str, order_price: float, best_bid: Optional[float], best
     return False
 
 
-def _market_execution_price(side: str, snapshot: Optional[PairSnapshot]) -> Optional[float]:
+def _market_execution_price(side: str, snapshot: PairSnapshot | None) -> float | None:
     best_bid = _snapshot_best_bid(snapshot)
     best_ask = _snapshot_best_ask(snapshot)
     if side == "buy":
@@ -1289,13 +1468,13 @@ def _market_execution_price(side: str, snapshot: Optional[PairSnapshot]) -> Opti
     return None
 
 
-def _extract_depth_levels(raw_levels: object, *, descending: bool, max_levels: int = 5) -> Tuple[Tuple[float, float], ...]:
-    levels: List[Tuple[float, float]] = []
+def _extract_depth_levels(raw_levels: object, *, descending: bool, max_levels: int = 5) -> tuple[tuple[float, float], ...]:
+    levels: list[tuple[float, float]] = []
     if not isinstance(raw_levels, list):
         return ()
     for raw in raw_levels:
-        price: Optional[float] = None
-        size: Optional[float] = None
+        price: float | None = None
+        size: float | None = None
         if isinstance(raw, dict):
             price = _try_float(raw.get("price"))
             size = _try_float(raw.get("size"))
@@ -1316,8 +1495,8 @@ def _contra_levels_for_snapshot(
     *,
     side: str,
     max_levels: int,
-    limit_price: Optional[float] = None,
-) -> Tuple[Tuple[float, float], ...]:
+    limit_price: float | None = None,
+) -> tuple[tuple[float, float], ...]:
     levels = snapshot.ask_levels if side == "buy" else snapshot.bid_levels
     if not levels:
         top_price = _snapshot_best_ask(snapshot) if side == "buy" else _snapshot_best_bid(snapshot)
@@ -1325,7 +1504,7 @@ def _contra_levels_for_snapshot(
         if top_price is None:
             return ()
         levels = ((float(top_price), float(top_size) if top_size is not None else float("inf")),)
-    filtered: List[Tuple[float, float]] = []
+    filtered: list[tuple[float, float]] = []
     for price, size in levels[: max(1, int(max_levels))]:
         if limit_price is not None:
             if side == "buy" and float(price) > float(limit_price):
@@ -1341,8 +1520,8 @@ def _contra_levels_for_snapshot(
 def _sweep_fill_from_levels(
     *,
     amount_base: float,
-    levels: Tuple[Tuple[float, float], ...],
-) -> Tuple[float, Optional[float]]:
+    levels: tuple[tuple[float, float], ...],
+) -> tuple[float, float | None]:
     remaining = max(0.0, float(amount_base))
     if remaining <= _MIN_FILL_EPSILON:
         return 0.0, None
@@ -1363,7 +1542,7 @@ def _sweep_fill_from_levels(
 
 
 def _effective_depth_from_levels(
-    levels: Tuple[Tuple[float, float], ...],
+    levels: tuple[tuple[float, float], ...],
     *,
     decay: float = 0.70,
 ) -> float:
@@ -1380,13 +1559,13 @@ def _effective_depth_from_levels(
 
 
 def _consume_levels(
-    levels: List[Tuple[float, float]],
+    levels: list[tuple[float, float]],
     consumed: float,
-) -> List[Tuple[float, float]]:
+) -> list[tuple[float, float]]:
     remaining = max(0.0, float(consumed))
     if remaining <= _MIN_FILL_EPSILON:
         return [(float(price), float(size)) for price, size in levels]
-    out: List[Tuple[float, float]] = []
+    out: list[tuple[float, float]] = []
     for price, size in levels:
         level_size = max(0.0, float(size))
         if remaining > _MIN_FILL_EPSILON and level_size > _MIN_FILL_EPSILON:
@@ -1399,13 +1578,13 @@ def _consume_levels(
 
 
 def _filter_levels_for_limit(
-    levels: List[Tuple[float, float]],
+    levels: list[tuple[float, float]],
     *,
     side: str,
     limit_price: float,
     max_levels: int,
-) -> Tuple[Tuple[float, float], ...]:
-    filtered: List[Tuple[float, float]] = []
+) -> tuple[tuple[float, float], ...]:
+    filtered: list[tuple[float, float]] = []
     for price, size in levels[: max(1, int(max_levels))]:
         if side == "buy" and float(price) > float(limit_price):
             continue
@@ -1427,7 +1606,7 @@ def _order_matches_snapshot(order: OrderRecord, snapshot: PairSnapshot) -> bool:
     )
 
 
-def _ordered_active_orders_for_snapshot(state: PaperExchangeState, snapshot: PairSnapshot) -> List[OrderRecord]:
+def _ordered_active_orders_for_snapshot(state: PaperExchangeState, snapshot: PairSnapshot) -> list[OrderRecord]:
     active = [
         order
         for order in state.orders_by_id.values()
@@ -1444,7 +1623,7 @@ def _build_fill_candidates_for_snapshot(
     resting_fill_latency_ms: int = 0,
     maker_queue_participation: float = 1.0,
     market_sweep_depth_levels: int = 1,
-) -> List[FillCandidate]:
+) -> list[FillCandidate]:
     best_bid = _snapshot_best_bid(snapshot)
     best_ask = _snapshot_best_ask(snapshot)
     if best_bid is None and best_ask is None:
@@ -1452,7 +1631,7 @@ def _build_fill_candidates_for_snapshot(
 
     bid_levels = list(_contra_levels_for_snapshot(snapshot, side="sell", max_levels=max(1, int(market_sweep_depth_levels))))
     ask_levels = list(_contra_levels_for_snapshot(snapshot, side="buy", max_levels=max(1, int(market_sweep_depth_levels))))
-    candidates: List[FillCandidate] = []
+    candidates: list[FillCandidate] = []
 
     # Replay guard for partially processed snapshot rows:
     # reserve liquidity already consumed by fills tied to this snapshot event_id.
@@ -1530,14 +1709,14 @@ def _build_fill_candidates_for_snapshot(
         else:
             bid_levels = _consume_levels(bid_levels, fill_amount)
 
-        fill_notional_quote = fill_amount * fill_price
+        fill_notional_quote = float(_D(fill_amount) * _D(fill_price))
         fill_fee_quote, fill_fee_rate_pct = _calc_fill_fee_quote(
             fill_notional_quote=fill_notional_quote,
             is_maker=True,
             maker_fee_pct=order.maker_fee_pct,
             taker_fee_pct=order.taker_fee_pct,
         )
-        filled_notional_quote_total = max(0.0, float(order.filled_quote) + float(fill_notional_quote))
+        filled_notional_quote_total = max(0.0, float(_D(order.filled_quote) + _D(fill_notional_quote)))
         margin_reserve_quote = _calc_margin_reserve_quote(
             filled_notional_quote_total=filled_notional_quote_total,
             leverage=order.leverage,
@@ -1572,11 +1751,12 @@ def _market_fill_event_from_candidate(
     order: OrderRecord,
     snapshot: PairSnapshot,
     candidate: FillCandidate,
+    realized_pnl_quote: float = 0.0,
 ) -> PaperExchangeEvent:
     reason = "resting_order_filled" if candidate.new_state == "filled" else "resting_order_partial_fill"
-    filled_base_total = max(0.0, float(order.filled_base) + float(candidate.fill_amount_base))
-    filled_notional_quote_total = max(0.0, float(order.filled_quote) + float(candidate.fill_notional_quote))
-    filled_fee_quote_total = max(0.0, float(order.filled_fee_quote) + float(candidate.fill_fee_quote))
+    filled_base_total = max(0.0, float(_D(order.filled_base) + _D(candidate.fill_amount_base)))
+    filled_notional_quote_total = max(0.0, float(_D(order.filled_quote) + _D(candidate.fill_notional_quote)))
+    filled_fee_quote_total = max(0.0, float(_D(order.filled_fee_quote) + _D(candidate.fill_fee_quote)))
     return PaperExchangeEvent(
         producer="paper_exchange_service",
         event_id=str(candidate.event_id),
@@ -1620,6 +1800,7 @@ def _market_fill_event_from_candidate(
             "snapshot_market_sequence": str(candidate.snapshot_market_sequence),
             "best_bid": str(snapshot.best_bid) if snapshot.best_bid is not None else "",
             "best_ask": str(snapshot.best_ask) if snapshot.best_ask is not None else "",
+            "realized_pnl_quote": str(realized_pnl_quote),
         },
     )
 
@@ -1634,9 +1815,9 @@ def _apply_fill_candidate(order: OrderRecord, candidate: FillCandidate, *, now_m
             target_state,
         )
         return False
-    order.filled_base = max(0.0, float(order.filled_base) + float(candidate.fill_amount_base))
-    order.filled_quote = max(0.0, float(order.filled_quote) + float(candidate.fill_notional_quote))
-    order.filled_fee_quote = max(0.0, float(order.filled_fee_quote) + float(candidate.fill_fee_quote))
+    order.filled_base = max(0.0, float(_D(order.filled_base) + _D(candidate.fill_amount_base)))
+    order.filled_quote = max(0.0, float(_D(order.filled_quote) + _D(candidate.fill_notional_quote)))
+    order.filled_fee_quote = max(0.0, float(_D(order.filled_fee_quote) + _D(candidate.fill_fee_quote)))
     order.margin_reserve_quote = max(0.0, float(candidate.margin_reserve_quote))
     order.fill_count = int(candidate.fill_count)
     if float(candidate.fill_amount_base) > _MIN_FILL_EPSILON and int(order.first_fill_ts_ms) <= 0:
@@ -1689,12 +1870,12 @@ def _prune_orders(
 
 
 def ingest_market_snapshot_payload(
-    payload: Dict[str, object],
+    payload: dict[str, object],
     state: PaperExchangeState,
-    allowed_connectors: Set[str],
+    allowed_connectors: set[str],
     *,
     entry_id: str = "",
-) -> Tuple[bool, str]:
+) -> tuple[bool, str]:
     """Ingest a canonical market quote or legacy controller snapshot."""
     for field_name, reason in (
         ("best_bid_size", "non_positive_best_bid_size"),
@@ -1806,11 +1987,11 @@ def ingest_market_snapshot_payload(
 def build_heartbeat_event(
     state: PaperExchangeState,
     service_instance_name: str,
-    allowed_connectors: Set[str],
+    allowed_connectors: set[str],
     stale_after_ms: int,
     consumer_group: str = "",
     consumer_name: str = "",
-    now_ms: Optional[int] = None,
+    now_ms: int | None = None,
 ) -> PaperExchangeHeartbeatEvent:
     now = int(now_ms if now_ms is not None else _now_ms())
     ages = [max(0, now - int(s.freshness_ts_ms or s.timestamp_ms)) for s in state.pairs.values()]
@@ -1887,15 +2068,15 @@ def build_heartbeat_event(
 
 
 def handle_command_payload(
-    payload: Dict[str, object],
+    payload: dict[str, object],
     state: PaperExchangeState,
     service_instance_name: str,
-    allowed_connectors: Optional[Set[str]] = None,
-    allowed_command_producers: Optional[Set[str]] = None,
+    allowed_connectors: set[str] | None = None,
+    allowed_command_producers: set[str] | None = None,
     market_stale_after_ms: int = 15_000,
     market_sweep_depth_levels: int = 1,
     command_sequence: int = 0,
-    now_ms: Optional[int] = None,
+    now_ms: int | None = None,
 ) -> PaperExchangeEvent:
     now = int(now_ms if now_ms is not None else _now_ms())
     command_seq = max(0, int(command_sequence))
@@ -1928,7 +2109,7 @@ def handle_command_payload(
         try:
             command.connector_name = resolved_connector_name
         except Exception:
-            pass
+            logger.exception("Failed to set resolved connector_name on command order_id=%s", getattr(command, "order_id", "?"))
 
     normalized_producer = _normalize(command.producer)
     if allowed_producers and normalized_producer not in allowed_producers:
@@ -1976,7 +2157,7 @@ def handle_command_payload(
         return _event_for_command(command=command, status="rejected", reason="expired_command")
 
     # Non-sync commands require fresh market snapshots from real exchange feed.
-    pair_snapshot: Optional[PairSnapshot] = None
+    pair_snapshot: PairSnapshot | None = None
     if command.command != "sync_state":
         pair_snapshot = _get_pair_snapshot(
             state,
@@ -2112,8 +2293,8 @@ def handle_command_payload(
             )
         initial_state = "working"
         reason = "order_accepted"
-        fill_price: Optional[float] = None
-        fill_notional_quote: Optional[float] = None
+        fill_price: float | None = None
+        fill_notional_quote: float | None = None
         is_maker = True
         initial_filled_base = 0.0
         initial_filled_quote = 0.0
@@ -2131,7 +2312,7 @@ def handle_command_payload(
             initial_state = "filled"
             reason = "order_filled_market"
             fill_price = order_price
-            fill_notional_quote = amount_base * fill_price
+            fill_notional_quote = float(_D(amount_base) * _D(fill_price))
             is_maker = False
             initial_filled_base = amount_base
             initial_filled_quote = float(fill_notional_quote)
@@ -2182,7 +2363,7 @@ def handle_command_payload(
                     min_fill_epsilon=_MIN_FILL_EPSILON,
                 )
                 if effective_fill_amount > _MIN_FILL_EPSILON:
-                    fill_notional_quote = effective_fill_amount * fill_price
+                    fill_notional_quote = float(_D(effective_fill_amount) * _D(fill_price))
                     is_maker = False
                     initial_filled_base = effective_fill_amount
                     initial_filled_quote = float(fill_notional_quote)
@@ -2364,7 +2545,7 @@ def handle_command_payload(
     return _event_for_command(command=command, status="processed", reason="sync_state_accepted")
 
 
-def _ack_entries(client: RedisStreamClient, stream: str, group: str, entry_ids: List[str]) -> None:
+def _ack_entries(client: RedisStreamClient, stream: str, group: str, entry_ids: list[str]) -> None:
     if not entry_ids:
         return
     ack_many = getattr(client, "ack_many", None)
@@ -2377,19 +2558,20 @@ def _ack_entries(client: RedisStreamClient, stream: str, group: str, entry_ids: 
 
 def process_command_rows(
     *,
-    rows: List[Tuple[str, Dict[str, object]]],
+    rows: list[tuple[str, dict[str, object]]],
     source: str,
     client: RedisStreamClient,
     state: PaperExchangeState,
     settings: ServiceSettings,
     command_journal_path: Path,
-    state_snapshot_path: Optional[Path] = None,
+    state_snapshot_path: Path | None = None,
+    persistence: PersistenceCoordinator | None = None,
 ) -> None:
-    ack_entry_ids: List[str] = []
+    ack_entry_ids: list[str] = []
     for entry_id, payload in rows:
-        parsed_command: Optional[PaperExchangeCommandEvent] = None
+        parsed_command: PaperExchangeCommandEvent | None = None
         command_event_id = ""
-        command_metadata: Dict[str, str] = {}
+        command_metadata: dict[str, str] = {}
         command_is_privileged = False
         command_name = ""
         command_mutates_orders = False
@@ -2448,7 +2630,10 @@ def process_command_rows(
                     existing_record["audit_published"] = True
                     state.privileged_command_audit_published += 1
                     try:
-                        _persist_command_journal(command_journal_path, state.command_results_by_id)
+                        if persistence is not None:
+                            persistence.mark_command_journal_dirty()
+                        else:
+                            _persist_command_journal(command_journal_path, state.command_results_by_id)
                     except Exception as exc:
                         logger.warning("paper_exchange command journal persist failed: %s", exc)
             ack_entry_ids.append(str(entry_id))
@@ -2529,7 +2714,10 @@ def process_command_rows(
                         producer_authorized=command_producer_authorized,
                     )
                     try:
-                        _persist_command_journal(command_journal_path, state.command_results_by_id)
+                        if persistence is not None:
+                            persistence.mark_command_journal_dirty()
+                        else:
+                            _persist_command_journal(command_journal_path, state.command_results_by_id)
                     except Exception as exc:
                         logger.warning("paper_exchange command journal persist failed: %s", exc)
                 # Leave entry pending to re-attempt audit publish without repeating side effects.
@@ -2547,17 +2735,23 @@ def process_command_rows(
                 producer_authorized=command_producer_authorized,
             )
             try:
-                _persist_command_journal(command_journal_path, state.command_results_by_id)
+                if persistence is not None:
+                    persistence.mark_command_journal_dirty()
+                else:
+                    _persist_command_journal(command_journal_path, state.command_results_by_id)
             except Exception as exc:
                 logger.warning("paper_exchange command journal persist failed: %s", exc)
         if state_snapshot_path is not None and command_mutates_orders:
             try:
-                _persist_state_snapshot(
-                    state_snapshot_path,
-                    state.orders_by_id,
-                    state.positions_by_key,
-                    funding_summary=_funding_summary(state),
-                )
+                if persistence is not None:
+                    persistence.mark_state_snapshot_dirty()
+                else:
+                    _persist_state_snapshot(
+                        state_snapshot_path,
+                        state.orders_by_id,
+                        state.positions_by_key,
+                        funding_summary=_funding_summary(state),
+                    )
             except Exception as exc:
                 logger.warning("paper_exchange state snapshot persist failed: %s", exc)
 
@@ -2569,14 +2763,15 @@ def process_command_rows(
 
 def process_market_rows(
     *,
-    rows: List[Tuple[str, Dict[str, object]]],
+    rows: list[tuple[str, dict[str, object]]],
     source: str,
     client: RedisStreamClient,
     state: PaperExchangeState,
     settings: ServiceSettings,
-    state_snapshot_path: Optional[Path] = None,
-    pair_snapshot_path: Optional[Path] = None,
-    market_fill_journal_path: Optional[Path] = None,
+    state_snapshot_path: Path | None = None,
+    pair_snapshot_path: Path | None = None,
+    market_fill_journal_path: Path | None = None,
+    persistence: PersistenceCoordinator | None = None,
 ) -> None:
     for entry_id, payload in rows:
         ok, _reason = ingest_market_snapshot_payload(
@@ -2604,7 +2799,10 @@ def process_market_rows(
             continue
         if pair_snapshot_path is not None:
             try:
-                _persist_pair_snapshot(pair_snapshot_path, state.pairs)
+                if persistence is not None:
+                    persistence.mark_pair_snapshot_dirty()
+                else:
+                    _persist_pair_snapshot(pair_snapshot_path, state.pairs)
             except Exception as exc:
                 logger.warning("paper_exchange pair snapshot persist failed: %s", exc)
 
@@ -2641,56 +2839,76 @@ def process_market_rows(
                     candidate.new_state,
                 )
                 continue
-            fill_event = _market_fill_event_from_candidate(order=order, snapshot=snapshot, candidate=candidate)
+            preview_pnl = _preview_fill_realized_pnl(
+                state, order, float(candidate.fill_amount_base), float(candidate.fill_price),
+            )
+            fill_event = _market_fill_event_from_candidate(
+                order=order, snapshot=snapshot, candidate=candidate,
+                realized_pnl_quote=preview_pnl,
+            )
             event_id = str(fill_event.event_id or "")
             event_already_published = bool(event_id and event_id in state.market_fill_events_by_id)
             if event_already_published:
                 state.deduplicated_market_fill_events += 1
-            else:
-                fill_payload = fill_event.model_dump()
-                fill_identity_ok, fill_identity_reason = validate_event_identity(fill_payload)
-                if not fill_identity_ok:
-                    state.market_fill_publish_failures += 1
-                    logger.warning(
-                        "paper_exchange market fill dropped due to identity contract | entry=%s order_id=%s reason=%s",
-                        entry_id,
-                        order.order_id,
-                        fill_identity_reason,
+                if not _apply_fill_candidate(order, candidate, now_ms=_now_ms()):
+                    state.market_fill_invalid_transition_drops += 1
+                else:
+                    _apply_position_fill(
+                        state=state,
+                        order=order,
+                        fill_amount_base=float(candidate.fill_amount_base),
+                        fill_price=float(candidate.fill_price),
+                        now_ms=_now_ms(),
                     )
-                    continue
-                publish_result = client.xadd(
-                    stream=settings.event_stream,
-                    payload=fill_payload,
-                    maxlen=STREAM_RETENTION_MAXLEN.get(settings.event_stream),
+                continue
+
+            fill_payload = fill_event.model_dump()
+            fill_identity_ok, fill_identity_reason = validate_event_identity(fill_payload)
+            if not fill_identity_ok:
+                state.market_fill_publish_failures += 1
+                logger.warning(
+                    "paper_exchange market fill dropped due to identity contract | entry=%s order_id=%s reason=%s",
+                    entry_id,
+                    order.order_id,
+                    fill_identity_reason,
                 )
-                if publish_result is None:
-                    state.market_fill_publish_failures += 1
-                    logger.warning(
-                        "paper_exchange market fill publish failed | entry=%s order_id=%s",
-                        entry_id,
-                        order.order_id,
-                    )
-                    publish_failed = True
-                    break
-                if event_id:
-                    state.market_fill_journal_next_seq += 1
-                    state.market_fill_events_by_id[event_id] = int(state.market_fill_journal_next_seq)
-                    _trim_market_fill_journal(
-                        state.market_fill_events_by_id,
-                        max_entries=settings.market_fill_journal_max_entries,
-                    )
-                    if market_fill_journal_path is not None:
-                        try:
+                continue
+            publish_result = client.xadd(
+                stream=settings.event_stream,
+                payload=fill_payload,
+                maxlen=STREAM_RETENTION_MAXLEN.get(settings.event_stream),
+            )
+            if publish_result is None:
+                state.market_fill_publish_failures += 1
+                logger.warning(
+                    "paper_exchange market fill publish failed | entry=%s order_id=%s",
+                    entry_id,
+                    order.order_id,
+                )
+                publish_failed = True
+                break
+            if event_id:
+                state.market_fill_journal_next_seq += 1
+                state.market_fill_events_by_id[event_id] = int(state.market_fill_journal_next_seq)
+                _trim_market_fill_journal(
+                    state.market_fill_events_by_id,
+                    max_entries=settings.market_fill_journal_max_entries,
+                )
+                if market_fill_journal_path is not None:
+                    try:
+                        if persistence is not None:
+                            persistence.mark_market_fill_journal_dirty()
+                        else:
                             _persist_market_fill_journal(
                                 market_fill_journal_path,
                                 state.market_fill_events_by_id,
                                 max_entries=settings.market_fill_journal_max_entries,
                             )
-                        except Exception as exc:
-                            state.market_fill_journal_write_failures += 1
-                            logger.warning("paper_exchange market fill journal persist failed: %s", exc)
-                            persist_failed = True
-                            break
+                    except Exception as exc:
+                        state.market_fill_journal_write_failures += 1
+                        logger.warning("paper_exchange market fill journal persist failed: %s", exc)
+                        persist_failed = True
+                        break
 
             if not _apply_fill_candidate(order, candidate, now_ms=_now_ms()):
                 state.market_fill_invalid_transition_drops += 1
@@ -2702,19 +2920,21 @@ def process_market_rows(
                 fill_price=float(candidate.fill_price),
                 now_ms=_now_ms(),
             )
-            if not event_already_published:
-                state.generated_fill_events += 1
-                if candidate.new_state == "partially_filled":
-                    state.generated_partial_fill_events += 1
+            state.generated_fill_events += 1
+            if candidate.new_state == "partially_filled":
+                state.generated_partial_fill_events += 1
             applied_count += 1
             if state_snapshot_path is not None:
                 try:
-                    _persist_state_snapshot(
-                        state_snapshot_path,
-                        state.orders_by_id,
-                        state.positions_by_key,
-                        funding_summary=_funding_summary(state),
-                    )
+                    if persistence is not None:
+                        persistence.mark_state_snapshot_dirty()
+                    else:
+                        _persist_state_snapshot(
+                            state_snapshot_path,
+                            state.orders_by_id,
+                            state.positions_by_key,
+                            funding_summary=_funding_summary(state),
+                        )
                 except Exception as exc:
                     logger.warning("paper_exchange state snapshot persist failed after market fill: %s", exc)
                     persist_failed = True
@@ -2757,12 +2977,15 @@ def process_market_rows(
                 _commit_funding_settlement(state, funding_event)
             if not publish_failed and state_snapshot_path is not None and funding_events:
                 try:
-                    _persist_state_snapshot(
-                        state_snapshot_path,
-                        state.orders_by_id,
-                        state.positions_by_key,
-                        funding_summary=_funding_summary(state),
-                    )
+                    if persistence is not None:
+                        persistence.mark_state_snapshot_dirty()
+                    else:
+                        _persist_state_snapshot(
+                            state_snapshot_path,
+                            state.orders_by_id,
+                            state.positions_by_key,
+                            funding_summary=_funding_summary(state),
+                        )
                 except Exception as exc:
                     logger.warning("paper_exchange state snapshot persist failed after funding settlement: %s", exc)
                     persist_failed = True
@@ -2790,6 +3013,7 @@ def run(settings: ServiceSettings) -> None:
     state_snapshot_path = _resolve_path(settings.state_snapshot_path, root)
     pair_snapshot_path = _resolve_path(settings.pair_snapshot_path, root)
     market_fill_journal_path = _resolve_path(settings.market_fill_journal_path, root)
+    latency_report_path = _resolve_path(settings.latency_report_path, root)
     client = RedisStreamClient(
         host=settings.redis_host,
         port=settings.redis_port,
@@ -2803,6 +3027,9 @@ def run(settings: ServiceSettings) -> None:
     state.command_results_by_id = _load_command_journal(command_journal_path)
     state.orders_by_id = _load_state_snapshot(state_snapshot_path)
     state.positions_by_key = _load_position_snapshot(state_snapshot_path)
+    _oneway_repaired = _sanitize_oneway_positions(state.positions_by_key)
+    if _oneway_repaired:
+        logger.warning("paper_exchange startup: repaired %d ONEWAY dual-leg position(s)", _oneway_repaired)
     state.market_fill_events_by_id = _load_market_fill_journal(market_fill_journal_path)
     state.market_fill_journal_next_seq = (
         max(state.market_fill_events_by_id.values()) if state.market_fill_events_by_id else 0
@@ -2835,6 +3062,20 @@ def run(settings: ServiceSettings) -> None:
             len(state.market_fill_events_by_id),
             market_fill_journal_path,
         )
+    latency_tracker = JsonLatencyTracker(
+        latency_report_path,
+        max_samples=int(os.getenv("PAPER_EXCHANGE_LATENCY_MAX_SAMPLES", "720")),
+        flush_interval_s=float(os.getenv("PAPER_EXCHANGE_LATENCY_FLUSH_S", "5")),
+    )
+    persistence = PersistenceCoordinator(
+        state=state,
+        settings=settings,
+        command_journal_path=command_journal_path,
+        state_snapshot_path=state_snapshot_path,
+        pair_snapshot_path=pair_snapshot_path,
+        market_fill_journal_path=market_fill_journal_path,
+        latency_tracker=latency_tracker,
+    )
     last_heartbeat_ms = 0
     last_pending_reclaim_ms = 0
     last_market_pending_reclaim_ms = 0
@@ -2847,7 +3088,8 @@ def run(settings: ServiceSettings) -> None:
     )
 
     while True:
-        reclaimed_market_rows: List[Tuple[str, Dict[str, object]]] = []
+        loop_started = time.perf_counter()
+        reclaimed_market_rows: list[tuple[str, dict[str, object]]] = []
         now = _now_ms()
         if (
             settings.market_pending_reclaim_enabled
@@ -2866,6 +3108,7 @@ def run(settings: ServiceSettings) -> None:
                 logger.info("paper_exchange reclaimed pending market snapshots=%s", len(reclaimed_market_rows))
 
         if reclaimed_market_rows:
+            started = time.perf_counter()
             process_market_rows(
                 rows=reclaimed_market_rows,
                 source="reclaimed",
@@ -2875,7 +3118,9 @@ def run(settings: ServiceSettings) -> None:
                 state_snapshot_path=state_snapshot_path,
                 pair_snapshot_path=pair_snapshot_path,
                 market_fill_journal_path=market_fill_journal_path,
+                persistence=persistence,
             )
+            latency_tracker.observe("paper_exchange_process_market_rows_ms", (time.perf_counter() - started) * 1000.0)
 
         market_rows = client.read_group(
             stream=settings.market_data_stream,
@@ -2886,6 +3131,7 @@ def run(settings: ServiceSettings) -> None:
             block_ms=min(max(1, int(settings.read_block_ms)), 10),
         )
         if market_rows:
+            started = time.perf_counter()
             process_market_rows(
                 rows=market_rows,
                 source="new",
@@ -2895,7 +3141,9 @@ def run(settings: ServiceSettings) -> None:
                 state_snapshot_path=state_snapshot_path,
                 pair_snapshot_path=pair_snapshot_path,
                 market_fill_journal_path=market_fill_journal_path,
+                persistence=persistence,
             )
+            latency_tracker.observe("paper_exchange_process_market_rows_ms", (time.perf_counter() - started) * 1000.0)
 
         command_rows = client.read_group(
             stream=settings.command_stream,
@@ -2904,7 +3152,7 @@ def run(settings: ServiceSettings) -> None:
             count=settings.read_count,
             block_ms=1,
         )
-        reclaimed_rows: List[Tuple[str, Dict[str, object]]] = []
+        reclaimed_rows: list[tuple[str, dict[str, object]]] = []
         now = _now_ms()
         if (
             settings.pending_reclaim_enabled
@@ -2923,6 +3171,7 @@ def run(settings: ServiceSettings) -> None:
                 logger.info("paper_exchange reclaimed pending commands=%s", len(reclaimed_rows))
 
         if reclaimed_rows:
+            started = time.perf_counter()
             process_command_rows(
                 rows=reclaimed_rows,
                 source="reclaimed",
@@ -2931,8 +3180,11 @@ def run(settings: ServiceSettings) -> None:
                 settings=settings,
                 command_journal_path=command_journal_path,
                 state_snapshot_path=state_snapshot_path,
+                persistence=persistence,
             )
+            latency_tracker.observe("paper_exchange_process_command_rows_ms", (time.perf_counter() - started) * 1000.0)
         if command_rows:
+            started = time.perf_counter()
             process_command_rows(
                 rows=command_rows,
                 source="new",
@@ -2941,12 +3193,17 @@ def run(settings: ServiceSettings) -> None:
                 settings=settings,
                 command_journal_path=command_journal_path,
                 state_snapshot_path=state_snapshot_path,
+                persistence=persistence,
             )
+            latency_tracker.observe("paper_exchange_process_command_rows_ms", (time.perf_counter() - started) * 1000.0)
+
+        persistence.flush_due(now_ms=_now_ms())
 
         now = _now_ms()
         if now - last_heartbeat_ms >= settings.heartbeat_interval_ms:
             try:
-                _persist_pair_snapshot(pair_snapshot_path, state.pairs)
+                persistence.mark_pair_snapshot_dirty()
+                persistence.flush_due(now_ms=now, force=True)
             except Exception as exc:
                 logger.warning("paper_exchange pair snapshot persist failed: %s", exc)
             heartbeat = build_heartbeat_event(
@@ -2962,6 +3219,15 @@ def run(settings: ServiceSettings) -> None:
                 stream=settings.heartbeat_stream,
                 payload=heartbeat.model_dump(),
                 maxlen=STREAM_RETENTION_MAXLEN.get(settings.heartbeat_stream),
+            )
+            latency_tracker.observe("paper_exchange_loop_ms", (time.perf_counter() - loop_started) * 1000.0)
+            latency_tracker.flush(
+                extra={
+                    "market_stream": settings.market_data_stream,
+                    "command_stream": settings.command_stream,
+                    "accepted_snapshots": state.accepted_snapshots,
+                    "processed_commands": state.processed_commands,
+                }
             )
             last_heartbeat_ms = now
 
@@ -2991,7 +3257,7 @@ def _parse_args() -> ServiceSettings:
     )
     parser.add_argument(
         "--market-stream",
-        default=os.getenv("PAPER_EXCHANGE_MARKET_STREAM", MARKET_QUOTE_STREAM),
+        default=os.getenv("PAPER_EXCHANGE_MARKET_STREAM", MARKET_DATA_STREAM),
         help="Redis stream carrying market snapshots.",
     )
     parser.add_argument(
@@ -3175,6 +3441,20 @@ def _parse_args() -> ServiceSettings:
         default=os.getenv("PAPER_EXCHANGE_PERSIST_SYNC_STATE_RESULTS", "true"),
         help="Persist sync_state command results to idempotency journal (set false for synthetic load runs).",
     )
+    parser.add_argument(
+        "--persistence-flush-interval-ms",
+        type=int,
+        default=int(os.getenv("PAPER_EXCHANGE_PERSISTENCE_FLUSH_INTERVAL_MS", "250")),
+    )
+    parser.add_argument(
+        "--pair-snapshot-flush-interval-ms",
+        type=int,
+        default=int(os.getenv("PAPER_EXCHANGE_PAIR_SNAPSHOT_FLUSH_INTERVAL_MS", "1000")),
+    )
+    parser.add_argument(
+        "--latency-report-path",
+        default=os.getenv("PAPER_EXCHANGE_LATENCY_REPORT_PATH", "reports/verification/paper_exchange_hot_path_latest.json"),
+    )
     args = parser.parse_args()
     redis_enabled = str(args.redis_enabled).strip().lower() in {"1", "true", "yes", "on"}
     pending_reclaim_enabled = str(args.pending_reclaim_enabled).strip().lower() in {"1", "true", "yes", "on"}
@@ -3226,6 +3506,9 @@ def _parse_args() -> ServiceSettings:
         terminal_order_ttl_ms=max(0, int(args.terminal_order_ttl_ms)),
         max_orders_tracked=max(1, int(args.max_orders_tracked)),
         persist_sync_state_results=persist_sync_state_results,
+        persistence_flush_interval_ms=max(1, int(args.persistence_flush_interval_ms)),
+        pair_snapshot_flush_interval_ms=max(1, int(args.pair_snapshot_flush_interval_ms)),
+        latency_report_path=str(args.latency_report_path),
     )
 
 

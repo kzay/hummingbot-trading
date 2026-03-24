@@ -7,13 +7,12 @@ import json
 import os
 import subprocess
 import sys
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Set, Tuple
 
 
 def _utc_now() -> str:
-    return datetime.now(timezone.utc).isoformat()
+    return datetime.now(UTC).isoformat()
 
 
 def _parse_ts(value: str) -> datetime:
@@ -23,20 +22,20 @@ def _parse_ts(value: str) -> datetime:
 def _minutes_since(ts: str) -> float:
     try:
         dt = _parse_ts(ts)
-        return (datetime.now(timezone.utc) - dt).total_seconds() / 60.0
+        return (datetime.now(UTC) - dt).total_seconds() / 60.0
     except Exception:
         return 1e9
 
 
 def _minutes_since_file_mtime(path: Path) -> float:
     try:
-        dt = datetime.fromtimestamp(path.stat().st_mtime, tz=timezone.utc)
-        return (datetime.now(timezone.utc) - dt).total_seconds() / 60.0
+        dt = datetime.fromtimestamp(path.stat().st_mtime, tz=UTC)
+        return (datetime.now(UTC) - dt).total_seconds() / 60.0
     except Exception:
         return 1e9
 
 
-def _read_json(path: Path, default: Dict[str, object]) -> Dict[str, object]:
+def _read_json(path: Path, default: dict[str, object]) -> dict[str, object]:
     if not path.exists():
         return default
     try:
@@ -46,11 +45,11 @@ def _read_json(path: Path, default: Dict[str, object]) -> Dict[str, object]:
         return default
 
 
-def _report_ts_utc(report: Dict[str, object]) -> str:
+def _report_ts_utc(report: dict[str, object]) -> str:
     return str(report.get("ts_utc") or report.get("last_update_utc") or "").strip()
 
 
-def _report_age_min(report_path: Optional[Path], report: Dict[str, object]) -> float:
+def _report_age_min(report_path: Path | None, report: dict[str, object]) -> float:
     ts = _report_ts_utc(report)
     if ts:
         return _minutes_since(ts)
@@ -59,11 +58,11 @@ def _report_age_min(report_path: Optional[Path], report: Dict[str, object]) -> f
     return float("inf")
 
 
-def _freshest_report(candidates: List[Path]) -> Tuple[Optional[Path], Dict[str, object], float]:
-    best_path: Optional[Path] = None
-    best_payload: Dict[str, object] = {}
+def _freshest_report(candidates: list[Path]) -> tuple[Path | None, dict[str, object], float]:
+    best_path: Path | None = None
+    best_payload: dict[str, object] = {}
     best_age = float("inf")
-    seen: Set[str] = set()
+    seen: set[str] = set()
     for candidate in candidates:
         raw = str(candidate)
         if raw in seen or not candidate.exists():
@@ -78,12 +77,12 @@ def _freshest_report(candidates: List[Path]) -> Tuple[Optional[Path], Dict[str, 
     return best_path, best_payload, best_age
 
 
-def _read_last_csv_row(path: Path) -> Dict[str, str]:
+def _read_last_csv_row(path: Path) -> dict[str, str]:
     if not path.exists():
         return {}
     try:
         with path.open("r", encoding="utf-8", newline="") as fp:
-            last_row: Dict[str, str] = {}
+            last_row: dict[str, str] = {}
             for row in csv.DictReader(fp):
                 if isinstance(row, dict):
                     last_row = row
@@ -92,7 +91,7 @@ def _read_last_csv_row(path: Path) -> Dict[str, str]:
         return {}
 
 
-def _csv_values(value: str) -> List[str]:
+def _csv_values(value: str) -> list[str]:
     return [item.strip() for item in str(value or "").split(",") if item.strip()]
 
 
@@ -132,12 +131,12 @@ def _history_read_rollout_enabled() -> bool:
 
 
 def _history_backfill_gate_status(
-    report: Dict[str, object],
+    report: dict[str, object],
     report_path: Path,
     *,
     enforced: bool,
     max_age_min: float,
-) -> Dict[str, object]:
+) -> dict[str, object]:
     if not enforced:
         return {
             "enabled": False,
@@ -179,8 +178,8 @@ def _history_seed_rollout_status(
     *,
     enabled: bool,
     max_age_min: float,
-    allowed_bots: Optional[Set[str]] = None,
-) -> Dict[str, object]:
+    allowed_bots: set[str] | None = None,
+) -> dict[str, object]:
     if not enabled:
         return {
             "enabled": False,
@@ -192,7 +191,7 @@ def _history_seed_rollout_status(
             "evidence_paths": [],
         }
 
-    latest_by_bot: Dict[str, Dict[str, object]] = {}
+    latest_by_bot: dict[str, dict[str, object]] = {}
     for minute_file in sorted(data_root.glob("*/logs/epp_v24/*/minute.csv")):
         row = _read_last_csv_row(minute_file)
         if not row:
@@ -229,7 +228,7 @@ def _history_seed_rollout_status(
         bad_statuses.add("stale")
     stale_bots = sorted(bot for bot, diag in latest_by_bot.items() if float(diag.get("age_min", 1e9)) > float(max_age_min))
     failing_bots = sorted(
-        f"{bot}:{str(diag.get('status', 'disabled'))}"
+        f"{bot}:{diag.get('status', 'disabled')!s}"
         for bot, diag in latest_by_bot.items()
         if str(diag.get("status", "disabled")) in bad_statuses
     )
@@ -268,7 +267,7 @@ def _resolve_threshold_manual_metrics_path(root: Path, raw_path: str) -> Path:
     return root / "reports" / "verification" / "paper_exchange_threshold_metrics_manual.json"
 
 
-def _live_account_mode_bots(root: Path) -> List[str]:
+def _live_account_mode_bots(root: Path) -> list[str]:
     account_map_path = root / "config" / "exchange_account_map.json"
     policy_path = root / "config" / "multi_bot_policy_v1.json"
     account_map = _read_json(account_map_path, {})
@@ -281,7 +280,7 @@ def _live_account_mode_bots(root: Path) -> List[str]:
             if isinstance(cfg, dict) and _safe_bool(cfg.get("enabled", True), default=True):
                 enabled_policy_bots.add(str(bot))
 
-    live_bots: List[str] = []
+    live_bots: list[str] = []
     account_map_bots = account_map.get("bots", {})
     if not isinstance(account_map_bots, dict):
         return live_bots
@@ -297,10 +296,10 @@ def _live_account_mode_bots(root: Path) -> List[str]:
     return sorted(set(live_bots))
 
 
-def _enabled_policy_bots(root: Path) -> List[str]:
+def _enabled_policy_bots(root: Path) -> list[str]:
     policy_path = root / "config" / "multi_bot_policy_v1.json"
     policy = _read_json(policy_path, {})
-    enabled_policy_bots: List[str] = []
+    enabled_policy_bots: list[str] = []
     policy_bots = policy.get("bots", {})
     if not isinstance(policy_bots, dict):
         return enabled_policy_bots
@@ -317,7 +316,7 @@ def _seed_paper_exchange_threshold_manual_metrics(
     *,
     manual_metrics_path: str,
     overwrite: bool = False,
-) -> Tuple[bool, Path]:
+) -> tuple[bool, Path]:
     target = _resolve_threshold_manual_metrics_path(root, manual_metrics_path)
     if target.exists() and not overwrite:
         return False, target
@@ -343,7 +342,7 @@ def _seed_paper_exchange_threshold_manual_metrics(
     return True, target
 
 
-def _check(cond: bool, name: str, severity: str, reason: str, evidence: List[str]) -> Dict[str, object]:
+def _check(cond: bool, name: str, severity: str, reason: str, evidence: list[str]) -> dict[str, object]:
     return {
         "name": name,
         "severity": severity,
@@ -353,7 +352,7 @@ def _check(cond: bool, name: str, severity: str, reason: str, evidence: List[str
     }
 
 
-def _metric_insufficient(metric_entry: Dict[str, object]) -> bool:
+def _metric_insufficient(metric_entry: dict[str, object]) -> bool:
     """Return True when a parity metric carries insufficient-data semantics."""
     if not isinstance(metric_entry, dict):
         return True
@@ -363,7 +362,7 @@ def _metric_insufficient(metric_entry: Dict[str, object]) -> bool:
     return metric_entry.get("value") is None and metric_entry.get("delta") is None
 
 
-def _parity_active_scope(parity: Dict[str, object]) -> List[str]:
+def _parity_active_scope(parity: dict[str, object]) -> list[str]:
     active_bots_raw = parity.get("active_bots", [])
     if isinstance(active_bots_raw, list):
         active_bots = sorted(str(bot).strip() for bot in active_bots_raw if str(bot).strip())
@@ -372,7 +371,7 @@ def _parity_active_scope(parity: Dict[str, object]) -> List[str]:
     bots = parity.get("bots", [])
     if not isinstance(bots, list):
         return []
-    inferred: List[str] = []
+    inferred: list[str] = []
     for idx, bot_entry in enumerate(bots):
         if not isinstance(bot_entry, dict):
             continue
@@ -392,7 +391,7 @@ def _parity_active_scope(parity: Dict[str, object]) -> List[str]:
     return sorted(set(inferred))
 
 
-def _parity_core_insufficient_active_bots(parity: Dict[str, object]) -> Tuple[List[str], List[str]]:
+def _parity_core_insufficient_active_bots(parity: dict[str, object]) -> tuple[list[str], list[str]]:
     """Return (insufficient_active_bots, active_bots).
 
     Active bot scope prefers the explicit parity report scope and falls back to
@@ -402,7 +401,7 @@ def _parity_core_insufficient_active_bots(parity: Dict[str, object]) -> Tuple[Li
     if not isinstance(bots, list):
         return [], []
     active_bot_scope = set(_parity_active_scope(parity))
-    insufficient_bots: List[str] = []
+    insufficient_bots: list[str] = []
     core_metrics = ("fill_ratio_delta", "slippage_delta_bps", "reject_rate_delta")
     for idx, bot_entry in enumerate(bots):
         if not isinstance(bot_entry, dict):
@@ -411,7 +410,7 @@ def _parity_core_insufficient_active_bots(parity: Dict[str, object]) -> Tuple[Li
         if bot_name not in active_bot_scope:
             continue
         metrics = bot_entry.get("metrics", [])
-        metric_map: Dict[str, Dict[str, object]] = {}
+        metric_map: dict[str, dict[str, object]] = {}
         if isinstance(metrics, list):
             for m in metrics:
                 if isinstance(m, dict):
@@ -422,12 +421,12 @@ def _parity_core_insufficient_active_bots(parity: Dict[str, object]) -> Tuple[Li
     return sorted(set(insufficient_bots)), sorted(active_bot_scope)
 
 
-def _parity_drift_audit_status(drift_audit: Dict[str, object], *, max_report_age_min: float) -> Dict[str, object]:
+def _parity_drift_audit_status(drift_audit: dict[str, object], *, max_report_age_min: float) -> dict[str, object]:
     active_bots_raw = drift_audit.get("active_bots", [])
     active_bots = sorted(str(bot).strip() for bot in active_bots_raw if str(bot).strip()) if isinstance(active_bots_raw, list) else []
     bots_raw = drift_audit.get("bots", [])
-    failing_active_bots: List[str] = []
-    insuff_active_bots: List[str] = []
+    failing_active_bots: list[str] = []
+    insuff_active_bots: list[str] = []
     if isinstance(bots_raw, list):
         active_scope = set(active_bots)
         for row in bots_raw:
@@ -458,7 +457,7 @@ def _parity_drift_audit_status(drift_audit: Dict[str, object], *, max_report_age
     }
 
 
-def _reconciliation_active_bot_coverage(reconciliation: Dict[str, object]) -> Dict[str, object]:
+def _reconciliation_active_bot_coverage(reconciliation: dict[str, object]) -> dict[str, object]:
     active_bots_raw = reconciliation.get("active_bots", [])
     active_bots = sorted(str(bot).strip() for bot in active_bots_raw if str(bot).strip()) if isinstance(active_bots_raw, list) else []
     uncovered_raw = reconciliation.get("active_bots_unchecked", [])
@@ -483,7 +482,7 @@ def _reconciliation_active_bot_coverage(reconciliation: Dict[str, object]) -> Di
     }
 
 
-def _portfolio_diversification_gate(report: Dict[str, object]) -> Tuple[bool, str]:
+def _portfolio_diversification_gate(report: dict[str, object]) -> tuple[bool, str]:
     """Return (gate_ok, reason) from diversification report payload."""
     status = str(report.get("status", "")).strip().lower()
     if status == "pass":
@@ -495,7 +494,7 @@ def _portfolio_diversification_gate(report: Dict[str, object]) -> Tuple[bool, st
     return False, "portfolio diversification report missing or invalid"
 
 
-def _performance_dossier_expectancy_diag(report: Dict[str, object]) -> Dict[str, object]:
+def _performance_dossier_expectancy_diag(report: dict[str, object]) -> dict[str, object]:
     """Normalize rolling expectancy gate diagnostics from performance dossier payload."""
     status = str(report.get("status", "")).strip().lower()
     summary_raw = report.get("summary", {})
@@ -586,7 +585,7 @@ def _performance_dossier_expectancy_diag(report: Dict[str, object]) -> Dict[str,
     }
 
 
-def _day2_freshness(day2: Dict[str, object], day2_path: Path, max_report_age_min: float) -> Tuple[bool, float]:
+def _day2_freshness(day2: dict[str, object], day2_path: Path, max_report_age_min: float) -> tuple[bool, float]:
     """Return (is_fresh, age_minutes) for day2 gate artifact."""
     day2_ts = str(day2.get("ts_utc", "")).strip()
     age_min = _minutes_since(day2_ts) if day2_ts else _minutes_since_file_mtime(day2_path)
@@ -594,8 +593,8 @@ def _day2_freshness(day2: Dict[str, object], day2_path: Path, max_report_age_min
 
 
 def _day2_lag_within_tolerance(
-    day2: Dict[str, object], reports_event_store: Path, max_allowed_delta: int
-) -> Tuple[bool, Dict[str, object]]:
+    day2: dict[str, object], reports_event_store: Path, max_allowed_delta: int
+) -> tuple[bool, dict[str, object]]:
     """Return (pass, diagnostics) for produced-vs-ingested lag tolerance."""
     source_compare_path_raw = str(day2.get("source_compare_file", "")).strip()
     source_compare_path = Path(source_compare_path_raw) if source_compare_path_raw else None
@@ -607,8 +606,8 @@ def _day2_lag_within_tolerance(
     delta_map_raw = source_compare.get("lag_produced_minus_ingested_since_baseline", {})
     delta_map_raw = delta_map_raw if isinstance(delta_map_raw, dict) else {}
 
-    lag_by_stream: Dict[str, int] = {}
-    lag_by_stream_signed: Dict[str, int] = {}
+    lag_by_stream: dict[str, int] = {}
+    lag_by_stream_signed: dict[str, int] = {}
     for stream, value in delta_map_raw.items():
         try:
             signed = int(value)
@@ -650,7 +649,7 @@ def _sha256_file(path: Path) -> str:
     return h.hexdigest()
 
 
-def _file_ref(path: Path) -> Dict[str, object]:
+def _file_ref(path: Path) -> dict[str, object]:
     exists = path.exists() and path.is_file()
     ref = {
         "path": str(path),
@@ -668,15 +667,15 @@ def _file_ref(path: Path) -> Dict[str, object]:
 
 
 def _paper_exchange_threshold_inputs_readiness(
-    report: Dict[str, object],
+    report: dict[str, object],
     *,
     enforce_live_path: bool = False,
-) -> Dict[str, object]:
+) -> dict[str, object]:
     diagnostics_raw = report.get("diagnostics", {})
     diagnostics = diagnostics_raw if isinstance(diagnostics_raw, dict) else {}
 
     unresolved_metrics_raw = diagnostics.get("unresolved_metrics", [])
-    unresolved_metrics: List[str] = []
+    unresolved_metrics: list[str] = []
     if isinstance(unresolved_metrics_raw, list):
         for metric_name in unresolved_metrics_raw:
             text = str(metric_name or "").strip()
@@ -690,7 +689,7 @@ def _paper_exchange_threshold_inputs_readiness(
         unresolved_metric_count = len(unresolved_metrics)
 
     stale_sources_raw = diagnostics.get("stale_sources", [])
-    stale_sources: List[str] = []
+    stale_sources: list[str] = []
     if isinstance(stale_sources_raw, list):
         for source_name in stale_sources_raw:
             text = str(source_name or "").strip()
@@ -698,7 +697,7 @@ def _paper_exchange_threshold_inputs_readiness(
                 stale_sources.append(text)
 
     missing_sources_raw = diagnostics.get("missing_sources", [])
-    missing_sources: List[str] = []
+    missing_sources: list[str] = []
     if isinstance(missing_sources_raw, list):
         for source_name in missing_sources_raw:
             text = str(source_name or "").strip()
@@ -742,7 +741,7 @@ def _paper_exchange_threshold_inputs_readiness(
 
 def _trading_validation_ladder_status(
     reports_root: Path, *, enforce_live_path: bool = True
-) -> Dict[str, object]:
+) -> dict[str, object]:
     ops_root = reports_root / "ops"
     strategy_root = reports_root / "strategy"
 
@@ -856,7 +855,7 @@ def _trading_validation_ladder_status(
         and road5_criteria_ok
     )
 
-    blocking_reasons: List[str] = []
+    blocking_reasons: list[str] = []
     if not go_live_complete:
         blocking_reasons.append(
             "p0_4_go_live_checklist_incomplete"
@@ -919,7 +918,7 @@ def _trading_validation_ladder_status(
     }
 
 
-def _write_markdown_summary(path: Path, summary: Dict[str, object]) -> None:
+def _write_markdown_summary(path: Path, summary: dict[str, object]) -> None:
     checks = summary.get("checks", []) if isinstance(summary.get("checks"), list) else []
     critical_failures = summary.get("critical_failures", []) if isinstance(summary.get("critical_failures"), list) else []
     bundle = summary.get("evidence_bundle", {}) if isinstance(summary.get("evidence_bundle"), dict) else {}
@@ -950,7 +949,7 @@ def _write_markdown_summary(path: Path, summary: Dict[str, object]) -> None:
     path.write_text("\n".join(lines) + "\n", encoding="utf-8")
 
 
-def _build_subprocess_env(root: Path) -> Dict[str, str]:
+def _build_subprocess_env(root: Path) -> dict[str, str]:
     env = os.environ.copy()
     root_str = str(root)
     current = env.get("PYTHONPATH", "")
@@ -961,7 +960,7 @@ def _build_subprocess_env(root: Path) -> Dict[str, str]:
     return env
 
 
-def _run_regression(root: Path) -> Tuple[int, str]:
+def _run_regression(root: Path) -> tuple[int, str]:
     cmd = [sys.executable, str(root / "scripts" / "release" / "run_backtest_regression.py"), "--min-events", "1000"]
     try:
         proc = subprocess.run(cmd, cwd=str(root), capture_output=True, text=True, check=False)
@@ -971,7 +970,7 @@ def _run_regression(root: Path) -> Tuple[int, str]:
         return 2, str(e)
 
 
-def _refresh_parity_once(root: Path) -> Tuple[int, str]:
+def _refresh_parity_once(root: Path) -> tuple[int, str]:
     cmd = [sys.executable, str(root / "services" / "shadow_execution" / "main.py"), "--once"]
     try:
         proc = subprocess.run(
@@ -983,7 +982,7 @@ def _refresh_parity_once(root: Path) -> Tuple[int, str]:
         return 2, str(e)
 
 
-def _refresh_reconciliation_exchange_once(root: Path) -> Tuple[int, str]:
+def _refresh_reconciliation_exchange_once(root: Path) -> tuple[int, str]:
     cmd = [sys.executable, str(root / "services" / "reconciliation_service" / "main.py"), "--once"]
     try:
         env = _build_subprocess_env(root)
@@ -997,7 +996,7 @@ def _refresh_reconciliation_exchange_once(root: Path) -> Tuple[int, str]:
         return 2, str(e)
 
 
-def _refresh_event_store_integrity_once(root: Path) -> Tuple[int, str]:
+def _refresh_event_store_integrity_once(root: Path) -> tuple[int, str]:
     """Recompute integrity stats from the local JSONL file (no Redis required)."""
     cmd = [sys.executable, str(root / "scripts" / "utils" / "refresh_event_store_integrity_local.py")]
     try:
@@ -1008,7 +1007,7 @@ def _refresh_event_store_integrity_once(root: Path) -> Tuple[int, str]:
         return 2, str(e)
 
 
-def _run_event_store_once(root: Path) -> Tuple[int, str]:
+def _run_event_store_once(root: Path) -> tuple[int, str]:
     cmd = [sys.executable, str(root / "services" / "event_store" / "main.py"), "--once"]
     try:
         proc = subprocess.run(
@@ -1053,7 +1052,7 @@ def _run_event_store_once(root: Path) -> Tuple[int, str]:
         return 2, str(e)
 
 
-def _run_event_store_count_check_once(root: Path) -> Tuple[int, str]:
+def _run_event_store_count_check_once(root: Path) -> tuple[int, str]:
     cmd = [sys.executable, str(root / "scripts" / "utils" / "event_store_count_check.py")]
     try:
         proc = subprocess.run(cmd, cwd=str(root), capture_output=True, text=True, check=False)
@@ -1067,7 +1066,7 @@ def _refresh_day2_gate_once(
     root: Path,
     day2_min_hours_override: float = -1.0,
     day2_max_delta_override: int = -1,
-) -> Tuple[int, str]:
+) -> tuple[int, str]:
     cmd = [sys.executable, str(root / "scripts" / "utils" / "day2_gate_evaluator.py")]
     try:
         env = _build_subprocess_env(root)
@@ -1082,7 +1081,7 @@ def _refresh_day2_gate_once(
         return 2, str(e)
 
 
-def _run_fill_event_backfill_once(root: Path, day_utc: str) -> Tuple[int, str]:
+def _run_fill_event_backfill_once(root: Path, day_utc: str) -> tuple[int, str]:
     cmd = [
         sys.executable,
         str(root / "scripts" / "utils" / "backfill_order_filled_events_from_fills_csv.py"),
@@ -1104,8 +1103,8 @@ def _attempt_day2_catchup(
     cycles: int,
     day2_min_hours_override: float = -1.0,
     day2_max_delta_override: int = -1,
-) -> Tuple[int, str]:
-    logs: List[str] = []
+) -> tuple[int, str]:
+    logs: list[str] = []
     worst_rc = 0
     for i in range(max(1, int(cycles))):
         rc_ingest, msg_ingest = _run_event_store_once(root)
@@ -1128,7 +1127,7 @@ def _attempt_day2_catchup(
     return worst_rc, " | ".join(logs)
 
 
-def _run_multi_bot_policy_check(root: Path) -> Tuple[int, str]:
+def _run_multi_bot_policy_check(root: Path) -> tuple[int, str]:
     cmd = [sys.executable, str(root / "scripts" / "release" / "check_multi_bot_policy.py")]
     try:
         proc = subprocess.run(cmd, cwd=str(root), capture_output=True, text=True, check=False)
@@ -1138,7 +1137,7 @@ def _run_multi_bot_policy_check(root: Path) -> Tuple[int, str]:
         return 2, str(e)
 
 
-def _run_secrets_hygiene_check(root: Path) -> Tuple[int, str]:
+def _run_secrets_hygiene_check(root: Path) -> tuple[int, str]:
     cmd = [
         sys.executable,
         str(root / "scripts" / "release" / "run_secrets_hygiene_check.py"),
@@ -1152,7 +1151,7 @@ def _run_secrets_hygiene_check(root: Path) -> Tuple[int, str]:
         return 2, str(e)
 
 
-def _run_strategy_catalog_check(root: Path) -> Tuple[int, str]:
+def _run_strategy_catalog_check(root: Path) -> tuple[int, str]:
     cmd = [sys.executable, str(root / "scripts" / "release" / "check_strategy_catalog_consistency.py")]
     try:
         proc = subprocess.run(cmd, cwd=str(root), capture_output=True, text=True, check=False)
@@ -1164,7 +1163,7 @@ def _run_strategy_catalog_check(root: Path) -> Tuple[int, str]:
 
 def _run_replay_regression_multi_window(
     root: Path, *, require_portfolio_risk_healthy: bool = True
-) -> Tuple[int, str]:
+) -> tuple[int, str]:
     cmd = [
         sys.executable,
         str(root / "scripts" / "release" / "run_replay_regression_multi_window.py"),
@@ -1183,7 +1182,7 @@ def _run_replay_regression_multi_window(
         return 2, str(e)
 
 
-def _run_ops_db_writer_once(root: Path) -> Tuple[int, str]:
+def _run_ops_db_writer_once(root: Path) -> tuple[int, str]:
     cmd = [sys.executable, str(root / "services" / "ops_db_writer" / "main.py"), "--once"]
     try:
         proc = subprocess.run(
@@ -1200,7 +1199,7 @@ def _run_ops_db_writer_once(root: Path) -> Tuple[int, str]:
         return 2, str(e)
 
 
-def _run_tests(root: Path, runtime: str = "auto") -> Tuple[int, str]:
+def _run_tests(root: Path, runtime: str = "auto") -> tuple[int, str]:
     cmd = [sys.executable, str(root / "scripts" / "release" / "run_tests.py"), "--runtime", runtime]
     try:
         proc = subprocess.run(cmd, cwd=str(root), capture_output=True, text=True, check=False)
@@ -1210,7 +1209,27 @@ def _run_tests(root: Path, runtime: str = "auto") -> Tuple[int, str]:
         return 2, str(e)
 
 
-def _run_coordination_policy_check(root: Path) -> Tuple[int, str]:
+def _run_ruff_check(root: Path) -> tuple[int, str]:
+    cmd = [sys.executable, "-m", "ruff", "check", "controllers/", "services/", "--no-fix"]
+    try:
+        proc = subprocess.run(cmd, cwd=str(root), capture_output=True, text=True, check=False)
+        msg = (proc.stdout or "") + ("\n" + proc.stderr if proc.stderr else "")
+        return int(proc.returncode), msg.strip()
+    except Exception as e:
+        return 2, str(e)
+
+
+def _run_mypy_check(root: Path) -> tuple[int, str]:
+    cmd = [sys.executable, "-m", "mypy", "controllers/", "--no-error-summary"]
+    try:
+        proc = subprocess.run(cmd, cwd=str(root), capture_output=True, text=True, check=False)
+        msg = (proc.stdout or "") + ("\n" + proc.stderr if proc.stderr else "")
+        return int(proc.returncode), msg.strip()
+    except Exception as e:
+        return 2, str(e)
+
+
+def _run_coordination_policy_check(root: Path) -> tuple[int, str]:
     cmd = [sys.executable, str(root / "scripts" / "release" / "check_coordination_policy.py")]
     try:
         proc = subprocess.run(cmd, cwd=str(root), capture_output=True, text=True, check=False)
@@ -1220,7 +1239,7 @@ def _run_coordination_policy_check(root: Path) -> Tuple[int, str]:
         return 2, str(e)
 
 
-def _run_market_data_freshness_check(root: Path, max_age_min: float) -> Tuple[int, str]:
+def _run_market_data_freshness_check(root: Path, max_age_min: float) -> tuple[int, str]:
     cmd = [
         sys.executable,
         str(root / "scripts" / "release" / "check_market_data_freshness.py"),
@@ -1235,7 +1254,7 @@ def _run_market_data_freshness_check(root: Path, max_age_min: float) -> Tuple[in
         return 2, str(e)
 
 
-def _run_accounting_integrity_check(root: Path, max_age_min: float) -> Tuple[int, str]:
+def _run_accounting_integrity_check(root: Path, max_age_min: float) -> tuple[int, str]:
     cmd = [
         sys.executable,
         str(root / "scripts" / "release" / "check_accounting_integrity_v2.py"),
@@ -1250,7 +1269,7 @@ def _run_accounting_integrity_check(root: Path, max_age_min: float) -> Tuple[int
         return 2, str(e)
 
 
-def _run_ml_governance_check(root: Path) -> Tuple[int, str]:
+def _run_ml_governance_check(root: Path) -> tuple[int, str]:
     cmd = [sys.executable, str(root / "scripts" / "release" / "check_ml_signal_governance.py")]
     try:
         proc = subprocess.run(cmd, cwd=str(root), capture_output=True, text=True, check=False)
@@ -1260,7 +1279,7 @@ def _run_ml_governance_check(root: Path) -> Tuple[int, str]:
         return 2, str(e)
 
 
-def _run_alerting_health_check(root: Path, strict: bool = False) -> Tuple[int, str]:
+def _run_alerting_health_check(root: Path, strict: bool = False) -> tuple[int, str]:
     cmd = [sys.executable, str(root / "scripts" / "release" / "check_alerting_health.py")]
     if strict:
         cmd.append("--strict")
@@ -1272,7 +1291,7 @@ def _run_alerting_health_check(root: Path, strict: bool = False) -> Tuple[int, s
         return 2, str(e)
 
 
-def _run_bot_preflight_check(root: Path, require_container: bool = False) -> Tuple[int, str]:
+def _run_bot_preflight_check(root: Path, require_container: bool = False) -> tuple[int, str]:
     """Run preflight_startup.py to verify env file and CONFIG_PASSWORD in bot container."""
     cmd = [sys.executable, str(root / "scripts" / "ops" / "preflight_startup.py")]
     if require_container:
@@ -1285,7 +1304,7 @@ def _run_bot_preflight_check(root: Path, require_container: bool = False) -> Tup
         return 2, str(e)
 
 
-def _run_recon_exchange_preflight_check(root: Path) -> Tuple[int, str]:
+def _run_recon_exchange_preflight_check(root: Path) -> tuple[int, str]:
     cmd = [
         sys.executable,
         str(root / "scripts" / "ops" / "preflight_startup.py"),
@@ -1299,7 +1318,7 @@ def _run_recon_exchange_preflight_check(root: Path) -> Tuple[int, str]:
         return 2, str(e)
 
 
-def _run_paper_exchange_preflight_check(root: Path, strict: bool = False) -> Tuple[int, str]:
+def _run_paper_exchange_preflight_check(root: Path, strict: bool = False) -> tuple[int, str]:
     cmd = [sys.executable, str(root / "scripts" / "ops" / "preflight_paper_exchange.py")]
     if strict:
         cmd.append("--strict")
@@ -1318,7 +1337,7 @@ def _run_paper_exchange_preflight_check(root: Path, strict: bool = False) -> Tup
         return 2, str(e)
 
 
-def _run_paper_exchange_golden_path_check(root: Path, strict: bool = False) -> Tuple[int, str]:
+def _run_paper_exchange_golden_path_check(root: Path, strict: bool = False) -> tuple[int, str]:
     cmd = [sys.executable, str(root / "scripts" / "release" / "run_paper_exchange_golden_path.py")]
     if strict:
         cmd.append("--strict")
@@ -1337,7 +1356,7 @@ def _run_paper_exchange_golden_path_check(root: Path, strict: bool = False) -> T
         return 2, str(e)
 
 
-def _run_checklist_evidence_collector(root: Path) -> Tuple[int, str]:
+def _run_checklist_evidence_collector(root: Path) -> tuple[int, str]:
     cmd = [sys.executable, str(root / "scripts" / "ops" / "checklist_evidence_collector.py")]
     try:
         proc = subprocess.run(cmd, cwd=str(root), capture_output=True, text=True, check=False)
@@ -1347,7 +1366,7 @@ def _run_checklist_evidence_collector(root: Path) -> Tuple[int, str]:
         return 2, str(e)
 
 
-def _run_telegram_validation(root: Path, strict: bool = False) -> Tuple[int, str]:
+def _run_telegram_validation(root: Path, strict: bool = False) -> tuple[int, str]:
     cmd = [sys.executable, str(root / "scripts" / "ops" / "validate_telegram_alerting.py")]
     if strict:
         cmd.append("--strict")
@@ -1359,7 +1378,7 @@ def _run_telegram_validation(root: Path, strict: bool = False) -> Tuple[int, str
         return 2, str(e)
 
 
-def _run_data_plane_consistency_check(root: Path) -> Tuple[int, str]:
+def _run_data_plane_consistency_check(root: Path) -> tuple[int, str]:
     cmd = [
         sys.executable,
         str(root / "scripts" / "release" / "validate_data_plane_consistency.py"),
@@ -1382,7 +1401,7 @@ def _run_canonical_plane_gate(
     max_parity_delta_ratio: float,
     min_duplicate_suppression_rate: float,
     max_replay_lag_delta: int,
-) -> Tuple[int, str]:
+) -> tuple[int, str]:
     cmd = [
         sys.executable,
         str(root / "scripts" / "release" / "check_canonical_plane_gate.py"),
@@ -1428,7 +1447,7 @@ def _run_paper_exchange_load_harness(
     result_timeout_sec: float = 30.0,
     poll_interval_ms: int = 300,
     scan_count: int = 20_000,
-) -> Tuple[int, str]:
+) -> tuple[int, str]:
     cmd = [
         sys.executable,
         str(root / "scripts" / "release" / "run_paper_exchange_load_harness.py"),
@@ -1503,7 +1522,7 @@ def _run_paper_exchange_load_check(
     heartbeat_consumer_group: str = "",
     heartbeat_consumer_name: str = "",
     load_run_id: str = "",
-) -> Tuple[int, str]:
+) -> tuple[int, str]:
     cmd = [
         sys.executable,
         str(root / "scripts" / "release" / "check_paper_exchange_load.py"),
@@ -1596,7 +1615,7 @@ def _run_paper_exchange_sustained_qualification(
     max_latency_p99_ms: float = 1000.0,
     max_backlog_growth_pct_per_10min: float = 1.0,
     max_restart_count: float = 0.0,
-) -> Tuple[int, str]:
+) -> tuple[int, str]:
     cmd = [
         sys.executable,
         str(root / "scripts" / "release" / "run_paper_exchange_sustained_qualification.py"),
@@ -1680,7 +1699,7 @@ def _run_paper_exchange_perf_baseline_capture(
     baseline_output_path: str = "",
     profile_label: str = "",
     require_source_pass: bool = True,
-) -> Tuple[int, str]:
+) -> tuple[int, str]:
     cmd = [
         sys.executable,
         str(root / "scripts" / "release" / "capture_paper_exchange_perf_baseline.py"),
@@ -1724,7 +1743,7 @@ def _run_paper_exchange_perf_regression_check(
     min_throughput_ratio: float = 0.85,
     max_restart_regression: float = 0.0,
     max_waiver_hours: float = 24.0,
-) -> Tuple[int, str]:
+) -> tuple[int, str]:
     cmd = [
         sys.executable,
         str(root / "scripts" / "release" / "check_paper_exchange_perf_regression.py"),
@@ -1768,7 +1787,7 @@ def _run_paper_exchange_threshold_inputs_builder(
     strict: bool = False,
     max_source_age_min: float = 20.0,
     manual_metrics_path: str = "",
-) -> Tuple[int, str]:
+) -> tuple[int, str]:
     cmd = [
         sys.executable,
         str(root / "scripts" / "release" / "build_paper_exchange_threshold_inputs.py"),
@@ -1799,7 +1818,7 @@ def _run_paper_exchange_thresholds_check(
     *,
     strict: bool = False,
     max_input_age_min: float = 20.0,
-) -> Tuple[int, str]:
+) -> tuple[int, str]:
     cmd = [
         sys.executable,
         str(root / "scripts" / "release" / "check_paper_exchange_thresholds.py"),
@@ -1816,7 +1835,7 @@ def _run_paper_exchange_thresholds_check(
         return 2, str(e)
 
 
-def _run_testnet_readiness_gate(root: Path, strict: bool = False) -> Tuple[int, str]:
+def _run_testnet_readiness_gate(root: Path, strict: bool = False) -> tuple[int, str]:
     cmd = [sys.executable, str(root / "scripts" / "release" / "testnet_readiness_gate.py")]
     if strict:
         cmd.append("--strict")
@@ -1828,7 +1847,7 @@ def _run_testnet_readiness_gate(root: Path, strict: bool = False) -> Tuple[int, 
         return 2, str(e)
 
 
-def _run_testnet_daily_scorecard(root: Path, day_utc: str) -> Tuple[int, str]:
+def _run_testnet_daily_scorecard(root: Path, day_utc: str) -> tuple[int, str]:
     cmd = [
         sys.executable,
         str(root / "scripts" / "analysis" / "testnet_daily_scorecard.py"),
@@ -1843,7 +1862,7 @@ def _run_testnet_daily_scorecard(root: Path, day_utc: str) -> Tuple[int, str]:
         return 2, str(e)
 
 
-def _run_testnet_multi_day_summary(root: Path, end_day_utc: str, window_days: int = 28) -> Tuple[int, str]:
+def _run_testnet_multi_day_summary(root: Path, end_day_utc: str, window_days: int = 28) -> tuple[int, str]:
     end_day = datetime.fromisoformat(str(end_day_utc)).date()
     start_day = end_day - timedelta(days=max(1, int(window_days)) - 1)
     cmd = [
@@ -1867,7 +1886,7 @@ def _run_performance_dossier(
     *,
     bot_log_root: str,
     lookback_days: int,
-) -> Tuple[int, str]:
+) -> tuple[int, str]:
     cmd = [
         sys.executable,
         str(root / "scripts" / "analysis" / "performance_dossier.py"),
@@ -1892,7 +1911,7 @@ def _run_performance_dossier(
         return 2, str(e)
 
 
-def _run_portfolio_diversification_check(root: Path) -> Tuple[int, str]:
+def _run_portfolio_diversification_check(root: Path) -> tuple[int, str]:
     cmd = [
         sys.executable,
         str(root / "scripts" / "analysis" / "portfolio_diversification_check.py"),
@@ -1905,7 +1924,7 @@ def _run_portfolio_diversification_check(root: Path) -> Tuple[int, str]:
         return 2, str(e)
 
 
-def _run_road9_allocation_rebalance(root: Path) -> Tuple[int, str]:
+def _run_road9_allocation_rebalance(root: Path) -> tuple[int, str]:
     cmd = [
         sys.executable,
         str(root / "scripts" / "analysis" / "rebalance_multi_bot_policy.py"),
@@ -1924,7 +1943,7 @@ def _run_dashboard_readiness_check(
     *,
     max_data_age_s: int,
     required_grafana_bot_variants: str = "",
-) -> Tuple[int, str]:
+) -> tuple[int, str]:
     cmd = [
         sys.executable,
         str(root / "scripts" / "ops" / "verify_dashboard.py"),
@@ -1959,7 +1978,7 @@ def _run_realtime_l2_data_quality_check(
     max_depth_stream_share: float,
     max_depth_event_bytes: int,
     lookback_depth_events: int,
-) -> Tuple[int, str]:
+) -> tuple[int, str]:
     cmd = [
         sys.executable,
         str(root / "scripts" / "release" / "check_realtime_l2_data_quality.py"),
@@ -2001,7 +2020,7 @@ def _run_runtime_performance_budgets_check(
     max_exporter_render_p95_ms: float,
     max_event_store_ingest_p95_ms: float,
     max_source_age_min: float,
-) -> Tuple[int, str]:
+) -> tuple[int, str]:
     cmd = [
         sys.executable,
         str(root / "scripts" / "release" / "check_runtime_performance_budgets.py"),
@@ -2067,7 +2086,7 @@ def main() -> int:
     parser.add_argument(
         "--attempt-fill-event-backfill",
         action="store_true",
-        help="Backfill order_filled events from fills.csv for the current UTC day before replay/parity checks.",
+        help="Backfill order_filled events from fills.csv for the current timezone.utc day before replay/parity checks.",
     )
     parser.add_argument(
         "--day2-catchup-cycles",
@@ -2164,7 +2183,7 @@ def main() -> int:
     parser.add_argument(
         "--check-testnet-daily-scorecard",
         action="store_true",
-        help="Run ROAD-5 daily scorecard for UTC today.",
+        help="Run ROAD-5 daily scorecard for timezone.utc today.",
     )
     parser.add_argument(
         "--check-performance-dossier",
@@ -2817,8 +2836,8 @@ def main() -> int:
     else:
         enforce_live_promotion_gates = live_promotion_required_auto
 
-    checks: List[Dict[str, object]] = []
-    critical_failures: List[str] = []
+    checks: list[dict[str, object]] = []
+    critical_failures: list[str] = []
     parity_refresh_rc = 0
     parity_refresh_msg = ""
     integrity_refresh_rc = 0
@@ -2841,7 +2860,7 @@ def main() -> int:
     testnet_multi_day_summary_msg = ""
     performance_dossier_rc = 0
     performance_dossier_msg = ""
-    performance_dossier_diag: Dict[str, object] = _performance_dossier_expectancy_diag({})
+    performance_dossier_diag: dict[str, object] = _performance_dossier_expectancy_diag({})
     diversification_rc = 0
     diversification_msg = ""
     road9_rebalance_rc = 0
@@ -2868,7 +2887,7 @@ def main() -> int:
     paper_exchange_golden_path_rc = 0
     paper_exchange_golden_path_msg = ""
     paper_exchange_threshold_inputs_path = reports / "verification" / "paper_exchange_threshold_inputs_latest.json"
-    paper_exchange_threshold_inputs_diag: Dict[str, object] = _paper_exchange_threshold_inputs_readiness({})
+    paper_exchange_threshold_inputs_diag: dict[str, object] = _paper_exchange_threshold_inputs_readiness({})
     paper_exchange_threshold_inputs_ready = False
     paper_exchange_threshold_manual_metrics_path = _resolve_threshold_manual_metrics_path(
         root, str(args.paper_exchange_threshold_manual_metrics_path)
@@ -2891,8 +2910,8 @@ def main() -> int:
     runtime_performance_budgets_msg = ""
     history_read_rollout_enabled = _history_read_rollout_enabled()
     history_seed_enabled = _safe_bool(os.getenv("HB_HISTORY_SEED_ENABLED"), default=False)
-    history_backfill_diag: Dict[str, object] = {}
-    history_seed_diag: Dict[str, object] = {}
+    history_backfill_diag: dict[str, object] = {}
+    history_seed_diag: dict[str, object] = {}
     ops_db_writer_refresh_rc = 0
     ops_db_writer_refresh_msg = ""
 
@@ -2911,7 +2930,7 @@ def main() -> int:
     attempt_fill_event_backfill = bool(args.attempt_fill_event_backfill or args.ci)
     if attempt_fill_event_backfill:
         fill_backfill_rc, fill_backfill_msg = _run_fill_event_backfill_once(
-            root, day_utc=datetime.now(timezone.utc).date().isoformat()
+            root, day_utc=datetime.now(UTC).date().isoformat()
         )
 
     day2_min_hours_override = float(args.day2_min_hours)
@@ -3136,7 +3155,7 @@ def main() -> int:
 
     # 1h) ROAD-5 daily scorecard
     if args.check_testnet_daily_scorecard:
-        day_utc = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+        day_utc = datetime.now(UTC).strftime("%Y-%m-%d")
         testnet_scorecard_rc, testnet_scorecard_msg = _run_testnet_daily_scorecard(root, day_utc=day_utc)
         testnet_score_path = root / "reports" / "strategy" / "testnet_daily_scorecard_latest.json"
         testnet_score = _read_json(testnet_score_path, {})
@@ -3824,6 +3843,81 @@ def main() -> int:
         )
     )
 
+    # 5b) Ruff lint check
+    ruff_rc, ruff_msg = _run_ruff_check(root)
+    ruff_ok = ruff_rc == 0
+    checks.append(
+        _check(
+            ruff_ok,
+            "ruff_lint",
+            "critical",
+            "ruff lint passed on controllers/ and services/"
+            if ruff_ok
+            else f"ruff lint failed (rc={ruff_rc}): {ruff_msg[:200]}",
+            [],
+        )
+    )
+
+    # 5c) Mypy type check (controllers/ gradual strict)
+    mypy_rc, mypy_msg = _run_mypy_check(root)
+    mypy_ok = mypy_rc == 0
+    checks.append(
+        _check(
+            mypy_ok,
+            "mypy_type_check",
+            "warning",
+            "mypy passed on controllers/"
+            if mypy_ok
+            else f"mypy failed (rc={mypy_rc}): {mypy_msg[:200]}",
+            [],
+        )
+    )
+
+    # 5d) Dependency audit (non-blocking)
+    try:
+        from scripts.release.run_dependency_audit import run as _run_dep_audit
+        dep_report = _run_dep_audit(root)
+        dep_cve_count = int(dep_report.get("cve_count", 0))
+        dep_ok = dep_cve_count == 0
+    except Exception as dep_exc:
+        dep_ok = True
+        dep_cve_count = 0
+        dep_report = {"error": str(dep_exc)}
+    checks.append(
+        _check(
+            dep_ok,
+            "dependency_audit",
+            "info",
+            f"dependency audit clean (outdated={dep_report.get('outdated_count', '?')})"
+            if dep_ok
+            else f"dependency audit found {dep_cve_count} CVE(s)",
+            [],
+        )
+    )
+
+    # 5e) Tick benchmark (non-blocking)
+    try:
+        from scripts.release.run_tick_benchmark import run as _run_tick_bench
+        bench_report = _run_tick_bench(root, iterations=500)
+        bench_status = bench_report.get("status", "fail")
+        bench_p99 = bench_report.get("total", {}).get("p99_ms", 0.0)
+        bench_ok = bench_status != "fail"
+    except Exception as bench_exc:
+        bench_ok = True
+        bench_p99 = 0.0
+        bench_report = {"error": str(bench_exc)}
+    checks.append(
+        _check(
+            bench_ok,
+            "tick_benchmark",
+            "info",
+            f"tick benchmark p99={bench_p99:.2f}ms (status={bench_report.get('status', '?')})"
+            if bench_ok
+            else f"tick benchmark FAIL: p99={bench_p99:.2f}ms exceeds threshold",
+            [],
+        )
+    )
+
     # 6) Secrets hygiene check
     secrets_check_path = reports / "security" / "latest.json"
     secrets_rc, secrets_msg = _run_secrets_hygiene_check(root)
@@ -4227,7 +4321,7 @@ def main() -> int:
             f"day2 gate status: go={day2_go} age_min={day2_age_min:.1f} "
             f"max_delta={int(day2_lag_diag.get('max_delta_observed', 0))}/"
             f"{int(day2_lag_diag.get('max_allowed_delta', int(args.day2_max_delta)))} "
-            f"worst_stream={str(day2_lag_diag.get('worst_stream', ''))} "
+            f"worst_stream={day2_lag_diag.get('worst_stream', '')!s} "
             f"(require_go={bool(args.require_day2_go)} "
             f"require_fresh={bool(args.require_day2_fresh)} "
             f"require_lag_tolerance={bool(args.require_day2_lag_within_tolerance)}). "
@@ -4579,7 +4673,7 @@ def main() -> int:
 
     out_root = reports / "promotion_gates"
     out_root.mkdir(parents=True, exist_ok=True)
-    stamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
+    stamp = datetime.now(UTC).strftime("%Y%m%dT%H%M%SZ")
     out_file = out_root / f"promotion_gates_{stamp}.json"
     out_md = out_root / f"promotion_gates_{stamp}.md"
     out_file.write_text(json.dumps(summary, indent=2), encoding="utf-8")

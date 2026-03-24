@@ -15,25 +15,22 @@ import logging
 import os
 import threading
 import time
-from datetime import datetime, timezone
 from decimal import Decimal
 from http.server import BaseHTTPRequestHandler, HTTPServer
 from pathlib import Path
-from typing import Dict, List, Optional
 
 try:
     import ccxt  # type: ignore
 except Exception:
     ccxt = None
 
-from services.common.graceful_shutdown import ShutdownHandler
-from services.common.logging_config import configure_logging
-from services.common.models import RedisSettings, ServiceSettings
-from services.common.utils import read_json, utc_now, write_json
-from services.contracts.event_schemas import AuditEvent
-from services.contracts.stream_names import (
+from platform_lib.core.graceful_shutdown import ShutdownHandler
+from platform_lib.logging.logging_config import configure_logging
+from platform_lib.core.models import RedisSettings, ServiceSettings
+from platform_lib.core.utils import utc_now, write_json
+from platform_lib.contracts.event_schemas import AuditEvent
+from platform_lib.contracts.stream_names import (
     AUDIT_STREAM,
-    DEFAULT_CONSUMER_GROUP,
     EXECUTION_INTENT_STREAM,
     STREAM_RETENTION_MAXLEN,
 )
@@ -46,7 +43,8 @@ STOP_BOT_ON_KILL = os.getenv("KILL_SWITCH_STOP_BOT", "true").lower() == "true"
 BOT_CONTAINER_NAME = os.getenv("KILL_SWITCH_BOT_CONTAINER", "bot1")
 FLATTEN_POSITION_ON_KILL = os.getenv("KILL_SWITCH_FLATTEN_POSITION", "false").lower() == "true"
 
-_kill_switch_state: Dict[str, object] = {"triggered": False, "last_result": None}
+_kill_switch_state: dict[str, object] = {"triggered": False, "last_result": None}
+_kill_switch_lock = threading.Lock()
 
 
 def _cancel_all_orders_ccxt(
@@ -54,9 +52,9 @@ def _cancel_all_orders_ccxt(
     api_key: str,
     secret: str,
     passphrase: str,
-    trading_pair: Optional[str],
+    trading_pair: str | None,
     dry_run: bool,
-) -> Dict[str, object]:
+) -> dict[str, object]:
     """Cancel all open orders on *exchange_id* via ccxt.
 
     Returns an evidence dict with cancelled order IDs or error details.
@@ -72,7 +70,7 @@ def _cancel_all_orders_ccxt(
         if exchange_cls is None:
             return {"status": "error", "error": f"unknown_exchange_{exchange_id}", "cancelled": []}
 
-        exchange_cfg: Dict[str, object] = {
+        exchange_cfg: dict[str, object] = {
             "apiKey": api_key,
             "secret": secret,
             "enableRateLimit": True,
@@ -86,8 +84,8 @@ def _cancel_all_orders_ccxt(
             return {"status": "dry_run", "error": "", "cancelled": []}
 
         symbol = trading_pair.replace("-", "/") if trading_pair else None
-        cancelled: List[str] = []
-        failed: List[str] = []
+        cancelled: list[str] = []
+        failed: list[str] = []
         max_retries = 3
 
         for attempt in range(max_retries):
@@ -103,13 +101,11 @@ def _cancel_all_orders_ccxt(
 
         for order in open_orders:
             oid = order.get("id", "")
-            cancel_ok = False
             for attempt in range(max_retries):
                 try:
                     exchange.cancel_order(oid, symbol=order.get("symbol"))
                     cancelled.append(str(oid))
                     logger.info("Cancelled order %s on %s", oid, exchange_id)
-                    cancel_ok = True
                     break
                 except Exception as exc:
                     if attempt == max_retries - 1:
@@ -132,8 +128,8 @@ def _flatten_position_ccxt(
     api_key: str,
     secret: str,
     passphrase: str,
-    trading_pair: Optional[str],
-) -> Dict[str, object]:
+    trading_pair: str | None,
+) -> dict[str, object]:
     """Flatten net position for *trading_pair* using a reduce-only market order."""
     if ccxt is None:
         return {"status": "error", "error": "ccxt_not_installed"}
@@ -147,7 +143,7 @@ def _flatten_position_ccxt(
         exchange_cls = getattr(ccxt, exchange_id, None)
         if exchange_cls is None:
             return {"status": "error", "error": f"unknown_exchange_{exchange_id}"}
-        exchange_cfg: Dict[str, object] = {
+        exchange_cfg: dict[str, object] = {
             "apiKey": api_key,
             "secret": secret,
             "enableRateLimit": True,
@@ -229,13 +225,13 @@ def _flatten_position_ccxt(
         return {"status": "error", "error": str(exc)}
 
 
-def _combine_kill_result(cancel_result: Dict[str, object], flatten_result: Dict[str, object]) -> Dict[str, object]:
+def _combine_kill_result(cancel_result: dict[str, object], flatten_result: dict[str, object]) -> dict[str, object]:
     combined = dict(cancel_result)
     combined["flatten"] = flatten_result
     return combined
 
 
-def _kill_execution_succeeded(result: Dict[str, object]) -> bool:
+def _kill_execution_succeeded(result: dict[str, object]) -> bool:
     """True only when order cancellation succeeded and optional flatten did not fail."""
     cancel_status = str(result.get("status", "")).strip().lower()
     if cancel_status not in {"executed", "dry_run"}:
@@ -245,6 +241,12 @@ def _kill_execution_succeeded(result: Dict[str, object]) -> bool:
         return True
     flatten_status = str(flatten.get("status", "")).strip().lower()
     return flatten_status in {"executed", "dry_run", "disabled", "no_position", "skipped"}
+
+
+def _log_escalation_if_needed(result: dict[str, object]) -> None:
+    """Log escalation when kill execution did not fully succeed."""
+    if not _kill_execution_succeeded(result):
+        logger.error("Kill switch escalation: non-success cancellation result=%s", result)
 
 
 def _stop_bot_container(container_name: str, timeout: int = 10) -> bool:
@@ -295,7 +297,7 @@ def _publish_audit(
     producer: str,
     instance_name: str,
     action: str,
-    details: Dict[str, object],
+    details: dict[str, object],
 ) -> None:
     """Publish an audit event for kill switch activity."""
     event = AuditEvent(
@@ -322,10 +324,10 @@ class _KillSwitchHTTPHandler(BaseHTTPRequestHandler):
     passphrase: str = ""
     dry_run: bool = True
     flatten_position_on_kill: bool = False
-    shutdown: Optional[ShutdownHandler] = None
-    redis_client: Optional[RedisStreamClient] = None
-    svc_cfg: Optional[ServiceSettings] = None
-    report_path: Optional[Path] = None
+    shutdown: ShutdownHandler | None = None
+    redis_client: RedisStreamClient | None = None
+    svc_cfg: ServiceSettings | None = None
+    report_path: Path | None = None
 
     def do_POST(self):
         if self.path == "/kill":
@@ -339,13 +341,17 @@ class _KillSwitchHTTPHandler(BaseHTTPRequestHandler):
             self.send_response(200)
             self.send_header("Content-Type", "application/json")
             self.end_headers()
-            body = json.dumps({"status": "ok", "triggered": _kill_switch_state["triggered"]})
+            with _kill_switch_lock:
+                triggered = _kill_switch_state["triggered"]
+            body = json.dumps({"status": "ok", "triggered": triggered})
             self.wfile.write(body.encode())
         elif self.path == "/status":
             self.send_response(200)
             self.send_header("Content-Type", "application/json")
             self.end_headers()
-            body = json.dumps(_kill_switch_state, default=str)
+            with _kill_switch_lock:
+                state_snapshot = dict(_kill_switch_state)
+            body = json.dumps(state_snapshot, default=str)
             self.wfile.write(body.encode())
         else:
             self.send_response(404)
@@ -367,7 +373,7 @@ class _KillSwitchHTTPHandler(BaseHTTPRequestHandler):
                 trading_pair=trading_pair,
                 dry_run=self.dry_run,
             )
-            flatten_result: Dict[str, object] = {"status": "disabled", "error": ""}
+            flatten_result: dict[str, object] = {"status": "disabled", "error": ""}
             if self.flatten_position_on_kill:
                 if self.dry_run:
                     flatten_result = {"status": "dry_run", "error": ""}
@@ -384,8 +390,9 @@ class _KillSwitchHTTPHandler(BaseHTTPRequestHandler):
             if STOP_BOT_ON_KILL and not self.dry_run:
                 _stop_bot_container(BOT_CONTAINER_NAME)
 
-            _kill_switch_state["triggered"] = True
-            _kill_switch_state["last_result"] = result
+            with _kill_switch_lock:
+                _kill_switch_state["triggered"] = True
+                _kill_switch_state["last_result"] = result
 
             report = {
                 "ts_utc": utc_now(),
@@ -539,7 +546,7 @@ def run() -> None:
                 trading_pair=trading_pair,
                 dry_run=dry_run,
             )
-            flatten_result: Dict[str, object] = {"status": "disabled", "error": ""}
+            flatten_result: dict[str, object] = {"status": "disabled", "error": ""}
             if FLATTEN_POSITION_ON_KILL:
                 if dry_run:
                     flatten_result = {"status": "dry_run", "error": ""}
@@ -552,8 +559,7 @@ def run() -> None:
                         trading_pair=trading_pair,
                     )
             result = _combine_kill_result(result, flatten_result)
-            if not _kill_execution_succeeded(result):
-                logger.error("Kill switch escalation: non-success cancellation result=%s", result)
+            _log_escalation_if_needed(result)
 
             if STOP_BOT_ON_KILL and not dry_run:
                 _stop_bot_container(BOT_CONTAINER_NAME)

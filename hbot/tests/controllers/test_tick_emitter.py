@@ -1,11 +1,19 @@
 from __future__ import annotations
 
+import json
 from decimal import Decimal
 from unittest.mock import MagicMock
+
+import pytest
 
 from controllers.core import MarketConditions, QuoteGeometry, SpreadEdgeState
 from controllers.ops_guard import GuardState
 from controllers.tick_emitter import TickEmitter
+
+try:
+    import orjson as _orjson
+except ImportError:
+    _orjson = None  # type: ignore[assignment]
 
 
 def _snapshot_defaults() -> dict:
@@ -187,4 +195,34 @@ def test_log_minute_returns_row_once_per_minute():
     assert row["history_seed_status"] == "disabled"
     assert row["history_seed_bars"] == "0"
     assert skipped is None
+    emitter.stop()
     csv_logger.log_minute.assert_called_once()
+
+
+# ------------------------------------------------------------------
+# orjson Decimal serialization round-trip
+# ------------------------------------------------------------------
+
+@pytest.mark.skipif(_orjson is None, reason="orjson not installed")
+def test_orjson_decimal_roundtrip():
+    """Verify that orjson with default=str produces content-identical output for Decimal values."""
+    payload = {
+        "price": Decimal("50123.45"),
+        "qty": Decimal("0.001"),
+        "zero": Decimal("0"),
+        "negative": Decimal("-12.5"),
+        "nested": {"rate": Decimal("0.0003")},
+    }
+    orjson_result = _orjson.dumps(payload, default=str).decode()
+    stdlib_result = json.dumps(payload, default=str)
+    assert json.loads(orjson_result) == json.loads(stdlib_result)
+
+
+@pytest.mark.skipif(_orjson is None, reason="orjson not installed")
+def test_orjson_opt_non_str_keys():
+    """Ensure OPT_NON_STR_KEYS handles integer dict keys without error."""
+    payload = {1: "one", 2: "two", "str_key": Decimal("99.9")}
+    result = _orjson.dumps(payload, default=str, option=_orjson.OPT_NON_STR_KEYS).decode()
+    parsed = json.loads(result)
+    assert parsed["1"] == "one"
+    assert parsed["str_key"] == "99.9"

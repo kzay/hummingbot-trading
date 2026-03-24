@@ -13,32 +13,54 @@ Live deployment requires passing all promotion gates and the go-live hardening c
 ## Workspace layout
 ```
 hbot/
-  controllers/        # Trading logic (legacy epp_v2_4.py + strategy lanes)
-  controllers/paper_engine_v2/  # Paper simulation (desk.py, hb_bridge.py, portfolio.py)
-  services/           # Supporting microservices (kill_switch, reconciliation, signal, etc.)
-  scripts/            # Ops, analysis, and release scripts
-  tests/              # pytest test suite
-  infra/compose/      # docker-compose.yml (all services)
-  infra/monitoring/   # Prometheus, Grafana, Alertmanager configs
-  config/             # JSON risk/policy configs
-  data/bot1/          # Bot state, fills, minute logs, conf
-  docs/               # Strategy specs, ops runbooks
-  BACKLOG.md          # All known gaps with AI-executable specs — CHECK THIS FIRST
-  infra/env/.env.template   # All required env vars
+  platform_lib/               # Shared infra library (market_data, execution, logging, contracts, core)
+  simulation/                 # Paper simulation engine (desk, matching, portfolio, risk)
+  simulation/bridge/          # HB connector bridge (hb_bridge, event fire, signal consumer)
+  controllers/                # Trading logic
+  controllers/runtime/kernel/ # Decomposed runtime kernel (controller, mixins, config)
+  controllers/bots/           # Strategy lanes (bot1, bot5, bot6, bot7)
+  controllers/paper_engine_v2/  # Re-export shim for simulation/ (backward compat)
+  services/                   # Supporting microservices (kill_switch, reconciliation, signal, etc.)
+  services/common/            # Re-export shims for platform_lib/ (backward compat)
+  scripts/                    # Ops, analysis, and release scripts
+  tests/                      # pytest test suite
+  tests/architecture/         # Architectural contract tests (import boundaries, coverage minimums)
+  tests/controllers/test_kernel/  # Kernel mixin unit tests
+  tests/test_simulation/      # Simulation/bridge error path tests
+  infra/compose/              # docker-compose.yml (all services)
+  infra/monitoring/           # Prometheus, Grafana, Alertmanager configs
+  config/                     # JSON risk/policy configs
+  data/bot1/                  # Bot state, fills, minute logs, conf
+  docs/                       # Strategy specs, ops runbooks
+  BACKLOG.md                  # All known gaps with AI-executable specs — CHECK THIS FIRST
+  infra/env/.env.template     # All required env vars
 ```
 
 ## Non-negotiables before touching production
-- All changes must compile: `python -m py_compile hbot/controllers/epp_v2_4.py`
+- All changes must compile: `python -m py_compile hbot/controllers/runtime/kernel/controller.py`
+- Architecture contracts must pass: `PYTHONPATH=hbot python -m pytest hbot/tests/architecture/ -q`
 - Promotion gates must pass: `cd hbot && python scripts/release/run_strict_promotion_cycle.py`
 - Never commit `.env` (only `infra/env/.env.template`)
 - Bot1 is paper-only. `BOT_MODE=paper` in compose. Do not change connector to `bitget` without completing go-live checklist.
 
 ## Key files
-- Main controller: `hbot/controllers/epp_v2_4.py` (2300+ lines)
-- Paper bridge: `hbot/controllers/paper_engine_v2/hb_bridge.py`
+- Runtime kernel: `hbot/controllers/runtime/kernel/controller.py` + mixins (`quoting_mixin.py`, `supervisory_mixin.py`, `telemetry_mixin.py`, `state_mixin.py`, `startup_mixin.py`, `regime_mixin.py`, `calibration_mixin.py`)
+- Strategy adapter: `hbot/controllers/epp_v2_4.py` (thin adapter over kernel)
+- Simulation engine: `hbot/simulation/desk.py`, `matching_engine.py`, `portfolio.py`
+- Paper bridge: `hbot/simulation/bridge/hb_bridge.py`
+- Platform utils: `hbot/platform_lib/core/utils.py`, `platform_lib/market_data/`
 - Bot1 config: `hbot/data/bot1/conf/controllers/epp_v2_4_bot_a.yml`
 - Compose: `hbot/infra/compose/docker-compose.yml`
 - Backlog: `hbot/BACKLOG.md`
+- Architecture tests: `hbot/tests/architecture/` (import boundaries, coverage minimums, regression baseline)
+- CI pipeline: `.github/workflows/architecture_contracts.yml`
+
+## Robustness standards (enforced by architecture tests)
+- Zero `print()` in production code (controllers/services/simulation/platform_lib, excluding CLI dirs)
+- Zero import boundary violations (platform→no ctrl/svc/sim; simulation→no ctrl/svc; controllers→no svc; no cross-service)
+- All `except Exception: pass` blocks have justification comments
+- All `# type: ignore` comments have mypy error codes
+- Minimum test counts enforced per module area (controllers≥50, services≥50, architecture≥5)
 
 ## Before starting any task
 1. Read `hbot/BACKLOG.md` for the full task spec including pre-answered design decisions
@@ -50,7 +72,7 @@ Some tasks benefit significantly from a more capable model. Flag this to the use
 
 | Use a capable model | A fast model is fine |
 |---|---|
-| Modifying `epp_v2_4.py` core logic (risk, edge, regime) | Config YAML edits |
+| Modifying runtime kernel mixins (risk, edge, regime, quoting) | Config YAML edits |
 | Implementing any P0 backlog item | Checking bot status / reading logs |
 | ROAD-10 / ROAD-11 (ML pipeline) | Minor doc updates |
 | New service design or architecture decisions | Running analysis scripts |

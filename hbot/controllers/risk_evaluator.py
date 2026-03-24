@@ -7,14 +7,15 @@ from __future__ import annotations
 
 import logging
 from decimal import Decimal
-from typing import List, Tuple
 
 from controllers.ops_guard import GuardState
 from controllers.runtime.risk_context import RuntimeRiskDecision
+from platform_lib.core.utils import safe_decimal
 
 logger = logging.getLogger(__name__)
 
 _ZERO = Decimal("0")
+_ONE = Decimal("1")
 
 
 class RiskEvaluator:
@@ -60,14 +61,25 @@ class RiskEvaluator:
         equity_quote: Decimal,
         daily_equity_open: Decimal,
         daily_equity_peak: Decimal,
-    ) -> Tuple[Decimal, Decimal]:
-        """Return ``(daily_loss_pct, drawdown_pct)``."""
+    ) -> tuple[Decimal, Decimal]:
+        """Return ``(daily_loss_pct, drawdown_pct)``.
+
+        NaN/Inf inputs are treated as worst-case (100% loss) to ensure
+        risk checks never fail-open on bad data.
+        """
+        eq = safe_decimal(equity_quote)
+        deo = safe_decimal(daily_equity_open)
+        dep = safe_decimal(daily_equity_peak)
         daily_loss_pct = _ZERO
         drawdown_pct = _ZERO
-        if daily_equity_open > _ZERO:
-            daily_loss_pct = max(_ZERO, (daily_equity_open - equity_quote) / daily_equity_open)
-        if daily_equity_peak > _ZERO:
-            drawdown_pct = max(_ZERO, (daily_equity_peak - equity_quote) / daily_equity_peak)
+        if deo > _ZERO:
+            daily_loss_pct = max(_ZERO, (deo - eq) / deo)
+        if dep > _ZERO:
+            drawdown_pct = max(_ZERO, (dep - eq) / dep)
+        if daily_loss_pct.is_nan() or daily_loss_pct.is_infinite():
+            daily_loss_pct = _ONE
+        if drawdown_pct.is_nan() or drawdown_pct.is_infinite():
+            drawdown_pct = _ONE
         return daily_loss_pct, drawdown_pct
 
     # ------------------------------------------------------------------
@@ -81,9 +93,9 @@ class RiskEvaluator:
         projected_total_quote: Decimal,
         daily_loss_pct: Decimal,
         drawdown_pct: Decimal,
-    ) -> Tuple[List[str], bool]:
+    ) -> tuple[list[str], bool]:
         """Return ``(reasons, hard_stop)``."""
-        reasons: List[str] = []
+        reasons: list[str] = []
         hard = False
         if base_pct < self._min_base_pct:
             reasons.append("base_pct_below_min")
@@ -91,7 +103,7 @@ class RiskEvaluator:
             reasons.append("base_pct_above_max")
         if self._max_total_notional_quote > _ZERO and projected_total_quote > self._max_total_notional_quote:
             reasons.append("projected_total_quote_above_cap")
-        if turnover_x > self._max_daily_turnover_x_hard:
+        if self._max_daily_turnover_x_hard > _ZERO and turnover_x > self._max_daily_turnover_x_hard:
             reasons.append("daily_turnover_hard_limit")
             hard = True
         if daily_loss_pct > self._max_daily_loss_pct_hard:
@@ -119,7 +131,7 @@ class RiskEvaluator:
         position_drift_pct: Decimal,
         order_book_stale: bool,
         pending_eod_close: bool,
-    ) -> Tuple[List[str], bool]:
+    ) -> tuple[list[str], bool]:
         """Run risk policy, margin, drift, and operational checks.
 
         Returns ``(risk_reasons, risk_hard_stop)``.

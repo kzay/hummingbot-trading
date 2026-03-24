@@ -4,27 +4,37 @@ import json
 from pathlib import Path
 
 import services.realtime_ui_api.main as realtime_ui_main
-from services.common.market_history_types import MarketBarKey
-from services.contracts.stream_names import BOT_TELEMETRY_STREAM, MARKET_DATA_STREAM, MARKET_DEPTH_STREAM, MARKET_QUOTE_STREAM
+import services.realtime_ui_api.state as realtime_ui_state
+from platform_lib.market_data.market_history_types import MarketBarKey
+from platform_lib.contracts.stream_names import (
+    BOT_TELEMETRY_STREAM,
+    MARKET_DATA_STREAM,
+    MARKET_DEPTH_STREAM,
+    MARKET_QUOTE_STREAM,
+)
 from services.realtime_ui_api.main import (
     DeskSnapshotFallback,
     OpsDbReadModel,
     RealtimeApiConfig,
     RealtimeState,
     _build_alerts,
-    _build_health_payload,
+    _build_bot_gates,
     _build_gate_timeline,
+    _build_health_payload,
     _build_instance_status_rows,
+    _build_legacy_candles,
+    _build_quote_gate_summary,
     _build_runtime_open_order_placeholders,
-    _sync_account_summary_with_open_orders,
     _candles_from_points,
     _enrich_closed_trades_with_minute_context,
-    _reconstruct_closed_trades,
     _history_quality_from_candles,
+    _merge_fill_activity,
+    _reconstruct_closed_trades,
     _summarize_daily_review,
     _summarize_fill_activity,
     _summarize_journal_review,
     _summarize_weekly_report,
+    _sync_account_summary_with_open_orders,
     _to_epoch_ms,
 )
 
@@ -191,7 +201,8 @@ def test_build_instance_status_rows_merges_stream_and_artifacts(tmp_path: Path, 
                     "equity_quote": "1005.5",
                 }
                 ,
-                "daily_state": {"equity_open": "1000.0", "equity_peak": "1008.0"},
+                "daily_state": {"day_key": "2026-03-06", "equity_open": "1000.0", "equity_peak": "1008.0"},
+
             }
         ),
         encoding="utf-8",
@@ -204,6 +215,7 @@ def test_build_instance_status_rows_merges_stream_and_artifacts(tmp_path: Path, 
     cfg = RealtimeApiConfig()
     state = RealtimeState(cfg)
     monkeypatch.setattr(realtime_ui_main, "_now_ms", lambda: 20_000)
+    monkeypatch.setattr(realtime_ui_state, "_now_ms", lambda: 20_000)
     state.process(
         MARKET_DATA_STREAM,
         "19500-0",
@@ -252,6 +264,7 @@ def test_realtime_state_selected_stream_age_ignores_unrelated_keys(monkeypatch) 
     cfg = RealtimeApiConfig()
     state = RealtimeState(cfg)
     monkeypatch.setattr(realtime_ui_main, "_now_ms", lambda: 10_000)
+    monkeypatch.setattr(realtime_ui_state, "_now_ms", lambda: 10_000)
     state.process(
         MARKET_DATA_STREAM,
         "1000-0",
@@ -617,6 +630,53 @@ def test_summarize_fill_activity_builds_15m_and_1h_windows() -> None:
     assert summary["window_1h"]["realized_pnl_quote"] == 1.25
 
 
+def test_merge_fill_activity_prefers_stream_when_db_lags() -> None:
+    db_activity = {
+        "fills_total": 20,
+        "latest_fill_ts_ms": 1741200000000,
+        "realized_pnl_total_quote": 5.0,
+        "window_15m": {"fill_count": 0, "volume_base": 0.0, "realized_pnl_quote": 0.0, "maker_count": 0},
+        "window_1h": {"fill_count": 2, "volume_base": 1.0, "realized_pnl_quote": 0.5, "maker_count": 1},
+    }
+    stream_activity = {
+        "fills_total": 3,
+        "latest_fill_ts_ms": 1741203600000,
+        "realized_pnl_total_quote": 1.2,
+        "window_15m": {"fill_count": 1, "volume_base": 0.5, "realized_pnl_quote": 0.3, "maker_count": 1},
+        "window_1h": {"fill_count": 3, "volume_base": 1.5, "realized_pnl_quote": 1.2, "maker_count": 2},
+    }
+    merged = _merge_fill_activity(db_activity, stream_activity)
+    assert merged["fills_total"] == 20
+    assert merged["latest_fill_ts_ms"] == 1741203600000
+    assert merged["realized_pnl_total_quote"] == 1.2
+    assert merged["window_15m"]["fill_count"] == 1
+    assert merged["window_15m"]["volume_base"] == 0.5
+    assert merged["window_1h"]["fill_count"] == 3
+    assert merged["window_1h"]["volume_base"] == 1.5
+
+
+def test_merge_fill_activity_keeps_db_when_richer() -> None:
+    db_activity = {
+        "fills_total": 50,
+        "latest_fill_ts_ms": 1741203600000,
+        "realized_pnl_total_quote": 10.0,
+        "window_15m": {"fill_count": 5, "volume_base": 2.0, "realized_pnl_quote": 1.0, "maker_count": 3},
+        "window_1h": {"fill_count": 15, "volume_base": 8.0, "realized_pnl_quote": 4.0, "maker_count": 10},
+    }
+    stream_activity = {
+        "fills_total": 2,
+        "latest_fill_ts_ms": 1741203500000,
+        "realized_pnl_total_quote": 0.5,
+        "window_15m": {"fill_count": 2, "volume_base": 0.5, "realized_pnl_quote": 0.2, "maker_count": 1},
+        "window_1h": {"fill_count": 2, "volume_base": 0.5, "realized_pnl_quote": 0.2, "maker_count": 1},
+    }
+    merged = _merge_fill_activity(db_activity, stream_activity)
+    assert merged["fills_total"] == 50
+    assert merged["window_15m"]["fill_count"] == 5
+    assert merged["window_15m"]["volume_base"] == 2.0
+    assert merged["window_1h"]["fill_count"] == 15
+
+
 def test_ops_db_read_model_fill_activity_uses_aggregate_row(monkeypatch) -> None:
     reader = OpsDbReadModel(RealtimeApiConfig())
     monkeypatch.setattr(reader, "available", lambda: True)
@@ -687,6 +747,7 @@ def test_build_health_payload_passes_when_redis_live_and_stream_fresh(tmp_path: 
     cfg = RealtimeApiConfig(mode="active", stream_stale_ms=5_000, fallback_enabled=True, degraded_mode_enabled=True, db_enabled=False)
     state = RealtimeState(cfg)
     monkeypatch.setattr(realtime_ui_main, "_now_ms", lambda: 10_000)
+    monkeypatch.setattr(realtime_ui_state, "_now_ms", lambda: 10_000)
     state.process(
         MARKET_DATA_STREAM,
         "9500-0",
@@ -1153,6 +1214,7 @@ def test_desk_snapshot_fallback_account_summary_reads_minute_equity(tmp_path: Pa
             "orders_active": "2",
         },
         "daily_state": {
+            "day_key": "2026-03-06",
             "equity_open": "995.0",
             "equity_peak": "1002.75",
         },
@@ -1209,6 +1271,74 @@ def test_desk_snapshot_fallback_loads_candles_from_minute_log(tmp_path: Path) ->
     assert candles[0]["open"] == 100.0
     assert candles[0]["close"] == 101.0
     assert candles[-1]["close"] == 102.0
+
+
+def test_build_legacy_candles_skips_minute_csv_when_operator_use_csv_disabled(tmp_path: Path) -> None:
+    reports_root = tmp_path / "reports"
+    data_root = tmp_path / "data"
+    minute_path = data_root / "bot1" / "logs" / "epp_v24" / "bot1_a" / "minute.csv"
+    minute_path.parent.mkdir(parents=True, exist_ok=True)
+    minute_path.write_text(
+        "ts,trading_pair,mid\n2026-03-05T12:00:00+00:00,BTC-USDT,100\n",
+        encoding="utf-8",
+    )
+    cfg = RealtimeApiConfig(
+        use_csv_for_operator_api=False,
+        csv_failover_only=True,
+        db_enabled=False,
+        fallback_enabled=True,
+    )
+    state = RealtimeState(cfg)
+    fallback = DeskSnapshotFallback(reports_root, data_root)
+    db_reader = OpsDbReadModel(cfg)
+    payload = _build_legacy_candles(
+        cfg,
+        state,
+        fallback,
+        db_reader,
+        "bot1",
+        "ctrl",
+        "BTC-USDT",
+        60,
+        300,
+    )
+    assert "minute_log" not in str(payload["source"])
+    assert payload["csv_failover_used"] is False
+    assert payload["candles"] == []
+
+
+def test_build_legacy_candles_uses_minute_csv_when_operator_use_csv_enabled_and_db_down(tmp_path: Path) -> None:
+    reports_root = tmp_path / "reports"
+    data_root = tmp_path / "data"
+    minute_path = data_root / "bot1" / "logs" / "epp_v24" / "bot1_a" / "minute.csv"
+    minute_path.parent.mkdir(parents=True, exist_ok=True)
+    minute_path.write_text(
+        "ts,trading_pair,mid\n2026-03-05T12:00:00+00:00,BTC-USDT,100\n",
+        encoding="utf-8",
+    )
+    cfg = RealtimeApiConfig(
+        use_csv_for_operator_api=True,
+        csv_failover_only=True,
+        db_enabled=False,
+        fallback_enabled=True,
+        degraded_mode_enabled=True,
+    )
+    state = RealtimeState(cfg)
+    fallback = DeskSnapshotFallback(reports_root, data_root)
+    db_reader = OpsDbReadModel(cfg)
+    payload = _build_legacy_candles(
+        cfg,
+        state,
+        fallback,
+        db_reader,
+        "bot1",
+        "ctrl",
+        "BTC-USDT",
+        60,
+        300,
+    )
+    assert "minute_log" in str(payload["source"])
+    assert len(payload["candles"]) >= 1
 
 
 def test_desk_snapshot_fallback_minute_log_bridges_open_on_1m(tmp_path: Path) -> None:
@@ -1532,7 +1662,8 @@ def test_ops_db_read_model_rest_backfill_candles(monkeypatch) -> None:
                 [1741200060000, 100.5, 102.0, 100.0, 101.5, 8.0],
             ]
 
-    monkeypatch.setattr(realtime_ui_main, "ccxt", type("FakeCcxt", (), {"bitget": _FakeExchange}))
+    import services.realtime_ui_api.fallback_readers as _fb_mod
+    monkeypatch.setattr(_fb_mod, "ccxt", type("FakeCcxt", (), {"bitget": _FakeExchange}))
     reader = OpsDbReadModel(RealtimeApiConfig())
     candles = reader.get_rest_backfill_candles("bitget_perpetual", "BTC-USDT", 60, 5)
     assert len(candles) == 2
@@ -1579,3 +1710,84 @@ def test_ops_db_read_model_get_market_bars_rolls_up_v2(monkeypatch) -> None:
     assert len(bars) == 1
     assert bars[0].open == 100.0
     assert bars[0].close == 101.5
+
+
+def test_build_quote_gate_summary_directional_omits_mm_gates() -> None:
+    minute = {
+        "state": "running",
+        "risk_reasons": "",
+        "order_book_stale": False,
+        "pnl_governor_active": False,
+        "spread_competitiveness_cap_active": False,
+        "soft_pause_edge": False,
+        "net_edge_pct": 0.001,
+        "net_edge_gate_pct": 0.0005,
+        "adaptive_effective_min_edge_pct": 0.0005,
+        "spread_pct": 0.001,
+        "spread_floor_pct": 0.0005,
+        "orders_active": 2,
+    }
+    result_mm = _build_quote_gate_summary(minute, strategy_type="mm")
+    result_dir = _build_quote_gate_summary(minute, strategy_type="directional")
+    result_none = _build_quote_gate_summary(minute, strategy_type=None)
+
+    mm_keys = {g["key"] for g in result_mm["quote_gates"]}
+    dir_keys = {g["key"] for g in result_dir["quote_gates"]}
+    none_keys = {g["key"] for g in result_none["quote_gates"]}
+
+    assert {"edge", "spread", "spread_cap"}.issubset(mm_keys)
+    assert {"edge", "spread", "spread_cap"}.issubset(none_keys)
+    assert "edge" not in dir_keys
+    assert "spread" not in dir_keys
+    assert "spread_cap" not in dir_keys
+    assert {"controller_state", "risk_reasons", "order_book", "pnl_governor", "orders"}.issubset(dir_keys)
+
+
+def test_build_bot_gates_derives_status_correctly() -> None:
+    raw = {
+        "bot6": {
+            "state": "blocked",
+            "reason": "trade_features_warmup",
+            "score_ratio": 0.85,
+            "cvd_divergence_ratio": 0.042,
+            "adx": 28.5,
+            "hedge_state": "off",
+        },
+        "bot7": {
+            "state": "active",
+            "reason": "",
+            "adx": 32.1,
+            "rsi": 55.2,
+        },
+    }
+    result = _build_bot_gates(raw, "directional")
+
+    assert len(result) == 2
+    bot6 = next(g for g in result if g["bot_id"] == "bot6")
+    bot7 = next(g for g in result if g["bot_id"] == "bot7")
+
+    assert bot6["strategy_type"] == "directional"
+    gate_state_6 = next(g for g in bot6["gates"] if g["key"] == "state")
+    assert gate_state_6["status"] == "fail"
+    assert gate_state_6["detail"] == "blocked"
+
+    cvd = next(g for g in bot6["gates"] if g["key"] == "cvd_divergence_ratio")
+    assert cvd["status"] == "info"
+    assert "0.042" in cvd["detail"]
+
+    gate_state_7 = next(g for g in bot7["gates"] if g["key"] == "state")
+    assert gate_state_7["status"] == "pass"
+    assert gate_state_7["detail"] == "active"
+
+    adx_7 = next(g for g in bot7["gates"] if g["key"] == "adx")
+    assert adx_7["status"] == "info"
+    assert "32.1" in adx_7["detail"]
+
+    rsi_7 = next(g for g in bot7["gates"] if g["key"] == "rsi")
+    assert rsi_7["status"] == "info"
+    assert "55.2" in rsi_7["detail"]
+
+
+def test_build_bot_gates_empty_input_returns_empty() -> None:
+    assert _build_bot_gates({}, None) == []
+    assert _build_bot_gates(None, None) == []  # type: ignore[arg-type]

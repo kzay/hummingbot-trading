@@ -4,11 +4,10 @@ from __future__ import annotations
 import argparse
 import csv
 import json
-from datetime import date, datetime, timedelta, timezone
+from collections.abc import Iterable
+from datetime import UTC, date, datetime, timedelta
 from decimal import Decimal
 from pathlib import Path
-from typing import Dict, Iterable, List
-
 
 MICRO_BENCHMARK_THRESHOLDS = {
     "max_fill_rate_delta": 0.50,
@@ -19,7 +18,7 @@ MICRO_BENCHMARK_THRESHOLDS = {
 
 
 def _utc_now() -> str:
-    return datetime.now(timezone.utc).isoformat()
+    return datetime.now(UTC).isoformat()
 
 
 def _parse_ts(value: str) -> datetime | None:
@@ -34,18 +33,18 @@ def _parse_ts(value: str) -> datetime | None:
         return None
 
 
-def _iter_csv(path: Path) -> Iterable[Dict[str, str]]:
+def _iter_csv(path: Path) -> Iterable[dict[str, str]]:
     if not path.exists():
         return []
     with path.open("r", newline="", encoding="utf-8") as f:
         yield from csv.DictReader(f)
 
 
-def _filter_day(rows: Iterable[Dict[str, str]], day: str) -> List[Dict[str, str]]:
+def _filter_day(rows: Iterable[dict[str, str]], day: str) -> list[dict[str, str]]:
     d = date.fromisoformat(day)
-    start = datetime(d.year, d.month, d.day, tzinfo=timezone.utc)
+    start = datetime(d.year, d.month, d.day, tzinfo=UTC)
     end = start + timedelta(days=1)
-    out: List[Dict[str, str]] = []
+    out: list[dict[str, str]] = []
     for row in rows:
         ts = _parse_ts(row.get("ts", ""))
         if ts is None:
@@ -73,14 +72,14 @@ def _is_truthy(value: object) -> bool:
     return str(value or "").strip().lower() in {"1", "true", "yes", "on", "y"}
 
 
-def _daily_net_pnl(rows: List[Dict[str, str]]) -> tuple[float, float, float]:
+def _daily_net_pnl(rows: list[dict[str, str]]) -> tuple[float, float, float]:
     realized = sum((_safe_decimal(r.get("realized_pnl_quote", "0")) for r in rows), Decimal("0"))
     fees = sum((_safe_decimal(r.get("fee_quote", "0")) for r in rows), Decimal("0"))
     net = realized - fees
     return float(net), float(realized), float(fees)
 
 
-def _hard_stop_incidents(rows: List[Dict[str, str]]) -> tuple[int, int]:
+def _hard_stop_incidents(rows: list[dict[str, str]]) -> tuple[int, int]:
     """Return (hard_stop_row_count, hard_stop_transition_count)."""
     hard_stop_row_count = 0
     hard_stop_transition_count = 0
@@ -106,7 +105,7 @@ def _repo_root() -> Path:
     return Path(__file__).resolve().parents[2]
 
 
-def _reject_rate(rows: List[Dict[str, str]]) -> tuple[int, float]:
+def _reject_rate(rows: list[dict[str, str]]) -> tuple[int, float]:
     rejected = sum(
         1
         for r in rows
@@ -117,12 +116,12 @@ def _reject_rate(rows: List[Dict[str, str]]) -> tuple[int, float]:
     return rejected, rate
 
 
-def _avg_slippage_bps(rows: List[Dict[str, str]]) -> float:
+def _avg_slippage_bps(rows: list[dict[str, str]]) -> float:
     samples = [_safe_float(r.get("pnl_vs_mid_pct", "0")) * 10000.0 for r in rows if r.get("pnl_vs_mid_pct") not in (None, "")]
     return (sum(samples) / len(samples)) if samples else 0.0
 
 
-def _cancel_before_fill_rate(rows: List[Dict[str, str]]) -> tuple[int, float]:
+def _cancel_before_fill_rate(rows: list[dict[str, str]]) -> tuple[int, float]:
     count = sum(
         1
         for r in rows
@@ -132,7 +131,7 @@ def _cancel_before_fill_rate(rows: List[Dict[str, str]]) -> tuple[int, float]:
     return count, rate
 
 
-def build_scorecard(day: str, testnet_root: Path, paper_root: Path, reports_root: Path) -> Dict:
+def build_scorecard(day: str, testnet_root: Path, paper_root: Path, reports_root: Path) -> dict:
     testnet_fills = _filter_day(_iter_csv(testnet_root / "fills.csv"), day)
     paper_fills = _filter_day(_iter_csv(paper_root / "fills.csv"), day)
     testnet_minute = _filter_day(_iter_csv(testnet_root / "minute.csv"), day)
@@ -161,7 +160,7 @@ def build_scorecard(day: str, testnet_root: Path, paper_root: Path, reports_root
     )
 
     status = "pass"
-    failures: List[str] = []
+    failures: list[str] = []
     # "no_testnet_fills" should only fire when testnet has zero fills.
     # A missing paper baseline (paper_fill_count == 0) should not erase
     # real testnet activity.
@@ -175,7 +174,7 @@ def build_scorecard(day: str, testnet_root: Path, paper_root: Path, reports_root
         status = "fail"
         failures.append("hard_stop_incident_detected")
 
-    benchmark_checks: List[Dict[str, object]] = []
+    benchmark_checks: list[dict[str, object]] = []
     benchmark_status = "insufficient_data"
     # Require both fills and minute baselines on each side before evaluating
     # fill-rate/cancel-rate deltas; otherwise mark micro-benchmark inconclusive.
@@ -261,7 +260,7 @@ def build_scorecard(day: str, testnet_root: Path, paper_root: Path, reports_root
 
 def main() -> int:
     parser = argparse.ArgumentParser(description="Generate ROAD-5 testnet daily scorecard.")
-    parser.add_argument("--day", required=True, help="UTC day YYYY-MM-DD")
+    parser.add_argument("--day", required=True, help="timezone.utc day YYYY-MM-DD")
     root = _repo_root()
     parser.add_argument("--testnet-root", default=str(root / "data" / "bot1" / "logs" / "epp_v24" / "bot1_a"))
     parser.add_argument("--paper-root", default=str(root / "data" / "bot3" / "logs" / "epp_v24" / "bot3_a"))

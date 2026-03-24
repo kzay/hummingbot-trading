@@ -1,30 +1,28 @@
 """Tests for reconciliation_service — drift detection, report shape, graceful fallbacks."""
 from __future__ import annotations
 
-import os
 import json
-import tempfile
-from datetime import datetime, timedelta, timezone
+import os
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from unittest.mock import patch
 
+from services.reconciliation_service.fill_reconciler import reconcile_fills
 from services.reconciliation_service.main import (
+    _apply_exchange_snapshot_check,
     _apply_fill_reconciliation_report,
+    _bot_thresholds,
+    _count_event_fills,
     _critical_action_name,
     _derive_reconciliation_actions,
     _emit_webhook_alert,
-    _apply_exchange_snapshot_check,
-    _bot_thresholds,
-    _count_event_fills,
     _inventory_drift_from_minute,
     _latest_source_compare_with_telemetry,
     _load_thresholds,
-    run,
     _severity,
     _write_json,
+    run,
 )
-from services.reconciliation_service.fill_reconciler import reconcile_fills
-
 
 # ── helpers ──────────────────────────────────────────────────────────
 
@@ -371,16 +369,16 @@ class TestRunLoopRegression:
         data_root = tmp_path / "data"
         minute_dir = data_root / "bot1" / "logs" / "epp_v24" / "bot1_a"
         minute_dir.mkdir(parents=True, exist_ok=True)
-        day_stamp = datetime.now(timezone.utc).strftime("%Y%m%d")
+        day_stamp = datetime.now(UTC).strftime("%Y%m%d")
         minute_dir.joinpath("minute.csv").write_text(
             "ts,state,connector_name,trading_pair,fills_count_today,fees_paid_today_quote,turnover_today_x,maker_fee_pct,taker_fee_pct,fee_source\n"
-            f"{datetime.now(timezone.utc).strftime('%Y-%m-%dT%H:%M:%SZ')},running,bitget_perpetual,BTC-USDT,2,0,0,0.0002,0.0006,vip0\n",
+            f"{datetime.now(UTC).strftime('%Y-%m-%dT%H:%M:%SZ')},running,bitget_perpetual,BTC-USDT,2,0,0,0.0002,0.0006,vip0\n",
             encoding="utf-8",
         )
         (event_store_root / f"integrity_{day_stamp}.json").write_text(
             json.dumps(
                 {
-                    "ts_utc": datetime.now(timezone.utc).isoformat(),
+                    "ts_utc": datetime.now(UTC).isoformat(),
                     "events_by_stream": {"hb.bot_telemetry.v1": 0},
                 }
             ),
@@ -389,7 +387,7 @@ class TestRunLoopRegression:
         (event_store_root / f"source_compare_{day_stamp}T000000Z.json").write_text(
             json.dumps(
                 {
-                    "ts_utc": datetime.now(timezone.utc).isoformat(),
+                    "ts_utc": datetime.now(UTC).isoformat(),
                     "source_events_by_stream": {"hb.bot_telemetry.v1": 12},
                     "stored_events_by_stream": {"hb.bot_telemetry.v1": 0},
                     "lag_produced_minus_ingested_since_baseline": {"hb.bot_telemetry.v1": 12},
@@ -398,8 +396,8 @@ class TestRunLoopRegression:
             ),
             encoding="utf-8",
         )
-        ts_utc = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
-        (event_store_root / f"events_{datetime.now(timezone.utc).strftime('%Y%m%d')}.jsonl").write_text(
+        ts_utc = datetime.now(UTC).strftime("%Y-%m-%dT%H:%M:%SZ")
+        (event_store_root / f"events_{datetime.now(UTC).strftime('%Y%m%d')}.jsonl").write_text(
             json.dumps(
                 {
                     "event_type": "bot_minute_snapshot",
@@ -430,9 +428,8 @@ class TestRunLoopRegression:
                 "HB_DATA_ROOT": str(data_root),
             },
             clear=False,
-        ):
-            with patch("services.reconciliation_service.main._write_json") as write_json_mock:
-                run(once=True)
+        ), patch("services.reconciliation_service.main._write_json") as write_json_mock:
+            run(once=True)
 
         assert write_json_mock.call_count >= 2
         payloads = [call.args[1] for call in write_json_mock.call_args_list if len(call.args) >= 2]
@@ -463,7 +460,7 @@ class TestRunLoopRegression:
         minute_dir.mkdir(parents=True, exist_ok=True)
         minute_dir.joinpath("minute.csv").write_text(
             "ts,state,connector_name,trading_pair,equity_quote,base_pct,target_base_pct,fills_count_today,fees_paid_today_quote,turnover_today_x,maker_fee_pct,taker_fee_pct,fee_source\n"
-            f"{datetime.now(timezone.utc).strftime('%Y-%m-%dT%H:%M:%SZ')},running,bitget_perpetual,BTC-USDT,1000,0.5,0.5,2,0,0,0.0002,0.0006,vip0\n",
+            f"{datetime.now(UTC).strftime('%Y-%m-%dT%H:%M:%SZ')},running,bitget_perpetual,BTC-USDT,1000,0.5,0.5,2,0,0,0.0002,0.0006,vip0\n",
             encoding="utf-8",
         )
 
@@ -474,9 +471,8 @@ class TestRunLoopRegression:
                 "HB_DATA_ROOT": str(data_root),
             },
             clear=False,
-        ):
-            with patch("services.reconciliation_service.main._write_json") as write_json_mock:
-                run(once=True)
+        ), patch("services.reconciliation_service.main._write_json") as write_json_mock:
+            run(once=True)
 
         payloads = [call.args[1] for call in write_json_mock.call_args_list if len(call.args) >= 2]
         report_payloads = [payload for payload in payloads if isinstance(payload, dict) and "checked_bots" in payload]
@@ -500,8 +496,8 @@ class TestRunLoopRegression:
         event_store_root.mkdir(parents=True, exist_ok=True)
         data_root = tmp_path / "data"
         data_root.mkdir(parents=True, exist_ok=True)
-        ts_utc = (datetime.now(timezone.utc) - timedelta(days=1)).strftime("%Y-%m-%dT%H:%M:%SZ")
-        (event_store_root / f"events_{(datetime.now(timezone.utc) - timedelta(days=1)).strftime('%Y%m%d')}.jsonl").write_text(
+        ts_utc = (datetime.now(UTC) - timedelta(days=1)).strftime("%Y-%m-%dT%H:%M:%SZ")
+        (event_store_root / f"events_{(datetime.now(UTC) - timedelta(days=1)).strftime('%Y%m%d')}.jsonl").write_text(
             json.dumps(
                 {
                     "event_type": "bot_minute_snapshot",
@@ -532,9 +528,8 @@ class TestRunLoopRegression:
                 "HB_DATA_ROOT": str(data_root),
             },
             clear=False,
-        ):
-            with patch("services.reconciliation_service.main._write_json") as write_json_mock:
-                run(once=True)
+        ), patch("services.reconciliation_service.main._write_json") as write_json_mock:
+            run(once=True)
 
         payloads = [call.args[1] for call in write_json_mock.call_args_list if len(call.args) >= 2]
         findings = []
@@ -546,3 +541,104 @@ class TestRunLoopRegression:
             if f.get("message") == "fills_present_without_order_filled_events"
         ]
         assert parity_findings == []
+
+    def test_run_once_empty_csv_with_events_no_crash(self, tmp_path):
+        """Reconciliation with header-only minute.csv and fill events in event store does not crash."""
+        event_store_root = tmp_path / "reports" / "event_store"
+        event_store_root.mkdir(parents=True, exist_ok=True)
+        data_root = tmp_path / "data"
+        minute_dir = data_root / "bot1" / "logs" / "epp_v24" / "bot1_a"
+        minute_dir.mkdir(parents=True, exist_ok=True)
+        day_stamp = datetime.now(UTC).strftime("%Y%m%d")
+        ts_utc = datetime.now(UTC).strftime("%Y-%m-%dT%H:%M:%SZ")
+
+        # CSV with only headers, no data rows
+        minute_dir.joinpath("minute.csv").write_text(
+            "ts,state,connector_name,trading_pair,fills_count_today,fees_paid_today_quote,turnover_today_x,maker_fee_pct,taker_fee_pct,fee_source\n",
+            encoding="utf-8",
+        )
+
+        # Event store: integrity and source_compare
+        (event_store_root / f"integrity_{day_stamp}.json").write_text(
+            json.dumps(
+                {
+                    "ts_utc": datetime.now(UTC).isoformat(),
+                    "events_by_stream": {"hb.bot_telemetry.v1": 0},
+                }
+            ),
+            encoding="utf-8",
+        )
+        (event_store_root / f"source_compare_{day_stamp}T000000Z.json").write_text(
+            json.dumps(
+                {
+                    "ts_utc": datetime.now(UTC).isoformat(),
+                    "source_events_by_stream": {"hb.bot_telemetry.v1": 12},
+                    "stored_events_by_stream": {"hb.bot_telemetry.v1": 12},
+                    "lag_produced_minus_ingested_since_baseline": {"hb.bot_telemetry.v1": 0},
+                    "delta_produced_minus_ingested_since_baseline": {"hb.bot_telemetry.v1": 0},
+                }
+            ),
+            encoding="utf-8",
+        )
+
+        # Fill events and bot_minute_snapshot (snapshot from event store; minute.csv fallback yields nothing)
+        events_path = event_store_root / f"events_{day_stamp}.jsonl"
+        events_path.write_text(
+            "\n".join(
+                json.dumps(ev) for ev in [
+                    {
+                        "event_type": "order_filled",
+                        "instance_name": "bot1",
+                        "ts_utc": ts_utc,
+                    },
+                    {
+                        "event_type": "bot_fill",
+                        "instance_name": "bot1",
+                        "ts_utc": ts_utc,
+                    },
+                    {
+                        "event_type": "bot_minute_snapshot",
+                        "instance_name": "bot1",
+                        "payload": {
+                            "instance_name": "bot1",
+                            "ts": ts_utc,
+                            "equity_quote": 1000,
+                            "base_pct": 0.5,
+                            "target_base_pct": 0.5,
+                            "connector_name": "bitget_perpetual",
+                            "fills_count_today": 2,
+                            "fees_paid_today_quote": 0,
+                            "turnover_today_x": 0,
+                            "maker_fee_pct": 0.0002,
+                            "taker_fee_pct": 0.0006,
+                            "fee_source": "vip0",
+                        },
+                    },
+                ]
+            ),
+            encoding="utf-8",
+        )
+
+        with patch.dict(
+            os.environ,
+            {
+                "RECON_EVENT_STORE_ROOT": str(event_store_root),
+                "HB_DATA_ROOT": str(data_root),
+            },
+            clear=False,
+        ), patch("services.reconciliation_service.main._write_json") as write_json_mock:
+            run(once=True)
+
+        assert write_json_mock.call_count >= 2
+        payloads = [call.args[1] for call in write_json_mock.call_args_list if len(call.args) >= 2]
+        report_payloads = [p for p in payloads if isinstance(p, dict) and "checked_bots" in p]
+        assert report_payloads
+        latest_report = report_payloads[-1]
+        assert "bot1" in latest_report.get("active_bots", [])
+        # Parity check ran without raising; no crash
+        parity_findings = [
+            f for f in latest_report.get("findings", [])
+            if f.get("check") == "fill_parity"
+        ]
+        # fills_count_today=2 matches 2 fill events; no mismatch finding expected
+        assert all(f.get("message") != "fills_present_without_order_filled_events" for f in parity_findings)

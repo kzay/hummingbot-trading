@@ -3,9 +3,9 @@ from __future__ import annotations
 import argparse
 import json
 import os
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
-from typing import Any, Dict, List
+from typing import Any
 
 try:
     import psycopg
@@ -14,10 +14,10 @@ except Exception:  # pragma: no cover
 
 
 def _utc_now() -> str:
-    return datetime.now(timezone.utc).isoformat()
+    return datetime.now(UTC).isoformat()
 
 
-def _connect() -> "psycopg.Connection[Any]":
+def _connect() -> psycopg.Connection[Any]:
     if psycopg is None:
         raise RuntimeError("psycopg_not_installed")
     return psycopg.connect(
@@ -29,16 +29,16 @@ def _connect() -> "psycopg.Connection[Any]":
     )
 
 
-def _apply_schema(conn: "psycopg.Connection[Any]", root: Path) -> None:
+def _apply_schema(conn: psycopg.Connection[Any], root: Path) -> None:
     schema_path = root / "services" / "ops_db_writer" / "schema_v2_market_bar.sql"
     with conn.cursor() as cur:
         cur.execute(schema_path.read_text(encoding="utf-8"))
     conn.commit()
 
 
-def _where_clause(connector_name: str, trading_pair: str) -> tuple[str, Dict[str, Any]]:
-    clauses: List[str] = []
-    params: Dict[str, Any] = {}
+def _where_clause(connector_name: str, trading_pair: str) -> tuple[str, dict[str, Any]]:
+    clauses: list[str] = []
+    params: dict[str, Any] = {}
     if connector_name:
         clauses.append("legacy.connector_name = %(connector_name)s")
         params["connector_name"] = connector_name
@@ -48,13 +48,13 @@ def _where_clause(connector_name: str, trading_pair: str) -> tuple[str, Dict[str
     return ("WHERE " + " AND ".join(clauses)) if clauses else "", params
 
 
-def _fetch_scalar(cur: "psycopg.Cursor[Any]", sql: str, params: Dict[str, Any]) -> int:
+def _fetch_scalar(cur: psycopg.Cursor[Any], sql: str, params: dict[str, Any]) -> int:
     cur.execute(sql, params)
     row = cur.fetchone()
     return int(row[0] or 0) if row else 0
 
 
-def _sample_parity(cur: "psycopg.Cursor[Any]", where_sql: str, params: Dict[str, Any], sample_limit: int) -> List[Dict[str, Any]]:
+def _sample_parity(cur: psycopg.Cursor[Any], where_sql: str, params: dict[str, Any], sample_limit: int) -> list[dict[str, Any]]:
     sample_sql = f"""
     SELECT
       legacy.bucket_minute_utc,
@@ -81,11 +81,11 @@ def _sample_parity(cur: "psycopg.Cursor[Any]", where_sql: str, params: Dict[str,
     """
     cur.execute(sample_sql, {**params, "sample_limit": max(1, int(sample_limit))})
     rows = cur.fetchall() or []
-    out: List[Dict[str, Any]] = []
+    out: list[dict[str, Any]] = []
     for row in rows:
         legacy_vals = [float(row[3]), float(row[4]), float(row[5]), float(row[6])]
         v2_vals = [float(row[7]), float(row[8]), float(row[9]), float(row[10])]
-        max_abs_diff = max(abs(a - b) for a, b in zip(legacy_vals, v2_vals))
+        max_abs_diff = max(abs(a - b) for a, b in zip(legacy_vals, v2_vals, strict=True))
         out.append(
             {
                 "bucket_minute_utc": row[0].isoformat() if hasattr(row[0], "isoformat") else str(row[0]),
@@ -116,7 +116,7 @@ def main() -> int:
     if not report_path.is_absolute():
         report_path = root / report_path
 
-    result: Dict[str, Any] = {
+    result: dict[str, Any] = {
         "ts_utc": _utc_now(),
         "status": "pass",
         "dry_run": bool(args.dry_run),
@@ -136,8 +136,8 @@ def main() -> int:
         FROM market_bar_v2 v2
         WHERE v2.bar_source = 'quote_mid'
           AND v2.bar_interval_s = 60
-          {f"AND v2.connector_name = %(connector_name)s" if params.get("connector_name") else ""}
-          {f"AND v2.trading_pair = %(trading_pair)s" if params.get("trading_pair") else ""}
+          {"AND v2.connector_name = %(connector_name)s" if params.get("connector_name") else ""}
+          {"AND v2.trading_pair = %(trading_pair)s" if params.get("trading_pair") else ""}
         """
         missing_count_sql = f"""
         SELECT COUNT(*)

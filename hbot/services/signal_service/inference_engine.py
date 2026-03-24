@@ -1,14 +1,16 @@
 from __future__ import annotations
 
+import logging
 import time
-from typing import Any, Dict, List, Optional, Tuple
 
 from services.signal_service.model_loader import LoadedModel
+
+logger = logging.getLogger(__name__)
 
 REGIME_LABELS = ["neutral_low_vol", "neutral_high_vol", "up", "down", "high_vol_shock"]
 
 
-def run_inference(loaded: LoadedModel, feature_vector: List[float], feature_map: Dict[str, float]) -> Tuple[float, float, int]:
+def run_inference(loaded: LoadedModel, feature_vector: list[float], feature_map: dict[str, float]) -> tuple[float, float, int]:
     start_ms = int(time.time() * 1000)
     model = loaded.model
     predicted_return = 0.0
@@ -24,7 +26,8 @@ def run_inference(loaded: LoadedModel, feature_vector: List[float], feature_map:
             decision = float(model.decision_function([feature_vector])[0])
             confidence = max(0.0, min(1.0, (abs(decision) / 5.0)))
         else:
-            confidence = min(1.0, abs(predicted_return) * 100)
+            confidence = 0.0
+            logger.warning("sklearn model has neither predict_proba nor decision_function — confidence forced to 0.0")
     elif loaded.runtime == "custom_python":
         # Custom model should accept dict-like or list-like features.
         if hasattr(model, "predict_with_confidence"):
@@ -34,7 +37,7 @@ def run_inference(loaded: LoadedModel, feature_vector: List[float], feature_map:
         elif hasattr(model, "predict"):
             pred = model.predict(feature_map)
             predicted_return = float(pred)
-            confidence = min(1.0, abs(predicted_return) * 100)
+            confidence = 0.0
         else:
             raise RuntimeError("custom_python model missing predict method")
     else:
@@ -47,9 +50,9 @@ def run_inference(loaded: LoadedModel, feature_vector: List[float], feature_map:
 
 def predict_regime(
     loaded: LoadedModel,
-    feature_vector: List[float],
-    regime_labels: Optional[List[str]] = None,
-) -> Tuple[str, float, int]:
+    feature_vector: list[float],
+    regime_labels: list[str] | None = None,
+) -> tuple[str, float, int]:
     """Predict regime from a classifier model.
 
     Returns: (regime_str, confidence, latency_ms)

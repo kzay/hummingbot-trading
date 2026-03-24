@@ -34,8 +34,14 @@ export function gateTone(status: string): "ok" | "warn" | "fail" | "neutral" {
   if (["limited", "waiting", "warn", "degraded", "stale"].includes(normalized)) {
     return "warn";
   }
-  if (["quoting", "active", "pass", "ok", "ready"].includes(normalized)) {
+  if (["quoting", "active", "pass", "ok", "ready", "connected", "live"].includes(normalized)) {
     return "ok";
+  }
+  if (normalized === "info") {
+    return "neutral";
+  }
+  if (["reconnecting", "connecting"].includes(normalized)) {
+    return "warn";
   }
   return "neutral";
 }

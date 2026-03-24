@@ -3,7 +3,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from decimal import Decimal
 
-from controllers.runtime.market_making_types import MarketConditions, RegimeSpec, SpreadEdgeState
+from controllers.runtime.runtime_types import MarketConditions, RegimeSpec, SpreadEdgeState
 
 
 @dataclass(frozen=True)

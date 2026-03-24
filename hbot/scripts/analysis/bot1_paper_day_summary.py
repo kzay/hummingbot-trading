@@ -5,10 +5,10 @@ import csv
 import datetime as dt
 import json
 import os
+from collections.abc import Iterable
 from dataclasses import dataclass
 from decimal import Decimal
 from pathlib import Path
-from typing import Dict, Iterable, List, Optional, Tuple
 
 try:
     import psycopg
@@ -29,9 +29,9 @@ def _parse_ts(s: str) -> dt.datetime:
     return dt.datetime.fromisoformat(s)
 
 
-def _day_window_utc(day: str) -> Tuple[dt.datetime, dt.datetime]:
+def _day_window_utc(day: str) -> tuple[dt.datetime, dt.datetime]:
     d = dt.date.fromisoformat(day)
-    start = dt.datetime(d.year, d.month, d.day, tzinfo=dt.timezone.utc)
+    start = dt.datetime(d.year, d.month, d.day, tzinfo=dt.UTC)
     end = start + dt.timedelta(days=1)
     return start, end
 
@@ -56,7 +56,7 @@ def _env_bool(name: str, default: bool) -> bool:
     return default
 
 
-def _infer_bot_variant(root: Path) -> Tuple[Optional[str], Optional[str]]:
+def _infer_bot_variant(root: Path) -> tuple[str | None, str | None]:
     # Expected: data/<bot>/logs/epp_v24/<variant_folder>
     try:
         return str(root.parts[-5]).lower(), str(root.parts[-1]).lower()
@@ -76,11 +76,11 @@ def _connect_ops_db():
     )
 
 
-def _row_to_str_dict(row: Dict[str, object]) -> Dict[str, str]:
-    out: Dict[str, str] = {}
+def _row_to_str_dict(row: dict[str, object]) -> dict[str, str]:
+    out: dict[str, str] = {}
     for k, v in row.items():
         if hasattr(v, "astimezone"):
-            out[k] = v.astimezone(dt.timezone.utc).isoformat()
+            out[k] = v.astimezone(dt.UTC).isoformat()
         elif isinstance(v, bool):
             out[k] = "true" if v else "false"
         elif v is None:
@@ -90,15 +90,15 @@ def _row_to_str_dict(row: Dict[str, object]) -> Dict[str, str]:
     return out
 
 
-def _load_day_rows_from_db(root: Path, day: str) -> Tuple[List[Dict[str, str]], List[Dict[str, str]]]:
+def _load_day_rows_from_db(root: Path, day: str) -> tuple[list[dict[str, str]], list[dict[str, str]]]:
     bot, variant = _infer_bot_variant(root)
     if not bot or not variant:
         raise RuntimeError("cannot_infer_bot_variant_from_root")
     start, end = _day_window_utc(day)
     conn = _connect_ops_db()
     try:
-        fills_day: List[Dict[str, str]] = []
-        minute_day: List[Dict[str, str]] = []
+        fills_day: list[dict[str, str]] = []
+        minute_day: list[dict[str, str]] = []
         with conn.cursor() as cur:
             cur.execute(
                 """
@@ -113,7 +113,7 @@ def _load_day_rows_from_db(root: Path, day: str) -> Tuple[List[Dict[str, str]], 
             )
             fill_cols = [str(desc[0]) for desc in (cur.description or [])]
             for rec in cur.fetchall() or []:
-                row = _row_to_str_dict(dict(zip(fill_cols, rec)))
+                row = _row_to_str_dict(dict(zip(fill_cols, rec, strict=True)))
                 row["ts"] = row.pop("ts_utc", "")
                 fills_day.append(row)
 
@@ -131,7 +131,7 @@ def _load_day_rows_from_db(root: Path, day: str) -> Tuple[List[Dict[str, str]], 
             )
             minute_cols = [str(desc[0]) for desc in (cur.description or [])]
             for rec in cur.fetchall() or []:
-                raw_row = dict(zip(minute_cols, rec))
+                raw_row = dict(zip(minute_cols, rec, strict=True))
                 payload = raw_row.get("raw_payload")
                 row = _row_to_str_dict(raw_row)
                 row["ts"] = row.pop("ts_utc", "")
@@ -159,10 +159,10 @@ class FillsAgg:
     edge_sum: Decimal = _ZERO          # signed edge vs mid_ref
     edge_abs_sum: Decimal = _ZERO
     edge_pos: int = 0
-    first_ts: Optional[dt.datetime] = None
-    last_ts: Optional[dt.datetime] = None
+    first_ts: dt.datetime | None = None
+    last_ts: dt.datetime | None = None
 
-    def add_row(self, r: Dict[str, str]) -> None:
+    def add_row(self, r: dict[str, str]) -> None:
         t = _parse_ts(r["ts"])
         if self.first_ts is None or t < self.first_ts:
             self.first_ts = t
@@ -196,7 +196,7 @@ class FillsAgg:
             if edge > _ZERO:
                 self.edge_pos += 1
 
-    def to_dict(self) -> Dict[str, object]:
+    def to_dict(self) -> dict[str, object]:
         taker = self.fills - self.maker
         fee_rate = (self.fees / self.notional) if self.notional > _ZERO else _ZERO
         avg_edge = (self.edge_sum / self.fills) if self.fills else _ZERO
@@ -228,27 +228,27 @@ class FillsAgg:
         }
 
 
-def _iter_csv_rows(path: Path) -> Iterable[Dict[str, str]]:
+def _iter_csv_rows(path: Path) -> Iterable[dict[str, str]]:
     with path.open("r", newline="", encoding="utf-8") as f:
         r = csv.DictReader(f)
         for row in r:
             yield row
 
 
-def _collect_minute_rows_for_day(root: Path, day: str) -> List[Dict[str, str]]:
+def _collect_minute_rows_for_day(root: Path, day: str) -> list[dict[str, str]]:
     """Load minute rows for a day from active + rotated files with dedupe/order."""
     minute_files = sorted(root.glob("minute.legacy_*.csv"))
     minute_main = root / "minute.csv"
     if minute_main.exists():
         minute_files.append(minute_main)
 
-    rows: List[Dict[str, str]] = []
+    rows: list[dict[str, str]] = []
     for path in minute_files:
         rows.extend(_filter_day(_iter_csv_rows(path), day))
 
     # Deduplicate on timestamp while preferring later files (newer writes),
     # then return deterministic ts ordering.
-    by_ts: Dict[str, Dict[str, str]] = {}
+    by_ts: dict[str, dict[str, str]] = {}
     for row in rows:
         ts = str(row.get("ts", "")).strip()
         if not ts:
@@ -257,9 +257,9 @@ def _collect_minute_rows_for_day(root: Path, day: str) -> List[Dict[str, str]]:
     return [by_ts[k] for k in sorted(by_ts.keys(), key=lambda t: _parse_ts(t))]
 
 
-def _filter_day(rows: Iterable[Dict[str, str]], day: str) -> List[Dict[str, str]]:
+def _filter_day(rows: Iterable[dict[str, str]], day: str) -> list[dict[str, str]]:
     start, end = _day_window_utc(day)
-    out: List[Dict[str, str]] = []
+    out: list[dict[str, str]] = []
     for row in rows:
         try:
             t = _parse_ts(row["ts"])
@@ -270,7 +270,7 @@ def _filter_day(rows: Iterable[Dict[str, str]], day: str) -> List[Dict[str, str]
     return out
 
 
-def _read_json(path: Path) -> Optional[Dict]:
+def _read_json(path: Path) -> dict | None:
     try:
         return json.loads(path.read_text(encoding="utf-8"))
     except Exception:
@@ -280,7 +280,7 @@ def _read_json(path: Path) -> Optional[Dict]:
 def main() -> int:
     ap = argparse.ArgumentParser()
     ap.add_argument("--day", required=True, help="UTC day, e.g. 2026-02-25")
-    ap.add_argument("--root", default="hbot/data/bot1/logs/epp_v24/bot1_a", help="log root")
+    ap.add_argument("--root", default="data/bot1/logs/epp_v24/bot1_a", help="log root")
     ap.add_argument("--exchange", default=None, help="Filter fills by exchange/connector_name (fills.csv 'exchange' column)")
     ap.add_argument("--pair", default=None, help="Filter fills by trading_pair (fills.csv 'trading_pair' column)")
     ap.add_argument(
@@ -301,7 +301,7 @@ def main() -> int:
     minute_path = root / "minute.csv"
 
     data_source_mode = "csv"
-    data_source_fallback_reason: Optional[str] = None
+    data_source_fallback_reason: str | None = None
     if _env_bool("OPS_DB_READ_PREFERRED", False):
         try:
             fills_day, minute_day = _load_day_rows_from_db(root, args.day)
@@ -338,7 +338,7 @@ def main() -> int:
         agg.add_row(r)
 
     # Minute-derived quick stats
-    minute_stats: Dict[str, object] = {
+    minute_stats: dict[str, object] = {
         "rows": len(minute_day),
     }
     if minute_day:
@@ -376,8 +376,8 @@ def main() -> int:
                 minute_stats[k] = last[k]
 
         # Distribution of guard states
-        states: Dict[str, int] = {}
-        regimes: Dict[str, int] = {}
+        states: dict[str, int] = {}
+        regimes: dict[str, int] = {}
         for r in minute_day:
             states[r.get("state", "")] = states.get(r.get("state", ""), 0) + 1
             regimes[r.get("regime", "")] = regimes.get(r.get("regime", ""), 0) + 1

@@ -1,0 +1,51 @@
+strategy_class: ""
+strategy_config:
+  adapter_mode: "momentum_scalper"
+  # Use EMA cross as reversal signal — trade AGAINST short-term momentum
+  # Buy when fast crosses BELOW slow (oversold bounce), sell when above
+  ema_fast: 8
+  ema_slow: 21
+  rsi_period: 14
+  atr_period: 14
+  adx_period: 14
+  # Extreme RSI as confirmation
+  rsi_overbought: "60"
+  rsi_oversold: "40"
+  # Low ADX = range-bound market
+  adx_min: "10"
+  risk_pct: "0.08"
+  # Tight TP, wider SL for mean-reversion
+  sl_atr_mult: "2.0"
+  tp_atr_mult: "1.0"
+  trail_activate_r: "0.5"
+  trail_offset_atr: "0.4"
+  max_hold_minutes: 60
+  cooldown_s: 600
+  max_daily_loss_pct: "0.03"
+  min_warmup_bars: 30
+
+data_source:
+  exchange: bitget
+  pair: BTC-USDT
+  resolution: 1m
+  instrument_type: perp
+  start_date: "2025-01-01"
+  end_date: "2025-01-31"
+  catalog_dir: data/historical
+
+initial_equity: 500
+fill_model: latency_aware
+seed: 42
+leverage: 1
+step_interval_s: 60
+warmup_bars: 60
+
+synthesis:
+  base_spread_bps: "5.0"
+  vol_spread_mult: "1.0"
+  depth_levels: 10
+  depth_decay: "0.70"
+  base_depth_size: "0.5"
+  steps_per_bar: 4
+
+output_dir: reports/backtest

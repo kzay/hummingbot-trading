@@ -5,16 +5,15 @@ import json
 import os
 import subprocess
 import sys
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
-from typing import Dict, List
 
 
 def _utc_now() -> str:
-    return datetime.now(timezone.utc).isoformat()
+    return datetime.now(UTC).isoformat()
 
 
-def _read_json(path: Path) -> Dict[str, object]:
+def _read_json(path: Path) -> dict[str, object]:
     if not path.exists():
         return {}
     try:
@@ -30,7 +29,7 @@ def _run_window(
     repeat: int,
     *,
     require_portfolio_risk_healthy: bool = True,
-) -> Dict[str, object]:
+) -> dict[str, object]:
     cmd = [
         sys.executable,
         str(root / "scripts" / "release" / "run_replay_regression_cycle.py"),
@@ -69,7 +68,7 @@ def _run_window(
         }
 
 
-def _write_md(path: Path, payload: Dict[str, object]) -> None:
+def _write_md(path: Path, payload: dict[str, object]) -> None:
     windows = payload.get("windows", []) if isinstance(payload.get("windows"), list) else []
     lines = [
         "# Replay Regression Multi-Window Summary",
@@ -118,7 +117,7 @@ def main() -> int:
     out_root = root / "reports" / "replay_regression_multi_window"
     out_root.mkdir(parents=True, exist_ok=True)
 
-    parsed_windows: List[int] = []
+    parsed_windows: list[int] = []
     for raw in str(args.windows).split(","):
         raw = raw.strip()
         if not raw:
@@ -157,7 +156,7 @@ def main() -> int:
         "failed_windows": failed,
         "windows": windows,
     }
-    stamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
+    stamp = datetime.now(UTC).strftime("%Y%m%dT%H%M%SZ")
     out_json = out_root / f"replay_regression_multi_window_{stamp}.json"
     out_md = out_root / f"replay_regression_multi_window_{stamp}.md"
     out_json.write_text(json.dumps(payload, indent=2), encoding="utf-8")

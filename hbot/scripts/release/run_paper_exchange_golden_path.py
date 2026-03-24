@@ -7,16 +7,15 @@ import os
 import subprocess
 import sys
 import time
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
-from typing import Dict, List, Tuple
 
 
 def _utc_now() -> str:
-    return datetime.now(timezone.utc).isoformat()
+    return datetime.now(UTC).isoformat()
 
 
-def _build_subprocess_env(root: Path) -> Dict[str, str]:
+def _build_subprocess_env(root: Path) -> dict[str, str]:
     env = os.environ.copy()
     root_str = str(root)
     current = env.get("PYTHONPATH", "")
@@ -27,7 +26,7 @@ def _build_subprocess_env(root: Path) -> Dict[str, str]:
     return env
 
 
-def _run_pytest_scenario(root: Path, node_ids: List[str], *, strict: bool) -> Tuple[int, str, float]:
+def _run_pytest_scenario(root: Path, node_ids: list[str], *, strict: bool) -> tuple[int, str, float]:
     cmd = [sys.executable, "-m", "pytest", "-q", *node_ids]
     if strict:
         cmd.insert(3, "-x")
@@ -49,7 +48,7 @@ def _run_pytest_scenario(root: Path, node_ids: List[str], *, strict: bool) -> Tu
         return 99, str(exc), elapsed
 
 
-def _scenario_matrix() -> List[Dict[str, object]]:
+def _scenario_matrix() -> list[dict[str, object]]:
     return [
         {
             "id": "submit_cancel_partial_fill_fill_reject_expire",
@@ -157,11 +156,11 @@ def _scenario_matrix() -> List[Dict[str, object]]:
     ]
 
 
-def build_report(root: Path, *, strict: bool, now_ts: float | None = None) -> Dict[str, object]:
+def build_report(root: Path, *, strict: bool, now_ts: float | None = None) -> dict[str, object]:
     _ = now_ts  # Reserved for deterministic testing hooks.
     scenarios = _scenario_matrix()
-    results: List[Dict[str, object]] = []
-    failed_categories: List[str] = []
+    results: list[dict[str, object]] = []
+    failed_categories: list[str] = []
 
     for scenario in scenarios:
         node_ids = [str(x) for x in scenario.get("node_ids", [])]
@@ -193,7 +192,7 @@ def build_report(root: Path, *, strict: bool, now_ts: float | None = None) -> Di
     failed_count = len(results) - passed_count
     status = "pass" if failed_count == 0 else "fail"
 
-    remediation_map: Dict[str, List[str]] = {}
+    remediation_map: dict[str, list[str]] = {}
     for row in results:
         if str(row.get("status", "")) == "pass":
             continue
@@ -218,10 +217,10 @@ def build_report(root: Path, *, strict: bool, now_ts: float | None = None) -> Di
     }
 
 
-def _persist_report(root: Path, report: Dict[str, object]) -> Path:
+def _persist_report(root: Path, report: dict[str, object]) -> Path:
     out_root = root / "reports" / "verification"
     out_root.mkdir(parents=True, exist_ok=True)
-    stamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
+    stamp = datetime.now(UTC).strftime("%Y%m%dT%H%M%SZ")
     out_file = out_root / f"paper_exchange_golden_path_{stamp}.json"
     out_file.write_text(json.dumps(report, indent=2), encoding="utf-8")
     (out_root / "paper_exchange_golden_path_latest.json").write_text(

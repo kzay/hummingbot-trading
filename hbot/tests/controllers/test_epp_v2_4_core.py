@@ -13,10 +13,9 @@ from __future__ import annotations
 import json
 import sys
 import types as _types_mod
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from decimal import Decimal
 from types import SimpleNamespace
-from typing import Optional
 from unittest.mock import MagicMock
 
 import pytest
@@ -96,19 +95,19 @@ def _install_hb_stubs() -> None:
 _install_hb_stubs()
 
 # Now safe to import the controller ----------------------------------------
-from controllers.core import MarketConditions, QuoteGeometry, RegimeSpec, SpreadEdgeState  # noqa: E402
-from controllers.epp_v2_4 import (  # noqa: E402
-    EppV24Controller,
-    _ZERO,
-    _ONE,
+from controllers.core import MarketConditions, QuoteGeometry, SpreadEdgeState
+from controllers.epp_v2_4 import (
     _10K,
+    _ONE,
+    _ZERO,
+    EppV24Controller,
     _paper_reset_state_on_startup_enabled,
 )
-from controllers.ops_guard import GuardState  # noqa: E402
-from controllers.price_buffer import MidPriceBuffer, MinuteBar  # noqa: E402
-from controllers.regime_detector import RegimeDetector  # noqa: E402
-from controllers.spread_engine import SpreadEngine  # noqa: E402
-from controllers.risk_evaluator import RiskEvaluator  # noqa: E402
+from controllers.ops_guard import GuardState
+from controllers.price_buffer import MinuteBar, PriceBuffer
+from controllers.regime_detector import RegimeDetector
+from controllers.risk_evaluator import RiskEvaluator
+from controllers.spread_engine import SpreadEngine
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -227,6 +226,57 @@ def _make_config(**overrides) -> SimpleNamespace:
     return SimpleNamespace(**defaults)
 
 
+def _bind_polymorphic_methods(ctrl):
+    """Bind methods to a SimpleNamespace stub that are now called via self.
+
+    After the SharedRuntimeKernel refactor, internal class method calls use
+    polymorphic self._ dispatch. SimpleNamespace stubs need these bound
+    explicitly since they don't inherit from the controller class.
+    """
+    _methods = [
+        "_fill_edge_below_cost_floor",
+        "_adverse_fill_soft_pause_active",
+        "_edge_confidence_soft_pause_active",
+        "_slippage_soft_pause_active",
+        "_increment_governor_reason_count",
+        "_compute_pnl_governor_size_mult",
+        "_recent_positive_slippage_p95_bps",
+        "_record_fill_event_key",
+        "_record_seen_fill_order_id",
+        "_update_position_from_fill",
+        "_publish_fill_telemetry",
+        "_cancel_active_quote_executors",
+        "_cancel_alpha_no_trade_orders",
+        "_cancel_active_runtime_orders",
+        "_cancel_stale_orders",
+        "_cancel_stale_side_executors",
+        "_derisk_force_min_base_amount",
+        "_derisk_force_expectancy_allows",
+        "_open_order_count",
+        "_open_order_level_ids",
+        "_order_size_constraints",
+        "_perp_target_base_amount",
+        "_position_rebalance_floor",
+        "_min_notional_quote",
+        "_cancel_stale_orders",
+        "_cancel_orphan_orders_on_startup",
+        "_update_adaptive_history",
+        "_compute_adaptive_spread_knobs",
+        "_compute_selective_quote_quality",
+        "_compute_alpha_policy",
+        "_pick_spread_pct",
+        "_risk_loss_metrics",
+        "_risk_policy_checks",
+        "_edge_gate_update",
+    ]
+    for name in _methods:
+        if not hasattr(ctrl, name):
+            method = getattr(EppV24Controller, name, None)
+            if method is not None:
+                ctrl.__dict__[name] = _types_mod.MethodType(method, ctrl)
+    return ctrl
+
+
 # --- regime helpers ---
 
 def _make_regime_ctrl(
@@ -276,6 +326,7 @@ def _make_regime_ctrl(
     ctrl._cancel_stale_side_executors = _types_mod.MethodType(
         EppV24Controller._cancel_stale_side_executors, ctrl,
     )
+    _bind_polymorphic_methods(ctrl)
     return ctrl
 
 
@@ -393,6 +444,25 @@ def _make_spread_ctrl(
     ctrl._compute_alpha_policy = _types_mod.MethodType(
         EppV24Controller._compute_alpha_policy, ctrl,
     )
+    ctrl._fill_edge_below_cost_floor = _types_mod.MethodType(
+        EppV24Controller._fill_edge_below_cost_floor, ctrl,
+    )
+    ctrl._increment_governor_reason_count = _types_mod.MethodType(
+        EppV24Controller._increment_governor_reason_count, ctrl,
+    )
+    ctrl._compute_pnl_governor_size_mult = _types_mod.MethodType(
+        EppV24Controller._compute_pnl_governor_size_mult, ctrl,
+    )
+    ctrl._adverse_fill_soft_pause_active = _types_mod.MethodType(
+        EppV24Controller._adverse_fill_soft_pause_active, ctrl,
+    )
+    ctrl._edge_confidence_soft_pause_active = _types_mod.MethodType(
+        EppV24Controller._edge_confidence_soft_pause_active, ctrl,
+    )
+    ctrl._slippage_soft_pause_active = _types_mod.MethodType(
+        EppV24Controller._slippage_soft_pause_active, ctrl,
+    )
+    _bind_polymorphic_methods(ctrl)
     return ctrl
 
 
@@ -459,12 +529,7 @@ def _make_risk_ctrl(
         margin_ratio_soft_pause_pct=cfg.margin_ratio_soft_pause_pct,
         position_drift_soft_pause_pct=cfg.position_drift_soft_pause_pct,
     )
-    ctrl._risk_loss_metrics = _types_mod.MethodType(
-        EppV24Controller._risk_loss_metrics, ctrl,
-    )
-    ctrl._risk_policy_checks = _types_mod.MethodType(
-        EppV24Controller._risk_policy_checks, ctrl,
-    )
+    _bind_polymorphic_methods(ctrl)
     return ctrl
 
 
@@ -490,6 +555,7 @@ def _make_edge_gate_ctrl(*, config_overrides=None, hold_s=30):
     ctrl._soft_pause_edge = False
     ctrl._edge_gate_update = _types_mod.MethodType(EppV24Controller._edge_gate_update, ctrl)
     ctrl._update_edge_gate_ewma = _types_mod.MethodType(EppV24Controller._update_edge_gate_ewma, ctrl)
+    _bind_polymorphic_methods(ctrl)
     return ctrl
 
 
@@ -575,6 +641,10 @@ def _make_fill_ctrl(
     ctrl._realized_pnl_today = _ZERO
     ctrl._position_base = position_base
     ctrl._avg_entry_price = avg_entry
+    ctrl._position_long_base = max(_ZERO, position_base)
+    ctrl._position_short_base = max(_ZERO, -position_base)
+    ctrl._avg_entry_price_long = avg_entry if position_base > _ZERO else _ZERO
+    ctrl._avg_entry_price_short = avg_entry if position_base < _ZERO else _ZERO
     ctrl._fill_edge_ewma = fill_edge_ewma
     ctrl._fill_edge_variance = fill_edge_variance
     ctrl._fill_count_for_kelly = 0
@@ -589,11 +659,13 @@ def _make_fill_ctrl(
     ctrl._ops_guard.state.value = "RUNNING"
     ctrl._save_daily_state = lambda force=False: None
     ctrl._get_telemetry_redis = lambda: None
+    ctrl.market_data_provider = SimpleNamespace(time=lambda: 1_700_000_000.0)
     ctrl.processed_data = {
         "spread_pct": spread_pct,
         "mid": mid,
         "adverse_drift_30s": _ZERO,
     }
+    _bind_polymorphic_methods(ctrl)
     return ctrl
 
 
@@ -705,6 +777,12 @@ class TestQuoteSideMode:
         ctrl._cancel_stale_side_executors = _types_mod.MethodType(
             EppV24Controller._cancel_stale_side_executors, ctrl,
         )
+        ctrl._cancel_active_quote_executors = _types_mod.MethodType(
+            EppV24Controller._cancel_active_quote_executors, ctrl,
+        )
+        ctrl._cancel_alpha_no_trade_orders = _types_mod.MethodType(
+            EppV24Controller._cancel_alpha_no_trade_orders, ctrl,
+        )
 
         mode = EppV24Controller._resolve_quote_side_mode(
             ctrl,
@@ -744,6 +822,9 @@ class TestQuoteSideMode:
         ctrl._cancel_active_quote_executors = _types_mod.MethodType(
             EppV24Controller._cancel_active_quote_executors, ctrl,
         )
+        ctrl._cancel_alpha_no_trade_orders = _types_mod.MethodType(
+            EppV24Controller._cancel_alpha_no_trade_orders, ctrl,
+        )
 
         mode = EppV24Controller._resolve_quote_side_mode(
             ctrl,
@@ -774,24 +855,77 @@ class TestQuoteSideMode:
             cancel_calls.append((float(stale_age_s), float(now_ts or 0.0)))
             return 1
 
-        monkeypatch.setattr(EppV24Controller, "_cancel_stale_paper_orders", _fake_cancel_stale)
-
         ctrl = SimpleNamespace(
             config=_make_config(is_paper=True),
             market_data_provider=SimpleNamespace(time=lambda: now["ts"]),
             _alpha_no_trade_last_paper_cancel_ts=0.0,
         )
+        ctrl._cancel_stale_orders = lambda **kw: _fake_cancel_stale(ctrl, **kw)
+        ctrl._cancel_active_runtime_orders = lambda: 0
 
-        first = EppV24Controller._cancel_alpha_no_trade_paper_orders(ctrl)
-        second = EppV24Controller._cancel_alpha_no_trade_paper_orders(ctrl)
+        first = EppV24Controller._cancel_alpha_no_trade_orders(ctrl)
+        second = EppV24Controller._cancel_alpha_no_trade_orders(ctrl)
         now["ts"] = 1006.0
-        third = EppV24Controller._cancel_alpha_no_trade_paper_orders(ctrl)
+        third = EppV24Controller._cancel_alpha_no_trade_orders(ctrl)
 
         assert first == 1
         assert second == 0
         assert third == 1
         assert len(cancel_calls) == 2
         assert cancel_calls[0][0] == 0.25
+
+    def test_alpha_no_trade_runtime_order_cleanup_cancels_active_runtime_orders(self):
+        cancel_calls = []
+        runtime_order = SimpleNamespace(
+            client_order_id="pe-runtime-1",
+            order_id="pe-runtime-1",
+            trading_pair="BTC-USDT",
+            current_state="working",
+            is_open=True,
+        )
+        pending_cancel_order = SimpleNamespace(
+            client_order_id="pe-runtime-2",
+            order_id="pe-runtime-2",
+            trading_pair="BTC-USDT",
+            current_state="pending_cancel",
+            is_open=True,
+        )
+        strategy = SimpleNamespace(
+            _paper_exchange_runtime_orders={
+                "bitget_perpetual": {
+                    "pe-runtime-1": runtime_order,
+                    "pe-runtime-2": pending_cancel_order,
+                }
+            },
+            cancel=lambda connector_name, trading_pair, order_id: cancel_calls.append(
+                (connector_name, trading_pair, order_id)
+            ),
+        )
+        ctrl = SimpleNamespace(
+            config=_make_config(is_paper=True, connector_name="bitget_perpetual"),
+            strategy=strategy,
+            _strategy=None,
+        )
+
+        canceled = EppV24Controller._cancel_active_runtime_orders(ctrl)
+
+        assert canceled == 1
+        assert cancel_calls == [("bitget_perpetual", "BTC-USDT", "pe-runtime-1")]
+
+    def test_alpha_no_trade_paper_cleanup_includes_runtime_orders(self):
+        now = {"ts": 1000.0}
+
+        ctrl = SimpleNamespace(
+            config=_make_config(is_paper=True),
+            market_data_provider=SimpleNamespace(time=lambda: now["ts"]),
+            _alpha_no_trade_last_paper_cancel_ts=0.0,
+        )
+        ctrl._cancel_stale_orders = lambda **kw: 1
+        ctrl._cancel_active_runtime_orders = lambda: 2
+
+        canceled = EppV24Controller._cancel_alpha_no_trade_orders(ctrl)
+
+        assert canceled == 3
 
     def test_neutral_trend_guard_blocks_buys_when_mid_below_ema(self):
         buy_executor = SimpleNamespace(
@@ -1615,7 +1749,7 @@ class TestRiskPolicyChecks:
 
 class TestDeriskForceMode:
     def _ctrl(self):
-        return SimpleNamespace(
+        ctrl = SimpleNamespace(
             config=SimpleNamespace(
                 derisk_force_taker_after_s=60.0,
                 derisk_progress_reset_ratio=Decimal("0.05"),
@@ -1633,6 +1767,8 @@ class TestDeriskForceMode:
             _recently_issued_levels={"buy_0": 1.0},
             _enqueue_force_derisk_executor_cancels=lambda: None,
         )
+        _bind_polymorphic_methods(ctrl)
+        return ctrl
 
     def test_enables_after_timeout_without_progress(self):
         ctrl = self._ctrl()
@@ -1757,11 +1893,12 @@ class TestDeriskForceMode:
         assert EppV24Controller.get_levels_to_execute(ctrl) == []
 
     def test_paper_open_orders_block_duplicate_level_creation(self):
-        open_buy = SimpleNamespace(side=SimpleNamespace(value="buy"), source_bot="bitget_perpetual")
-        engine = SimpleNamespace(open_orders=lambda: [open_buy])
+        open_buy = SimpleNamespace(
+            client_order_id="o1", trading_pair="BTC-USDT",
+            trade_type=SimpleNamespace(name="BUY"), source_bot="bitget_perpetual",
+        )
         connector = SimpleNamespace(
-            _paper_desk_v2=SimpleNamespace(_engines={"bitget:BTC-USDT:perp": engine}),
-            _paper_desk_v2_instrument_id=SimpleNamespace(key="bitget:BTC-USDT:perp"),
+            get_open_orders=lambda: [open_buy],
         )
         ctrl = SimpleNamespace(
             _derisk_force_taker=False,
@@ -1769,6 +1906,7 @@ class TestDeriskForceMode:
                 is_paper=True,
                 bot_mode="paper",
                 connector_name="bitget_perpetual",
+                trading_pair="BTC-USDT",
                 max_active_executors=8,
             ),
             _runtime_levels=SimpleNamespace(
@@ -1787,39 +1925,43 @@ class TestDeriskForceMode:
             _connector=lambda: connector,
             get_level_id_from_side=lambda side, level: ("buy" if "BUY" in str(side) else "sell") + f"_{level}",
         )
+        _bind_polymorphic_methods(ctrl)
 
         assert EppV24Controller.get_levels_to_execute(ctrl) == ["sell_0"]
 
-    def test_paper_open_order_count_filters_to_controller_connector(self):
-        open_buy = SimpleNamespace(side=SimpleNamespace(value="buy"), source_bot="bitget_perpetual")
-        foreign_sell = SimpleNamespace(side=SimpleNamespace(value="sell"), source_bot="other_connector")
-        engine = SimpleNamespace(open_orders=lambda: [open_buy, foreign_sell])
+    def test_open_order_count_filters_to_controller_connector(self):
+        open_buy = SimpleNamespace(
+            client_order_id="o1", trading_pair="BTC-USDT",
+            trade_type=SimpleNamespace(name="BUY"), source_bot="bitget_perpetual",
+        )
+        foreign_sell = SimpleNamespace(
+            client_order_id="o2", trading_pair="BTC-USDT",
+            trade_type=SimpleNamespace(name="SELL"), source_bot="other_connector",
+        )
         connector = SimpleNamespace(
-            _paper_desk_v2=SimpleNamespace(_engines={"bitget:BTC-USDT:perp": engine}),
-            _paper_desk_v2_instrument_id=SimpleNamespace(key="bitget:BTC-USDT:perp"),
+            get_open_orders=lambda: [open_buy, foreign_sell],
         )
         ctrl = SimpleNamespace(
-            config=SimpleNamespace(is_paper=True, bot_mode="paper", connector_name="bitget_perpetual"),
+            config=SimpleNamespace(is_paper=True, bot_mode="paper", connector_name="bitget_perpetual", trading_pair="BTC-USDT"),
             _connector=lambda: connector,
             strategy=None,
             _strategy=None,
         )
+        _bind_polymorphic_methods(ctrl)
 
-        assert EppV24Controller._paper_open_order_count(ctrl) == 1
+        assert EppV24Controller._open_order_count(ctrl) == 1
 
     def test_paper_inflight_accept_blocks_duplicate_level_reissue(self):
-        inflight_buy = SimpleNamespace(side=SimpleNamespace(value="buy"), source_bot="bitget_perpetual")
-        foreign_inflight_sell = SimpleNamespace(side=SimpleNamespace(value="sell"), source_bot="other_connector")
-        engine = SimpleNamespace(
-            open_orders=lambda: [],
-            _inflight=[
-                (101_000, "accept", inflight_buy),
-                (101_000, "accept", foreign_inflight_sell),
-            ],
+        open_buy = SimpleNamespace(
+            client_order_id="o1", trading_pair="BTC-USDT",
+            trade_type=SimpleNamespace(name="BUY"), source_bot="bitget_perpetual",
+        )
+        foreign_sell = SimpleNamespace(
+            client_order_id="o2", trading_pair="BTC-USDT",
+            trade_type=SimpleNamespace(name="SELL"), source_bot="other_connector",
         )
         connector = SimpleNamespace(
-            _paper_desk_v2=SimpleNamespace(_engines={"bitget:BTC-USDT:perp": engine}),
-            _paper_desk_v2_instrument_id=SimpleNamespace(key="bitget:BTC-USDT:perp"),
+            get_open_orders=lambda: [open_buy, foreign_sell],
         )
         ctrl = SimpleNamespace(
             _derisk_force_taker=False,
@@ -1827,6 +1969,7 @@ class TestDeriskForceMode:
                 is_paper=True,
                 bot_mode="paper",
                 connector_name="bitget_perpetual",
+                trading_pair="BTC-USDT",
                 max_active_executors=8,
             ),
             _runtime_levels=SimpleNamespace(
@@ -1847,8 +1990,9 @@ class TestDeriskForceMode:
             _strategy=None,
             get_level_id_from_side=lambda side, level: ("buy" if "BUY" in str(side) else "sell") + f"_{level}",
         )
+        _bind_polymorphic_methods(ctrl)
 
-        assert EppV24Controller._paper_open_order_count(ctrl) == 1
+        assert EppV24Controller._open_order_count(ctrl) == 1
         assert EppV24Controller.get_levels_to_execute(ctrl) == ["sell_0"]
 
     def test_recently_issued_levels_expire_on_cooldown_not_refresh_window(self):
@@ -1868,6 +2012,7 @@ class TestDeriskForceMode:
             get_not_active_levels_ids=lambda active_levels_ids: ["buy_0", "sell_0"],
             get_level_id_from_side=lambda side, level: ("buy" if "BUY" in str(side) else "sell") + f"_{level}",
         )
+        _bind_polymorphic_methods(ctrl)
 
         levels = EppV24Controller.get_levels_to_execute(ctrl)
 
@@ -1892,6 +2037,7 @@ class TestDeriskForceMode:
             get_not_active_levels_ids=lambda active_levels_ids: ["buy_0", "sell_0"],
             get_level_id_from_side=lambda side, level: ("buy" if "BUY" in str(side) else "sell") + f"_{level}",
         )
+        _bind_polymorphic_methods(ctrl)
 
         levels = EppV24Controller.get_levels_to_execute(ctrl)
 
@@ -1922,6 +2068,7 @@ class TestDeriskForceMode:
             get_not_active_levels_ids=lambda active_levels_ids: ["buy_0", "buy_1", "sell_0", "sell_1"],
             get_level_id_from_side=lambda side, level: ("buy" if "BUY" in str(side) else "sell") + f"_{level}",
         )
+        _bind_polymorphic_methods(ctrl)
 
         levels = EppV24Controller.get_levels_to_execute(ctrl)
 
@@ -1946,6 +2093,7 @@ class TestDeriskForceMode:
             get_current_base_position=lambda: Decimal("0"),
             create_position_rebalance_order=_mk_rebalance,
         )
+        _bind_polymorphic_methods(ctrl)
         action = EppV24Controller.check_position_rebalance(ctrl)
         assert action is not None
         assert action["amount"] == Decimal("0.003")
@@ -1973,6 +2121,7 @@ class TestDeriskForceMode:
             get_current_base_position=lambda: Decimal("0"),
             create_position_rebalance_order=_mk_rebalance,
         )
+        _bind_polymorphic_methods(ctrl)
         action = EppV24Controller.check_position_rebalance(ctrl)
         assert action is not None
         assert action["amount"] == Decimal("0.003")
@@ -2000,6 +2149,7 @@ class TestDeriskForceMode:
             get_current_base_position=lambda: Decimal("0"),
             create_position_rebalance_order=_mk_rebalance,
         )
+        _bind_polymorphic_methods(ctrl)
         action = EppV24Controller.check_position_rebalance(ctrl)
         assert action is not None
         assert action["amount"] == Decimal("0.003")
@@ -2027,6 +2177,7 @@ class TestDeriskForceMode:
             get_current_base_position=lambda: Decimal("0"),
             create_position_rebalance_order=_mk_rebalance,
         )
+        _bind_polymorphic_methods(ctrl)
         action = EppV24Controller.check_position_rebalance(ctrl)
         assert action is not None
         assert action["amount"] == Decimal("0.003")
@@ -2058,6 +2209,7 @@ class TestDeriskForceMode:
             get_current_base_position=lambda: Decimal("0"),
             create_position_rebalance_order=_mk_rebalance,
         )
+        _bind_polymorphic_methods(ctrl)
         action = EppV24Controller.check_position_rebalance(ctrl)
         assert action is not None
         assert action["side"] is not None
@@ -2087,6 +2239,7 @@ class TestDeriskForceMode:
             get_current_base_position=lambda: Decimal("0"),
             create_position_rebalance_order=_mk_rebalance,
         )
+        _bind_polymorphic_methods(ctrl)
         action = EppV24Controller.check_position_rebalance(ctrl)
         assert action is None
 
@@ -2115,6 +2268,7 @@ class TestDeriskForceMode:
             get_current_base_position=lambda: Decimal("0"),
             create_position_rebalance_order=_mk_rebalance,
         )
+        _bind_polymorphic_methods(ctrl)
         action = EppV24Controller.check_position_rebalance(ctrl)
         assert action is None
 
@@ -2123,25 +2277,18 @@ class TestDeriskForceMode:
             config=SimpleNamespace(position_rebalance_min_base_mult=Decimal("5.0")),
             _min_base_amount=lambda _ref: Decimal("0.0001"),
         )
+        _bind_polymorphic_methods(ctrl)
         floor = EppV24Controller._position_rebalance_floor(ctrl, Decimal("66000"))
         assert floor == Decimal("0.0005")
 
 
 class TestSizingQuantizationAlignment:
     def test_quantize_amount_respects_paper_spec_min_lot(self):
-        spec = SimpleNamespace(min_quantity=Decimal("0.001"), size_increment=Decimal("0.001"))
-        desk = SimpleNamespace(
-            _specs={"bitget:BTC-USDT:perp": spec},
-            _engines={},
-        )
-        connector = SimpleNamespace(
-            _paper_desk_v2=desk,
-            _paper_desk_v2_instrument_id=SimpleNamespace(key="bitget:BTC-USDT:perp"),
-        )
         rule = SimpleNamespace(
-            min_order_size=Decimal("0.0001"),
-            min_base_amount_increment=Decimal("0.0001"),
+            min_order_size=Decimal("0.001"),
+            min_base_amount_increment=Decimal("0.001"),
         )
+        connector = SimpleNamespace()
         ctrl = SimpleNamespace(
             config=SimpleNamespace(is_paper=True, connector_name="bitget_perpetual"),
             _connector=lambda: connector,
@@ -2149,20 +2296,13 @@ class TestSizingQuantizationAlignment:
             strategy=None,
             _strategy=None,
         )
+        _bind_polymorphic_methods(ctrl)
 
         q_amount = EppV24Controller._quantize_amount(ctrl, Decimal("0.0001"))
         assert q_amount == Decimal("0.001")
 
-    def test_quantize_amount_uses_paper_spec_when_trading_rule_missing(self):
-        spec = SimpleNamespace(min_quantity=Decimal("0.001"), size_increment=Decimal("0.001"))
-        desk = SimpleNamespace(
-            _specs={"bitget:BTC-USDT:perp": spec},
-            _engines={},
-        )
-        connector = SimpleNamespace(
-            _paper_desk_v2=desk,
-            _paper_desk_v2_instrument_id=SimpleNamespace(key="bitget:BTC-USDT:perp"),
-        )
+    def test_quantize_amount_falls_back_when_trading_rule_missing(self):
+        connector = SimpleNamespace()
         ctrl = SimpleNamespace(
             config=SimpleNamespace(is_paper=True, connector_name="bitget_perpetual"),
             _connector=lambda: connector,
@@ -2170,9 +2310,10 @@ class TestSizingQuantizationAlignment:
             strategy=None,
             _strategy=None,
         )
+        _bind_polymorphic_methods(ctrl)
 
         q_amount = EppV24Controller._quantize_amount(ctrl, Decimal("0.0001"))
-        assert q_amount == Decimal("0.001")
+        assert q_amount == Decimal("0.0001")
 
     def test_project_total_amount_quote_scales_min_base_by_levels(self):
         ctrl = SimpleNamespace(
@@ -2224,10 +2365,9 @@ class TestExecutorRefreshResilience:
         reconnect_cooldown_until: float,
         reconnect_grace_until: float,
         is_paper: bool = False,
-        paper_executor_min_lifetime_s: int = 120,
         order_ack_timeout_s: int = 10,
         stale_timestamp: float = 0.0,
-        stuck_timestamp: Optional[float] = None,
+        stuck_timestamp: float | None = None,
     ):
         if stuck_timestamp is None:
             stuck_timestamp = now - 15.0
@@ -2239,7 +2379,6 @@ class TestExecutorRefreshResilience:
                 id="ctrl_1",
                 order_ack_timeout_s=order_ack_timeout_s,
                 is_paper=is_paper,
-                paper_executor_min_lifetime_s=paper_executor_min_lifetime_s,
             ),
             _runtime_levels=SimpleNamespace(executor_refresh_time=40),
             market_data_provider=SimpleNamespace(time=lambda: now),
@@ -2268,63 +2407,60 @@ class TestExecutorRefreshResilience:
         assert len(actions) == 2
         assert ctrl._consecutive_stuck_ticks == 1
 
-    def test_paper_mode_uses_min_lifetime_for_stale_refresh(self):
-        # Stale candidate age=60s: stale under refresh_s=40, but not stale under paper min-lifetime=120.
+    def test_stale_refresh_uses_refresh_time_uniformly(self):
         ctrl = self._make_ctrl(
             now=100.0,
             reconnect_cooldown_until=0.0,
             reconnect_grace_until=0.0,
             is_paper=True,
-            paper_executor_min_lifetime_s=120,
             order_ack_timeout_s=90,
             stale_timestamp=40.0,
             stuck_timestamp=85.0,
         )
         ctrl._consecutive_stuck_ticks = 0
         actions = EppV24Controller.executors_to_refresh(ctrl)
-        assert actions == []
+        assert len(actions) == 1
         assert ctrl._consecutive_stuck_ticks == 0
 
-    def test_paper_mode_cancels_stale_open_orders_during_refresh(self):
+    def test_stale_open_orders_canceled_during_refresh(self):
         canceled: list[str] = []
         open_sell = SimpleNamespace(
-            order_id="paper_v2_200",
-            side=SimpleNamespace(value="sell"),
+            client_order_id="paper_v2_200",
+            trading_pair="BTC-USDT",
+            trade_type=SimpleNamespace(name="SELL"),
             source_bot="bitget_perpetual",
-            created_at_ns=20_000_000_000,
-        )
-        engine = SimpleNamespace(open_orders=lambda: [open_sell])
-        desk = SimpleNamespace(
-            _engines={"bitget:BTC-USDT:perp": engine},
-            cancel_order=lambda iid, order_id: canceled.append(f"{iid.key}:{order_id}") or object(),
+            creation_timestamp=20.0,
         )
         connector = SimpleNamespace(
-            _paper_desk_v2=desk,
-            _paper_desk_v2_instrument_id=SimpleNamespace(key="bitget:BTC-USDT:perp"),
+            get_open_orders=lambda: [open_sell],
+        )
+        strategy = SimpleNamespace(
+            cancel=lambda conn, pair, oid: canceled.append(f"{conn}:{pair}:{oid}"),
         )
         ctrl = self._make_ctrl(
             now=100.0,
             reconnect_cooldown_until=0.0,
             reconnect_grace_until=0.0,
             is_paper=True,
-            paper_executor_min_lifetime_s=0,
             order_ack_timeout_s=90,
             stale_timestamp=0.0,
             stuck_timestamp=85.0,
         )
-        ctrl.config.paper_state_reconcile_enabled = True
         ctrl.config.connector_name = "bitget_perpetual"
         ctrl.config.trading_pair = "BTC-USDT"
         ctrl._connector = lambda: connector
-        ctrl.strategy = None
+        ctrl.strategy = strategy
         ctrl._strategy = None
         ctrl._recently_issued_levels = {"sell_0": 12.0}
         ctrl._consecutive_stuck_ticks = 0
+        ctrl._cancel_stale_orders = _types_mod.MethodType(
+            EppV24Controller._cancel_stale_orders, ctrl,
+        )
 
         actions = EppV24Controller.executors_to_refresh(ctrl)
 
         assert len(actions) == 1
-        assert canceled == ["bitget:BTC-USDT:perp:paper_v2_200"]
+        assert canceled == ["bitget_perpetual:BTC-USDT:paper_v2_200"]
         assert ctrl._recently_issued_levels == {}
         assert ctrl._consecutive_stuck_ticks == 0
 
@@ -2355,11 +2491,11 @@ class TestRestartFillAgeHydration:
         assert ctrl._seen_fill_order_ids == {"ord-1", "ord-2"}
         assert ctrl._seen_fill_order_ids_fifo == ["ord-1", "ord-2"]
         assert ctrl._last_fill_ts == pytest.approx(
-            datetime(2026, 3, 6, 18, 12, 30, tzinfo=timezone.utc).timestamp()
+            datetime(2026, 3, 6, 18, 12, 30, tzinfo=UTC).timestamp()
         )
 
     def test_load_daily_state_restores_last_fill_ts(self):
-        today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+        today = datetime.now(UTC).strftime("%Y-%m-%d")
         ctrl = SimpleNamespace(
             _state_store=SimpleNamespace(
                 load=lambda: {
@@ -2593,7 +2729,7 @@ class TestPnlGovernor:
                 "pnl_governor_max_edge_bps_cut": Decimal("6"),
             },
         )
-        now_ts = datetime(2026, 1, 1, 12, 0, 0, tzinfo=timezone.utc).timestamp()
+        now_ts = datetime(2026, 1, 1, 12, 0, 0, tzinfo=UTC).timestamp()
         ctrl._last_fill_ts = now_ts - float(ctrl.config.adaptive_fill_target_age_s)
         ctrl._market_spread_bps_ewma = _ZERO
         ctrl._band_pct_ewma = _ZERO
@@ -2617,7 +2753,7 @@ class TestPnlGovernor:
                 "adaptive_edge_relax_max_bps": Decimal("8"),
             },
         )
-        now_ts = datetime(2026, 1, 1, 12, 0, 0, tzinfo=timezone.utc).timestamp()
+        now_ts = datetime(2026, 1, 1, 12, 0, 0, tzinfo=UTC).timestamp()
         ctrl._last_fill_ts = now_ts - 1800.0
         ctrl._market_spread_bps_ewma = _ZERO
         ctrl._band_pct_ewma = _ZERO
@@ -2641,7 +2777,7 @@ class TestPnlGovernor:
                 "slippage_est_pct": Decimal("0.0005"),
             },
         )
-        now_ts = datetime(2026, 1, 1, 12, 0, 0, tzinfo=timezone.utc).timestamp()
+        now_ts = datetime(2026, 1, 1, 12, 0, 0, tzinfo=UTC).timestamp()
         ctrl._last_fill_ts = now_ts - 1800.0
         ctrl._market_spread_bps_ewma = _ZERO
         ctrl._band_pct_ewma = _ZERO
@@ -2664,7 +2800,7 @@ class TestPnlGovernor:
                 "pnl_governor_max_edge_bps_cut": Decimal("6"),
             },
         )
-        now_ts = datetime(2026, 1, 1, 12, 0, 0, tzinfo=timezone.utc).timestamp()
+        now_ts = datetime(2026, 1, 1, 12, 0, 0, tzinfo=UTC).timestamp()
         ctrl._last_fill_ts = now_ts - float(ctrl.config.adaptive_fill_target_age_s)
         ctrl._market_spread_bps_ewma = _ZERO
         ctrl._band_pct_ewma = _ZERO
@@ -2691,7 +2827,7 @@ class TestPnlGovernor:
                 "slippage_est_pct": Decimal("0.0005"),
             },
         )
-        now_ts = datetime(2026, 1, 1, 12, 0, 0, tzinfo=timezone.utc).timestamp()
+        now_ts = datetime(2026, 1, 1, 12, 0, 0, tzinfo=UTC).timestamp()
         ctrl._last_fill_ts = now_ts - float(ctrl.config.adaptive_fill_target_age_s)
         ctrl._market_spread_bps_ewma = _ZERO
         ctrl._band_pct_ewma = _ZERO
@@ -2718,7 +2854,7 @@ class TestPnlGovernor:
                 "pnl_governor_max_edge_bps_cut": Decimal("6"),
             },
         )
-        now_ts = datetime(2026, 1, 1, 12, 0, 0, tzinfo=timezone.utc).timestamp()
+        now_ts = datetime(2026, 1, 1, 12, 0, 0, tzinfo=UTC).timestamp()
         ctrl._last_fill_ts = now_ts - float(ctrl.config.adaptive_fill_target_age_s)
         ctrl._market_spread_bps_ewma = _ZERO
         ctrl._band_pct_ewma = _ZERO
@@ -2743,7 +2879,7 @@ class TestPnlGovernor:
             },
         )
         ctrl._external_daily_pnl_target_pct_override = Decimal("0.8")
-        now_ts = datetime(2026, 1, 1, 12, 0, 0, tzinfo=timezone.utc).timestamp()
+        now_ts = datetime(2026, 1, 1, 12, 0, 0, tzinfo=UTC).timestamp()
         ctrl._last_fill_ts = now_ts - float(ctrl.config.adaptive_fill_target_age_s)
         ctrl._market_spread_bps_ewma = _ZERO
         ctrl._band_pct_ewma = _ZERO
@@ -3246,6 +3382,9 @@ class TestMinuteSnapshotTelemetry:
             ),
             id="ctrl_bot1",
             _get_telemetry_redis=lambda: mock_redis,
+            _position_base=Decimal("-0.001"),
+            _avg_entry_price=Decimal("67500"),
+            _realized_pnl_today=Decimal("1.5"),
         )
         minute_row = {
             "state": "running",
@@ -3286,6 +3425,13 @@ class TestMinuteSnapshotTelemetry:
         assert payload["event_type"] == "bot_minute_snapshot"
         assert payload["instance_name"] == "bot1"
         assert payload["controller_id"] == "ctrl_bot1"
+        position = payload["position"]
+        assert position["trading_pair"] == "BTC-USDT"
+        assert position["quantity"] == -0.001
+        assert position["side"] == "short"
+        assert position["realized_pnl_today"] == 1.5
+        assert position["avg_entry_price"] == 67500.0
+        assert position["unrealized_pnl"] != 0.0
 
     def test_publish_bot_minute_snapshot_telemetry_falls_back_to_event_store_file(self, tmp_path, monkeypatch):
         import controllers.epp_v2_4 as epp_module
@@ -3303,6 +3449,9 @@ class TestMinuteSnapshotTelemetry:
             ),
             id="ctrl_bot1",
             _get_telemetry_redis=lambda: None,
+            _position_base=Decimal("-0.002"),
+            _avg_entry_price=Decimal("67500"),
+            _realized_pnl_today=Decimal("1.5"),
         )
         minute_row = {
             "state": "running",
@@ -3361,169 +3510,57 @@ class TestPaperEquityStateReconciliation:
         assert _paper_reset_state_on_startup_enabled(cfg) is True
 
     def test_compute_equity_prefers_paper_portfolio_equity_for_perp_risk(self):
+        # paper_portfolio_snapshot returns true equity (cash + unrealized PnL);
+        # the method must prefer it over the raw cash quote_bal so that risk
+        # gates and sizing see the correct mark-to-market value.
+        paper_equity = Decimal("195")  # cash 200 minus $5 unrealized loss
+        mock_connector = SimpleNamespace(
+            paper_portfolio_snapshot=lambda mid: {"equity_quote": paper_equity}
+        )
         ctrl = SimpleNamespace()
         ctrl.config = _make_config(
             is_paper=True,
-            paper_use_portfolio_equity_for_risk=True,
         )
         ctrl._is_perp = True
         ctrl._position_base = Decimal("0.002")
         ctrl._get_balances = lambda: (Decimal("0.002"), Decimal("200"))
-        ctrl._paper_portfolio_snapshot = lambda mid: {
-            "position_base": Decimal("0.002"),
-            "equity_quote": Decimal("500"),
-        }
         ctrl._refresh_margin_ratio = lambda mid, pos_base, quote_bal: None
+        ctrl._connector = lambda: mock_connector
 
         equity, base_pct_gross, base_pct_net = EppV24Controller._compute_equity_and_base_pcts(
             ctrl, Decimal("60000")
         )
 
-        assert equity == Decimal("500")
-        assert abs(base_pct_gross - Decimal("0.24")) < Decimal("0.000001")
-        assert abs(base_pct_net - Decimal("0.24")) < Decimal("0.000001")
+        assert equity == paper_equity
+        expected_pct = Decimal("0.002") * Decimal("60000") / paper_equity
+        assert abs(base_pct_gross - expected_pct) < Decimal("0.000001")
+        assert abs(base_pct_net - expected_pct) < Decimal("0.000001")
 
     def test_compute_equity_collapses_oneway_perp_gross_to_net_exposure(self):
         ctrl = SimpleNamespace()
         ctrl.config = _make_config(
             is_paper=True,
-            paper_use_portfolio_equity_for_risk=True,
             position_mode="ONEWAY",
         )
         ctrl._is_perp = True
         ctrl._position_base = Decimal("0.001")
         ctrl._position_gross_base = Decimal("0.015")
         ctrl._get_balances = lambda: (Decimal("0.001"), Decimal("200"))
-        ctrl._paper_portfolio_snapshot = lambda mid: {
-            "position_base": Decimal("0.001"),
-            "position_gross_base": Decimal("0.015"),
-            "position_mode": "ONEWAY",
-            "equity_quote": Decimal("1000"),
-        }
         ctrl._refresh_margin_ratio = lambda mid, pos_base, quote_bal, gross_base=None: None
+        ctrl._connector = lambda: None  # no paper snapshot — falls back to quote_bal
 
         equity, base_pct_gross, base_pct_net = EppV24Controller._compute_equity_and_base_pcts(
             ctrl, Decimal("60000")
         )
 
-        assert equity == Decimal("1000")
-        assert abs(base_pct_gross - Decimal("0.06")) < Decimal("0.000001")
-        assert abs(base_pct_net - Decimal("0.06")) < Decimal("0.000001")
-
-    def test_sync_from_paper_desk_reconciles_realized_state_and_persists(self):
-        ctrl = SimpleNamespace()
-        ctrl.config = _make_config(
-            is_paper=True,
-            paper_state_reconcile_enabled=True,
-            paper_state_reconcile_realized_pnl_diff_quote=Decimal("5"),
-        )
-        ctrl.market_data_provider = SimpleNamespace(time=lambda: 1_700_000_000.0)
-        ctrl._paper_state_reconcile_last_ts = 0.0
-        ctrl._paper_state_reconcile_log_cooldown_s = 1.0
-        ctrl._controller_start_ts = 0.0
-        ctrl._paper_daily_baseline_reset_done = True
-        ctrl._daily_equity_open = Decimal("500")
-        ctrl._daily_equity_peak = None
-        ctrl._realized_pnl_today = Decimal("-250")
-        ctrl._position_base = _ZERO
-        ctrl._avg_entry_price = _ZERO
-        ctrl._save_daily_state = MagicMock()
-
-        pos = SimpleNamespace(
-            quantity=Decimal("0.001"),
-            avg_entry_price=Decimal("65000"),
-            unrealized_pnl=Decimal("1"),
-            realized_pnl=Decimal("8"),
-        )
-        portfolio = SimpleNamespace(
-            daily_open_equity=Decimal("500"),
-            get_position=lambda _iid: pos,
-            equity_quote=lambda _marks, quote_asset="USDT": Decimal("510"),
-        )
-        connector = SimpleNamespace(
-            _paper_desk_v2=SimpleNamespace(portfolio=portfolio),
-            _paper_desk_v2_instrument_id=SimpleNamespace(
-                key="bitget:BTC-USDT:perp",
-                quote_asset="USDT",
-            ),
-        )
-        ctrl._connector = lambda: connector
-        ctrl._paper_portfolio_snapshot = _types_mod.MethodType(
-            EppV24Controller._paper_portfolio_snapshot, ctrl
-        )
-
-        EppV24Controller._sync_from_paper_desk_v2(ctrl, mid=Decimal("65000"), equity_quote=Decimal("200"))
-
-        # realized = (equity - open_equity) - unrealized = (510 - 500) - 1 = 9
-        assert ctrl._realized_pnl_today == Decimal("9")
-        assert ctrl._position_base == Decimal("0.001")
-        assert ctrl._avg_entry_price == Decimal("65000")
-        ctrl._save_daily_state.assert_called_once_with(force=True)
-
-    def test_sync_from_paper_desk_can_reset_startup_daily_baseline_when_inherited_loss_is_large(self):
-        now_ts = 1_700_000_000.0
-        ctrl = SimpleNamespace()
-        ctrl.config = _make_config(
-            is_paper=True,
-            paper_state_reconcile_enabled=True,
-            paper_state_reconcile_realized_pnl_diff_quote=Decimal("5"),
-            paper_daily_baseline_auto_reset_on_startup=True,
-            paper_daily_baseline_reset_loss_pct_threshold=Decimal("0.25"),
-            paper_daily_baseline_reset_startup_window_s=300,
-        )
-        ctrl.market_data_provider = SimpleNamespace(time=lambda: now_ts)
-        ctrl._controller_start_ts = now_ts - 5.0
-        ctrl._paper_daily_baseline_reset_done = False
-        ctrl._paper_state_reconcile_last_ts = 0.0
-        ctrl._paper_state_reconcile_log_cooldown_s = 1.0
-        ctrl._daily_equity_open = Decimal("500")
-        ctrl._daily_equity_peak = Decimal("520")
-        ctrl._realized_pnl_today = Decimal("-120")
-        ctrl._position_base = _ZERO
-        ctrl._avg_entry_price = _ZERO
-        ctrl._traded_notional_today = Decimal("200")
-        ctrl._fills_count_today = 9
-        ctrl._fees_paid_today_quote = Decimal("3")
-        ctrl._funding_cost_today_quote = Decimal("1")
-        ctrl._save_daily_state = MagicMock()
-
-        pos = SimpleNamespace(
-            quantity=Decimal("-0.002"),
-            avg_entry_price=Decimal("65000"),
-            unrealized_pnl=Decimal("0"),
-            realized_pnl=Decimal("12"),
-        )
-        portfolio = SimpleNamespace(
-            daily_open_equity=Decimal("500"),
-            get_position=lambda _iid: pos,
-            equity_quote=lambda _marks, quote_asset="USDT": Decimal("200"),
-        )
-        connector = SimpleNamespace(
-            _paper_desk_v2=SimpleNamespace(portfolio=portfolio),
-            _paper_desk_v2_instrument_id=SimpleNamespace(
-                key="bitget:BTC-USDT:perp",
-                quote_asset="USDT",
-            ),
-        )
-        ctrl._connector = lambda: connector
-        ctrl._paper_portfolio_snapshot = _types_mod.MethodType(
-            EppV24Controller._paper_portfolio_snapshot, ctrl
-        )
-
-        EppV24Controller._sync_from_paper_desk_v2(ctrl, mid=Decimal("65000"), equity_quote=Decimal("200"))
-
-        assert ctrl._paper_daily_baseline_reset_done is True
-        assert ctrl._daily_equity_open == Decimal("200")
-        assert ctrl._traded_notional_today == Decimal("0")
-        assert ctrl._fills_count_today == 0
-        assert ctrl._fees_paid_today_quote == Decimal("0")
-        assert ctrl._funding_cost_today_quote == Decimal("0")
-        assert ctrl._save_daily_state.call_count >= 1
-
+        assert equity == Decimal("200")
+        expected_pct = Decimal("0.001") * Decimal("60000") / Decimal("200")
+        assert abs(base_pct_gross - expected_pct) < Decimal("0.000001")
+        assert abs(base_pct_net - expected_pct) < Decimal("0.000001")
 
 def test_maybe_seed_price_buffer_updates_status_and_buffer() -> None:
     class _FakeProvider:
-        def seed_midprice_buffer(self, buffer, key, bars_needed, now_ms):
+        def seed_price_buffer(self, buffer, key, bars_needed, now_ms):
             buffer.seed_bars(
                 [
                     MinuteBar(ts_minute=60, open=Decimal("100"), high=Decimal("100"), low=Decimal("100"), close=Decimal("100")),
@@ -3540,7 +3577,7 @@ def test_maybe_seed_price_buffer_updates_status_and_buffer() -> None:
 
     ctrl = SimpleNamespace(
         config=SimpleNamespace(connector_name="bitget_perpetual", trading_pair="BTC-USDT", ema_period=20, atr_period=14),
-        _price_buffer=MidPriceBuffer(),
+        _price_buffer=PriceBuffer(),
         _history_provider=_FakeProvider(),
         _history_seed_attempted=False,
         _history_seed_status="disabled",
@@ -3571,7 +3608,7 @@ def test_maybe_seed_price_buffer_respects_policy_source_fallback(monkeypatch) ->
     monkeypatch.setenv("HB_HISTORY_MAX_ACCEPTABLE_GAP_S", "300")
 
     class _FakeProvider:
-        def seed_midprice_buffer(self, buffer, key, bars_needed, now_ms):
+        def seed_price_buffer(self, buffer, key, bars_needed, now_ms):
             if key.bar_source == "quote_mid":
                 buffer.seed_bars(
                     [
@@ -3601,7 +3638,7 @@ def test_maybe_seed_price_buffer_respects_policy_source_fallback(monkeypatch) ->
 
     ctrl = SimpleNamespace(
         config=SimpleNamespace(connector_name="bitget_perpetual", trading_pair="BTC-USDT", ema_period=20, atr_period=14),
-        _price_buffer=MidPriceBuffer(),
+        _price_buffer=PriceBuffer(),
         _history_provider=_FakeProvider(),
         _history_seed_attempted=False,
         _history_seed_status="disabled",
@@ -3632,7 +3669,7 @@ def test_maybe_seed_price_buffer_clears_buffer_when_policy_rejects_all_sources(m
     monkeypatch.setenv("HB_HISTORY_MAX_ACCEPTABLE_GAP_S", "60")
 
     class _FakeProvider:
-        def seed_midprice_buffer(self, buffer, key, bars_needed, now_ms):
+        def seed_price_buffer(self, buffer, key, bars_needed, now_ms):
             buffer.seed_bars(
                 [
                     MinuteBar(ts_minute=60, open=Decimal("100"), high=Decimal("100"), low=Decimal("100"), close=Decimal("100")),
@@ -3649,7 +3686,7 @@ def test_maybe_seed_price_buffer_clears_buffer_when_policy_rejects_all_sources(m
 
     ctrl = SimpleNamespace(
         config=SimpleNamespace(connector_name="bitget_perpetual", trading_pair="BTC-USDT", ema_period=20, atr_period=14),
-        _price_buffer=MidPriceBuffer(),
+        _price_buffer=PriceBuffer(),
         _history_provider=_FakeProvider(),
         _history_seed_attempted=False,
         _history_seed_status="disabled",
@@ -3673,12 +3710,12 @@ def test_maybe_seed_price_buffer_clears_buffer_when_policy_rejects_all_sources(m
 
 def test_maybe_seed_price_buffer_handles_provider_exception_without_crash() -> None:
     class _BoomProvider:
-        def seed_midprice_buffer(self, buffer, key, bars_needed, now_ms):
+        def seed_price_buffer(self, buffer, key, bars_needed, now_ms):
             raise RuntimeError("provider_boom")
 
     ctrl = SimpleNamespace(
         config=SimpleNamespace(connector_name="bitget_perpetual", trading_pair="BTC-USDT", ema_period=20, atr_period=14),
-        _price_buffer=MidPriceBuffer(),
+        _price_buffer=PriceBuffer(),
         _history_provider=_BoomProvider(),
         _history_seed_attempted=False,
         _history_seed_status="disabled",

@@ -1,11 +1,9 @@
 """Tests for bot_watchdog — circuit breaker state machine, persistence, staleness."""
 from __future__ import annotations
 
-import json
 import os
 import time
-from pathlib import Path
-from unittest.mock import MagicMock, patch
+from unittest.mock import patch
 
 import services.bot_watchdog.main as watchdog_mod
 from services.bot_watchdog.main import (
@@ -15,13 +13,12 @@ from services.bot_watchdog.main import (
     _fingerprint_suppressed,
     _get_stale_since,
     _load_state,
-    _record_restart,
     _record_fingerprint,
+    _record_restart,
     _restart_backoff_active,
     _save_state,
     _set_stale_since,
 )
-
 
 # ── Circuit breaker state machine ────────────────────────────────────
 

@@ -1,21 +1,25 @@
-"""Shared primitives for the market-making v2.4 controller family.
+"""Shared runtime primitives for the v2.4 controller family.
 
 Houses data classes and utility functions imported by multiple controller
-sub-modules.  Extracted from the legacy main runtime module to break circular imports
-between regime_detector, spread_engine, risk_policy, and the main controller.
+sub-modules.  Extracted from the legacy main runtime module to break circular
+imports between regime_detector, spread_engine, risk_policy, and the main
+controller.
 
-Historical note: this module name is retained for compatibility. New imports
-should use ``controllers.runtime.market_making_types``.
+Canonical import path: ``controllers.runtime.runtime_types``.
 """
 from __future__ import annotations
 
 from dataclasses import dataclass
 from decimal import Decimal
-from typing import List
 
 
 def clip(value: Decimal, low: Decimal, high: Decimal) -> Decimal:
-    """Clamp *value* to the inclusive range [low, high]."""
+    """Clamp *value* to the inclusive range [low, high].
+
+    NaN/Inf inputs are clamped to *low* (fail-safe).
+    """
+    if value.is_nan() or value.is_infinite():
+        return low
     return min(high, max(low, value))
 
 
@@ -40,10 +44,10 @@ class RegimeSpec:
 
 @dataclass
 class RuntimeLevelState:
-    buy_spreads: List[Decimal]
-    sell_spreads: List[Decimal]
-    buy_amounts_pct: List[Decimal]
-    sell_amounts_pct: List[Decimal]
+    buy_spreads: list[Decimal]
+    sell_spreads: list[Decimal]
+    buy_amounts_pct: list[Decimal]
+    sell_amounts_pct: list[Decimal]
     total_amount_quote: Decimal
     executor_refresh_time: int
     cooldown_time: int

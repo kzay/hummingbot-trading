@@ -1,11 +1,14 @@
 from __future__ import annotations
 
+import logging
 import os
 import time
 
-from services.common.models import RedisSettings, ServiceSettings
-from services.contracts.event_schemas import MarketSnapshotEvent, MlSignalEvent, StrategySignalEvent
-from services.contracts.stream_names import (
+logger = logging.getLogger(__name__)
+
+from platform_lib.core.models import RedisSettings, ServiceSettings
+from platform_lib.contracts.event_schemas import MarketSnapshotEvent, MlSignalEvent, StrategySignalEvent
+from platform_lib.contracts.stream_names import (
     DEFAULT_CONSUMER_GROUP,
     MARKET_DATA_STREAM,
     ML_SIGNAL_STREAM,
@@ -55,7 +58,8 @@ def run() -> None:
                     timeout_sec=ml_http_timeout_sec,
                 )
                 next_reload_ts = time.time() + ml_model_refresh_sec
-            except Exception:
+            except Exception as exc:
+                logger.warning("ML model load failed, retrying in 10s: %s", exc)
                 loaded_model = None
                 next_reload_ts = time.time() + min(10, ml_model_refresh_sec)
 
@@ -69,7 +73,8 @@ def run() -> None:
         for entry_id, payload in entries:
             try:
                 market = MarketSnapshotEvent(**payload)
-            except Exception:
+            except Exception as exc:
+                logger.debug("Unparseable market snapshot entry=%s: %s", entry_id, exc)
                 client.ack(MARKET_DATA_STREAM, group, entry_id)
                 continue
 
@@ -127,8 +132,8 @@ def run() -> None:
                                 ml_signal.model_dump(),
                                 maxlen=STREAM_RETENTION_MAXLEN.get(ML_SIGNAL_STREAM),
                             )
-                except Exception:
-                    pass
+                except Exception as exc:
+                    logger.warning("ML inference failed for entry=%s: %s", entry_id, exc)
             else:
                 imbalance = market.target_base_pct - market.base_pct
                 signal = StrategySignalEvent(

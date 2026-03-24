@@ -38,9 +38,9 @@ def _install_import_stubs() -> None:
     models_actions = _ensure_module("hummingbot.strategy_v2.models.executor_actions")
     _ensure_module("hummingbot.strategy_v2")
     _ensure_module("hummingbot.strategy_v2.models")
-    hb_bridge = _ensure_module("controllers.paper_engine_v2.hb_bridge")
+    hb_bridge = _ensure_module("simulation.bridge.hb_bridge")
     _ensure_module("controllers")
-    _ensure_module("controllers.paper_engine_v2")
+    _ensure_module("simulation")
     preflight = _ensure_module("services.common.preflight")
 
     async def _noop_async(*args, **kwargs):
@@ -107,11 +107,10 @@ def _controller_cls():
     return module.V2WithControllers
 
 
-def _attach_open_order_helpers(controller_cls, fake_self) -> None:  # noqa: ANN001
+def _attach_open_order_helpers(controller_cls, fake_self) -> None:
     for name in (
         "_append_open_order_snapshot_entry",
         "_iter_connector_open_orders",
-        "_iter_bridge_open_orders",
         "_iter_runtime_open_orders",
     ):
         setattr(fake_self, name, types.MethodType(getattr(controller_cls, name), fake_self))

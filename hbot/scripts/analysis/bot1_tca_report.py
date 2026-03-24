@@ -18,15 +18,14 @@ import csv
 import json
 import sys
 from collections import defaultdict
-from dataclasses import dataclass, field
-from datetime import datetime, timezone, timedelta
+from dataclasses import dataclass
+from datetime import UTC, datetime, timedelta
 from decimal import Decimal
 from pathlib import Path
-from typing import Dict, List, Optional, Tuple
 
 _ZERO = Decimal("0")
 _10K = Decimal("10000")
-_REPORTS_DIR = Path("hbot/reports/strategy")
+_REPORTS_DIR = Path("reports/strategy")
 
 
 def _d(x) -> Decimal:
@@ -36,7 +35,7 @@ def _d(x) -> Decimal:
         return _ZERO
 
 
-def _parse_ts(s: str) -> Optional[datetime]:
+def _parse_ts(s: str) -> datetime | None:
     s = (s or "").strip()
     if not s:
         return None
@@ -100,7 +99,7 @@ class TcaBucket:
         self.fees_sum += rec.fee_quote
         self.notional_sum += rec.notional
 
-    def to_dict(self) -> Dict:
+    def to_dict(self) -> dict:
         n = max(1, self.fills)
         adverse_rate = self.adverse_fills / self.fills if self.fills else 0.0
         return {
@@ -118,7 +117,7 @@ class TcaBucket:
         }
 
 
-def _load_fills(fills_path: Path, start: Optional[datetime], end: Optional[datetime]) -> List[Dict]:
+def _load_fills(fills_path: Path, start: datetime | None, end: datetime | None) -> list[dict]:
     rows = []
     if not fills_path.exists():
         return rows
@@ -137,7 +136,7 @@ def _load_fills(fills_path: Path, start: Optional[datetime], end: Optional[datet
     return rows
 
 
-def _load_minute(minute_path: Path, start: Optional[datetime], end: Optional[datetime]) -> List[Dict]:
+def _load_minute(minute_path: Path, start: datetime | None, end: datetime | None) -> list[dict]:
     rows = []
     if not minute_path.exists():
         return rows
@@ -156,9 +155,9 @@ def _load_minute(minute_path: Path, start: Optional[datetime], end: Optional[dat
     return rows
 
 
-def _build_minute_index(minute_rows: List[Dict]) -> Dict[int, Dict]:
+def _build_minute_index(minute_rows: list[dict]) -> dict[int, dict]:
     """Index minute rows by truncated unix minute timestamp for fast lookup."""
-    idx: Dict[int, Dict] = {}
+    idx: dict[int, dict] = {}
     for row in minute_rows:
         ts = row["ts"]
         if not isinstance(ts, datetime):
@@ -170,7 +169,7 @@ def _build_minute_index(minute_rows: List[Dict]) -> Dict[int, Dict]:
     return idx
 
 
-def _get_minute_mid(minute_idx: Dict[int, Dict], ts: datetime, offset_minutes: int = 0) -> Optional[Decimal]:
+def _get_minute_mid(minute_idx: dict[int, dict], ts: datetime, offset_minutes: int = 0) -> Decimal | None:
     key = int(ts.timestamp() // 60) + offset_minutes
     row = minute_idx.get(key)
     if row is None:
@@ -182,10 +181,10 @@ def _get_minute_mid(minute_idx: Dict[int, Dict], ts: datetime, offset_minutes: i
 def run_tca(
     fills_path: Path,
     minute_path: Path,
-    start: Optional[datetime] = None,
-    end: Optional[datetime] = None,
+    start: datetime | None = None,
+    end: datetime | None = None,
     save: bool = False,
-) -> Dict:
+) -> dict:
     fills_raw = _load_fills(fills_path, start, end)
     minute_raw = _load_minute(minute_path, start, end)
 
@@ -194,7 +193,7 @@ def run_tca(
 
     minute_idx = _build_minute_index(minute_raw)
 
-    records: List[Tuple[FillRecord, Decimal]] = []
+    records: list[tuple[FillRecord, Decimal]] = []
 
     for row in fills_raw:
         ts = row["ts"]
@@ -237,11 +236,11 @@ def run_tca(
 
     # Overall bucket
     overall = TcaBucket(label="overall")
-    by_regime: Dict[str, TcaBucket] = defaultdict(lambda: TcaBucket(label=""))
-    by_hour: Dict[int, TcaBucket] = defaultdict(lambda: TcaBucket(label=""))
-    by_side: Dict[str, TcaBucket] = defaultdict(lambda: TcaBucket(label=""))
-    by_spread: Dict[str, TcaBucket] = defaultdict(lambda: TcaBucket(label=""))
-    by_maker: Dict[str, TcaBucket] = defaultdict(lambda: TcaBucket(label=""))
+    by_regime: dict[str, TcaBucket] = defaultdict(lambda: TcaBucket(label=""))
+    by_hour: dict[int, TcaBucket] = defaultdict(lambda: TcaBucket(label=""))
+    by_side: dict[str, TcaBucket] = defaultdict(lambda: TcaBucket(label=""))
+    by_spread: dict[str, TcaBucket] = defaultdict(lambda: TcaBucket(label=""))
+    by_maker: dict[str, TcaBucket] = defaultdict(lambda: TcaBucket(label=""))
 
     for rec, mi in records:
         overall.add(rec, mi)
@@ -298,10 +297,10 @@ def run_tca(
 
 def _generate_insights(
     overall: TcaBucket,
-    by_regime: Dict[str, TcaBucket],
-    by_hour: Dict[int, TcaBucket],
-    by_side: Dict[str, TcaBucket],
-) -> List[str]:
+    by_regime: dict[str, TcaBucket],
+    by_hour: dict[int, TcaBucket],
+    by_side: dict[str, TcaBucket],
+) -> list[str]:
     insights = []
     if overall.fills == 0:
         return insights
@@ -318,7 +317,7 @@ def _generate_insights(
     worst_hour = max(by_hour.values(), key=lambda b: b.adverse_fills / max(1, b.fills), default=None)
     if worst_hour and worst_hour.fills >= 5:
         r = worst_hour.adverse_fills / worst_hour.fills
-        insights.append(f"Hour {worst_hour.label} UTC has worst adverse rate {r:.1%} — consider pausing during this hour")
+        insights.append(f"Hour {worst_hour.label} timezone.utc has worst adverse rate {r:.1%} — consider pausing during this hour")
 
     avg_is = float(overall.is_bps_sum / max(1, overall.fills))
     if avg_is > 2.0:
@@ -330,7 +329,7 @@ def _generate_insights(
 
 
 def _parse_date(s: str) -> datetime:
-    return datetime.fromisoformat(s).replace(tzinfo=timezone.utc)
+    return datetime.fromisoformat(s).replace(tzinfo=UTC)
 
 
 if __name__ == "__main__":
@@ -338,7 +337,7 @@ if __name__ == "__main__":
     ap.add_argument("--start", default=None, help="Start date YYYY-MM-DD")
     ap.add_argument("--end", default=None, help="End date YYYY-MM-DD")
     ap.add_argument("--day", default=None, help="Single day YYYY-MM-DD (overrides --start/--end)")
-    ap.add_argument("--root", default="hbot/data/bot1/logs/epp_v24/bot1_a")
+    ap.add_argument("--root", default="data/bot1/logs/epp_v24/bot1_a")
     ap.add_argument("--save", action="store_true")
     args = ap.parse_args()
 

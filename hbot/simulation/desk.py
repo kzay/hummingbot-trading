@@ -14,28 +14,30 @@ import time
 from collections import deque
 from dataclasses import dataclass, field
 from decimal import Decimal
-from typing import Any, Deque, Dict, List, Optional
+from typing import Any
 
-from controllers.paper_engine_v2.fee_models import FeeModel, make_fee_model
-from controllers.paper_engine_v2.fill_models import FillModel, make_fill_model
-from controllers.paper_engine_v2.funding_simulator import FundingSimulator
-from controllers.paper_engine_v2.latency_model import LatencyModel, make_latency_model
-from controllers.paper_engine_v2.matching_engine import EngineConfig, OrderMatchingEngine
-from controllers.paper_engine_v2.config import PaperEngineConfig
-from controllers.paper_engine_v2.portfolio import PaperPortfolio, PortfolioConfig
-from controllers.paper_engine_v2.state_store import DeskStateStore
-from controllers.paper_engine_v2.types import (
+from simulation.config import PaperEngineConfig
+from simulation.fee_models import FeeModel, make_fee_model
+from simulation.fill_models import FillModel, make_fill_model
+from simulation.funding_simulator import FundingSimulator
+from simulation.latency_model import LatencyModel, make_latency_model
+from simulation.matching_engine import EngineConfig, OrderMatchingEngine
+from simulation.portfolio import PaperPortfolio, PortfolioConfig
+from simulation.state_store import DeskStateStore
+from simulation.types import (
+    _ZERO,
+    CancelRejected,
     EngineEvent,
     InstrumentId,
     InstrumentSpec,
+    OrderExpired,
     OrderFilled,
     OrderRejected,
     OrderSide,
+    OrderStatus,
     PaperOrder,
     PaperOrderType,
     PositionAction,
-    OrderStatus,
-    _ZERO,
     _uuid,
 )
 
@@ -66,7 +68,7 @@ class DeskConfig:
 
     YAML config fields map to these parameters (see Section 15.2 of spec).
     """
-    initial_balances: Dict[str, Decimal]       # {"USDT": Decimal("10000")}
+    initial_balances: dict[str, Decimal]       # {"USDT": Decimal("10000")}
     portfolio_config: PortfolioConfig = field(default_factory=PortfolioConfig)
     default_fill_model: str = "queue_position"  # "queue_position"|"latency_aware"|"top_of_book"|"best_price"|"one_tick_slippage"|"two_tier"
     default_fee_source: str = "instrument_spec" # "instrument_spec"|"fee_profiles"
@@ -89,11 +91,12 @@ class DeskConfig:
     default_engine_config: EngineConfig = field(default_factory=EngineConfig)
     state_file_path: str = "/tmp/paper_desk_v2_state.json"
     redis_key: str = "paper_desk:v2:state"
-    redis_url: Optional[str] = None
+    redis_url: str | None = None
     reset_state_on_startup: bool = False
-    event_log_max_size: int = 100_000
+    event_log_max_size: int = 10_000
     seed: int = 7
     fee_profiles_path: str = "config/fee_profiles.json"
+    disable_persistence: bool = False
 
 
 # ---------------------------------------------------------------------------
@@ -110,23 +113,31 @@ class PaperDesk:
     def __init__(self, config: DeskConfig):
         self._config = config
         self._portfolio = PaperPortfolio(config.initial_balances, config.portfolio_config)
-        self._engines: Dict[str, OrderMatchingEngine] = {}
-        self._feeds: Dict[str, Any] = {}   # MarketDataFeed per instrument key
-        self._specs: Dict[str, InstrumentSpec] = {}
-        self._funding_rates: Dict[str, Decimal] = {}
+        self._engines: dict[str, OrderMatchingEngine] = {}
+        self._feeds: dict[str, Any] = {}   # MarketDataFeed per instrument key
+        self._specs: dict[str, InstrumentSpec] = {}
+        self._funding_rates: dict[str, Decimal] = {}
         self._funding_sim = FundingSimulator()
         self._state_store = DeskStateStore(
             file_path=config.state_file_path,
             redis_key=config.redis_key,
             redis_url=config.redis_url,
         )
-        self._event_log: Deque[EngineEvent] = deque(maxlen=config.event_log_max_size)
+        self._event_log: deque[EngineEvent] = deque(maxlen=config.event_log_max_size)
         self._rng = random.Random(config.seed)
         self._order_counter: int = 0
         self._risk_margin_call_events_total: int = 0
         self._risk_liquidation_events_total: int = 0
         self._risk_liquidation_actions_total: int = 0
         self._risk_last_margin_level: str = "unknown"
+        self._feed_fail_counts: dict[str, int] = {}
+        self._FEED_CIRCUIT_BREAKER_THRESHOLD: int = 10
+        # Execution quality tracking
+        self._fill_count: int = 0
+        self._maker_fill_count: int = 0
+        self._slippage_sum_bps: Decimal = _ZERO
+        self._mid_slippage_sum_bps: Decimal = _ZERO
+        self._expired_count: int = 0
         if config.reset_state_on_startup:
             logger.warning(
                 "PaperDesk: clearing persisted state on startup for %s",
@@ -141,10 +152,10 @@ class PaperDesk:
         self,
         instrument_spec: InstrumentSpec,
         data_feed: Any,
-        fill_model: Optional[FillModel] = None,
-        fee_model: Optional[FeeModel] = None,
-        latency_model: Optional[LatencyModel] = None,
-        engine_config: Optional[EngineConfig] = None,
+        fill_model: FillModel | None = None,
+        fee_model: FeeModel | None = None,
+        latency_model: LatencyModel | None = None,
+        engine_config: EngineConfig | None = None,
         leverage: int = 1,
     ) -> None:
         """Register an instrument with its data feed and simulation models."""
@@ -292,19 +303,30 @@ class PaperDesk:
 
     def cancel_order(
         self, instrument_id: InstrumentId, order_id: str
-    ) -> Optional[EngineEvent]:
+    ) -> EngineEvent:
         key = instrument_id.key
         engine = self._engines.get(key)
         if engine is None:
-            return None
-        event = engine.cancel_order(order_id, self._now_ns())
-        if event is not None:
+            event: EngineEvent = CancelRejected(
+                event_id=_uuid(), timestamp_ns=self._now_ns(),
+                instrument_id=instrument_id,
+                order_id=order_id, reason="instrument_not_registered",
+                source_bot="",
+            )
             self._event_log.append(event)
+            return event
+        event = engine.cancel_order(order_id, self._now_ns())
+        if isinstance(event, CancelRejected):
+            logger.warning(
+                "PaperDesk cancel_order rejected: order_id=%s reason=%s",
+                order_id, event.reason,
+            )
+        self._event_log.append(event)
         return event
 
-    def cancel_all(self, instrument_id: Optional[InstrumentId] = None) -> List[EngineEvent]:
+    def cancel_all(self, instrument_id: InstrumentId | None = None) -> list[EngineEvent]:
         """Cancel all orders. If instrument_id given, cancel only for that instrument."""
-        events: List[EngineEvent] = []
+        events: list[EngineEvent] = []
         now_ns = self._now_ns()
         if instrument_id is not None:
             engine = self._engines.get(instrument_id.key)
@@ -320,13 +342,13 @@ class PaperDesk:
 
     # -- Tick ---------------------------------------------------------------
 
-    def tick(self, now_ns: Optional[int] = None) -> List[EngineEvent]:
+    def tick(self, now_ns: int | None = None) -> list[EngineEvent]:
         """Drive all engines for one tick cycle. Never raises."""
         if now_ns is None:
             now_ns = self._now_ns()
 
-        all_events: List[EngineEvent] = []
-        current_prices: Dict[str, Decimal] = {}
+        all_events: list[EngineEvent] = []
+        current_prices: dict[str, Decimal] = {}
 
         for key, engine in self._engines.items():
             feed = self._feeds.get(key)
@@ -334,7 +356,7 @@ class PaperDesk:
             if feed is None or spec is None:
                 continue
 
-            # Update book from data feed
+            # Update book from data feed (with circuit breaker)
             try:
                 book = feed.get_book(spec.instrument_id)
                 if book is not None:
@@ -342,13 +364,22 @@ class PaperDesk:
                     mid = book.mid_price
                     if mid:
                         current_prices[key] = mid
+                    self._feed_fail_counts[key] = 0
                 # Update funding rate
                 try:
                     self._funding_rates[key] = feed.get_funding_rate(spec.instrument_id)
-                except Exception:
+                except (ValueError, TypeError, AttributeError, ArithmeticError):
                     pass
             except Exception as exc:
-                logger.warning("Data feed error for %s: %s", key, exc, exc_info=True)
+                self._feed_fail_counts[key] = self._feed_fail_counts.get(key, 0) + 1
+                _fc = self._feed_fail_counts[key]
+                if _fc <= 3 or _fc % 60 == 0:
+                    logger.warning(
+                        "Data feed error for %s (consecutive=%d): %s",
+                        key, _fc, exc, exc_info=(_fc <= 3),
+                    )
+                if _fc >= self._FEED_CIRCUIT_BREAKER_THRESHOLD:
+                    continue  # skip engine tick — no reliable price data
 
             # Tick engine
             events = engine.tick(now_ns)
@@ -388,7 +419,7 @@ class PaperDesk:
 
         # Mark to market
         if current_prices:
-            self._portfolio.mark_to_market(current_prices)
+            self._portfolio.mark_to_market(current_prices, now_ns=now_ns)
 
         # Post-trade risk evaluation (advisory liquidation actions)
         try:
@@ -421,29 +452,41 @@ class PaperDesk:
                         )
                     )
                 if current_prices:
-                    self._portfolio.mark_to_market(current_prices)
-        except Exception:
-            pass
+                    self._portfolio.mark_to_market(current_prices, now_ns=now_ns)
+        except Exception as exc:
+            logger.warning("PaperDesk risk evaluation failed: %s", exc, exc_info=True)
 
-        # Persist state (throttled)
-        now_ts = now_ns / 1e9
-        snap = self.snapshot()
-        self._state_store.save(snap, now_ts, force=False)
+        # Persist state — force-save when fills occurred to prevent data loss on crash
+        if not self._config.disable_persistence:
+            has_fills = any(isinstance(ev, OrderFilled) for ev in all_events)
+            now_ts = now_ns / 1e9
+            snap = self.snapshot()
+            self._state_store.save(snap, now_ts, force=has_fills)
 
-        # Journal fill events for replay/postmortem
+        # Accumulate execution quality metrics + journal fill events.
         try:
             for ev in all_events:
                 if isinstance(ev, OrderFilled):
-                    self._state_store.journal_event("order_filled", {
-                        "instrument_id": ev.instrument_id.key,
-                        "order_id": ev.order_id,
-                        "fill_price": str(ev.fill_price),
-                        "fill_quantity": str(ev.fill_quantity),
-                        "fee": str(ev.fee),
-                        "is_maker": ev.is_maker,
-                    })
-        except Exception:
-            pass
+                    self._fill_count += 1
+                    if ev.is_maker:
+                        self._maker_fill_count += 1
+                    self._slippage_sum_bps += ev.slippage_bps
+                    self._mid_slippage_sum_bps += ev.mid_slippage_bps
+                    if not self._config.disable_persistence:
+                        self._state_store.journal_event("order_filled", {
+                            "instrument_id": ev.instrument_id.key,
+                            "order_id": ev.order_id,
+                            "fill_price": str(ev.fill_price),
+                            "fill_quantity": str(ev.fill_quantity),
+                            "fee": str(ev.fee),
+                            "is_maker": ev.is_maker,
+                            "slippage_bps": str(ev.slippage_bps),
+                            "mid_slippage_bps": str(ev.mid_slippage_bps),
+                        })
+                elif isinstance(ev, OrderExpired):
+                    self._expired_count += 1
+        except Exception as exc:
+            logger.warning("PaperDesk journal_event failed: %s", exc, exc_info=True)
 
         # Log events
         self._event_log.extend(all_events)
@@ -455,7 +498,21 @@ class PaperDesk:
     def portfolio(self) -> PaperPortfolio:
         return self._portfolio
 
-    def snapshot(self) -> Dict[str, Any]:
+    def execution_quality(self) -> dict[str, Any]:
+        """Return execution quality metrics for monitoring/reporting."""
+        avg_slip = self._slippage_sum_bps / self._fill_count if self._fill_count > 0 else _ZERO
+        avg_mid_slip = self._mid_slippage_sum_bps / self._fill_count if self._fill_count > 0 else _ZERO
+        maker_pct = Decimal(str(self._maker_fill_count)) / Decimal(str(self._fill_count)) * 100 if self._fill_count > 0 else _ZERO
+        return {
+            "fill_count": self._fill_count,
+            "maker_fill_count": self._maker_fill_count,
+            "maker_fill_pct": str(maker_pct.quantize(Decimal("0.1"))),
+            "avg_slippage_bps": str(avg_slip.quantize(Decimal("0.01"))),
+            "avg_mid_slippage_bps": str(avg_mid_slip.quantize(Decimal("0.01"))),
+            "expired_count": self._expired_count,
+        }
+
+    def snapshot(self) -> dict[str, Any]:
         return {
             "portfolio": self._portfolio.snapshot(),
             "funding_timestamps": dict(self._funding_sim._last_funding_ns),
@@ -466,12 +523,13 @@ class PaperDesk:
                 "liquidation_actions_total": int(self._risk_liquidation_actions_total),
                 "last_margin_level": str(self._risk_last_margin_level),
             },
+            "execution_quality": self.execution_quality(),
         }
 
-    def event_log(self) -> List[EngineEvent]:
+    def event_log(self) -> list[EngineEvent]:
         return list(self._event_log)
 
-    def paper_stats(self, instrument_id: Optional[InstrumentId] = None) -> Dict[str, Any]:
+    def paper_stats(self, instrument_id: InstrumentId | None = None) -> dict[str, Any]:
         """Return paper_stats dict compatible with existing paper_engine.py API."""
         fill_count = 0
         reject_count = 0
@@ -529,7 +587,7 @@ class PaperDesk:
     # -- Factory ------------------------------------------------------------
 
     @classmethod
-    def from_paper_config(cls, cfg: PaperEngineConfig, redis_url: Optional[str] = None) -> "PaperDesk":
+    def from_paper_config(cls, cfg: PaperEngineConfig, redis_url: str | None = None) -> PaperDesk:
         """Build PaperDesk from PaperEngineConfig."""
         if redis_url is None:
             redis_url = PaperEngineConfig.resolve_redis_url_from_env()
@@ -576,11 +634,15 @@ class PaperDesk:
         ))
 
     @classmethod
-    def from_controller_config(cls, cfg: Any) -> "PaperDesk":
+    def from_controller_config(cls, cfg: Any) -> PaperDesk:
         """Adapter from a controller config object with nested `paper_engine` block."""
         return cls.from_paper_config(PaperEngineConfig.from_controller_config(cfg))
 
     @classmethod
-    def from_epp_config(cls, cfg: Any) -> "PaperDesk":
+    def from_epp_config(cls, cfg: Any) -> PaperDesk:
         """Backward-compatible alias for legacy EPP integrations."""
         return cls.from_controller_config(cfg)
+
+    def close(self) -> None:
+        """Flush pending I/O and release resources. Call on clean shutdown."""
+        self._state_store.close()

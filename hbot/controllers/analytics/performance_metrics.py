@@ -11,10 +11,10 @@ use in controllers (no pandas/numpy/sklearn required).
 from __future__ import annotations
 
 import math
-from datetime import datetime, timezone
+from collections.abc import Iterable, Sequence
 from dataclasses import dataclass
+from datetime import UTC, datetime
 from decimal import Decimal
-from typing import Iterable, List, Optional, Sequence, Tuple, Union
 
 _ZERO = Decimal("0")
 _SECONDS_PER_YEAR = 365.25 * 24 * 60 * 60
@@ -24,8 +24,8 @@ class MetricsError(ValueError):
     pass
 
 
-def _to_decimal_list(values: Iterable[Decimal]) -> List[Decimal]:
-    out: List[Decimal] = []
+def _to_decimal_list(values: Iterable[Decimal]) -> list[Decimal]:
+    out: list[Decimal] = []
     for v in values:
         if v is None:
             continue
@@ -47,12 +47,12 @@ def percent_return(price_series: Sequence[Decimal]) -> Decimal:
     return (last / first) - Decimal("1")
 
 
-def simple_return_series(price_series: Sequence[Decimal]) -> List[Decimal]:
+def simple_return_series(price_series: Sequence[Decimal]) -> list[Decimal]:
     """Per-step simple returns: r_t = p_t / p_{t-1} - 1."""
     prices = _to_decimal_list(price_series)
     if len(prices) < 2:
         return []
-    rets: List[Decimal] = []
+    rets: list[Decimal] = []
     prev = prices[0]
     for p in prices[1:]:
         if prev <= _ZERO:
@@ -63,12 +63,12 @@ def simple_return_series(price_series: Sequence[Decimal]) -> List[Decimal]:
     return rets
 
 
-def log_return_series(price_series: Sequence[Decimal]) -> List[Decimal]:
+def log_return_series(price_series: Sequence[Decimal]) -> list[Decimal]:
     """Per-step log returns: lr_t = ln(p_t / p_{t-1})."""
     prices = _to_decimal_list(price_series)
     if len(prices) < 2:
         return []
-    out: List[Decimal] = []
+    out: list[Decimal] = []
     prev = prices[0]
     for p in prices[1:]:
         if prev <= _ZERO or p <= _ZERO:
@@ -79,7 +79,7 @@ def log_return_series(price_series: Sequence[Decimal]) -> List[Decimal]:
     return out
 
 
-def mean_std(values: Sequence[Decimal]) -> Tuple[Decimal, Decimal]:
+def mean_std(values: Sequence[Decimal]) -> tuple[Decimal, Decimal]:
     """Sample std (ddof=1) over non-empty list; returns (mean, std)."""
     xs = _to_decimal_list(values)
     n = len(xs)
@@ -94,7 +94,7 @@ def mean_std(values: Sequence[Decimal]) -> Tuple[Decimal, Decimal]:
     return mean, std
 
 
-def drawdown_series(price_series: Sequence[Decimal], method: str = "percent") -> List[Decimal]:
+def drawdown_series(price_series: Sequence[Decimal], method: str = "percent") -> list[Decimal]:
     """Drawdown series as positive numbers (0 = at peak)."""
     prices = _to_decimal_list(price_series)
     if not prices:
@@ -104,7 +104,7 @@ def drawdown_series(price_series: Sequence[Decimal], method: str = "percent") ->
         raise MetricsError(f"Unsupported drawdown method: {method}")
 
     peak = prices[0]
-    out: List[Decimal] = []
+    out: list[Decimal] = []
     for p in prices:
         if p > peak:
             peak = p
@@ -130,15 +130,15 @@ class MaxDrawdownMetadata:
     trough_index: int
     peak_price: Decimal
     trough_price: Decimal
-    peak_ts: Optional[str] = None
-    trough_ts: Optional[str] = None
+    peak_ts: str | None = None
+    trough_ts: str | None = None
 
 
 def max_drawdown_with_metadata(
     price_series: Sequence[Decimal],
     *,
     method: str = "percent",
-    timestamps: Optional[Sequence[str]] = None,
+    timestamps: Sequence[str] | None = None,
 ) -> MaxDrawdownMetadata:
     prices = _to_decimal_list(price_series)
     if not prices:
@@ -204,13 +204,13 @@ def max_drawdown(price_series: Sequence[Decimal], method: str = "percent") -> De
     return max_drawdown_with_metadata(price_series, method=method).max_drawdown
 
 
-def _to_datetimes(timestamps: Sequence[Union[str, datetime, float, int]]) -> List[datetime]:
-    out: List[datetime] = []
+def _to_datetimes(timestamps: Sequence[str | datetime | float | int]) -> list[datetime]:
+    out: list[datetime] = []
     for ts in timestamps:
         if isinstance(ts, datetime):
-            out.append(ts if ts.tzinfo else ts.replace(tzinfo=timezone.utc))
+            out.append(ts if ts.tzinfo else ts.replace(tzinfo=UTC))
         elif isinstance(ts, (int, float)):
-            out.append(datetime.fromtimestamp(float(ts), tz=timezone.utc))
+            out.append(datetime.fromtimestamp(float(ts), tz=UTC))
         else:
             s = str(ts).strip()
             if s.endswith("Z"):
@@ -219,7 +219,7 @@ def _to_datetimes(timestamps: Sequence[Union[str, datetime, float, int]]) -> Lis
     return out
 
 
-def years_past(timestamps: Sequence[Union[str, datetime, float, int]]) -> float:
+def years_past(timestamps: Sequence[str | datetime | float | int]) -> float:
     dts = _to_datetimes(timestamps)
     if len(dts) < 2:
         return 0.0
@@ -227,7 +227,7 @@ def years_past(timestamps: Sequence[Union[str, datetime, float, int]]) -> float:
     return max(0.0, delta_s / _SECONDS_PER_YEAR)
 
 
-def entries_per_year(timestamps: Sequence[Union[str, datetime, float, int]]) -> float:
+def entries_per_year(timestamps: Sequence[str | datetime | float | int]) -> float:
     yp = years_past(timestamps)
     if yp <= 0:
         return 0.0
@@ -238,7 +238,7 @@ def entries_per_year(timestamps: Sequence[Union[str, datetime, float, int]]) -> 
 def cagr(
     price_series: Sequence[Decimal],
     *,
-    timestamps: Sequence[Union[str, datetime, float, int]],
+    timestamps: Sequence[str | datetime | float | int],
 ) -> Decimal:
     prices = _to_decimal_list(price_series)
     if len(prices) < 2:
@@ -257,7 +257,7 @@ def cagr(
 def annualized_volatility(
     return_series: Sequence[Decimal],
     *,
-    timestamps: Sequence[Union[str, datetime, float, int]],
+    timestamps: Sequence[str | datetime | float | int],
 ) -> Decimal:
     _, std = mean_std(return_series)
     epy = entries_per_year(timestamps)
@@ -269,7 +269,7 @@ def annualized_volatility(
 def sharpe_ratio(
     price_series: Sequence[Decimal],
     *,
-    timestamps: Sequence[Union[str, datetime, float, int]],
+    timestamps: Sequence[str | datetime | float | int],
     benchmark_rate_annual: Decimal = _ZERO,
     use_log_returns: bool = False,
 ) -> Decimal:
@@ -287,7 +287,7 @@ def sharpe_ratio(
 def annualized_downside_deviation(
     return_series: Sequence[Decimal],
     *,
-    timestamps: Sequence[Union[str, datetime, float, int]],
+    timestamps: Sequence[str | datetime | float | int],
     benchmark_rate_annual: Decimal = _ZERO,
 ) -> Decimal:
     rets = _to_decimal_list(return_series)
@@ -315,7 +315,7 @@ def annualized_downside_deviation(
 def sortino_ratio(
     price_series: Sequence[Decimal],
     *,
-    timestamps: Sequence[Union[str, datetime, float, int]],
+    timestamps: Sequence[str | datetime | float | int],
     benchmark_rate_annual: Decimal = _ZERO,
     use_log_returns: bool = False,
 ) -> Decimal:
@@ -347,7 +347,7 @@ def jensens_alpha(
     varx = sum((xi - mx) ** 2 for xi in xf)
     if varx <= 0:
         return _ZERO
-    cov = sum((xi - mx) * (yi - my) for xi, yi in zip(xf, yf))
+    cov = sum((xi - mx) * (yi - my) for xi, yi in zip(xf, yf, strict=True))
     beta = cov / varx
     alpha = my - beta * mx
     return Decimal(str(alpha))

@@ -2,7 +2,6 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from decimal import Decimal
-from typing import List
 
 from controllers.ops_guard import GuardState
 
@@ -11,7 +10,7 @@ from controllers.ops_guard import GuardState
 class RuntimeRiskDecision:
     """Neutral risk outcome consumed by telemetry and execution gating."""
 
-    risk_reasons: List[str]
+    risk_reasons: list[str]
     risk_hard_stop: bool
     daily_loss_pct: Decimal
     drawdown_pct: Decimal

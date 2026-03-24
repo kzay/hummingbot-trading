@@ -3,16 +3,15 @@ from __future__ import annotations
 
 import argparse
 import json
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
-from typing import Dict, List
 
 
 def _utc_now() -> str:
-    return datetime.now(timezone.utc).isoformat()
+    return datetime.now(UTC).isoformat()
 
 
-def _read_json(path: Path) -> Dict:
+def _read_json(path: Path) -> dict:
     if not path.exists():
         return {}
     try:
@@ -22,7 +21,7 @@ def _read_json(path: Path) -> Dict:
         return {}
 
 
-def _check(name: str, ok: bool, reason: str, evidence_paths: List[str]) -> Dict:
+def _check(name: str, ok: bool, reason: str, evidence_paths: list[str]) -> dict:
     return {
         "name": name,
         "pass": bool(ok),
@@ -39,12 +38,12 @@ def _minutes_since(ts: str) -> float:
         s = s[:-1] + "+00:00"
     try:
         dt = datetime.fromisoformat(s)
-        return (datetime.now(timezone.utc) - dt).total_seconds() / 60.0
+        return (datetime.now(UTC) - dt).total_seconds() / 60.0
     except Exception:
         return 1e9
 
 
-def build_kill_switch_evidence(kill_report: Dict, *, max_age_min: float) -> Dict:
+def build_kill_switch_evidence(kill_report: dict, *, max_age_min: float) -> dict:
     ts_utc = str(kill_report.get("ts_utc", ""))
     age_min = _minutes_since(ts_utc)
     dry_run = str(kill_report.get("dry_run", True)).strip().lower() in {"true", "1", "yes"}
@@ -71,8 +70,8 @@ def build_kill_switch_evidence(kill_report: Dict, *, max_age_min: float) -> Dict
     }
 
 
-def _read_env_map(env_path: Path) -> Dict[str, str]:
-    out: Dict[str, str] = {}
+def _read_env_map(env_path: Path) -> dict[str, str]:
+    out: dict[str, str] = {}
     if not env_path.exists():
         return out
     for raw in env_path.read_text(encoding="utf-8").splitlines():
@@ -98,7 +97,7 @@ def main() -> int:
     kill_evidence_path = root / "reports" / "ops" / "kill_switch_non_dry_run_evidence_latest.json"
     kill_evidence_ts_dir = root / "reports" / "ops"
 
-    checks: List[Dict] = []
+    checks: list[dict] = []
 
     # 1) kill-switch dry-run must be disabled for ROAD-5
     dry_run_off = str(env_map.get("KILL_SWITCH_DRY_RUN", "true")).lower() in {"0", "false", "no"}
@@ -116,7 +115,7 @@ def main() -> int:
     max_ks_age_min = float(env_map.get("KILL_SWITCH_EVIDENCE_MAX_AGE_MIN", "1440"))
     kill_evidence = build_kill_switch_evidence(kill_rep, max_age_min=max_ks_age_min)
     kill_evidence_ts_dir.mkdir(parents=True, exist_ok=True)
-    stamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
+    stamp = datetime.now(UTC).strftime("%Y%m%dT%H%M%SZ")
     kill_evidence_ts = kill_evidence_ts_dir / f"kill_switch_non_dry_run_evidence_{stamp}.json"
     kill_evidence_ts.write_text(json.dumps(kill_evidence, indent=2), encoding="utf-8")
     kill_evidence_path.write_text(json.dumps(kill_evidence, indent=2), encoding="utf-8")

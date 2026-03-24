@@ -10,12 +10,8 @@ Covers:
 import json
 import time
 from decimal import Decimal
-from pathlib import Path
 
-import pytest
-
-from controllers.paper_engine_v2.state_store import DeskStateStore, EventJournal
-
+from simulation.state_store import DeskStateStore, EventJournal
 
 # ---------------------------------------------------------------------------
 # EventJournal unit tests
@@ -116,7 +112,7 @@ class TestDeskStateStoreJournal:
 class TestReplayDeterminism:
     def test_same_fills_produce_same_state(self):
         """Replay accounting.apply_fill() with same sequence → identical result."""
-        from controllers.paper_engine_v2.accounting import PositionState, apply_fill
+        from simulation.accounting import PositionState, apply_fill
 
         _Z = Decimal("0")
         s0 = PositionState(quantity=_Z, avg_entry_price=_Z, realized_pnl=_Z, opened_at_ns=0)

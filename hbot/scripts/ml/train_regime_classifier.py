@@ -8,8 +8,8 @@ Deployment criteria (from ml-trading-guardrails.mdc):
 - OOS Sharpe improvement >= 0.3 (requires backtest comparison)
 
 Usage:
-    python hbot/scripts/ml/train_regime_classifier.py --data hbot/data/ml/regime_train_20260227.parquet
-    python hbot/scripts/ml/train_regime_classifier.py --data hbot/data/ml/regime_train_20260227.parquet --n-windows 3
+    PYTHONPATH=hbot python -m scripts.ml.train_regime_classifier --data data/ml/regime_train_20260227.parquet
+    PYTHONPATH=hbot python -m scripts.ml.train_regime_classifier --data data/ml/regime_train_20260227.parquet --n-windows 3
 """
 from __future__ import annotations
 
@@ -17,14 +17,13 @@ import argparse
 import json
 import sys
 from pathlib import Path
-from typing import Dict, List, Optional, Tuple
 
 REGIME_LABELS = ["neutral_low_vol", "neutral_high_vol", "up", "down", "high_vol_shock"]
 TARGET_COL = "regime_label"
 DROP_COLS = ["regime_str", "ts", TARGET_COL]
 
 
-def _get_feature_cols(df) -> List[str]:
+def _get_feature_cols(df) -> list[str]:
     return [c for c in df.columns if c not in DROP_COLS]
 
 
@@ -72,9 +71,9 @@ def _build_model(use_lightgbm: bool = True):
     )
 
 
-def _walk_forward_cv(df, n_windows: int = 3) -> List[Dict]:
-    from sklearn.metrics import accuracy_score, classification_report  # type: ignore
+def _walk_forward_cv(df, n_windows: int = 3) -> list[dict]:
     import numpy as np  # type: ignore
+    from sklearn.metrics import accuracy_score, classification_report  # type: ignore
 
     n = len(df)
     window = n // (n_windows + 1)
@@ -130,12 +129,12 @@ def _walk_forward_cv(df, n_windows: int = 3) -> List[Dict]:
 
 def train_and_save(
     parquet_path: str,
-    output_dir: str = "hbot/data/ml",
+    output_dir: str = "data/ml",
     n_windows: int = 3,
 ) -> Path:
     try:
-        import pandas as pd  # type: ignore
         import joblib  # type: ignore
+        import pandas as pd  # type: ignore
     except ImportError:
         print("ERROR: pandas, pyarrow, scikit-learn, and joblib required.", file=sys.stderr)
         sys.exit(1)
@@ -153,7 +152,7 @@ def train_and_save(
         print(f"\nWARNING: Not all windows passed (mean OOS accuracy={mean_acc:.4f}). See ROAD-10 deployment criteria.", file=sys.stderr)
         print("Model will be saved but flagged as NOT_READY for deployment.", file=sys.stderr)
 
-    print(f"\nTraining final model on all data ...", file=sys.stderr)
+    print("\nTraining final model on all data ...", file=sys.stderr)
     X_all = df[feature_cols].values
     y_all = df[TARGET_COL].values
     final_model = _build_model()
@@ -171,7 +170,7 @@ def train_and_save(
         "feature_set": "v2",
         "feature_columns": feature_cols,
         "regime_labels": REGIME_LABELS,
-        "n_training_rows": int(len(df)),
+        "n_training_rows": len(df),
         "walk_forward_n_windows": n_windows,
         "mean_oos_accuracy": round(mean_acc, 4),
         "all_windows_passed": all_passed,
@@ -185,17 +184,17 @@ def train_and_save(
 
     status = "READY" if all_passed else "NOT_READY"
     print(f"\n{'='*60}", file=sys.stderr)
-    print(f"Regime Classifier Training Complete", file=sys.stderr)
+    print("Regime Classifier Training Complete", file=sys.stderr)
     print(f"Status: {status}", file=sys.stderr)
     print(f"Mean OOS Accuracy: {mean_acc:.4f} (threshold: 0.55)", file=sys.stderr)
     print(f"Model: {model_path}", file=sys.stderr)
     if all_passed:
-        print(f"\nTo deploy:", file=sys.stderr)
-        print(f"  1. Set ML_ENABLED=true in compose env for signal-service", file=sys.stderr)
+        print("\nTo deploy:", file=sys.stderr)
+        print("  1. Set ML_ENABLED=true in compose env for signal-service", file=sys.stderr)
         print(f"  2. Set ML_MODEL_URI=file://{model_path.resolve()}", file=sys.stderr)
-        print(f"  3. Set ML_FEATURE_SET=v2", file=sys.stderr)
-        print(f"  4. Set ml_regime_enabled: true in epp_v2_4_bot_a.yml", file=sys.stderr)
-        print(f"  5. Restart signal-service and bot1", file=sys.stderr)
+        print("  3. Set ML_FEATURE_SET=v2", file=sys.stderr)
+        print("  4. Set ml_regime_enabled: true in epp_v2_4_bot_a.yml", file=sys.stderr)
+        print("  5. Restart signal-service and bot1", file=sys.stderr)
     print(f"{'='*60}", file=sys.stderr)
 
     return model_path
@@ -204,7 +203,7 @@ def train_and_save(
 if __name__ == "__main__":
     ap = argparse.ArgumentParser(description="Train ML regime classifier for EPP v2.4")
     ap.add_argument("--data", required=True, help="Path to regime_train_*.parquet")
-    ap.add_argument("--output", default="hbot/data/ml")
+    ap.add_argument("--output", default="data/ml")
     ap.add_argument("--n-windows", type=int, default=3)
     args = ap.parse_args()
 

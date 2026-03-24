@@ -18,25 +18,24 @@ HUMMINGBOT_AVAILABLE = _hummingbot_available()
 
 if HUMMINGBOT_AVAILABLE:
     from controllers.bot6_cvd_divergence_v1 import Bot6CvdDivergenceV1Config, Bot6CvdDivergenceV1Controller
-    from controllers.epp_v2_4 import EppV24Config, EppV24Controller
     from controllers.epp_v2_4_bot6 import EppV24Bot6Config, EppV24Bot6Controller
-    from controllers.runtime.base import StrategyRuntimeV24Config, StrategyRuntimeV24Controller
+    from controllers.runtime.base import DirectionalStrategyRuntimeV24Config, DirectionalStrategyRuntimeV24Controller
     from controllers.runtime.data_context import RuntimeDataContext
     from controllers.runtime.directional_core import DirectionalRuntimeAdapter
     from controllers.runtime.execution_context import RuntimeExecutionPlan
-    from controllers.runtime.market_making_types import RegimeSpec
-    from services.common.market_data_plane import DirectionalTradeFeatures, TradeFlowFeatures
+    from controllers.runtime.runtime_types import RegimeSpec
+    from controllers.shared_runtime_v24 import SharedRuntimeKernel
+    from platform_lib.market_data.market_data_plane import DirectionalTradeFeatures, TradeFlowFeatures
 else:  # pragma: no cover - stripped environments
     Bot6CvdDivergenceV1Config = object
     Bot6CvdDivergenceV1Controller = object
-    EppV24Config = object
-    EppV24Controller = object
     DirectionalRuntimeAdapter = object
     RuntimeDataContext = object
     RuntimeExecutionPlan = object
     RegimeSpec = object
-    StrategyRuntimeV24Config = object
-    StrategyRuntimeV24Controller = object
+    DirectionalStrategyRuntimeV24Config = object
+    DirectionalStrategyRuntimeV24Controller = object
+    SharedRuntimeKernel = object
     EppV24Bot6Config = object
     EppV24Bot6Controller = object
     DirectionalTradeFeatures = object
@@ -46,16 +45,14 @@ pytestmark = pytest.mark.skipif(not HUMMINGBOT_AVAILABLE, reason="hummingbot not
 
 
 def test_bot6_controller_reuses_shared_runtime_stack() -> None:
-    assert issubclass(Bot6CvdDivergenceV1Config, StrategyRuntimeV24Config)
-    assert issubclass(Bot6CvdDivergenceV1Controller, StrategyRuntimeV24Controller)
+    assert issubclass(Bot6CvdDivergenceV1Config, DirectionalStrategyRuntimeV24Config)
+    assert issubclass(Bot6CvdDivergenceV1Controller, DirectionalStrategyRuntimeV24Controller)
     assert Bot6CvdDivergenceV1Config.controller_name == "bot6_cvd_divergence_v1"
 
     assert issubclass(EppV24Bot6Config, Bot6CvdDivergenceV1Config)
     assert issubclass(EppV24Bot6Controller, Bot6CvdDivergenceV1Controller)
-    assert issubclass(EppV24Bot6Config, StrategyRuntimeV24Config)
-    assert issubclass(EppV24Bot6Controller, StrategyRuntimeV24Controller)
-    assert issubclass(EppV24Bot6Config, EppV24Config)
-    assert issubclass(EppV24Bot6Controller, EppV24Controller)
+    assert issubclass(EppV24Bot6Config, DirectionalStrategyRuntimeV24Config)
+    assert issubclass(EppV24Bot6Controller, DirectionalStrategyRuntimeV24Controller)
     assert EppV24Bot6Config.controller_name == "epp_v2_4_bot6"
 
 
@@ -68,7 +65,7 @@ def test_bot6_controller_uses_directional_family_adapter() -> None:
 def _make_bot6_config(**overrides) -> SimpleNamespace:
     defaults = dict(
         id="epp_v2_4_bot6_test",
-        controller_type="market_making",
+        controller_type="directional",
         connector_name="bitget_perpetual",
         trading_pair="BTC-USDT",
         candles_connector="bitget_perpetual",
@@ -149,7 +146,11 @@ def _trade_features(
     divergence_ratio: str,
     funding_bias: str = "long",
     stale: bool = False,
+    futures_stale: bool | None = None,
+    spot_stale: bool | None = None,
 ) -> DirectionalTradeFeatures:
+    _futures_stale = futures_stale if futures_stale is not None else stale
+    _spot_stale = spot_stale if spot_stale is not None else stale
     futures = TradeFlowFeatures(
         trade_count=120,
         buy_volume=Decimal("15"),
@@ -158,7 +159,7 @@ def _trade_features(
         cvd=Decimal("10"),
         last_price=Decimal("101"),
         latest_ts_ms=1,
-        stale=stale,
+        stale=_futures_stale,
         imbalance_ratio=Decimal("0.50"),
         stacked_buy_count=4,
         stacked_sell_count=1,
@@ -172,7 +173,7 @@ def _trade_features(
         cvd=Decimal("14"),
         last_price=Decimal("100"),
         latest_ts_ms=1,
-        stale=stale,
+        stale=_spot_stale,
         imbalance_ratio=Decimal("0.63"),
         stacked_buy_count=3,
         stacked_sell_count=0,
@@ -192,7 +193,7 @@ def _trade_features(
         funding_aligned_short=False,
         long_score=long_score,
         short_score=short_score,
-        stale=stale,
+        stale=bool(_futures_stale or _spot_stale),
     )
 
 
@@ -208,7 +209,7 @@ def _make_bot6_controller(*, config: SimpleNamespace | None = None) -> EppV24Bot
     ctrl.executors_info = []
     ctrl.processed_data = {}
     ctrl._bot6_signal_state = EppV24Bot6Controller._empty_bot6_signal_state(ctrl)
-    ctrl._cancel_stale_side_executors = MethodType(EppV24Controller._cancel_stale_side_executors, ctrl)
+    ctrl._cancel_stale_side_executors = MethodType(SharedRuntimeKernel._cancel_stale_side_executors, ctrl)
     ctrl.market_data_provider = SimpleNamespace(time=lambda: 1_000.0)
     return ctrl
 
@@ -334,10 +335,10 @@ def test_bot6_keeps_two_sided_quotes_when_regime_mode_is_off(monkeypatch) -> Non
     ctrl._project_total_amount_quote = lambda **kwargs: Decimal(kwargs["total_levels"])
 
     monkeypatch.setattr(
-        StrategyRuntimeV24Controller,
+        DirectionalStrategyRuntimeV24Controller,
         "build_runtime_execution_plan",
         lambda self, data_context: RuntimeExecutionPlan(
-            family="market_making",
+            family="directional",
             buy_spreads=[Decimal("0.001"), Decimal("0.002")],
             sell_spreads=[Decimal("0.001"), Decimal("0.002")],
             projected_total_quote=Decimal("4"),
@@ -374,10 +375,10 @@ def test_bot6_build_runtime_execution_plan_marks_directional_family(monkeypatch)
     }
 
     monkeypatch.setattr(
-        StrategyRuntimeV24Controller,
+        DirectionalStrategyRuntimeV24Controller,
         "build_runtime_execution_plan",
         lambda self, data_context: RuntimeExecutionPlan(
-            family="market_making",
+            family="directional",
             buy_spreads=[Decimal("0.001"), Decimal("0.002")],
             sell_spreads=[Decimal("0.001"), Decimal("0.002")],
             projected_total_quote=Decimal("4"),
@@ -444,7 +445,7 @@ def test_bot6_trade_feature_warmup_does_not_hard_block_risk(monkeypatch) -> None
     def _fake_super(self, spread_state, base_pct_gross, equity_quote, projected_total_quote, market):
         return (["shared_reason"], False, Decimal("0"), Decimal("0"))
 
-    monkeypatch.setattr(StrategyRuntimeV24Controller, "_evaluate_all_risk", _fake_super)
+    monkeypatch.setattr(DirectionalStrategyRuntimeV24Controller, "_evaluate_all_risk", _fake_super)
 
     reasons, risk_hard_stop, daily_loss_pct, drawdown_pct = EppV24Bot6Controller._evaluate_all_risk(
         ctrl,
@@ -460,3 +461,138 @@ def test_bot6_trade_feature_warmup_does_not_hard_block_risk(monkeypatch) -> None
     assert risk_hard_stop is False
     assert daily_loss_pct == Decimal("0")
     assert drawdown_pct == Decimal("0")
+
+
+class TestBot6StalenessDecoupling:
+    """Verify futures-only mode fires when spot is stale but futures is fresh."""
+
+    def test_futures_stale_blocks_signal(self) -> None:
+        ctrl = _make_bot6_controller()
+        ctrl._get_bot6_candle_signal = lambda: {
+            "sma_fast": Decimal("101"),
+            "sma_slow": Decimal("100"),
+            "adx": Decimal("31"),
+        }
+        ctrl._runtime_adapter = SimpleNamespace(
+            get_directional_trade_features=lambda **_kwargs: _trade_features(
+                long_score=8, short_score=1, divergence_ratio="0.22",
+                futures_stale=True, spot_stale=False,
+            )
+        )
+
+        state = EppV24Bot6Controller._bot6_update_signal_state(ctrl, Decimal("101.0"))
+
+        assert state["direction"] == "off"
+        assert state["reason"] == "trade_features_warmup"
+        assert state["futures_stale"] is True
+
+    def test_spot_stale_allows_futures_only_signal(self) -> None:
+        ctrl = _make_bot6_controller()
+        ctrl._get_bot6_candle_signal = lambda: {
+            "sma_fast": Decimal("101"),
+            "sma_slow": Decimal("100"),
+            "adx": Decimal("31"),
+        }
+        ctrl._runtime_adapter = SimpleNamespace(
+            get_directional_trade_features=lambda **_kwargs: _trade_features(
+                long_score=8, short_score=1, divergence_ratio="0.22",
+                futures_stale=False, spot_stale=True,
+            )
+        )
+
+        state = EppV24Bot6Controller._bot6_update_signal_state(ctrl, Decimal("101.0"))
+
+        assert state["direction"] == "buy"
+        assert state["reason"] == "bullish_futures_only"
+        assert state["spot_stale"] is True
+        assert state["futures_stale"] is False
+
+    def test_both_fresh_uses_full_divergence_reason(self) -> None:
+        ctrl = _make_bot6_controller()
+        ctrl._get_bot6_candle_signal = lambda: {
+            "sma_fast": Decimal("101"),
+            "sma_slow": Decimal("100"),
+            "adx": Decimal("31"),
+        }
+        ctrl._runtime_adapter = SimpleNamespace(
+            get_directional_trade_features=lambda **_kwargs: _trade_features(
+                long_score=8, short_score=1, divergence_ratio="0.22",
+                futures_stale=False, spot_stale=False,
+            )
+        )
+
+        state = EppV24Bot6Controller._bot6_update_signal_state(ctrl, Decimal("101.0"))
+
+        assert state["direction"] == "buy"
+        assert state["reason"] == "bullish_cvd_divergence"
+
+    def test_bearish_futures_only(self) -> None:
+        ctrl = _make_bot6_controller()
+        ctrl._get_bot6_candle_signal = lambda: {
+            "sma_fast": Decimal("99"),
+            "sma_slow": Decimal("100"),
+            "adx": Decimal("31"),
+        }
+        ctrl._runtime_adapter = SimpleNamespace(
+            get_directional_trade_features=lambda **_kwargs: _trade_features(
+                long_score=1, short_score=8, divergence_ratio="-0.22",
+                futures_stale=False, spot_stale=True,
+            )
+        )
+
+        state = EppV24Bot6Controller._bot6_update_signal_state(ctrl, Decimal("99.5"))
+
+        assert state["direction"] == "sell"
+        assert state["reason"] == "bearish_futures_only"
+
+
+class TestBot6FailClosedGateCleanup:
+    """Verify fail_closed gate triggers order cleanup in _resolve_quote_side_mode."""
+
+    def test_fail_closed_cancels_executors_and_sets_off(self) -> None:
+        ctrl = _make_bot6_controller()
+        executor = SimpleNamespace(is_active=True, id="exec-buy", custom_info={"level_id": "buy_0"})
+        ctrl.executors_info = [executor]
+        ctrl._bot6_signal_state = {
+            **EppV24Bot6Controller._empty_bot6_signal_state(ctrl),
+            "reason": "trade_features_warmup",
+        }
+
+        cancel_calls = []
+        ctrl._cancel_active_quote_executors = lambda: (cancel_calls.append("active"), [])[1]
+        ctrl._cancel_alpha_no_trade_orders = lambda: cancel_calls.append("alpha")
+
+        mode = EppV24Bot6Controller._resolve_quote_side_mode(
+            ctrl,
+            mid=Decimal("101.0"),
+            regime_name="neutral_low_vol",
+            regime_spec=_make_regime_spec(one_sided="off"),
+        )
+
+        assert mode == "off"
+        assert ctrl._quote_side_reason == "bot6_trade_features_warmup"
+        assert "active" in cancel_calls
+        assert "alpha" in cancel_calls
+
+    def test_non_fail_closed_does_not_trigger_cleanup(self) -> None:
+        ctrl = _make_bot6_controller()
+        ctrl._bot6_signal_state = {
+            **EppV24Bot6Controller._empty_bot6_signal_state(ctrl),
+            "direction": "off",
+            "directional_allowed": False,
+            "reason": "score_below_threshold",
+        }
+
+        cancel_calls = []
+        ctrl._cancel_active_quote_executors = lambda: (cancel_calls.append("active"), [])[1]
+        ctrl._cancel_alpha_no_trade_orders = lambda: cancel_calls.append("alpha")
+
+        mode = EppV24Bot6Controller._resolve_quote_side_mode(
+            ctrl,
+            mid=Decimal("101.0"),
+            regime_name="neutral_low_vol",
+            regime_spec=_make_regime_spec(one_sided="off"),
+        )
+
+        assert mode == "off"
+        assert cancel_calls == []

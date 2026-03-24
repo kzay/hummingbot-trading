@@ -6,13 +6,14 @@ receives ``bridge_state`` as a parameter to avoid circular imports.
 from __future__ import annotations
 
 import logging
+import threading
 import time
+from datetime import UTC
 from decimal import Decimal
 from types import SimpleNamespace
-from typing import Any, Dict, List, Optional, Protocol, Tuple
+from typing import Any, Protocol
 
-from controllers.paper_engine_v2.desk import PaperDesk
-from controllers.paper_engine_v2.types import (
+from simulation.types import (
     EngineEvent,
     OrderCanceled,
     OrderFilled,
@@ -44,7 +45,12 @@ class EventSubscriber(Protocol):
     def on_reject(self, event: OrderRejected, connector_name: str) -> None: ...
 
 
-_EVENT_SUBSCRIBERS: List[EventSubscriber] = []
+# CONCURRENCY CONTRACT:
+# - Mutations (register/unregister) happen during bridge setup on the main thread.
+# - Iteration (_dispatch_to_subscribers) runs on the main HB event loop thread.
+# - Do NOT register/unregister while a bridge tick is in progress.
+# - If concurrent access is ever needed, replace with a threading.Lock + list copy.
+_EVENT_SUBSCRIBERS: list[EventSubscriber] = []
 
 
 def register_event_subscriber(subscriber: EventSubscriber) -> None:
@@ -97,7 +103,7 @@ def _find_controller_for_connector(
     wanted_pair = str(trading_pair or "").strip()
     wanted_instance = str(instance_name or "").strip().lower()
 
-    scored: List[Tuple[int, str, Any]] = []
+    scored: list[tuple[int, str, Any]] = []
     for controller_id, ctrl in controllers.items():
         cfg = getattr(ctrl, "config", None)
         if cfg is None:
@@ -181,8 +187,8 @@ def _fire_hb_events(strategy: Any, connector_name: str, event: Any, bridge_state
     """Convert v2 event to HB event and fire on the correct controller.
 
     The controller's did_fill_order() writes to fills.csv and updates
-    minute.csv — this is what Grafana reads. Without this, fills are
-    invisible to the dashboard regardless of paper/live mode.
+    minute.csv — this is what the metrics exporter reads. Without this,
+    fills are invisible to the dashboard regardless of paper/live mode.
 
     Phase 5: Dispatches to registered EventSubscribers FIRST (clean path),
     then falls through to the legacy HB monkey-patch path.
@@ -207,46 +213,38 @@ def _fire_fill_event(strategy: Any, connector_name: str, fill_event: OrderFilled
     """Fire fill event directly to the controller's did_fill_order().
 
     This is the critical path: controller.did_fill_order() writes to
-    fills.csv, updates daily counters, and feeds Grafana.
+    fills.csv, updates daily counters, and feeds metrics exporters.
     """
     try:
-        from hummingbot.core.event.events import OrderFilledEvent as HBOrderFilledEvent  # type: ignore
-        from hummingbot.core.data_type.common import TradeType  # type: ignore
+        from hummingbot.core.data_type.common import TradeType  # type: ignore[import-untyped]
+        from hummingbot.core.event.events import OrderFilledEvent as HBOrderFilledEvent  # type: ignore[import-untyped]
 
         trade_type = TradeType.BUY  # default
-        side_hint = ""
         fill_instance_name = str(getattr(fill_event, "instance_name", "") or "").strip()
         runtime_order = None
-        bridges = getattr(strategy, "_paper_desk_v2_bridges", {})
-        bridge = bridges.get(connector_name)
-        if bridge:
-            _desk: PaperDesk = bridge["desk"]
-            for key, engine in _desk._engines.items():
-                side_str = engine.get_order_side(fill_event.order_id)
-                if side_str:
-                    side_hint = str(side_str).strip().lower()
-                    trade_type = TradeType.BUY if side_hint == "buy" else TradeType.SELL
-                    break
-        if not side_hint:
-            runtime_orders = getattr(strategy, "_paper_exchange_runtime_orders", None)
-            if isinstance(runtime_orders, dict):
-                for bucket in runtime_orders.values():
-                    if not isinstance(bucket, dict):
-                        continue
-                    runtime_order = bucket.get(fill_event.order_id)
-                    if runtime_order is None:
-                        continue
-                    runtime_side = str(getattr(runtime_order, "trade_type", "")).strip().lower()
-                    if runtime_side in {"buy", "sell"}:
-                        side_hint = runtime_side
-                        break
-        if side_hint in {"buy", "sell"}:
+
+        side_hint = getattr(fill_event, "side", "")
+        if side_hint:
             trade_type = TradeType.BUY if side_hint == "buy" else TradeType.SELL
+
+        runtime_orders = getattr(strategy, "_paper_exchange_runtime_orders", None)
+        if isinstance(runtime_orders, dict):
+            for bucket in runtime_orders.values():
+                if not isinstance(bucket, dict):
+                    continue
+                runtime_order = bucket.get(fill_event.order_id)
+                if runtime_order is not None:
+                    if not side_hint:
+                        runtime_side = str(getattr(runtime_order, "trade_type", "")).strip().lower()
+                        if runtime_side in {"buy", "sell"}:
+                            side_hint = runtime_side
+                            trade_type = TradeType.BUY if side_hint == "buy" else TradeType.SELL
+                    break
 
         now = time.time()
 
         try:
-            from hummingbot.core.event.events import TradeFee, TokenAmount
+            from hummingbot.core.event.events import TokenAmount, TradeFee
             fee = TradeFee(
                 percent=Decimal("0"),
                 flat_fees=[TokenAmount(fill_event.instrument_id.quote_asset, fill_event.fee)],
@@ -270,12 +268,12 @@ def _fire_fill_event(strategy: Any, connector_name: str, fill_event: OrderFilled
             trade_fee=fee,
         )
         try:
-            setattr(hb_fill, "is_maker", bool(getattr(fill_event, "is_maker", False)))
-        except Exception:
+            hb_fill.is_maker = bool(getattr(fill_event, "is_maker", False))
+        except (AttributeError, TypeError):
             pass
         try:
-            setattr(hb_fill, "position_action", str(getattr(fill_event, "position_action", "auto") or "auto"))
-        except Exception:
+            hb_fill.position_action = str(getattr(fill_event, "position_action", "auto") or "auto")
+        except (AttributeError, TypeError):
             pass
 
         controller = _resolve_controller_for_event(strategy, connector_name, fill_event)
@@ -296,7 +294,7 @@ def _fire_fill_event(strategy: Any, connector_name: str, fill_event: OrderFilled
             )
             return
         try:
-            setattr(hb_fill, "instance_name", fill_instance_name or controller_instance_name)
+            hb_fill.instance_name = fill_instance_name or controller_instance_name
         except Exception as exc:
             logger.debug("Failed to attach instance_name to HB fill event: %s", exc, exc_info=True)
         realized_before = _safe_float(getattr(controller, "_realized_pnl_today", 0.0), 0.0)
@@ -316,33 +314,36 @@ def _fire_fill_event(strategy: Any, connector_name: str, fill_event: OrderFilled
             is_maker_val = bool(getattr(fill_event, "is_maker", False))
             side_str = "buy" if trade_type == TradeType.BUY else "sell"
 
-            from datetime import datetime, timezone as _tz
-            from pathlib import Path
             import json as _json
-            import os as _os
             import uuid as _uuid_mod
-            from services.contracts.event_identity import validate_event_identity as _validate_event_identity
+            from datetime import datetime
+            from pathlib import Path
+            try:
+                import orjson as _orjson_ef
+            except ImportError:
+                _orjson_ef = None  # type: ignore[assignment]
+            from platform_lib.contracts.event_identity import validate_event_identity as _validate_event_identity
 
             _payload = {
                 "event_id": str(_uuid_mod.uuid4()),
                 "event_type": "bot_fill",
                 "event_version": "v1",
                 "schema_version": "1.0",
-                "ts_utc": datetime.now(_tz.utc).isoformat(),
+                "ts_utc": datetime.now(UTC).isoformat(),
                 "producer": "hb.paper_engine_v2",
                 "instance_name": instance_name,
                 "controller_id": controller_id,
                 "connector_name": str(connector_name),
                 "trading_pair": str(fill_event.instrument_id.trading_pair),
                 "side": side_str,
-                "price": float(fill_event.fill_price),
-                "amount_base": float(fill_event.fill_quantity),
-                "notional_quote": float(fill_event.fill_price * fill_event.fill_quantity),
-                "fee_quote": float(fill_event.fee),
+                "price": float(fill_event.fill_price),  # float: serialization-only
+                "amount_base": float(fill_event.fill_quantity),  # float: serialization-only
+                "notional_quote": float(fill_event.fill_price * fill_event.fill_quantity),  # float: serialization-only
+                "fee_quote": float(fill_event.fee),  # float: serialization-only
                 "order_id": str(fill_event.order_id),
                 "accounting_source": "paper_desk_v2",
                 "is_maker": is_maker_val,
-                "realized_pnl_quote": float(realized_pnl_quote),
+                "realized_pnl_quote": float(realized_pnl_quote),  # float: serialization-only
                 "bot_state": "",
                 "correlation_id": str(getattr(fill_event, "event_id", "") or ""),
             }
@@ -354,60 +355,74 @@ def _fire_fill_event(strategy: Any, connector_name: str, fill_event: OrderFilled
                     _identity_reason,
                 )
             else:
-                _redis_published = False
-                try:
-                    _r = bridge_state.get_redis()
-                    if _r is not None:
-                        _r.xadd(
-                            "hb.bot_telemetry.v1",
-                            {"payload": _json.dumps(_payload)},
-                            maxlen=100_000,
-                            approximate=True,
-                        )
-                        _redis_published = True
-                except Exception:
-                    logger.debug("Paper fill telemetry publish failed for order %s", fill_event.order_id, exc_info=True)
+                _telemetry_payload_json = _orjson_ef.dumps(_payload).decode() if _orjson_ef else _json.dumps(_payload)
+                _fill_oid = str(fill_event.order_id)
+                _fill_iid = fill_event.instrument_id
+                _fill_price = float(fill_event.fill_price)  # float: serialization-only
+                _fill_qty = float(fill_event.fill_quantity)  # float: serialization-only
+                _fill_fee = float(fill_event.fee)  # float: serialization-only
+                _fill_event_id = str(getattr(fill_event, "event_id", "") or "")
 
-                if not _redis_published:
-                    root = Path("/workspace/hbot") if Path("/.dockerenv").exists() else Path(__file__).resolve().parents[2]
-                    out_dir = root / "reports" / "event_store"
-                    out_dir.mkdir(parents=True, exist_ok=True)
-                    out_path = out_dir / f"events_{datetime.now(_tz.utc).strftime('%Y%m%d')}.jsonl"
-                    envelope = {
-                        "event_id": str(_uuid_mod.uuid4()),
-                        "event_type": "bot_fill",
-                        "event_version": "v1",
-                        "ts_utc": datetime.now(_tz.utc).isoformat(),
-                        "producer": "hb.paper_engine_v2",
-                        "instance_name": instance_name,
-                        "controller_id": controller_id,
-                        "connector_name": str(connector_name),
-                        "trading_pair": str(fill_event.instrument_id.trading_pair),
-                        "correlation_id": str(getattr(fill_event, "event_id", "") or ""),
-                        "stream": "local.paper_engine_v2.fallback",
-                        "stream_entry_id": "",
-                        "accounting_source": "paper_desk_v2",
-                        "payload": {
-                            "order_id": str(fill_event.order_id),
-                            "side": side_str,
-                            "price": float(fill_event.fill_price),
-                            "amount_base": float(fill_event.fill_quantity),
-                            "fee_quote": float(fill_event.fee),
-                            "is_maker": is_maker_val,
-                            "realized_pnl_quote": float(realized_pnl_quote),
-                        },
-                        "ingest_ts_utc": datetime.now(_tz.utc).isoformat(),
-                        "schema_validation_status": "ok",
-                    }
-                    with out_path.open("a", encoding="utf-8") as f:
-                        f.write(_json.dumps(envelope, ensure_ascii=True) + "\n")
-        except Exception:
+                def _publish_telemetry():
+                    _redis_published = False
+                    try:
+                        _r = bridge_state.get_redis()
+                        if _r is not None:
+                            _r.xadd(
+                                "hb.bot_telemetry.v1",
+                                {"payload": _telemetry_payload_json},
+                                maxlen=100_000,
+                                approximate=True,
+                            )
+                            _redis_published = True
+                    except Exception:
+                        logger.debug("Paper fill telemetry publish failed for order %s", _fill_oid, exc_info=True)
+
+                    if not _redis_published:
+                        try:
+                            root = Path("/workspace/hbot") if Path("/.dockerenv").exists() else Path(__file__).resolve().parents[2]
+                            out_dir = root / "reports" / "event_store"
+                            out_dir.mkdir(parents=True, exist_ok=True)
+                            out_path = out_dir / f"events_{datetime.now(UTC).strftime('%Y%m%d')}.jsonl"
+                            envelope = {
+                                "event_id": str(_uuid_mod.uuid4()),
+                                "event_type": "bot_fill",
+                                "event_version": "v1",
+                                "ts_utc": datetime.now(UTC).isoformat(),
+                                "producer": "hb.paper_engine_v2",
+                                "instance_name": instance_name,
+                                "controller_id": controller_id,
+                                "connector_name": str(connector_name),
+                                "trading_pair": str(_fill_iid.trading_pair),
+                                "correlation_id": _fill_event_id,
+                                "stream": "local.paper_engine_v2.fallback",
+                                "stream_entry_id": "",
+                                "accounting_source": "paper_desk_v2",
+                                "payload": {
+                                    "order_id": _fill_oid,
+                                    "side": side_str,
+                                    "price": _fill_price,
+                                    "amount_base": _fill_qty,
+                                    "fee_quote": _fill_fee,
+                                    "is_maker": is_maker_val,
+                                    "realized_pnl_quote": float(realized_pnl_quote),  # float: serialization-only
+                                },
+                                "ingest_ts_utc": datetime.now(UTC).isoformat(),
+                                "schema_validation_status": "ok",
+                            }
+                            with out_path.open("a", encoding="utf-8") as f:
+                                f.write((_orjson_ef.dumps(envelope).decode() if _orjson_ef else _json.dumps(envelope, ensure_ascii=True)) + "\n")
+                        except (OSError, ValueError, TypeError):
+                            logger.debug("Paper fill telemetry file fallback failed for order %s", _fill_oid, exc_info=True)
+
+                threading.Thread(target=_publish_telemetry, daemon=True).start()
+        except Exception:  # cleanup: swallow all (telemetry must not break fills)
             pass
 
         if hasattr(strategy, "did_fill_order"):
             try:
                 strategy.did_fill_order(hb_fill)
-            except Exception:
+            except Exception:  # connector API: broad catch justified
                 pass
 
     except Exception as exc:

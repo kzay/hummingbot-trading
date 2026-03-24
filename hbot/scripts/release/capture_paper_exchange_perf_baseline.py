@@ -4,9 +4,8 @@ from __future__ import annotations
 import argparse
 import json
 import os
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
-from typing import Dict, Optional
 
 REQUIRED_METRICS = [
     "p1_19_sustained_command_throughput_cmds_per_sec",
@@ -18,10 +17,10 @@ REQUIRED_METRICS = [
 
 
 def _utc_now() -> str:
-    return datetime.now(timezone.utc).isoformat()
+    return datetime.now(UTC).isoformat()
 
 
-def _read_json(path: Path) -> Dict[str, object]:
+def _read_json(path: Path) -> dict[str, object]:
     if not path.exists():
         return {}
     try:
@@ -31,7 +30,7 @@ def _read_json(path: Path) -> Dict[str, object]:
     return payload if isinstance(payload, dict) else {}
 
 
-def _to_float(value: object) -> Optional[float]:
+def _to_float(value: object) -> float | None:
     try:
         if value is None:
             return None
@@ -51,11 +50,11 @@ def _resolve_path(path_value: str, default_rel: str, root: Path) -> Path:
 def build_report(
     root: Path,
     *,
-    source_report_path: Optional[Path] = None,
-    baseline_output_path: Optional[Path] = None,
+    source_report_path: Path | None = None,
+    baseline_output_path: Path | None = None,
     require_source_pass: bool = True,
     profile_label: str = "",
-) -> Dict[str, object]:
+) -> dict[str, object]:
     source_path = source_report_path or (root / "reports" / "verification" / "paper_exchange_load_latest.json")
     output_path = baseline_output_path or (root / "reports" / "verification" / "paper_exchange_load_baseline_latest.json")
     source_payload = _read_json(source_path)
@@ -64,7 +63,7 @@ def build_report(
     source_metrics = source_metrics_raw if isinstance(source_metrics_raw, dict) else {}
 
     missing_metrics = []
-    extracted_metrics: Dict[str, float] = {}
+    extracted_metrics: dict[str, float] = {}
     for metric_name in REQUIRED_METRICS:
         parsed = _to_float(source_metrics.get(metric_name))
         if parsed is None:
@@ -126,7 +125,7 @@ def run_capture(
     )
 
     output_path.parent.mkdir(parents=True, exist_ok=True)
-    stamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
+    stamp = datetime.now(UTC).strftime("%Y%m%dT%H%M%SZ")
     timestamped_path = output_path.with_name(f"paper_exchange_load_baseline_{stamp}.json")
     payload = json.dumps(report, indent=2)
     output_path.write_text(payload, encoding="utf-8")

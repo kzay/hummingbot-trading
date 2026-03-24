@@ -4,7 +4,7 @@ import csv
 import json
 from pathlib import Path
 
-from scripts.analysis.performance_dossier import build_dossier, _resolve_output_paths
+from scripts.analysis.performance_dossier import _resolve_output_paths, build_dossier
 
 
 def _write_csv(path: Path, headers: list[str], rows: list[dict[str, object]]) -> None:

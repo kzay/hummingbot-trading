@@ -7,7 +7,7 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
-from controllers.paper_engine_v2 import hb_bridge
+from simulation.bridge import hb_bridge
 
 
 @pytest.fixture(autouse=True)
@@ -278,20 +278,21 @@ def test_hydrate_runtime_orders_logs_snapshot_read_failure(tmp_path, monkeypatch
     bad_snapshot_path.write_text("{invalid", encoding="utf-8")
     strategy, _ctrl = _make_strategy(instance_name="bot1")
 
-    with patch.object(hb_bridge.logger, "warning") as warning_mock:
-        with patch.dict(
-            "os.environ",
-            {
-                "PAPER_EXCHANGE_STATE_SNAPSHOT_PATH": str(bad_snapshot_path),
-            },
-            clear=False,
-        ):
-            hydrated = hb_bridge._hydrate_runtime_orders_from_state_snapshot(
-                strategy,
-                instance_name="bot1",
-                connector_name="test_conn",
-                trading_pair="BTC-USDT",
-            )
+    from simulation.bridge import paper_exchange_protocol as _pep
+
+    with patch.object(_pep.logger, "warning") as warning_mock, patch.dict(
+        "os.environ",
+        {
+            "PAPER_EXCHANGE_STATE_SNAPSHOT_PATH": str(bad_snapshot_path),
+        },
+        clear=False,
+    ):
+        hydrated = hb_bridge._hydrate_runtime_orders_from_state_snapshot(
+            strategy,
+            instance_name="bot1",
+            connector_name="test_conn",
+            trading_pair="BTC-USDT",
+        )
 
     assert hydrated == []
     warning_mock.assert_called_once()

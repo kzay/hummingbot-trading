@@ -259,7 +259,7 @@ def test_day_summary_collects_rotated_minute_rows_with_dedupe(tmp_path: Path) ->
 
 
 def test_multi_day_summary_marks_low_confidence_when_minute_missing(monkeypatch) -> None:
-    def _fake_day(day: str, root: str):  # noqa: ARG001
+    def _fake_day(day: str, root: str):
         if day == "2026-02-27":
             return {
                 "fills_agg": {"fills": 10, "realized_pnl_sum_quote": "1.0", "fees_quote": "0.1"},
@@ -280,7 +280,7 @@ def test_multi_day_summary_marks_low_confidence_when_minute_missing(monkeypatch)
 
 
 def test_multi_day_summary_aggregates_spread_cap_hit_ratio(monkeypatch) -> None:
-    def _fake_day(day: str, root: str):  # noqa: ARG001
+    def _fake_day(day: str, root: str):
         if day == "2026-02-26":
             return {
                 "fills_agg": {"fills": 4, "realized_pnl_sum_quote": "0.8", "fees_quote": "0.1"},
@@ -318,7 +318,7 @@ def test_multi_day_summary_aggregates_spread_cap_hit_ratio(monkeypatch) -> None:
 
 
 def test_multi_day_summary_includes_funding_component(monkeypatch) -> None:
-    def _fake_day(day: str, root: str):  # noqa: ARG001
+    def _fake_day(day: str, root: str):
         if day == "2026-02-26":
             return {
                 "fills_agg": {"fills": 2, "realized_pnl_sum_quote": "1.0", "fees_quote": "0.1"},
@@ -356,7 +356,7 @@ def test_multi_day_summary_includes_funding_component(monkeypatch) -> None:
 
 
 def test_multi_day_summary_road1_gate_passes_with_20_consecutive_days_and_spread_capture(monkeypatch) -> None:
-    def _fake_day(day: str, root: str):  # noqa: ARG001
+    def _fake_day(day: str, root: str):
         return {
             "fills_agg": {
                 "fills": 10,
@@ -394,7 +394,7 @@ def test_multi_day_summary_road1_gate_passes_with_20_consecutive_days_and_spread
 def test_multi_day_summary_road1_gate_fails_on_missing_days_and_non_dominant_spread_capture(monkeypatch) -> None:
     missing_day = "2026-01-10"
 
-    def _fake_day(day: str, root: str):  # noqa: ARG001
+    def _fake_day(day: str, root: str):
         if day == missing_day:
             return None
         return {

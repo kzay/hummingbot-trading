@@ -6,12 +6,13 @@ persistence from trading logic.
 from __future__ import annotations
 
 import logging
-from datetime import datetime, timezone
+import queue
+import threading
 from decimal import Decimal
-from typing import Any, Dict, List, Optional
+from typing import Any
 
-from controllers.runtime.market_making_types import MarketConditions, SpreadEdgeState
 from controllers.ops_guard import GuardState
+from controllers.runtime.runtime_types import MarketConditions, SpreadEdgeState
 from controllers.types import ProcessedState
 
 logger = logging.getLogger(__name__)
@@ -20,22 +21,88 @@ _ZERO = Decimal("0")
 _ONE = Decimal("1")
 _10K = Decimal("10000")
 
+_WRITE_QUEUE_SIZE = 100
+_SENTINEL = object()
+
 
 class TickEmitter:
     """Builds ``ProcessedState`` dicts and writes minute-level CSV rows."""
 
     def __init__(self, csv_logger: Any):
         self._csv = csv_logger
-        self._last_minute_key: Optional[int] = None
+        self._last_minute_key: int | None = None
         self._missing_snapshot_keys_warned: set[str] = set()
+        self._write_queue: queue.Queue = queue.Queue(maxsize=_WRITE_QUEUE_SIZE)
+        self._writer_thread: threading.Thread | None = None
+        self._writer_started = False
 
-    def _snapshot_get(self, snapshot: Dict[str, Any], key: str, default: Any) -> Any:
+    def _snapshot_get(self, snapshot: dict[str, Any], key: str, default: Any) -> Any:
         if key in snapshot:
             return snapshot[key]
         if key not in self._missing_snapshot_keys_warned:
             logger.warning("TickEmitter: snapshot missing key '%s'; using default=%s", key, default)
             self._missing_snapshot_keys_warned.add(key)
         return default
+
+    # ------------------------------------------------------------------
+    # Background CSV writer
+    # ------------------------------------------------------------------
+
+    def _ensure_writer(self) -> None:
+        """Lazily start the background CSV writer thread on first write."""
+        if self._writer_started:
+            return
+        t = threading.Thread(target=self._csv_writer_loop, daemon=True, name="tick-csv-writer")
+        t.start()
+        self._writer_thread = t
+        self._writer_started = True
+
+    def _csv_writer_loop(self) -> None:
+        """Drain the queue and write rows to CSV.  Runs in a dedicated thread."""
+        while True:
+            item = self._write_queue.get()
+            if item is _SENTINEL:
+                break
+            try:
+                row, ts, strategy_fields = item
+                self._csv.log_minute(row, ts=ts, strategy_fields=strategy_fields)
+            except Exception:
+                logger.exception("TickEmitter: background CSV write failed")
+
+    def _enqueue_write(
+        self,
+        row: dict[str, Any],
+        ts: str,
+        strategy_fields: tuple[str, ...],
+    ) -> None:
+        """Enqueue a CSV row for background writing.  Drops oldest on overflow."""
+        self._ensure_writer()
+        try:
+            self._write_queue.put_nowait((row, ts, strategy_fields))
+        except queue.Full:
+            try:
+                self._write_queue.get_nowait()
+            except queue.Empty:
+                pass
+            logger.warning(
+                "TickEmitter: CSV write queue full (maxsize=%d); dropped oldest entry",
+                _WRITE_QUEUE_SIZE,
+            )
+            try:
+                self._write_queue.put_nowait((row, ts, strategy_fields))
+            except queue.Full:
+                logger.warning("TickEmitter: CSV write queue still full after drop; row discarded")
+
+    def stop(self) -> None:
+        """Drain pending writes and stop the background writer thread."""
+        if not self._writer_started or self._writer_thread is None:
+            return
+        self._write_queue.put(_SENTINEL)
+        self._writer_thread.join(timeout=5.0)
+        if self._writer_thread.is_alive():
+            logger.warning("TickEmitter: CSV writer thread did not stop within timeout")
+        self._writer_started = False
+        self._writer_thread = None
 
     # ------------------------------------------------------------------
     # ProcessedState construction
@@ -54,11 +121,11 @@ class TickEmitter:
         base_bal: Decimal,
         quote_bal: Decimal,
         risk_hard_stop: bool,
-        risk_reasons: List[str],
+        risk_reasons: list[str],
         daily_loss_pct: Decimal,
         drawdown_pct: Decimal,
         projected_total_quote: Decimal,
-        snapshot: Dict[str, Any],
+        snapshot: dict[str, Any],
     ) -> ProcessedState:
         """Build the ``ProcessedState`` dict from tick data and a controller snapshot."""
         from controllers.types import PROCESSED_STATE_SCHEMA_VERSION
@@ -72,6 +139,7 @@ class TickEmitter:
 
         return {
             "schema_version": PROCESSED_STATE_SCHEMA_VERSION,
+            "runtime_family": self._snapshot_get(snapshot, "runtime_family", "unknown"),
             "reference_price": mid,
             "spread_multiplier": snapshot["spread_multiplier"],
             "regime": regime_name,
@@ -206,11 +274,12 @@ class TickEmitter:
         self,
         now_ts: float,
         event_ts: str,
-        pd: Dict[str, Any],
+        pd: dict[str, Any],
         state: GuardState,
-        risk_reasons: List[str],
-        snapshot: Dict[str, Any],
-    ) -> Optional[Dict[str, Any]]:
+        risk_reasons: list[str],
+        snapshot: dict[str, Any],
+        strategy_telemetry: tuple[tuple[str, str, Any], ...] = (),
+    ) -> dict[str, Any] | None:
         """Write one row to ``minute.csv`` per calendar minute and return it."""
         minute_key = int(now_ts // 60)
         if self._last_minute_key == minute_key:
@@ -337,41 +406,6 @@ class TickEmitter:
             "funding_cost_today_quote": str(snapshot["funding_cost_today_quote"]),
             "margin_ratio": str(snapshot["margin_ratio"]),
             "position_drift_pct": str(snapshot["position_drift_pct"]),
-            "bot1_gate_state": str(pd.get("bot1_gate_state", "active")),
-            "bot1_gate_reason": str(pd.get("bot1_gate_reason", "startup")),
-            "bot1_signal_side": str(pd.get("bot1_signal_side", "two_sided")),
-            "bot1_signal_reason": str(pd.get("bot1_signal_reason", "maker_two_sided")),
-            "bot1_signal_score": str(pd.get("bot1_signal_score", _ZERO)),
-            "bot5_gate_state": str(pd.get("bot5_gate_state", "idle")),
-            "bot5_gate_reason": str(pd.get("bot5_gate_reason", "inactive")),
-            "bot5_signal_side": str(pd.get("bot5_signal_side", "off")),
-            "bot5_signal_reason": str(pd.get("bot5_signal_reason", "inactive")),
-            "bot5_signal_score": str(pd.get("bot5_signal_score", _ZERO)),
-            "bot6_signal_side": str(pd.get("bot6_signal_side", "off")),
-            "bot6_signal_reason": str(pd.get("bot6_signal_reason", "inactive")),
-            "bot6_gate_state": str(pd.get("bot6_gate_state", "idle")),
-            "bot6_gate_reason": str(pd.get("bot6_gate_reason", "inactive")),
-            "bot6_signal_score": str(pd.get("bot6_signal_score", 0)),
-            "bot6_signal_score_long": str(pd.get("bot6_signal_score_long", 0)),
-            "bot6_signal_score_short": str(pd.get("bot6_signal_score_short", 0)),
-            "bot6_signal_score_active": str(pd.get("bot6_signal_score_active", 0)),
-            "bot6_sma_fast": str(pd.get("bot6_sma_fast", _ZERO)),
-            "bot6_sma_slow": str(pd.get("bot6_sma_slow", _ZERO)),
-            "bot6_adx": str(pd.get("bot6_adx", _ZERO)),
-            "bot6_funding_bias": str(pd.get("bot6_funding_bias", "neutral")),
-            "bot6_futures_cvd": str(pd.get("bot6_futures_cvd", _ZERO)),
-            "bot6_spot_cvd": str(pd.get("bot6_spot_cvd", _ZERO)),
-            "bot6_cvd_divergence_ratio": str(pd.get("bot6_cvd_divergence_ratio", _ZERO)),
-            "bot6_stacked_buy_count": str(pd.get("bot6_stacked_buy_count", 0)),
-            "bot6_stacked_sell_count": str(pd.get("bot6_stacked_sell_count", 0)),
-            "bot6_delta_spike_ratio": str(pd.get("bot6_delta_spike_ratio", _ZERO)),
-            "bot6_hedge_state": str(pd.get("bot6_hedge_state", "inactive")),
-            "bot6_partial_exit_ratio": str(pd.get("bot6_partial_exit_ratio", _ZERO)),
-            "bot7_gate_state": str(pd.get("bot7_gate_state", "idle")),
-            "bot7_gate_reason": str(pd.get("bot7_gate_reason", "inactive")),
-            "bot7_signal_side": str(pd.get("bot7_signal_side", "off")),
-            "bot7_signal_reason": str(pd.get("bot7_signal_reason", "inactive")),
-            "bot7_signal_score": str(pd.get("bot7_signal_score", _ZERO)),
             "ws_reconnect_count": str(snapshot["ws_reconnect_count"]),
             "order_book_stale": str(snapshot["order_book_stale"]),
             "derisk_runtime_recovered": str(pd.get("derisk_runtime_recovered", False)),
@@ -382,5 +416,14 @@ class TickEmitter:
             "_indicator_duration_ms": str(snapshot["indicator_duration_ms"]),
             "_connector_io_duration_ms": str(snapshot["connector_io_duration_ms"]),
         }
-        self._csv.log_minute(minute_row, ts=event_ts)
+        strategy_field_names: tuple[str, ...] = ()
+        if strategy_telemetry:
+            extra = {}
+            names: list[str] = []
+            for csv_col, pd_key, default in strategy_telemetry:
+                extra[csv_col] = str(pd.get(pd_key, default))
+                names.append(csv_col)
+            minute_row.update(extra)
+            strategy_field_names = tuple(names)
+        self._enqueue_write(minute_row, ts=event_ts, strategy_fields=strategy_field_names)
         return minute_row

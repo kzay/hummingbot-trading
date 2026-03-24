@@ -3,16 +3,15 @@ from __future__ import annotations
 import argparse
 import json
 import time
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
-from typing import Dict, List, Tuple
 
 
 def _utc_now() -> str:
-    return datetime.now(timezone.utc).isoformat()
+    return datetime.now(UTC).isoformat()
 
 
-def _read_json(path: Path, default: Dict[str, object]) -> Dict[str, object]:
+def _read_json(path: Path, default: dict[str, object]) -> dict[str, object]:
     if not path.exists():
         return default
     try:
@@ -33,14 +32,14 @@ def _minutes_since(ts: str) -> float:
     dt = _parse_ts(ts)
     if dt is None:
         return 1e9
-    return (datetime.now(timezone.utc) - dt).total_seconds() / 60.0
+    return (datetime.now(UTC) - dt).total_seconds() / 60.0
 
 
-def _status_from_report(payload: Dict[str, object], status_key: str = "status", default: str = "unknown") -> str:
+def _status_from_report(payload: dict[str, object], status_key: str = "status", default: str = "unknown") -> str:
     return str(payload.get(status_key, default)).strip().lower()
 
 
-def _build_snapshot(root: Path, freshness_max_min: int) -> Dict[str, object]:
+def _build_snapshot(root: Path, freshness_max_min: int) -> dict[str, object]:
     reports = root / "reports"
     day2_path = reports / "event_store" / "day2_gate_eval_latest.json"
     recon_path = reports / "reconciliation" / "latest.json"
@@ -68,7 +67,7 @@ def _build_snapshot(root: Path, freshness_max_min: int) -> Dict[str, object]:
     }
     freshness_ok = all(freshness.values())
 
-    blockers: List[str] = []
+    blockers: list[str] = []
     if not day2_go:
         blockers.append("day2_event_store_gate")
     if not recon_ok:
@@ -120,10 +119,10 @@ def _build_snapshot(root: Path, freshness_max_min: int) -> Dict[str, object]:
     }
 
 
-def _write_snapshot(root: Path, payload: Dict[str, object]) -> Path:
+def _write_snapshot(root: Path, payload: dict[str, object]) -> Path:
     out_root = root / "reports" / "soak"
     out_root.mkdir(parents=True, exist_ok=True)
-    stamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
+    stamp = datetime.now(UTC).strftime("%Y%m%dT%H%M%SZ")
     out_path = out_root / f"soak_snapshot_{stamp}.json"
     out_path.write_text(json.dumps(payload, indent=2), encoding="utf-8")
     (out_root / "latest.json").write_text(json.dumps(payload, indent=2), encoding="utf-8")

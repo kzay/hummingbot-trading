@@ -6,21 +6,27 @@ time gate, max fills, latency queue, LIMIT_MAKER cross rejection.
 import time
 from decimal import Decimal
 
-import pytest
-
-from controllers.paper_engine_v2.fee_models import MakerTakerFeeModel
-from controllers.paper_engine_v2.fill_models import QueuePositionFillModel, TopOfBookFillModel
-from controllers.paper_engine_v2.fill_models import QueuePositionConfig
-from controllers.paper_engine_v2.latency_model import NO_LATENCY, LatencyModel
-from controllers.paper_engine_v2.matching_engine import EngineConfig, OrderMatchingEngine
-from controllers.paper_engine_v2.portfolio import PaperPortfolio, PortfolioConfig
-from controllers.paper_engine_v2.types import (
-    EngineError, OrderAccepted, OrderCanceled, OrderFilled,
-    OrderRejected, OrderSide, OrderStatus, PositionChanged,
-    PaperOrderType,
+from simulation.fee_models import MakerTakerFeeModel
+from simulation.fill_models import QueuePositionConfig, QueuePositionFillModel, TopOfBookFillModel
+from simulation.latency_model import NO_LATENCY, LatencyModel
+from simulation.matching_engine import EngineConfig, OrderMatchingEngine
+from simulation.portfolio import PaperPortfolio, PortfolioConfig
+from simulation.types import (
+    CancelRejected,
+    EngineError,
+    OrderAccepted,
+    OrderCanceled,
+    OrderFilled,
+    OrderRejected,
+    OrderSide,
+    OrderStatus,
+    PositionChanged,
 )
 from tests.controllers.test_paper_engine_v2.conftest import (
-    BTC_PERP, BTC_SPOT, ETH_SPOT, make_book, make_order, make_spec,
+    BTC_SPOT,
+    make_book,
+    make_order,
+    make_spec,
 )
 
 
@@ -314,10 +320,11 @@ class TestCancellation:
         assert sum(1 for e in events if isinstance(e, OrderCanceled)) == 3
         assert len(engine.open_orders()) == 0
 
-    def test_cancel_nonexistent_returns_none(self):
+    def test_cancel_nonexistent_returns_cancel_rejected(self):
         engine = make_engine()
         result = engine.cancel_order("nonexistent", _now())
-        assert result is None
+        assert isinstance(result, CancelRejected)
+        assert result.reason == "not_found"
 
     def test_cancel_parked_contingent_order(self):
         engine = make_engine()
@@ -380,9 +387,10 @@ class TestLatencyQueue:
         now = _now()
         engine.submit_order(order, now)
 
-        # Cancel requested, but confirm is delayed.
+        # Cancel requested, but confirm is delayed — returns CancelRejected("cancel_pending").
         cancel_ev = engine.cancel_order(order.order_id, now + 1)
-        assert cancel_ev is None
+        assert isinstance(cancel_ev, CancelRejected)
+        assert cancel_ev.reason == "cancel_pending"
 
         # Fill can still occur before cancel confirmation.
         fill_events = engine.tick(now + 50_000_000)

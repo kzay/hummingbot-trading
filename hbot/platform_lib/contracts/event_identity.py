@@ -1,6 +1,7 @@
 from __future__ import annotations
 
-from typing import Any, Mapping, Optional, Tuple
+from collections.abc import Mapping
+from typing import Any
 
 # Identity fields required to route bot-scoped events safely.
 _REQUIRED_FIELDS_BY_EVENT_TYPE = {
@@ -14,7 +15,7 @@ _REQUIRED_FIELDS_BY_EVENT_TYPE = {
 }
 
 
-def required_identity_fields(event_type: str) -> Tuple[str, ...]:
+def required_identity_fields(event_type: str) -> tuple[str, ...]:
     return _REQUIRED_FIELDS_BY_EVENT_TYPE.get(str(event_type or "").strip().lower(), ())
 
 
@@ -34,9 +35,9 @@ def _field_text(payload: Mapping[str, Any], key: str, *, allow_nested_payload: b
 def validate_event_identity(
     payload: Mapping[str, Any],
     *,
-    event_type: Optional[str] = None,
+    event_type: str | None = None,
     allow_nested_payload: bool = False,
-) -> Tuple[bool, str]:
+) -> tuple[bool, str]:
     """Validate identity fields for event payloads.
 
     Returns `(True, "")` when identity is valid or not required for the

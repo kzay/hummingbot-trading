@@ -37,9 +37,9 @@ def _install_import_stubs() -> None:
     models_actions = _ensure_module("hummingbot.strategy_v2.models.executor_actions")
     _ensure_module("hummingbot.strategy_v2")
     _ensure_module("hummingbot.strategy_v2.models")
-    hb_bridge = _ensure_module("controllers.paper_engine_v2.hb_bridge")
+    hb_bridge = _ensure_module("simulation.bridge.hb_bridge")
     _ensure_module("controllers")
-    _ensure_module("controllers.paper_engine_v2")
+    _ensure_module("simulation")
     preflight = _ensure_module("services.common.preflight")
 
     async def _noop_async(*args, **kwargs):

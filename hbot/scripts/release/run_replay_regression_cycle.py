@@ -6,16 +6,15 @@ import os
 import shutil
 import subprocess
 import sys
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
-from typing import Dict, List, Tuple
 
 
 def _utc_now() -> str:
-    return datetime.now(timezone.utc).isoformat()
+    return datetime.now(UTC).isoformat()
 
 
-def _read_json(path: Path, default: Dict[str, object]) -> Dict[str, object]:
+def _read_json(path: Path, default: dict[str, object]) -> dict[str, object]:
     if not path.exists():
         return default
     try:
@@ -25,7 +24,7 @@ def _read_json(path: Path, default: Dict[str, object]) -> Dict[str, object]:
         return default
 
 
-def _build_subprocess_env(root: Path) -> Dict[str, str]:
+def _build_subprocess_env(root: Path) -> dict[str, str]:
     env = os.environ.copy()
     root_str = str(root)
     current = env.get("PYTHONPATH", "")
@@ -39,7 +38,7 @@ def _build_subprocess_env(root: Path) -> Dict[str, str]:
     return env
 
 
-def _run_step(root: Path, label: str, cmd: List[str]) -> Dict[str, object]:
+def _run_step(root: Path, label: str, cmd: list[str]) -> dict[str, object]:
     try:
         proc = subprocess.run(
             cmd,
@@ -94,7 +93,7 @@ def _matching_integrity_for_event(event_file: Path | None, event_store_dir: Path
     return _latest_matching(event_store_dir, "integrity_*.json")
 
 
-def _collect_snapshot(root: Path) -> Dict[str, object]:
+def _collect_snapshot(root: Path) -> dict[str, object]:
     reg = _read_json(root / "reports" / "backtest_regression" / "latest.json", {})
     recon = _read_json(root / "reports" / "reconciliation" / "latest.json", {})
     parity = _read_json(root / "reports" / "parity" / "latest.json", {})
@@ -135,11 +134,11 @@ def _collect_snapshot(root: Path) -> Dict[str, object]:
 
 
 def _evaluate_snapshot(
-    snapshot: Dict[str, object],
+    snapshot: dict[str, object],
     *,
     require_portfolio_risk_healthy: bool = True,
-) -> Tuple[bool, List[str]]:
-    failures: List[str] = []
+) -> tuple[bool, list[str]]:
+    failures: list[str] = []
     reg = snapshot.get("regression", {}) if isinstance(snapshot.get("regression"), dict) else {}
     recon = snapshot.get("reconciliation", {}) if isinstance(snapshot.get("reconciliation"), dict) else {}
     parity = snapshot.get("parity", {}) if isinstance(snapshot.get("parity"), dict) else {}
@@ -161,7 +160,7 @@ def _evaluate_snapshot(
     return (len(failures) == 0), failures
 
 
-def _snapshot_signature(snapshot: Dict[str, object]) -> Dict[str, object]:
+def _snapshot_signature(snapshot: dict[str, object]) -> dict[str, object]:
     reg = snapshot.get("regression", {}) if isinstance(snapshot.get("regression"), dict) else {}
     recon = snapshot.get("reconciliation", {}) if isinstance(snapshot.get("reconciliation"), dict) else {}
     parity = snapshot.get("parity", {}) if isinstance(snapshot.get("parity"), dict) else {}
@@ -183,10 +182,10 @@ def _snapshot_signature(snapshot: Dict[str, object]) -> Dict[str, object]:
 
 def _freeze_inputs(
     out_root: Path, event_file: Path | None, integrity_file: Path | None
-) -> Tuple[Path | None, Path | None, Path | None]:
+) -> tuple[Path | None, Path | None, Path | None]:
     if not event_file and not integrity_file:
         return None, None, None
-    stamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
+    stamp = datetime.now(UTC).strftime("%Y%m%dT%H%M%SZ")
     snap_dir = out_root / "pinned_inputs" / stamp
     snap_dir.mkdir(parents=True, exist_ok=True)
 
@@ -201,7 +200,7 @@ def _freeze_inputs(
     return frozen_event, frozen_integrity, snap_dir
 
 
-def _write_markdown(path: Path, payload: Dict[str, object]) -> None:
+def _write_markdown(path: Path, payload: dict[str, object]) -> None:
     runs = payload.get("runs", []) if isinstance(payload.get("runs"), list) else []
     blockers = payload.get("blockers", []) if isinstance(payload.get("blockers"), list) else []
     evidence_paths = payload.get("evidence_paths", {}) if isinstance(payload.get("evidence_paths"), dict) else {}
@@ -260,8 +259,8 @@ def main() -> int:
         integrity_file=pinned_integrity_file,
     )
 
-    all_runs: List[Dict[str, object]] = []
-    blockers: List[str] = []
+    all_runs: list[dict[str, object]] = []
+    blockers: list[str] = []
     repeat = max(1, int(args.repeat))
 
     for _ in range(repeat):
@@ -329,7 +328,7 @@ def main() -> int:
         blockers.append("deterministic_repeat_check_failed")
 
     status = "pass" if not blockers else "fail"
-    ts = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
+    ts = datetime.now(UTC).strftime("%Y%m%dT%H%M%SZ")
     json_path = out_root / f"replay_regression_{ts}.json"
     md_path = out_root / f"replay_regression_{ts}.md"
 

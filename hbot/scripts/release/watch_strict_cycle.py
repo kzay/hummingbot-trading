@@ -5,16 +5,15 @@ import json
 import subprocess
 import sys
 import time
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
-from typing import Dict
 
 
 def _utc_now() -> str:
-    return datetime.now(timezone.utc).isoformat()
+    return datetime.now(UTC).isoformat()
 
 
-def _load_json(path: Path, default: Dict[str, object]) -> Dict[str, object]:
+def _load_json(path: Path, default: dict[str, object]) -> dict[str, object]:
     if not path.exists():
         return default
     try:
@@ -24,7 +23,7 @@ def _load_json(path: Path, default: Dict[str, object]) -> Dict[str, object]:
         return default
 
 
-def _append_jsonl(path: Path, payload: Dict[str, object]) -> None:
+def _append_jsonl(path: Path, payload: dict[str, object]) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     with path.open("a", encoding="utf-8") as f:
         f.write(json.dumps(payload) + "\n")

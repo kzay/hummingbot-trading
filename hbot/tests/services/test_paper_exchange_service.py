@@ -8,13 +8,13 @@ import pytest
 
 from services.paper_exchange_service.main import (
     FillCandidate,
+    OrderRecord,
+    PaperExchangeState,
+    ServiceSettings,
     _load_market_fill_journal,
     _load_position_snapshot,
     _load_state_snapshot,
     _prune_orders,
-    OrderRecord,
-    PaperExchangeState,
-    ServiceSettings,
     build_heartbeat_event,
     handle_command_payload,
     ingest_market_snapshot_payload,
@@ -275,8 +275,8 @@ class _RunLoopFakeRedisClient(_FakeRedisClient):
     def __init__(
         self,
         *,
-        reclaimed_rows_by_stream: dict[str, list[tuple[str, dict[str, object]]] | BaseException] | None = None,
-        new_rows_by_stream: dict[str, list[tuple[str, dict[str, object]]] | BaseException] | None = None,
+        reclaimed_rows_by_stream: dict[str, list[tuple[str, dict[str, object]]]] | None = None,
+        new_rows_by_stream: dict[str, list[tuple[str, dict[str, object]]]] | None = None,
     ) -> None:
         super().__init__(xadd_result="1-0")
         self._reclaimed_rows_by_stream = dict(reclaimed_rows_by_stream or {})
@@ -390,6 +390,7 @@ def test_run_claims_pending_commands_and_processes_reclaimed_before_new(monkeypa
         settings,
         command_journal_path: Path,
         state_snapshot_path: Path | None = None,
+        persistence=None,
     ) -> None:
         call_order.append(source)
         if source == "new":
@@ -405,6 +406,7 @@ def test_run_claims_pending_commands_and_processes_reclaimed_before_new(monkeypa
         state_snapshot_path: Path | None = None,
         pair_snapshot_path: Path | None = None,
         market_fill_journal_path: Path | None = None,
+        persistence=None,
     ) -> None:
         return None
 
@@ -456,6 +458,7 @@ def test_run_claims_pending_market_rows_and_processes_reclaimed_before_new(monke
         state_snapshot_path: Path | None = None,
         pair_snapshot_path: Path | None = None,
         market_fill_journal_path: Path | None = None,
+        persistence=None,
     ) -> None:
         call_order.append(source)
         if source == "new":
@@ -470,6 +473,7 @@ def test_run_claims_pending_market_rows_and_processes_reclaimed_before_new(monke
         settings,
         command_journal_path: Path,
         state_snapshot_path: Path | None = None,
+        persistence=None,
     ) -> None:
         return None
 

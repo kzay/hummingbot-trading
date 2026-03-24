@@ -11,10 +11,9 @@ from __future__ import annotations
 import dataclasses
 import uuid
 from dataclasses import dataclass, field
-from decimal import Decimal, ROUND_DOWN, ROUND_UP
-from enum import Enum
-from typing import Any, Dict, Optional, Tuple
-
+from decimal import ROUND_DOWN, ROUND_UP, Decimal
+from enum import Enum, StrEnum
+from typing import Any
 
 # ---------------------------------------------------------------------------
 # Constants
@@ -103,13 +102,18 @@ class InstrumentSpec:
         return max(self.price_increment, steps * self.price_increment)
 
     def quantize_size(self, size: Decimal) -> Decimal:
-        """Round size down to valid lot, clamped to min_quantity."""
+        """Round size down to a valid lot, returning zero when below minimum."""
+        if size <= _ZERO:
+            return _ZERO
         if self.size_increment <= _ZERO:
-            return size
+            return size if size >= self.min_quantity else _ZERO
         steps = (size / self.size_increment).to_integral_value(rounding=ROUND_DOWN)
-        return max(self.min_quantity, steps * self.size_increment)
+        quantized = steps * self.size_increment
+        if quantized < self.min_quantity:
+            return _ZERO
+        return quantized
 
-    def validate_order(self, price: Decimal, quantity: Decimal) -> Optional[str]:
+    def validate_order(self, price: Decimal, quantity: Decimal) -> str | None:
         """Return rejection reason string or None if valid."""
         if quantity < self.min_quantity:
             return f"qty {quantity} < min {self.min_quantity}"
@@ -143,8 +147,8 @@ class InstrumentSpec:
         cls,
         instrument_id: InstrumentId,
         rule: Any,
-        fee_profile: Optional[Dict[str, str]] = None,
-    ) -> "InstrumentSpec":
+        fee_profile: dict[str, str] | None = None,
+    ) -> InstrumentSpec:
         """Build from a Hummingbot connector trading_rules entry."""
         def _d(attr: str, default: str = "0") -> Decimal:
             v = getattr(rule, attr, None)
@@ -204,7 +208,7 @@ class InstrumentSpec:
         )
 
     @classmethod
-    def spot_usdt(cls, venue: str, pair: str) -> "InstrumentSpec":
+    def spot_usdt(cls, venue: str, pair: str) -> InstrumentSpec:
         """Generic USDT spot instrument with conservative defaults."""
         iid = InstrumentId(venue=venue, trading_pair=pair, instrument_type="spot")
         return cls(
@@ -218,7 +222,7 @@ class InstrumentSpec:
         )
 
     @classmethod
-    def perp_usdt(cls, venue: str, pair: str, leverage_max: int = 20) -> "InstrumentSpec":
+    def perp_usdt(cls, venue: str, pair: str, leverage_max: int = 20) -> InstrumentSpec:
         """Generic USDT perp instrument with conservative defaults."""
         iid = InstrumentId(venue=venue, trading_pair=pair, instrument_type="perp")
         return cls(
@@ -237,15 +241,15 @@ class InstrumentSpec:
 # Order types
 # ---------------------------------------------------------------------------
 
-class OrderSide(str, Enum):
+class OrderSide(StrEnum):
     BUY = "buy"
     SELL = "sell"
 
-    def opposite(self) -> "OrderSide":
+    def opposite(self) -> OrderSide:
         return OrderSide.SELL if self == OrderSide.BUY else OrderSide.BUY
 
 
-class PositionAction(str, Enum):
+class PositionAction(StrEnum):
     """Explicit hedge-leg intent for an order/fill.
 
     `AUTO` preserves legacy signed-position behavior for existing callers.
@@ -260,31 +264,34 @@ class PositionAction(str, Enum):
     CLOSE_SHORT = "close_short"
 
 
-class PaperOrderType(str, Enum):
+class PaperOrderType(StrEnum):
     LIMIT = "limit"
     LIMIT_MAKER = "limit_maker"
     MARKET = "market"
 
 
-class OrderStatus(str, Enum):
+class OrderStatus(StrEnum):
     PENDING_SUBMIT = "pending_submit"  # in latency queue
     OPEN = "open"
     PARTIALLY_FILLED = "partial"
     FILLED = "filled"        # terminal
     CANCELED = "canceled"    # terminal
     REJECTED = "rejected"    # terminal
+    EXPIRED = "expired"      # terminal (time-in-force expiry)
 
 
 # Allowed state transitions (Nautilus-style explicit state machine).
 # Any transition not in this map is invalid.
-_ORDER_TRANSITIONS: Dict[OrderStatus, tuple] = {
-    OrderStatus.PENDING_SUBMIT: (OrderStatus.OPEN, OrderStatus.CANCELED, OrderStatus.REJECTED),
-    OrderStatus.OPEN: (OrderStatus.PARTIALLY_FILLED, OrderStatus.FILLED, OrderStatus.CANCELED, OrderStatus.REJECTED),
-    OrderStatus.PARTIALLY_FILLED: (OrderStatus.PARTIALLY_FILLED, OrderStatus.FILLED, OrderStatus.CANCELED),
+# CONCURRENCY: read-only after module load — safe from any thread.
+_ORDER_TRANSITIONS: dict[OrderStatus, tuple] = {
+    OrderStatus.PENDING_SUBMIT: (OrderStatus.OPEN, OrderStatus.CANCELED, OrderStatus.REJECTED, OrderStatus.EXPIRED),
+    OrderStatus.OPEN: (OrderStatus.PARTIALLY_FILLED, OrderStatus.FILLED, OrderStatus.CANCELED, OrderStatus.REJECTED, OrderStatus.EXPIRED),
+    OrderStatus.PARTIALLY_FILLED: (OrderStatus.PARTIALLY_FILLED, OrderStatus.FILLED, OrderStatus.CANCELED, OrderStatus.EXPIRED),
     # Terminal states: no outgoing transitions
     OrderStatus.FILLED: (),
     OrderStatus.CANCELED: (),
     OrderStatus.REJECTED: (),
+    OrderStatus.EXPIRED: (),
 }
 
 
@@ -327,6 +334,7 @@ class PaperOrder:
     position_mode: str = "ONEWAY"
     contingent_parent_order_id: str = ""
     contingent_trigger_mode: str = "partial"  # "partial"|"full"
+    time_in_force_ns: int = 0  # 0 = GTC (good-till-canceled), >0 = absolute expiry timestamp in ns
     # Internal: set by engine at acceptance time for release on fill/cancel
     _reserved_asset: str = field(default="", repr=False)
     _reserved_amount: Decimal = field(default_factory=lambda: Decimal("0"), repr=False)
@@ -343,7 +351,7 @@ class PaperOrder:
 
     @property
     def is_terminal(self) -> bool:
-        return self.status in (OrderStatus.FILLED, OrderStatus.CANCELED, OrderStatus.REJECTED)
+        return self.status in (OrderStatus.FILLED, OrderStatus.CANCELED, OrderStatus.REJECTED, OrderStatus.EXPIRED)
 
     @property
     def is_open(self) -> bool:
@@ -429,8 +437,17 @@ class PaperPosition:
             self.short_funding_paid = self.funding_paid
             self.short_opened_at_ns = self.opened_at_ns
 
-    def sync_derived_fields(self) -> None:
-        """Refresh legacy netted fields from leg-aware state."""
+    def sync_derived_fields(self, last_fill_price: Decimal | None = None) -> None:
+        """Refresh legacy netted fields from leg-aware state.
+
+        Parameters
+        ----------
+        last_fill_price:
+            When provided and the net position has flipped sign (e.g., long→short),
+            use this as the new avg_entry_price instead of resetting to zero.
+            This preserves the entry price of the new direction after a flip.
+        """
+        old_qty = self.quantity
         self.long_quantity = max(_ZERO, self.long_quantity)
         self.short_quantity = max(_ZERO, self.short_quantity)
         self.quantity = self.long_quantity - self.short_quantity
@@ -444,7 +461,13 @@ class PaperPosition:
             self.avg_entry_price = self.short_avg_entry_price
             self.opened_at_ns = self.short_opened_at_ns
         else:
-            self.avg_entry_price = _ZERO
+            # Position is flat. If it flipped through zero and we have a fill price,
+            # preserve the fill price for downstream consumers that read the snapshot
+            # between the flip and the next fill.
+            if last_fill_price is not None and old_qty != _ZERO:
+                self.avg_entry_price = last_fill_price
+            else:
+                self.avg_entry_price = _ZERO
             self.opened_at_ns = min(
                 value for value in (self.long_opened_at_ns, self.short_opened_at_ns) if value > 0
             ) if (self.long_opened_at_ns > 0 or self.short_opened_at_ns > 0) else 0
@@ -455,7 +478,7 @@ class PaperPosition:
     def leg_avg_entry_price(self, leg_side: str) -> Decimal:
         return self.long_avg_entry_price if str(leg_side).lower() == "long" else self.short_avg_entry_price
 
-    def to_dict(self) -> Dict[str, Any]:
+    def to_dict(self) -> dict[str, Any]:
         self.ensure_leg_consistency()
         self.sync_derived_fields()
         return {
@@ -484,7 +507,7 @@ class PaperPosition:
         }
 
     @classmethod
-    def from_dict(cls, d: Dict[str, Any], instrument_id: InstrumentId) -> "PaperPosition":
+    def from_dict(cls, d: dict[str, Any], instrument_id: InstrumentId) -> PaperPosition:
         pos = cls(
             instrument_id=instrument_id,
             quantity=Decimal(str(d.get("quantity", "0"))),
@@ -514,7 +537,7 @@ class PaperPosition:
         return pos
 
     @classmethod
-    def flat(cls, instrument_id: InstrumentId) -> "PaperPosition":
+    def flat(cls, instrument_id: InstrumentId) -> PaperPosition:
         return cls(
             instrument_id=instrument_id, quantity=_ZERO,
             avg_entry_price=_ZERO, realized_pnl=_ZERO,
@@ -537,34 +560,34 @@ class BookLevel:
 @dataclass(frozen=True)
 class OrderBookSnapshot:
     instrument_id: InstrumentId
-    bids: Tuple[BookLevel, ...]   # best (highest) first
-    asks: Tuple[BookLevel, ...]   # best (lowest) first
+    bids: tuple[BookLevel, ...]   # best (highest) first
+    asks: tuple[BookLevel, ...]   # best (lowest) first
     timestamp_ns: int
 
     @property
-    def best_bid(self) -> Optional[BookLevel]:
+    def best_bid(self) -> BookLevel | None:
         return self.bids[0] if self.bids else None
 
     @property
-    def best_ask(self) -> Optional[BookLevel]:
+    def best_ask(self) -> BookLevel | None:
         return self.asks[0] if self.asks else None
 
     @property
-    def mid_price(self) -> Optional[Decimal]:
+    def mid_price(self) -> Decimal | None:
         bb, ba = self.best_bid, self.best_ask
         if bb and ba:
             return (bb.price + ba.price) / _TWO
         return None
 
     @property
-    def spread(self) -> Optional[Decimal]:
+    def spread(self) -> Decimal | None:
         bb, ba = self.best_bid, self.best_ask
         if bb and ba and ba.price > bb.price:
             return ba.price - bb.price
         return None
 
     @property
-    def spread_pct(self) -> Optional[Decimal]:
+    def spread_pct(self) -> Decimal | None:
         mid = self.mid_price
         sp = self.spread
         if mid and sp and mid > _ZERO:
@@ -579,11 +602,32 @@ class OrderBookSnapshot:
 # Events
 # ---------------------------------------------------------------------------
 
+_BACKTEST_ID_MODE: bool = False
+_BACKTEST_ID_COUNTER: int = 0
+
+
+def enable_backtest_ids() -> None:
+    """Switch to fast, deterministic counter-based IDs (call before backtest)."""
+    global _BACKTEST_ID_MODE, _BACKTEST_ID_COUNTER
+    _BACKTEST_ID_MODE = True
+    _BACKTEST_ID_COUNTER = 0
+
+
+def disable_backtest_ids() -> None:
+    """Restore UUID4-based IDs (call after backtest if needed)."""
+    global _BACKTEST_ID_MODE
+    _BACKTEST_ID_MODE = False
+
+
 def _uuid() -> str:
+    global _BACKTEST_ID_COUNTER
+    if _BACKTEST_ID_MODE:
+        _BACKTEST_ID_COUNTER += 1
+        return f"bt{_BACKTEST_ID_COUNTER:014x}"
     return str(uuid.uuid4())
 
 
-def _event_to_dict(event: Any) -> Dict[str, Any]:
+def _event_to_dict(event: Any) -> dict[str, Any]:
     """Serialize an EngineEvent to a JSON-safe dict."""
     result = {}
     for f in dataclasses.fields(event):
@@ -608,7 +652,7 @@ class EngineEvent:
     timestamp_ns: int
     instrument_id: InstrumentId
 
-    def to_dict(self) -> Dict[str, Any]:
+    def to_dict(self) -> dict[str, Any]:
         return _event_to_dict(self)
 
 
@@ -635,6 +679,7 @@ class OrderRejected(EngineEvent):
 @dataclass(frozen=True)
 class OrderFilled(EngineEvent):
     order_id: str
+    side: str                    # "buy" or "sell"
     fill_price: Decimal
     fill_quantity: Decimal
     fee: Decimal                 # tracked separately from PnL
@@ -643,10 +688,33 @@ class OrderFilled(EngineEvent):
     source_bot: str
     instance_name: str = ""
     position_action: str = PositionAction.AUTO.value
+    slippage_bps: Decimal = field(default_factory=lambda: _ZERO)
+    mid_slippage_bps: Decimal = field(default_factory=lambda: _ZERO)
 
 
 @dataclass(frozen=True)
 class OrderCanceled(EngineEvent):
+    order_id: str
+    source_bot: str
+    instance_name: str = ""
+
+
+@dataclass(frozen=True)
+class CancelRejected(EngineEvent):
+    """Returned when a cancel request cannot be fulfilled.
+
+    reason values:
+      - "not_found": order_id does not exist in the engine
+      - "already_terminal": order is already filled/canceled/rejected
+    """
+    order_id: str
+    reason: str  # "not_found" | "already_terminal"
+    source_bot: str = ""
+
+
+@dataclass(frozen=True)
+class OrderExpired(EngineEvent):
+    """Emitted when an order's time-in-force expires."""
     order_id: str
     source_bot: str
     instance_name: str = ""

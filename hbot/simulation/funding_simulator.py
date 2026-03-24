@@ -7,13 +7,11 @@ from __future__ import annotations
 
 import logging
 from decimal import Decimal
-from typing import Dict, List, Tuple
 
-from controllers.paper_engine_v2.types import (
+from simulation.types import (
+    _ZERO,
     FundingApplied,
     InstrumentSpec,
-    _ZERO,
-    _uuid,
 )
 
 logger = logging.getLogger(__name__)
@@ -29,15 +27,15 @@ class FundingSimulator:
     """
 
     def __init__(self) -> None:
-        self._last_funding_ns: Dict[str, int] = {}
+        self._last_funding_ns: dict[str, int] = {}
 
     def tick(
         self,
         now_ns: int,
-        portfolio: "PaperPortfolio",  # type: ignore[name-defined]  # noqa: F821
-        instruments: Dict[str, Tuple[InstrumentSpec, Decimal]],  # key → (spec, funding_rate)
-    ) -> List[FundingApplied]:
-        events: List[FundingApplied] = []
+        portfolio: PaperPortfolio,  # type: ignore[name-defined]  # noqa: F821
+        instruments: dict[str, tuple[InstrumentSpec, Decimal]],  # key → (spec, funding_rate)
+    ) -> list[FundingApplied]:
+        events: list[FundingApplied] = []
         for key, (spec, funding_rate) in instruments.items():
             if not spec.instrument_id.is_perp or spec.funding_interval_s <= 0:
                 continue

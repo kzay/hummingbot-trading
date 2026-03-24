@@ -2,7 +2,7 @@
 
 Usage::
 
-    from services.common.logging_config import configure_logging
+    from platform_lib.logging.logging_config import configure_logging
     configure_logging()
 """
 from __future__ import annotations

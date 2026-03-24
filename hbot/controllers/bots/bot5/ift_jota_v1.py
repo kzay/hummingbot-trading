@@ -1,16 +1,15 @@
 from __future__ import annotations
 
 from decimal import Decimal
-from typing import Any, Dict, List, Tuple
+from typing import Any
 
 from pydantic import Field
 
+from controllers.runtime.base import DirectionalStrategyRuntimeV24Config, DirectionalStrategyRuntimeV24Controller
 from controllers.runtime.data_context import RuntimeDataContext
-from controllers.runtime.directional_core import DirectionalRuntimeAdapter
 from controllers.runtime.execution_context import RuntimeExecutionPlan
-from controllers.runtime.base import StrategyRuntimeV24Config, StrategyRuntimeV24Controller
-from controllers.runtime.market_making_types import MarketConditions, RegimeSpec, SpreadEdgeState, clip
-from services.common.utils import to_decimal
+from controllers.runtime.runtime_types import MarketConditions, RegimeSpec, SpreadEdgeState, clip
+from platform_lib.core.utils import to_decimal
 
 _ZERO = Decimal("0")
 _ONE = Decimal("1")
@@ -19,16 +18,10 @@ _10K = Decimal("10000")
 _FLOW_EPS = Decimal("0.05")
 
 
-class Bot5IftJotaV1Config(StrategyRuntimeV24Config):
+class Bot5IftJotaV1Config(DirectionalStrategyRuntimeV24Config):
     """Bot5 IFT/JOTA strategy lane over shared runtime."""
 
     controller_name: str = "bot5_ift_jota_v1"
-    shared_edge_gate_enabled: bool = Field(default=False)
-    alpha_policy_enabled: bool = Field(default=False)
-    selective_quoting_enabled: bool = Field(default=False)
-    adverse_fill_soft_pause_enabled: bool = Field(default=False)
-    edge_confidence_soft_pause_enabled: bool = Field(default=False)
-    slippage_soft_pause_enabled: bool = Field(default=False)
     bot5_flow_imbalance_threshold: Decimal = Field(
         default=Decimal("0.18"),
         description="Minimum absolute order-book imbalance needed before flow conviction is considered meaningful.",
@@ -59,17 +52,14 @@ class Bot5IftJotaV1Config(StrategyRuntimeV24Config):
     )
 
 
-class Bot5IftJotaV1Controller(StrategyRuntimeV24Controller):
+class Bot5IftJotaV1Controller(DirectionalStrategyRuntimeV24Controller):
     """Bot5-specific IFT/JOTA strategy wrapper over shared runtime controller."""
 
     def __init__(self, config: Bot5IftJotaV1Config, *args, **kwargs):
         super().__init__(config, *args, **kwargs)
-        self._bot5_flow_state: Dict[str, Any] = self._empty_bot5_flow_state()
+        self._bot5_flow_state: dict[str, Any] = self._empty_bot5_flow_state()
 
-    def _make_runtime_family_adapter(self):
-        return DirectionalRuntimeAdapter(self)
-
-    def _empty_bot5_flow_state(self) -> Dict[str, Any]:
+    def _empty_bot5_flow_state(self) -> dict[str, Any]:
         return {
             "direction": "off",
             "imbalance": _ZERO,
@@ -83,7 +73,7 @@ class Bot5IftJotaV1Controller(StrategyRuntimeV24Controller):
             "reason": "inactive",
         }
 
-    def _bot5_gate_metrics(self) -> Dict[str, Any]:
+    def _bot5_gate_metrics(self) -> dict[str, Any]:
         flow_state = getattr(self, "_bot5_flow_state", None) or self._empty_bot5_flow_state()
         reason = str(flow_state.get("reason", "inactive"))
         directional_allowed = bool(flow_state.get("directional_allowed", False))
@@ -110,10 +100,10 @@ class Bot5IftJotaV1Controller(StrategyRuntimeV24Controller):
         market: MarketConditions,
         target_net_base_pct: Decimal,
         base_pct_net: Decimal,
-    ) -> Dict[str, Decimal | str | bool]:
+    ) -> dict[str, Decimal | str | bool]:
         gate = self._bot5_gate_metrics()
         conviction = to_decimal(gate["conviction"])
-        metrics: Dict[str, Decimal | str | bool] = {
+        metrics: dict[str, Decimal | str | bool] = {
             "state": "bot5_strategy_gate",
             "reason": str(gate["reason"]),
             "maker_score": conviction,
@@ -134,7 +124,7 @@ class Bot5IftJotaV1Controller(StrategyRuntimeV24Controller):
         equity_quote: Decimal,
         projected_total_quote: Decimal,
         market: MarketConditions,
-    ) -> Tuple[List[str], bool, Decimal, Decimal]:
+    ) -> tuple[list[str], bool, Decimal, Decimal]:
         risk_reasons, risk_hard_stop, daily_loss_pct, drawdown_pct = super()._evaluate_all_risk(
             spread_state=spread_state,
             base_pct_gross=base_pct_gross,
@@ -149,7 +139,7 @@ class Bot5IftJotaV1Controller(StrategyRuntimeV24Controller):
                 risk_reasons.append(gate_reason)
         return risk_reasons, risk_hard_stop, daily_loss_pct, drawdown_pct
 
-    def _bot5_update_flow_state(self, mid: Decimal, regime_name: str, band_pct: Decimal) -> Dict[str, Any]:
+    def _bot5_update_flow_state(self, mid: Decimal, regime_name: str, band_pct: Decimal) -> dict[str, Any]:
         ema_val = to_decimal(getattr(self, "_regime_ema_value", _ZERO) or _ZERO)
         imbalance = clip(to_decimal(getattr(self, "_ob_imbalance", _ZERO) or _ZERO), _NEG_ONE, _ONE)
         trend_threshold = max(
@@ -193,7 +183,7 @@ class Bot5IftJotaV1Controller(StrategyRuntimeV24Controller):
             direction = "sell"
 
         selective_state = str(getattr(self, "_selective_quote_state", "inactive") or "inactive")
-        fill_edge_blocked = StrategyRuntimeV24Controller._fill_edge_below_cost_floor(self)
+        fill_edge_blocked = self._fill_edge_below_cost_floor()
         bias_threshold = clip(
             to_decimal(getattr(self.config, "bot5_flow_bias_threshold", Decimal("0.55"))),
             Decimal("0.25"),
@@ -267,7 +257,7 @@ class Bot5IftJotaV1Controller(StrategyRuntimeV24Controller):
         }
         return self._bot5_flow_state
 
-    def _resolve_regime_and_targets(self, mid: Decimal) -> Tuple[str, RegimeSpec, Decimal, Decimal, Decimal]:
+    def _resolve_regime_and_targets(self, mid: Decimal) -> tuple[str, RegimeSpec, Decimal, Decimal, Decimal]:
         regime_name, regime_spec, target_base_pct, target_net_base_pct, band_pct = super()._resolve_regime_and_targets(mid)
         flow_state = self._bot5_update_flow_state(mid=mid, regime_name=regime_name, band_pct=band_pct)
         if bool(getattr(self, "_is_perp", False)):
@@ -285,6 +275,15 @@ class Bot5IftJotaV1Controller(StrategyRuntimeV24Controller):
     ) -> str:
         base_mode = regime_spec.one_sided
         flow_state = getattr(self, "_bot5_flow_state", None) or self._empty_bot5_flow_state()
+        gate = self._bot5_gate_metrics()
+
+        if gate["fail_closed"]:
+            self._pending_stale_cancel_actions.extend(self._cancel_active_quote_executors())
+            self._cancel_alpha_no_trade_orders()
+            self._quote_side_mode = "off"
+            self._quote_side_reason = f"bot5_{gate['reason']}"
+            return "off"
+
         if not bool(flow_state.get("directional_allowed", False)):
             self._quote_side_mode = base_mode
             self._quote_side_reason = "regime"
@@ -302,7 +301,7 @@ class Bot5IftJotaV1Controller(StrategyRuntimeV24Controller):
 
     def _compute_adaptive_spread_knobs(
         self, now_ts: float, equity_quote: Decimal, regime_name: str = "neutral_low_vol"
-    ) -> Tuple[Decimal | None, Decimal | None, Decimal | None]:
+    ) -> tuple[Decimal | None, Decimal | None, Decimal | None]:
         effective_min_edge_pct, market_floor_pct, vol_ratio = super()._compute_adaptive_spread_knobs(
             now_ts, equity_quote, regime_name
         )
@@ -337,7 +336,7 @@ class Bot5IftJotaV1Controller(StrategyRuntimeV24Controller):
         equity_quote: Decimal,
         mid: Decimal,
         market: MarketConditions,
-    ) -> Tuple[list[Decimal], list[Decimal], Decimal, Decimal]:
+    ) -> tuple[list[Decimal], list[Decimal], Decimal, Decimal]:
         plan = self.build_runtime_execution_plan(
             RuntimeDataContext(
                 now_ts=float(self.market_data_provider.time()),
@@ -396,8 +395,8 @@ class Bot5IftJotaV1Controller(StrategyRuntimeV24Controller):
     def _extend_processed_data_before_log(
         self,
         *,
-        processed_data: Dict[str, Any],
-        snapshot: Dict[str, Any],
+        processed_data: dict[str, Any],
+        snapshot: dict[str, Any],
         state: Any,
         regime_name: str,
         market: MarketConditions,
@@ -413,3 +412,12 @@ class Bot5IftJotaV1Controller(StrategyRuntimeV24Controller):
         processed_data["bot5_flow_direction"] = flow_state["direction"]
         processed_data["bot5_flow_reason"] = flow_state["reason"]
         processed_data["bot5_flow_conviction"] = flow_state["conviction"]
+
+    def telemetry_fields(self) -> tuple[tuple[str, str, Any], ...]:
+        return (
+            ("bot5_gate_state", "bot5_gate_state", "idle"),
+            ("bot5_gate_reason", "bot5_gate_reason", "inactive"),
+            ("bot5_signal_side", "bot5_signal_side", "off"),
+            ("bot5_signal_reason", "bot5_signal_reason", "inactive"),
+            ("bot5_signal_score", "bot5_signal_score", _ZERO),
+        )

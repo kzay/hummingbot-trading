@@ -1,8 +1,7 @@
 """Tests for controllers.daily_state_store — dual-backend persistence."""
-import json
 from pathlib import Path
 
-from controllers.daily_state_store import DailyStateStore
+from platform_lib.core.daily_state_store import DailyStateStore
 
 
 def test_save_and_load_file_only(tmp_path: Path):

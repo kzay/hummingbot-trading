@@ -1,5 +1,7 @@
 import inspect
+
 from hummingbot.connector.exchange_py_base import ExchangePyBase
+
 # Check if budget_checker is a property (descriptor) or instance attribute
 for cls in inspect.getmro(ExchangePyBase):
     if "budget_checker" in cls.__dict__:
@@ -16,6 +18,7 @@ else:
 
 # Also check the connector_base
 from hummingbot.connector.connector_base import ConnectorBase
+
 for cls in inspect.getmro(ConnectorBase):
     if "budget_checker" in cls.__dict__:
         obj = cls.__dict__["budget_checker"]

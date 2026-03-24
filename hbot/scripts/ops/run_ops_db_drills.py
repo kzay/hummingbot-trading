@@ -4,9 +4,8 @@ from __future__ import annotations
 import argparse
 import json
 import os
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
-from typing import Dict
 
 from scripts.ops.data_plane_rollback_drill import run_drill as run_data_plane_rollback_drill
 from scripts.ops.ops_db_restore_drill import run_restore_drill
@@ -14,12 +13,12 @@ from scripts.ops.pg_backup import run_backup
 
 
 def _utc_now() -> str:
-    return datetime.now(timezone.utc).isoformat()
+    return datetime.now(UTC).isoformat()
 
 
-def _write_report(report_dir: Path, stem: str, payload: Dict[str, object]) -> None:
+def _write_report(report_dir: Path, stem: str, payload: dict[str, object]) -> None:
     report_dir.mkdir(parents=True, exist_ok=True)
-    stamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
+    stamp = datetime.now(UTC).strftime("%Y%m%dT%H%M%SZ")
     ts_path = report_dir / f"{stem}_{stamp}.json"
     latest_path = report_dir / f"{stem}_latest.json"
     raw = json.dumps(payload, indent=2)
@@ -51,9 +50,9 @@ def main() -> int:
     password = os.getenv("OPS_DB_PASSWORD", "kzay_capital_dev_password")
     admin_db = os.getenv("OPS_DB_ADMIN_DB", "postgres")
 
-    backup_payload: Dict[str, object] = {"status": "skipped"}
-    restore_payload: Dict[str, object] = {"status": "skipped"}
-    rollback_payload: Dict[str, object] = {"status": "skipped"}
+    backup_payload: dict[str, object] = {"status": "skipped"}
+    restore_payload: dict[str, object] = {"status": "skipped"}
+    rollback_payload: dict[str, object] = {"status": "skipped"}
 
     backup_dir = Path(args.backup_dir)
     report_dir = Path(args.report_dir)

@@ -9,7 +9,7 @@ from decimal import Decimal
 
 import pytest
 
-from controllers.paper_engine_v2.types import (
+from simulation.types import (
     OrderStatus,
     order_status_transition,
 )
@@ -79,13 +79,13 @@ class TestOrderStateMachineInEngine:
 
     def test_submitted_order_transitions_to_open(self):
         """With no-latency model, order goes PENDING_SUBMIT → OPEN immediately."""
-        from decimal import Decimal
         import time
-        from controllers.paper_engine_v2.fee_models import MakerTakerFeeModel
-        from controllers.paper_engine_v2.fill_models import TopOfBookFillModel
-        from controllers.paper_engine_v2.latency_model import NO_LATENCY
-        from controllers.paper_engine_v2.matching_engine import EngineConfig, OrderMatchingEngine
-        from controllers.paper_engine_v2.portfolio import PaperPortfolio, PortfolioConfig
+
+        from simulation.fee_models import MakerTakerFeeModel
+        from simulation.fill_models import TopOfBookFillModel
+        from simulation.latency_model import NO_LATENCY
+        from simulation.matching_engine import EngineConfig, OrderMatchingEngine
+        from simulation.portfolio import PaperPortfolio, PortfolioConfig
         from tests.controllers.test_paper_engine_v2.conftest import BTC_SPOT, make_book, make_order, make_spec
 
         spec = make_spec(BTC_SPOT)
@@ -106,13 +106,13 @@ class TestOrderStateMachineInEngine:
 
     def test_reserve_released_on_cancel_only_once(self):
         """Reserve must not be double-released on cancel."""
-        from decimal import Decimal
         import time
-        from controllers.paper_engine_v2.fee_models import MakerTakerFeeModel
-        from controllers.paper_engine_v2.fill_models import TopOfBookFillModel
-        from controllers.paper_engine_v2.latency_model import NO_LATENCY
-        from controllers.paper_engine_v2.matching_engine import EngineConfig, OrderMatchingEngine
-        from controllers.paper_engine_v2.portfolio import PaperPortfolio, PortfolioConfig
+
+        from simulation.fee_models import MakerTakerFeeModel
+        from simulation.fill_models import TopOfBookFillModel
+        from simulation.latency_model import NO_LATENCY
+        from simulation.matching_engine import EngineConfig, OrderMatchingEngine
+        from simulation.portfolio import PaperPortfolio, PortfolioConfig
         from tests.controllers.test_paper_engine_v2.conftest import BTC_SPOT, make_book, make_order, make_spec
 
         usdt_start = Decimal("1000")

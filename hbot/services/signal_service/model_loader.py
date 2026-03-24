@@ -5,7 +5,7 @@ import os
 import tempfile
 import time
 from dataclasses import dataclass
-from typing import Any, Optional, Tuple
+from typing import Any
 
 try:
     import joblib  # type: ignore

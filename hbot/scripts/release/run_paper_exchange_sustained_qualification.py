@@ -4,13 +4,12 @@ from __future__ import annotations
 import argparse
 import json
 import os
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
-from typing import Any, Dict
 
 from scripts.release.check_paper_exchange_load import run_check
 from scripts.release.run_paper_exchange_load_harness import run_harness
-from services.contracts.stream_names import (
+from platform_lib.contracts.stream_names import (
     PAPER_EXCHANGE_COMMAND_STREAM,
     PAPER_EXCHANGE_EVENT_STREAM,
     PAPER_EXCHANGE_HEARTBEAT_STREAM,
@@ -18,7 +17,7 @@ from services.contracts.stream_names import (
 
 
 def _utc_now() -> str:
-    return datetime.now(timezone.utc).isoformat()
+    return datetime.now(UTC).isoformat()
 
 
 def _safe_int(value: object, default: int = 0) -> int:
@@ -53,7 +52,7 @@ def _default_harness_producer() -> str:
     return "hb.paper_engine_v2"
 
 
-def _read_json(path: Path) -> Dict[str, object]:
+def _read_json(path: Path) -> dict[str, object]:
     if not path.exists():
         return {}
     try:
@@ -105,12 +104,12 @@ def _resolve_sustained_window_sec(sustained_window_sec: int, duration_sec: float
 
 def build_report(
     *,
-    profile: Dict[str, object],
+    profile: dict[str, object],
     harness_rc: int,
     load_rc: int,
-    harness_report: Dict[str, object],
-    load_report: Dict[str, object],
-) -> Dict[str, object]:
+    harness_report: dict[str, object],
+    load_report: dict[str, object],
+) -> dict[str, object]:
     harness_status = str(harness_report.get("status", "")).strip().lower()
     load_status = str(load_report.get("status", "")).strip().lower()
     harness_failed_checks = sorted(
@@ -418,7 +417,7 @@ def run_sustained_qualification(
 
     out_dir = root / "reports" / "verification"
     out_dir.mkdir(parents=True, exist_ok=True)
-    stamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
+    stamp = datetime.now(UTC).strftime("%Y%m%dT%H%M%SZ")
     out_path = out_dir / f"paper_exchange_sustained_qualification_{stamp}.json"
     latest_path = out_dir / "paper_exchange_sustained_qualification_latest.json"
     payload = json.dumps(report, indent=2)
@@ -428,7 +427,7 @@ def run_sustained_qualification(
     print(
         "[paper-exchange-sustained-qualification] "
         f"status={report.get('status')} "
-        f"run_id={str(report.get('diagnostics', {}).get('harness_run_id', ''))}"
+        f"run_id={report.get('diagnostics', {}).get('harness_run_id', '')!s}"
     )
     print(f"[paper-exchange-sustained-qualification] evidence={out_path}")
     if strict and str(report.get("status", "fail")).strip().lower() != "pass":

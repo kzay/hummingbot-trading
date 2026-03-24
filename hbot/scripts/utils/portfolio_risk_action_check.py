@@ -4,9 +4,9 @@ import argparse
 import json
 import os
 import re
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
-from typing import Any, Dict, List
+from typing import Any
 
 try:
     import redis  # type: ignore
@@ -15,14 +15,14 @@ except Exception as exc:  # pragma: no cover
 
 
 def _utc_now_iso() -> str:
-    return datetime.now(timezone.utc).isoformat()
+    return datetime.now(UTC).isoformat()
 
 
 def _today_stamp() -> str:
-    return datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
+    return datetime.now(UTC).strftime("%Y%m%dT%H%M%SZ")
 
 
-def _parse_payload(entry: Dict[str, Any]) -> Dict[str, Any]:
+def _parse_payload(entry: dict[str, Any]) -> dict[str, Any]:
     payload_raw = entry.get("payload")
     if not isinstance(payload_raw, str):
         return {}
@@ -33,7 +33,7 @@ def _parse_payload(entry: Dict[str, Any]) -> Dict[str, Any]:
         return {}
 
 
-def _simplify_intent(entry_id: str, payload: Dict[str, Any]) -> Dict[str, Any]:
+def _simplify_intent(entry_id: str, payload: dict[str, Any]) -> dict[str, Any]:
     details_text = ""
     metadata = payload.get("metadata")
     if isinstance(metadata, dict):
@@ -50,7 +50,7 @@ def _simplify_intent(entry_id: str, payload: Dict[str, Any]) -> Dict[str, Any]:
     }
 
 
-def _simplify_audit(entry_id: str, payload: Dict[str, Any]) -> Dict[str, Any]:
+def _simplify_audit(entry_id: str, payload: dict[str, Any]) -> dict[str, Any]:
     return {
         "entry_id": entry_id,
         "timestamp_ms": payload.get("timestamp_ms"),
@@ -63,7 +63,7 @@ def _simplify_audit(entry_id: str, payload: Dict[str, Any]) -> Dict[str, Any]:
     }
 
 
-def _entry_ts_ms(entry_id: str, payload: Dict[str, Any]) -> int:
+def _entry_ts_ms(entry_id: str, payload: dict[str, Any]) -> int:
     payload_ts = payload.get("timestamp_ms")
     try:
         if payload_ts is not None:
@@ -119,7 +119,7 @@ def main() -> None:
 
     intent_stream = "hb.execution_intent.v1"
     audit_stream = "hb.audit.v1"
-    now_ms = int(datetime.now(timezone.utc).timestamp() * 1000)
+    now_ms = int(datetime.now(UTC).timestamp() * 1000)
     min_ts_ms = 0
     if args.since_minutes > 0:
         min_ts_ms = max(0, now_ms - int(args.since_minutes * 60 * 1000))
@@ -129,7 +129,7 @@ def main() -> None:
 
     producer_filter = str(args.producer).strip()
 
-    matched_intents: List[Dict[str, Any]] = []
+    matched_intents: list[dict[str, Any]] = []
     for entry_id, data in intents_raw:
         payload = _parse_payload(data if isinstance(data, dict) else {})
         if producer_filter and str(payload.get("producer", "")) != producer_filter:
@@ -138,7 +138,7 @@ def main() -> None:
             continue
         matched_intents.append(_simplify_intent(str(entry_id), payload))
 
-    matched_audits: List[Dict[str, Any]] = []
+    matched_audits: list[dict[str, Any]] = []
     for entry_id, data in audits_raw:
         payload = _parse_payload(data if isinstance(data, dict) else {})
         if producer_filter and str(payload.get("producer", "")) != producer_filter:

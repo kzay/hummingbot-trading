@@ -131,3 +131,58 @@ def test_runtime_performance_budgets_report_fails_when_tick_budget_exceeded(tmp_
     assert report["status"] == "fail"
     failed = {check["name"] for check in report["checks"] if not check["pass"]}
     assert "controller_tick_p95_budget" in failed
+
+
+def test_runtime_performance_budgets_report_uses_hot_path_reports_when_present(tmp_path: Path, monkeypatch) -> None:
+    minute_dir = tmp_path / "data" / "bot1" / "logs" / "epp_v24" / "bot1_a"
+    minute_dir.mkdir(parents=True, exist_ok=True)
+    minute_dir.joinpath("minute.csv").write_text(
+        "\n".join(
+            [
+                "ts,_tick_duration_ms,_indicator_duration_ms,_connector_io_duration_ms,equity_quote",
+                "2026-03-09T12:00:00+00:00,100,20,10,1000",
+            ]
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    reports_event_store = tmp_path / "reports" / "event_store"
+    reports_event_store.mkdir(parents=True, exist_ok=True)
+    reports_event_store.joinpath("integrity_20260309.json").write_text(
+        json.dumps({"ingest_duration_ms_recent": [20.0, 30.0, 40.0]}),
+        encoding="utf-8",
+    )
+    verification_dir = tmp_path / "reports" / "verification"
+    verification_dir.mkdir(parents=True, exist_ok=True)
+    verification_dir.joinpath("strategy_hot_path_latest.json").write_text(
+        json.dumps(
+            {
+                "ts_utc": "2026-03-09T12:00:00+00:00",
+                "metrics": {
+                    "strategy_super_on_tick_ms": {"samples": 3, "p50_ms": 10.0, "p95_ms": 15.0, "p99_ms": 15.0, "max_ms": 15.0, "last_ms": 12.0},
+                    "bus_publish_market_state_ms": {"samples": 3, "p50_ms": 4.0, "p95_ms": 7.0, "p99_ms": 7.0, "max_ms": 7.0, "last_ms": 5.0},
+                },
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    monkeypatch.setattr(
+        "scripts.release.check_runtime_performance_budgets._measure_exporter_render",
+        lambda data_root, samples: {"samples": 5.0, "p50_ms": 50.0, "p95_ms": 60.0, "p99_ms": 70.0, "max_ms": 75.0},
+    )
+
+    report = run(
+        tmp_path,
+        exporter_render_samples=5,
+        max_controller_tick_p95_ms=250.0,
+        max_exporter_render_p95_ms=500.0,
+        max_event_store_ingest_p95_ms=250.0,
+        max_strategy_super_on_tick_p95_ms=20.0,
+        max_bus_publish_p95_ms=10.0,
+    )
+
+    assert report["status"] == "pass"
+    passed = {check["name"] for check in report["checks"] if check["pass"]}
+    assert "strategy_super_on_tick_p95_budget" in passed
+    assert "bus_publish_p95_budget" in passed

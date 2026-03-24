@@ -1,0 +1,50 @@
+strategy_class: ""
+strategy_config:
+  adapter_mode: "momentum_scalper"
+  # Very wide EMAs to catch only major trend changes
+  ema_fast: 30
+  ema_slow: 100
+  rsi_period: 14
+  atr_period: 20
+  adx_period: 14
+  rsi_overbought: "65"
+  rsi_oversold: "35"
+  adx_min: "20"
+  # Larger risk since fewer trades
+  risk_pct: "0.20"
+  # Extremely asymmetric: 5:1 R:R
+  sl_atr_mult: "1.0"
+  tp_atr_mult: "5.0"
+  trail_activate_r: "2.0"
+  trail_offset_atr: "0.8"
+  # Long hold time for trend following
+  max_hold_minutes: 1440
+  cooldown_s: 3600
+  max_daily_loss_pct: "0.04"
+  min_warmup_bars: 105
+
+data_source:
+  exchange: bitget
+  pair: BTC-USDT
+  resolution: 1m
+  instrument_type: perp
+  start_date: "2025-01-01"
+  end_date: "2025-01-31"
+  catalog_dir: data/historical
+
+initial_equity: 500
+fill_model: latency_aware
+seed: 42
+leverage: 1
+step_interval_s: 60
+warmup_bars: 110
+
+synthesis:
+  base_spread_bps: "5.0"
+  vol_spread_mult: "1.0"
+  depth_levels: 10
+  depth_decay: "0.70"
+  base_depth_size: "0.5"
+  steps_per_bar: 4
+
+output_dir: reports/backtest

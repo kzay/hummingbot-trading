@@ -16,6 +16,11 @@ alwaysApply: true
 - Use `hbot/controllers/market_making/*` only for market-making loader shims; never place non-MM strategy logic there.
 - Legacy `hbot/controllers/epp_v2_4_bot*` files are compatibility wrappers only; do not add strategy logic there.
 - Strategy changes for one bot should stay in that bot lane file unless a deliberate shared-runtime interface change is required.
+- The class hierarchy is: `SharedRuntimeKernel` (shared infra) -> `EppV24Controller` (MM) and `DirectionalRuntimeController` (directional).
+  `DirectionalRuntimeController` extends `SharedRuntimeKernel` directly, NOT through `EppV24Controller`.
+- **Market-making bots** (bot1) extend `StrategyRuntimeV24Config` / `StrategyRuntimeV24Controller`.
+- **Directional bots** (bot5, bot6, bot7) must extend `DirectionalStrategyRuntimeV24Config` / `DirectionalStrategyRuntimeV24Controller` (from `controllers.runtime.base`).
+- Directional bots must NOT manually disable MM flags (e.g. `shared_edge_gate_enabled: false`) — the `DirectionalRuntimeConfig` base handles this.
 - When changing strategy/runtime boundaries, run:
   - `PYTHONPATH=hbot python -m pytest hbot/tests/controllers/test_strategy_isolation_contract.py -q`
   - `PYTHONPATH=hbot python -m pytest hbot/tests/controllers/test_market_making_shim_contract.py -q`

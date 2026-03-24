@@ -1,3 +1,4 @@
+import { memo } from "react";
 import type { WeeklyReviewPayload } from "../types/realtime";
 import { formatNumber, formatPct, formatSigned } from "../utils/format";
 import { signedClass } from "../utils/presentation";
@@ -15,7 +16,7 @@ interface WeeklyReviewPanelProps {
   onRefresh: () => void;
 }
 
-export function WeeklyReviewPanel({ state, onRefresh }: WeeklyReviewPanelProps) {
+export const WeeklyReviewPanel = memo(function WeeklyReviewPanel({ state, onRefresh }: WeeklyReviewPanelProps) {
   const payload = state.review || {};
   const summary = payload.summary || {};
   const days = Array.isArray(payload.days) ? payload.days : [];
@@ -120,9 +121,9 @@ export function WeeklyReviewPanel({ state, onRefresh }: WeeklyReviewPanelProps) 
           <table>
             <thead>
               <tr>
-                <th>Regime</th>
-                <th>Count</th>
-                <th>Share</th>
+                <th scope="col">Regime</th>
+                <th scope="col">Count</th>
+                <th scope="col">Share</th>
               </tr>
             </thead>
             <tbody>
@@ -149,8 +150,8 @@ export function WeeklyReviewPanel({ state, onRefresh }: WeeklyReviewPanelProps) 
           <table>
             <thead>
               <tr>
-                <th>Type</th>
-                <th>Detail</th>
+                <th scope="col">Type</th>
+                <th scope="col">Detail</th>
               </tr>
             </thead>
             <tbody>
@@ -182,13 +183,13 @@ export function WeeklyReviewPanel({ state, onRefresh }: WeeklyReviewPanelProps) 
           <table>
             <thead>
               <tr>
-                <th>Date</th>
-                <th>Net PnL</th>
-                <th>Bps</th>
-                <th>Drawdown</th>
-                <th>Fills</th>
-                <th>Turnover</th>
-                <th>Regime</th>
+                <th scope="col">Date</th>
+                <th scope="col">Net PnL</th>
+                <th scope="col">Bps</th>
+                <th scope="col">Drawdown</th>
+                <th scope="col">Fills</th>
+                <th scope="col">Turnover</th>
+                <th scope="col">Regime</th>
               </tr>
             </thead>
             <tbody>
@@ -215,4 +216,4 @@ export function WeeklyReviewPanel({ state, onRefresh }: WeeklyReviewPanelProps) 
       </Panel>
     </>
   );
-}
+});

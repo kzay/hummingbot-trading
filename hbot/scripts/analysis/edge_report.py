@@ -14,23 +14,22 @@ import csv
 import sys
 from collections import defaultdict
 from pathlib import Path
-from typing import Dict, List
 
 _SCRIPT_DIR = Path(__file__).resolve().parent
 _PROJECT_ROOT = _SCRIPT_DIR.parents[1]
 sys.path.insert(0, str(_PROJECT_ROOT))
 
-from services.common.utils import safe_float, utc_now, write_json
+from platform_lib.core.utils import safe_float, utc_now, write_json
 
 
-def _read_csv(path: Path) -> List[Dict[str, str]]:
+def _read_csv(path: Path) -> list[dict[str, str]]:
     if not path.exists():
         return []
     with path.open("r", encoding="utf-8", newline="") as f:
         return list(csv.DictReader(f))
 
 
-def compute_edge(fills: List[Dict[str, str]]) -> Dict[str, object]:
+def compute_edge(fills: list[dict[str, str]]) -> dict[str, object]:
     """Compute edge metrics from fills data."""
     if not fills:
         return {"status": "no_fills", "fill_count": 0}
@@ -40,7 +39,7 @@ def compute_edge(fills: List[Dict[str, str]]) -> Dict[str, object]:
     total_fees = 0.0
     total_adverse_drift_cost = 0.0
     fill_count = 0
-    daily_pnl: Dict[str, float] = defaultdict(float)
+    daily_pnl: dict[str, float] = defaultdict(float)
 
     for fill in fills:
         price = safe_float(fill.get("price"))

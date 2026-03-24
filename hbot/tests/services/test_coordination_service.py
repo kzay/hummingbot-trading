@@ -1,14 +1,11 @@
 """Tests for coordination_service — risk→intent transformation, multi-decision, empty stream."""
 from __future__ import annotations
 
-import json
 import time
-from pathlib import Path
-from unittest.mock import MagicMock, patch
+from unittest.mock import MagicMock
 
-from services.contracts.event_schemas import ExecutionIntentEvent, RiskDecisionEvent
-from services.contracts.stream_names import EXECUTION_INTENT_STREAM, RISK_DECISION_STREAM
-
+from platform_lib.contracts.event_schemas import ExecutionIntentEvent, RiskDecisionEvent
+from platform_lib.contracts.stream_names import RISK_DECISION_STREAM
 
 # ── helpers ──────────────────────────────────────────────────────────
 

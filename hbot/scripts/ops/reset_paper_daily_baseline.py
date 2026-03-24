@@ -3,23 +3,22 @@ from __future__ import annotations
 
 import argparse
 import json
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from decimal import Decimal
 from pathlib import Path
-from typing import Dict, Optional
 
 import redis  # type: ignore
 
 
 def _utc_now() -> str:
-    return datetime.now(timezone.utc).isoformat()
+    return datetime.now(UTC).isoformat()
 
 
 def _today_utc() -> str:
-    return datetime.now(timezone.utc).strftime("%Y-%m-%d")
+    return datetime.now(UTC).strftime("%Y-%m-%d")
 
 
-def _read_json(path: Path) -> Dict[str, object]:
+def _read_json(path: Path) -> dict[str, object]:
     if not path.exists():
         return {}
     try:
@@ -29,7 +28,7 @@ def _read_json(path: Path) -> Dict[str, object]:
         return {}
 
 
-def _write_json(path: Path, payload: Dict[str, object]) -> None:
+def _write_json(path: Path, payload: dict[str, object]) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(json.dumps(payload, indent=2), encoding="utf-8")
 
@@ -43,7 +42,7 @@ def _safe_decimal(value: object, default: Decimal = Decimal("0")) -> Decimal:
         return default
 
 
-def _resolve_daily_state_path(root: Path, instance_name: str, variant: str) -> Optional[Path]:
+def _resolve_daily_state_path(root: Path, instance_name: str, variant: str) -> Path | None:
     base = root / "data" / instance_name / "logs" / "epp_v24" / f"{instance_name}_{variant}"
     if not base.exists():
         return None
@@ -54,7 +53,7 @@ def _resolve_daily_state_path(root: Path, instance_name: str, variant: str) -> O
 
 
 def _compute_equity_from_paper_desk(
-    paper_desk_payload: Dict[str, object], equity_source: str
+    paper_desk_payload: dict[str, object], equity_source: str
 ) -> Decimal:
     portfolio = paper_desk_payload.get("portfolio", {})
     portfolio = portfolio if isinstance(portfolio, dict) else {}

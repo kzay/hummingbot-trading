@@ -533,7 +533,10 @@ const instanceStatusRowSchema = z
     trading_pair: z.string().optional(),
     quoting_status: z.string().optional(),
     realized_pnl_quote: numberLikeSchema.optional(),
+    unrealized_pnl_quote: numberLikeSchema.optional(),
     equity_quote: numberLikeSchema.optional(),
+    equity_open_quote: numberLikeSchema.optional(),
+    equity_delta_open_quote: numberLikeSchema.optional(),
     source_label: z.string().optional(),
     controller_id: z.string().optional(),
     orders_active: numberLikeSchema.optional(),
@@ -631,7 +634,20 @@ export async function parseJsonResponse<T>(response: Response, schema: z.ZodType
   return parseWithSchema(schema, raw, label);
 }
 
+const HIGH_FREQ_FAST_PATH_TYPES = new Set(["market_quote", "market_depth_snapshot"]);
+
 export function parseWsInboundMessage(value: unknown): WsInboundMessage {
+  if (
+    value != null &&
+    typeof value === "object" &&
+    "type" in value &&
+    (value as Record<string, unknown>).type === "event"
+  ) {
+    const eventType = (value as Record<string, unknown>).event_type;
+    if (typeof eventType === "string" && HIGH_FREQ_FAST_PATH_TYPES.has(eventType)) {
+      return value as WsEventMessage;
+    }
+  }
   return parseWithSchema(z.union([wsSnapshotMessageSchema, wsEventMessageSchema, wsKeepaliveMessageSchema]), value, "websocket");
 }
 

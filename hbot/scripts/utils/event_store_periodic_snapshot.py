@@ -4,11 +4,10 @@ import argparse
 import json
 import os
 import time
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
 
 import redis  # type: ignore
-
 
 STREAMS = (
     "hb.market_data.v1",
@@ -22,11 +21,11 @@ STREAMS = (
 
 
 def _utc_now() -> str:
-    return datetime.now(timezone.utc).isoformat()
+    return datetime.now(UTC).isoformat()
 
 
 def _today() -> str:
-    return datetime.now(timezone.utc).strftime("%Y%m%d")
+    return datetime.now(UTC).strftime("%Y%m%d")
 
 
 def _load_integrity(root: Path) -> dict:
@@ -49,7 +48,7 @@ def _load_json(path: Path, default: dict) -> dict:
 
 
 def _snapshot(root: Path, client: redis.Redis) -> Path:
-    out_path = root / "reports" / "event_store" / f"source_compare_{datetime.now(timezone.utc).strftime('%Y%m%dT%H%M%SZ')}.json"
+    out_path = root / "reports" / "event_store" / f"source_compare_{datetime.now(UTC).strftime('%Y%m%dT%H%M%SZ')}.json"
     baseline_path = root / "reports" / "event_store" / "baseline_counts.json"
     out_path.parent.mkdir(parents=True, exist_ok=True)
     stored = _load_integrity(root)

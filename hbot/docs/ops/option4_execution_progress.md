@@ -683,7 +683,7 @@ Wave summary:
 - Day25 PostgreSQL operational store v1 completed:
   - compose runtime additions:
     - `infra/compose/docker-compose.yml`
-    - services: `postgres` (profile `ops`), optional `pgadmin` (profile `ops-tools`)
+    - services: `postgres` (default profile — no `--profile` flag needed)
     - persistent volume: `postgres-data`
   - Grafana datasource provisioning:
     - `infra/monitoring/grafana/provisioning/datasources/datasource.yml` (`uid=postgres-ops`)

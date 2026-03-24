@@ -1,6 +1,11 @@
-"""Canonical market-making runtime dataclasses and helpers."""
+"""Backward-compatibility re-export shim.
 
-from controllers.core import (
+These types are strategy-agnostic and now live at
+``controllers.runtime.runtime_types``.  This module is kept so existing
+third-party or generated imports continue to resolve.
+"""
+
+from controllers.runtime.runtime_types import (
     MarketConditions,
     QuoteGeometry,
     RegimeSpec,

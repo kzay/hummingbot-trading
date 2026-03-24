@@ -9,7 +9,7 @@ Deployment criteria (from ml-trading-guardrails.mdc):
 - Do NOT deploy if OOS precision < 0.55 (worse than baseline)
 
 Usage:
-    python hbot/scripts/ml/train_adverse_classifier.py --data hbot/data/ml/adverse_fill_train_20260227.parquet
+    PYTHONPATH=hbot python -m scripts.ml.train_adverse_classifier --data data/ml/adverse_fill_train_20260227.parquet
 """
 from __future__ import annotations
 
@@ -17,13 +17,12 @@ import argparse
 import json
 import sys
 from pathlib import Path
-from typing import Dict, List
 
 TARGET_COL = "adverse_label"
 DROP_COLS = [TARGET_COL, "pnl_vs_mid_bps"]
 
 
-def _get_feature_cols(df) -> List[str]:
+def _get_feature_cols(df) -> list[str]:
     return [c for c in df.columns if c not in DROP_COLS]
 
 
@@ -73,8 +72,8 @@ def _build_model(use_lightgbm: bool = True):
 def _precision_at_recall(y_true, y_proba, target_recall: float = 0.70):
     """Find precision at the threshold where recall >= target_recall."""
     try:
-        from sklearn.metrics import precision_recall_curve  # type: ignore
         import numpy as np  # type: ignore
+        from sklearn.metrics import precision_recall_curve  # type: ignore
         precision, recall, thresholds = precision_recall_curve(y_true, y_proba)
         valid = recall >= target_recall
         if not any(valid):
@@ -85,7 +84,7 @@ def _precision_at_recall(y_true, y_proba, target_recall: float = 0.70):
         return 0.0, 0.0
 
 
-def _walk_forward_cv(df, n_windows: int = 3) -> List[Dict]:
+def _walk_forward_cv(df, n_windows: int = 3) -> list[dict]:
     results = []
     n = len(df)
     fit_size = n * 3 // (n_windows + 1) * 2 // 3
@@ -138,7 +137,7 @@ def _walk_forward_cv(df, n_windows: int = 3) -> List[Dict]:
 
 def train_and_save(
     parquet_path: str,
-    output_dir: str = "hbot/data/ml",
+    output_dir: str = "data/ml",
     n_windows: int = 3,
 ) -> Path:
     try:
@@ -161,7 +160,7 @@ def train_and_save(
         print(f"\nERROR: Mean OOS precision {mean_prec:.4f} < baseline {baseline:.4f}.", file=sys.stderr)
         print("Model is WORSE than not using it. Do NOT deploy.", file=sys.stderr)
 
-    print(f"\nTraining final model on all data ...", file=sys.stderr)
+    print("\nTraining final model on all data ...", file=sys.stderr)
     X_all = df[feature_cols].values
     y_all = df[TARGET_COL].values
     final_model = _build_model()
@@ -177,7 +176,7 @@ def train_and_save(
     metadata = {
         "model_type": type(final_model).__name__,
         "feature_columns": feature_cols,
-        "n_training_rows": int(len(df)),
+        "n_training_rows": len(df),
         "adverse_rate": float(baseline),
         "walk_forward_n_windows": n_windows,
         "mean_precision_at_recall_0_70": round(mean_prec, 4),
@@ -193,14 +192,14 @@ def train_and_save(
 
     status = "READY" if metadata["deployment_ready"] else "NOT_READY"
     print(f"\n{'='*60}", file=sys.stderr)
-    print(f"Adverse Fill Classifier Training Complete", file=sys.stderr)
+    print("Adverse Fill Classifier Training Complete", file=sys.stderr)
     print(f"Status: {status}", file=sys.stderr)
     print(f"Mean precision@recall=0.70: {mean_prec:.4f} (threshold: 0.60)", file=sys.stderr)
     if metadata["deployment_ready"]:
-        print(f"\nTo deploy:", file=sys.stderr)
-        print(f"  1. Set adverse_classifier_enabled: true in epp_v2_4_bot_a.yml", file=sys.stderr)
+        print("\nTo deploy:", file=sys.stderr)
+        print("  1. Set adverse_classifier_enabled: true in epp_v2_4_bot_a.yml", file=sys.stderr)
         print(f"  2. Set adverse_classifier_model_path: {model_path.resolve()}", file=sys.stderr)
-        print(f"  3. Restart bot1", file=sys.stderr)
+        print("  3. Restart bot1", file=sys.stderr)
     print(f"{'='*60}", file=sys.stderr)
 
     return model_path
@@ -209,7 +208,7 @@ def train_and_save(
 if __name__ == "__main__":
     ap = argparse.ArgumentParser(description="Train adverse fill classifier for EPP v2.4")
     ap.add_argument("--data", required=True, help="Path to adverse_fill_train_*.parquet")
-    ap.add_argument("--output", default="hbot/data/ml")
+    ap.add_argument("--output", default="data/ml")
     ap.add_argument("--n-windows", type=int, default=3)
     args = ap.parse_args()
 

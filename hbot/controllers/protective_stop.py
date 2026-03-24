@@ -24,9 +24,9 @@ import os
 import time
 from abc import ABC, abstractmethod
 from decimal import Decimal
-from typing import Any, Dict, Optional
+from typing import Any
 
-from services.common.rate_limiter import ExchangeRateLimiter
+from platform_lib.core.rate_limiter import ExchangeRateLimiter
 
 logger = logging.getLogger(__name__)
 
@@ -38,7 +38,7 @@ class ProtectiveStopBackend(ABC):
     """Exchange-agnostic interface for server-side stop-loss orders."""
 
     @abstractmethod
-    def place_stop(self, symbol: str, side: str, amount: Decimal, trigger_price: Decimal) -> Optional[str]:
+    def place_stop(self, symbol: str, side: str, amount: Decimal, trigger_price: Decimal) -> str | None:
         """Place a stop order. Return order ID on success, None on failure."""
 
     @abstractmethod
@@ -57,7 +57,7 @@ class BitgetStopBackend(ProtectiveStopBackend):
         self._exchange = exchange
         self._is_perp = is_perp
 
-    def place_stop(self, symbol: str, side: str, amount: Decimal, trigger_price: Decimal) -> Optional[str]:
+    def place_stop(self, symbol: str, side: str, amount: Decimal, trigger_price: Decimal) -> str | None:
         try:
             _RATE_LIMITER.get_or_create("bitget").wait_if_needed()
             order = self._exchange.create_order(
@@ -117,7 +117,7 @@ class BitgetStopBackend(ProtectiveStopBackend):
             logger.error("cancel_all_stops: failed to fetch/cancel stop orders for %s: %s", symbol, exc)
 
 
-def _resolve_credentials(exchange_id: str) -> Dict[str, str]:
+def _resolve_credentials(exchange_id: str) -> dict[str, str]:
     """Resolve API credentials from environment variables.
 
     Supports per-bot prefixed vars (e.g. BOT1_BITGET_API_KEY) as well as
@@ -133,7 +133,7 @@ def _resolve_credentials(exchange_id: str) -> Dict[str, str]:
     return {"api_key": api_key, "secret": secret, "passphrase": passphrase}
 
 
-def create_stop_backend(exchange_id: str, is_perp: bool) -> Optional[ProtectiveStopBackend]:
+def create_stop_backend(exchange_id: str, is_perp: bool) -> ProtectiveStopBackend | None:
     """Factory: create a ProtectiveStopBackend for the given exchange.
 
     Returns None if ccxt is unavailable, credentials are missing, or
@@ -157,7 +157,7 @@ def create_stop_backend(exchange_id: str, is_perp: bool) -> Optional[ProtectiveS
         return None
 
     try:
-        cfg: Dict[str, Any] = {
+        cfg: dict[str, Any] = {
             "apiKey": creds["api_key"],
             "secret": creds["secret"],
             "enableRateLimit": True,
@@ -185,7 +185,7 @@ class ProtectiveStopManager:
         trading_pair: str,
         stop_loss_pct: Decimal,
         refresh_interval_s: int = 60,
-        backend: Optional[ProtectiveStopBackend] = None,
+        backend: ProtectiveStopBackend | None = None,
     ):
         self._exchange_id = exchange_id
         self._is_perp = "perpetual" in exchange_id or "swap" in exchange_id
@@ -197,12 +197,14 @@ class ProtectiveStopManager:
         self._stop_loss_pct = stop_loss_pct
         self._refresh_interval_s = refresh_interval_s
         self._backend = backend
-        self._current_stop_order_id: Optional[str] = None
+        self._current_stop_order_id: str | None = None
         self._last_position_base: Decimal = _ZERO
         self._last_avg_entry: Decimal = _ZERO
         self._last_refresh_ts: float = 0.0
         self._enabled = backend is not None
         self._init_error: str = "" if self._enabled else "no_backend"
+        self._consecutive_placement_failures: int = 0
+        self._PLACEMENT_FAILURE_ESCALATION: int = 3
 
     def initialize(self) -> bool:
         """Initialize the stop manager. Creates backend via factory if none was injected."""
@@ -230,6 +232,13 @@ class ProtectiveStopManager:
 
     def update(self, position_base: Decimal, avg_entry_price: Decimal) -> None:
         if not self._enabled or self._backend is None:
+            return
+
+        if position_base.is_nan() or position_base.is_infinite():
+            logger.warning("Protective stop: ignoring NaN/Inf position_base=%s", position_base)
+            return
+        if avg_entry_price.is_nan() or avg_entry_price.is_infinite():
+            logger.warning("Protective stop: ignoring NaN/Inf avg_entry_price=%s", avg_entry_price)
             return
 
         now = time.time()
@@ -266,6 +275,19 @@ class ProtectiveStopManager:
 
         if self._current_stop_order_id is None:
             order_id = self._backend.place_stop(self._ccxt_symbol, stop_side, abs(position_base), stop_price)
+            if order_id is None:
+                logger.warning("Protective stop placement failed — retrying once for %s", self._ccxt_symbol)
+                order_id = self._backend.place_stop(self._ccxt_symbol, stop_side, abs(position_base), stop_price)
+            if order_id is not None:
+                self._consecutive_placement_failures = 0
+            else:
+                self._consecutive_placement_failures += 1
+                logger.error(
+                    "Protective stop placement FAILED after retry for %s — "
+                    "position %.8f is UNPROTECTED (consecutive_failures=%d)",
+                    self._ccxt_symbol, float(abs(position_base)),
+                    self._consecutive_placement_failures,
+                )
             self._current_stop_order_id = order_id
 
         self._last_position_base = position_base
@@ -281,9 +303,14 @@ class ProtectiveStopManager:
         self._cancel_stop()
 
     @property
-    def active_stop_order_id(self) -> Optional[str]:
+    def active_stop_order_id(self) -> str | None:
         return self._current_stop_order_id
 
     @property
     def is_enabled(self) -> bool:
         return self._enabled
+
+    @property
+    def placement_failure_escalation(self) -> bool:
+        """True when stop placement has failed repeatedly and the position is unprotected."""
+        return self._consecutive_placement_failures >= self._PLACEMENT_FAILURE_ESCALATION

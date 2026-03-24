@@ -3,9 +3,8 @@ from __future__ import annotations
 import argparse
 import json
 import os
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
-from typing import Dict
 
 try:
     import redis  # type: ignore
@@ -25,10 +24,10 @@ STREAMS = (
 
 
 def _utc_now() -> str:
-    return datetime.now(timezone.utc).isoformat()
+    return datetime.now(UTC).isoformat()
 
 
-def _load_json(path: Path, default: Dict[str, object]) -> Dict[str, object]:
+def _load_json(path: Path, default: dict[str, object]) -> dict[str, object]:
     if not path.exists():
         return default
     try:
@@ -43,7 +42,7 @@ def _latest_integrity_file(reports_dir: Path) -> Path | None:
     return files[-1] if files else None
 
 
-def _write_json(path: Path, payload: Dict[str, object]) -> None:
+def _write_json(path: Path, payload: dict[str, object]) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(json.dumps(payload, indent=2), encoding="utf-8")
 
@@ -114,7 +113,7 @@ def main() -> None:
         "integrity_file": str(latest_integrity_path) if latest_integrity_path else "",
     }
 
-    stamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
+    stamp = datetime.now(UTC).strftime("%Y%m%dT%H%M%SZ")
     preview_path = reports_dir / f"baseline_reset_preview_{stamp}.json"
     backup_path = reports_dir / f"baseline_counts_backup_{stamp}.json"
     apply_report_path = reports_dir / f"baseline_reset_apply_{stamp}.json"

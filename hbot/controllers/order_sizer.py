@@ -5,12 +5,12 @@ order pricing pipeline.
 """
 from __future__ import annotations
 
-from decimal import Decimal, ROUND_DOWN, ROUND_UP
-from typing import Any, Optional
+from decimal import ROUND_DOWN, ROUND_UP, Decimal
+from typing import Any
 
 from hummingbot.core.data_type.common import TradeType
 
-from services.common.utils import to_decimal
+from platform_lib.core.utils import to_decimal
 
 
 class OrderSizer:

@@ -1,7 +1,7 @@
 from __future__ import annotations
 
-from services.common.market_history_policy import runtime_seed_policy, status_meets_policy
-from services.common.market_history_types import MarketHistoryStatus
+from platform_lib.market_data.market_history_policy import runtime_seed_policy, status_meets_policy
+from platform_lib.market_data.market_history_types import MarketHistoryStatus
 
 
 def test_runtime_seed_policy_reads_env(monkeypatch) -> None:

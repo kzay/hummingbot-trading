@@ -1,4 +1,4 @@
-from services.contracts.event_schemas import ExecutionIntentEvent, MlSignalEvent, RiskDecisionEvent
+from platform_lib.contracts.event_schemas import ExecutionIntentEvent, MlSignalEvent, RiskDecisionEvent
 
 
 def test_ml_signal_to_intent_chain_metadata():

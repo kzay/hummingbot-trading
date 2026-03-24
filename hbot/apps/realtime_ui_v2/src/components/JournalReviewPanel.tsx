@@ -1,3 +1,4 @@
+import { memo } from "react";
 import type { JournalReviewPayload, JournalTrade } from "../types/realtime";
 import { formatAgeMs, formatNumber, formatPct, formatRelativeTs, formatSigned, formatTs } from "../utils/format";
 import { sideTone, signedClass } from "../utils/presentation";
@@ -23,7 +24,7 @@ interface JournalReviewPanelProps {
   selectedTrade: JournalTrade | null;
 }
 
-export function JournalReviewPanel({
+export const JournalReviewPanel = memo(function JournalReviewPanel({
   state,
   startDay,
   endDay,
@@ -147,19 +148,19 @@ export function JournalReviewPanel({
           <table>
             <thead>
               <tr>
-                <th>Entry</th>
-                <th>Exit</th>
-                <th>Side</th>
-                <th>Qty</th>
-                <th>Entry Avg</th>
-                <th>Exit Avg</th>
-                <th>Hold</th>
-                <th>Context</th>
-                <th>MFE / MAE</th>
-                <th>Fees</th>
-                <th>Exit</th>
-                <th>Realized</th>
-                <th>Action</th>
+                <th scope="col">Entry</th>
+                <th scope="col">Exit</th>
+                <th scope="col">Side</th>
+                <th scope="col">Qty</th>
+                <th scope="col">Entry Avg</th>
+                <th scope="col">Exit Avg</th>
+                <th scope="col">Hold</th>
+                <th scope="col">Context</th>
+                <th scope="col">MFE / MAE</th>
+                <th scope="col">Fees</th>
+                <th scope="col">Exit</th>
+                <th scope="col">Realized</th>
+                <th scope="col">Action</th>
               </tr>
             </thead>
             <tbody>
@@ -337,14 +338,14 @@ export function JournalReviewPanel({
           <table>
             <thead>
               <tr>
-                <th>Time</th>
-                <th>Role</th>
-                <th>Side</th>
-                <th>Qty</th>
-                <th>Price</th>
-                <th>Notional</th>
-                <th>Fee</th>
-                <th>Realized</th>
+                <th scope="col">Time</th>
+                <th scope="col">Role</th>
+                <th scope="col">Side</th>
+                <th scope="col">Qty</th>
+                <th scope="col">Price</th>
+                <th scope="col">Notional</th>
+                <th scope="col">Fee</th>
+                <th scope="col">Realized</th>
               </tr>
             </thead>
             <tbody>
@@ -381,11 +382,11 @@ export function JournalReviewPanel({
           <table>
             <thead>
               <tr>
-                <th>Time</th>
-                <th>Mid</th>
-                <th>Equity</th>
-                <th>State</th>
-                <th>Regime</th>
+                <th scope="col">Time</th>
+                <th scope="col">Mid</th>
+                <th scope="col">Equity</th>
+                <th scope="col">State</th>
+                <th scope="col">Regime</th>
               </tr>
             </thead>
             <tbody>
@@ -417,4 +418,4 @@ export function JournalReviewPanel({
       </Panel>
     </>
   );
-}
+});

@@ -5,12 +5,12 @@ from decimal import Decimal
 from types import SimpleNamespace
 from unittest.mock import MagicMock, patch
 
-from controllers.paper_engine_v2.hb_event_fire import (
-    _fire_fill_event,
+from simulation.bridge.hb_event_fire import (
     _find_controller_for_connector,
+    _fire_fill_event,
     _realized_pnl_delta_quote,
 )
-from controllers.paper_engine_v2.types import InstrumentId, OrderFilled
+from simulation.types import InstrumentId, OrderFilled
 
 
 def test_realized_pnl_delta_quote_positive() -> None:
@@ -82,7 +82,7 @@ def _install_fill_event_stubs(monkeypatch) -> None:
     fake_identity = SimpleNamespace(validate_event_identity=lambda payload: (False, "test"))
     monkeypatch.setitem(sys.modules, "hummingbot.core.event.events", fake_events)
     monkeypatch.setitem(sys.modules, "hummingbot.core.data_type.common", fake_common)
-    monkeypatch.setitem(sys.modules, "services.contracts.event_identity", fake_identity)
+    monkeypatch.setitem(sys.modules, "platform.contracts.event_identity", fake_identity)
 
 
 def test_fire_fill_event_drops_unscoped_paper_fill_without_runtime_order(monkeypatch) -> None:
@@ -104,6 +104,7 @@ def test_fire_fill_event_drops_unscoped_paper_fill_without_runtime_order(monkeyp
         timestamp_ns=1,
         instrument_id=InstrumentId("bitget", "BTC-USDT", "perp"),
         order_id="pe-ghost-fill-1",
+        side="buy",
         fill_price=Decimal("100"),
         fill_quantity=Decimal("0.1"),
         fee=Decimal("0.01"),
@@ -137,6 +138,7 @@ def test_fire_fill_event_accepts_scoped_runtime_owned_paper_fill(monkeypatch) ->
         timestamp_ns=1,
         instrument_id=InstrumentId("bitget", "BTC-USDT", "perp"),
         order_id="pe-owned-fill-1",
+        side="buy",
         fill_price=Decimal("100"),
         fill_quantity=Decimal("0.1"),
         fee=Decimal("0.01"),
@@ -170,6 +172,7 @@ def test_fire_fill_event_uses_sell_trade_type_from_runtime_order(monkeypatch) ->
         timestamp_ns=1,
         instrument_id=InstrumentId("bitget", "BTC-USDT", "perp"),
         order_id="pe-owned-sell-fill",
+        side="sell",
         fill_price=Decimal("100"),
         fill_quantity=Decimal("0.1"),
         fee=Decimal("0.01"),
@@ -220,7 +223,7 @@ def test_fire_fill_event_logs_instance_name_attachment_failure(monkeypatch) -> N
     )
     monkeypatch.setitem(
         sys.modules,
-        "services.contracts.event_identity",
+        "platform.contracts.event_identity",
         SimpleNamespace(validate_event_identity=lambda payload: (False, "test")),
     )
     controller = SimpleNamespace(
@@ -241,6 +244,7 @@ def test_fire_fill_event_logs_instance_name_attachment_failure(monkeypatch) -> N
         timestamp_ns=1,
         instrument_id=InstrumentId("bitget", "BTC-USDT", "perp"),
         order_id="pe-owned-fill-2",
+        side="buy",
         fill_price=Decimal("100"),
         fill_quantity=Decimal("0.1"),
         fee=Decimal("0.01"),
@@ -249,7 +253,7 @@ def test_fire_fill_event_logs_instance_name_attachment_failure(monkeypatch) -> N
         source_bot="bitget",
     )
 
-    with patch("controllers.paper_engine_v2.hb_event_fire.logger.debug") as debug_mock:
+    with patch("simulation.bridge.hb_event_fire.logger.debug") as debug_mock:
         _fire_fill_event(strategy, "bitget", fill_event, bridge_state)
 
     controller.did_fill_order.assert_called_once()

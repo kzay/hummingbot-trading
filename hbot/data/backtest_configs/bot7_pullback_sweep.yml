@@ -1,0 +1,107 @@
+# Bot7 Pullback — parameter sweep configuration
+# Usage: PYTHONPATH=hbot python -m controllers.backtesting.sweep_cli --config data/backtest_configs/bot7_pullback_sweep.yml
+
+sweep_mode: grid
+objective: sharpe_ratio
+workers: 3
+seed: 42
+
+# Focused sweep on entry zone and risk/reward (most impactful for fill count + profitability)
+param_spaces:
+  - name: pullback_zone_pct
+    mode: grid
+    values: [0.003, 0.005, 0.008]
+
+  - name: sl_atr_mult
+    mode: grid
+    values: [1.0, 1.5, 2.0]
+
+  - name: tp_atr_mult
+    mode: grid
+    values: [2.0, 3.0]
+
+# Total combinations: 3 x 3 x 2 = 18 runs
+
+# Base backtest config (embedded)
+base_config:
+  strategy_class: ""
+  strategy_config:
+    adapter_mode: pullback
+    bb_period: 20
+    bb_stddev: "2.0"
+    rsi_period: 14
+    adx_period: 14
+    atr_period: 14
+    rsi_long_min: "30"
+    rsi_long_max: "48"
+    rsi_short_min: "52"
+    rsi_short_max: "70"
+    adx_min: "20"
+    adx_max: "45"
+    pullback_zone_pct: "0.003"
+    band_floor_pct: "0.0010"
+    zone_atr_mult: "0.35"
+    max_grid_legs: 1
+    per_leg_risk_pct: "0.008"
+    total_grid_exposure_cap_pct: "0.020"
+    grid_spacing_bb_fraction: "0.12"
+    grid_spacing_atr_mult: "0.50"
+    grid_spacing_floor_pct: "0.0012"
+    grid_spacing_cap_pct: "0.005"
+    sl_atr_mult: "1.0"
+    tp_atr_mult: "2.5"
+    sl_floor_pct: "0.003"
+    sl_cap_pct: "0.008"
+    tp_floor_pct: "0.006"
+    tp_cap_pct: "0.02"
+    trend_quality_enabled: true
+    basis_slope_bars: 5
+    min_basis_slope_pct: "0.0003"
+    trend_sma_period: 50
+    limit_entry_enabled: true
+    entry_offset_pct: "0.0015"
+    session_filter_enabled: true
+    quality_hours_utc: "1-4,8-16,20-23"
+    low_quality_size_mult: "0.5"
+    signal_cooldown_s: 120
+    signal_freshness_enabled: false
+    signal_max_age_s: 120
+    trailing_stop_enabled: true
+    trail_activate_atr_mult: "0.7"
+    trail_offset_atr_mult: "0.4"
+    partial_take_pct: "0.50"
+    hard_sl_enabled: true
+    hard_sl_atr_mult: "1.0"
+    max_hold_minutes: 480
+    regime_reversal_exit: true
+    no_add_to_position: true
+    max_base_pct: "0.40"
+    max_daily_loss_pct: "0.015"
+    max_drawdown_pct: "0.025"
+    quote_size_pct: "0.03"
+    min_warmup_bars: 60
+
+  data_source:
+    exchange: bitget
+    pair: BTC-USDT
+    resolution: 1m
+    instrument_type: perp
+    start_date: "2025-01-01"
+    end_date: "2025-01-31"
+    catalog_dir: data/historical
+
+  initial_equity: 500
+  fill_model: latency_aware
+  seed: 42
+  leverage: 1
+  step_interval_s: 60
+  warmup_bars: 60
+
+  synthesis:
+    base_spread_bps: 5.0
+    vol_spread_mult: 1.0
+    depth_levels: 5
+    depth_decay: 0.70
+    base_depth_size: 1.0
+    steps_per_bar: 1
+    seed: 42

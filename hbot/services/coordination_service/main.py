@@ -3,13 +3,12 @@ from __future__ import annotations
 import json
 import os
 import time
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
-from typing import Dict
 
-from services.common.models import RedisSettings, ServiceSettings
-from services.contracts.event_schemas import ExecutionIntentEvent, RiskDecisionEvent
-from services.contracts.stream_names import (
+from platform_lib.core.models import RedisSettings, ServiceSettings
+from platform_lib.contracts.event_schemas import ExecutionIntentEvent, RiskDecisionEvent
+from platform_lib.contracts.stream_names import (
     DEFAULT_CONSUMER_GROUP,
     EXECUTION_INTENT_STREAM,
     RISK_DECISION_STREAM,
@@ -26,10 +25,10 @@ def _env_bool(name: str, default: bool) -> bool:
 
 
 def _utc_now() -> str:
-    return datetime.now(timezone.utc).isoformat()
+    return datetime.now(UTC).isoformat()
 
 
-def _read_json(path: Path) -> Dict[str, object]:
+def _read_json(path: Path) -> dict[str, object]:
     if not path.exists():
         return {}
     try:
@@ -39,12 +38,12 @@ def _read_json(path: Path) -> Dict[str, object]:
         return {}
 
 
-def _write_health(path: Path, payload: Dict[str, object]) -> None:
+def _write_health(path: Path, payload: dict[str, object]) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(json.dumps(payload, indent=2), encoding="utf-8")
 
 
-def _load_policy(path: Path) -> Dict[str, object]:
+def _load_policy(path: Path) -> dict[str, object]:
     policy = _read_json(path)
     if not policy:
         return {
@@ -94,7 +93,7 @@ def run() -> None:
     intents_emitted = 0
     decisions_seen = 0
 
-    from services.common.utils import CachedJsonFile
+    from platform_lib.core.utils import CachedJsonFile
     _default_policy = {
         "enabled_default": False,
         "require_ml_enabled": True,

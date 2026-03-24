@@ -1,10 +1,9 @@
 from __future__ import annotations
 
 import time
-from typing import Dict, List, Set, Tuple
 
-from services.contracts.event_schemas import ExecutionIntentEvent
-from services.contracts.stream_names import (
+from platform_lib.contracts.event_schemas import ExecutionIntentEvent
+from platform_lib.contracts.stream_names import (
     DEAD_LETTER_STREAM,
     EXECUTION_INTENT_STREAM,
     STREAM_RETENTION_MAXLEN,
@@ -24,7 +23,7 @@ class HBIntentConsumer:
         self._group = group
         self._consumer_name = consumer_name
         self._dedup_ttl = dedup_ttl_sec
-        self._seen: Dict[str, float] = {}
+        self._seen: dict[str, float] = {}
         self._redis.create_group(EXECUTION_INTENT_STREAM, group)
 
     def _cleanup_seen(self) -> None:
@@ -37,7 +36,7 @@ class HBIntentConsumer:
     def _mark_seen(self, event_id: str) -> None:
         self._seen[event_id] = time.time()
 
-    def poll(self, count: int = 20, block_ms: int = 1000) -> List[Tuple[str, ExecutionIntentEvent]]:
+    def poll(self, count: int = 20, block_ms: int = 1000) -> list[tuple[str, ExecutionIntentEvent]]:
         self._cleanup_seen()
         entries = self._redis.read_group(
             stream=EXECUTION_INTENT_STREAM,
@@ -46,8 +45,8 @@ class HBIntentConsumer:
             count=count,
             block_ms=block_ms,
         )
-        out: List[Tuple[str, ExecutionIntentEvent]] = []
-        seen_in_batch: Set[str] = set()
+        out: list[tuple[str, ExecutionIntentEvent]] = []
+        seen_in_batch: set[str] = set()
         now_ms = int(time.time() * 1000)
         for entry_id, payload in entries:
             try:

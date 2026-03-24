@@ -2,16 +2,15 @@ from __future__ import annotations
 
 import json
 import os
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
-from typing import Dict, List
 
 
 def _utc_now() -> str:
-    return datetime.now(timezone.utc).isoformat()
+    return datetime.now(UTC).isoformat()
 
 
-def _read_json(path: Path) -> Dict[str, object]:
+def _read_json(path: Path) -> dict[str, object]:
     if not path.exists():
         return {}
     try:
@@ -24,7 +23,7 @@ def _read_json(path: Path) -> Dict[str, object]:
 def _minutes_since(ts: str) -> float:
     try:
         dt = datetime.fromisoformat(ts.replace("Z", "+00:00"))
-        return (datetime.now(timezone.utc) - dt).total_seconds() / 60.0
+        return (datetime.now(UTC) - dt).total_seconds() / 60.0
     except Exception:
         return 1e9
 
@@ -36,11 +35,11 @@ def _env_bool(name: str, default: bool = False) -> bool:
     return val.strip().lower() in {"1", "true", "yes", "on"}
 
 
-def _check(name: str, ok: bool, reason: str, details: Dict[str, object]) -> Dict[str, object]:
+def _check(name: str, ok: bool, reason: str, details: dict[str, object]) -> dict[str, object]:
     return {"name": name, "pass": bool(ok), "reason": reason, "details": details}
 
 
-def _write(path: Path, payload: Dict[str, object]) -> None:
+def _write(path: Path, payload: dict[str, object]) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(json.dumps(payload, indent=2), encoding="utf-8")
 
@@ -54,7 +53,7 @@ def main() -> int:
     policy = _read_json(policy_path)
     ml_enabled = _env_bool("ML_ENABLED", bool(policy.get("enabled_default", False)))
     report = _read_json(report_path)
-    checks: List[Dict[str, object]] = []
+    checks: list[dict[str, object]] = []
 
     required_top = {
         "version",
@@ -189,7 +188,7 @@ def main() -> int:
         "checks": checks,
     }
 
-    stamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
+    stamp = datetime.now(UTC).strftime("%Y%m%dT%H%M%SZ")
     out = out_root / f"ml_governance_check_{stamp}.json"
     _write(out, payload)
     _write(out_root / "ml_governance_latest.json", payload)

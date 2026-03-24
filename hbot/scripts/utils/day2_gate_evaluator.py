@@ -3,12 +3,11 @@ from __future__ import annotations
 import glob
 import json
 import os
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
-from typing import Any, Dict, List
+from typing import Any
 
-from services.contracts.stream_names import MARKET_DATA_STREAM, MARKET_DEPTH_STREAM, MARKET_QUOTE_STREAM
-
+from platform_lib.contracts.stream_names import MARKET_DATA_STREAM, MARKET_DEPTH_STREAM, MARKET_QUOTE_STREAM
 
 _TRIM_SENSITIVE_STREAMS = {
     MARKET_DATA_STREAM,
@@ -18,7 +17,7 @@ _TRIM_SENSITIVE_STREAMS = {
 
 
 def _utc_now() -> datetime:
-    return datetime.now(timezone.utc)
+    return datetime.now(UTC)
 
 
 def _load_json(path: Path, default: dict) -> dict:
@@ -67,7 +66,7 @@ def _safe_int(value: Any, default: int = 0) -> int:
         return int(default)
 
 
-def _should_exclude_trimmed_stream(stream: str, latest_compare: Dict[str, object]) -> bool:
+def _should_exclude_trimmed_stream(stream: str, latest_compare: dict[str, object]) -> bool:
     if stream not in _TRIM_SENSITIVE_STREAMS:
         return False
     source_length_map = latest_compare.get("source_length_by_stream", {})
@@ -86,16 +85,16 @@ def _should_exclude_trimmed_stream(stream: str, latest_compare: Dict[str, object
     return source_events > source_length and stored_events >= source_length
 
 
-def _lag_diagnostics(latest_compare: Dict[str, object], max_allowed_delta: int) -> Dict[str, object]:
+def _lag_diagnostics(latest_compare: dict[str, object], max_allowed_delta: int) -> dict[str, object]:
     delta_since = latest_compare.get("lag_produced_minus_ingested_since_baseline")
     if not isinstance(delta_since, dict) or not delta_since:
         delta_since = latest_compare.get("delta_produced_minus_ingested_since_baseline", {})
     if not isinstance(delta_since, dict):
         delta_since = {}
-    lag_by_stream_abs: Dict[str, int] = {}
-    lag_by_stream_signed: Dict[str, int] = {}
-    raw_lag_by_stream_abs: Dict[str, int] = {}
-    excluded_streams: Dict[str, Dict[str, object]] = {}
+    lag_by_stream_abs: dict[str, int] = {}
+    lag_by_stream_signed: dict[str, int] = {}
+    raw_lag_by_stream_abs: dict[str, int] = {}
+    excluded_streams: dict[str, dict[str, object]] = {}
     consumer_group_lag_map = latest_compare.get("consumer_group_lag_by_stream", {})
     source_length_map = latest_compare.get("source_length_by_stream", {})
     source_events_map = latest_compare.get("source_events_by_stream", {})
@@ -179,7 +178,7 @@ def main() -> None:
     worst_stream = str(lag_diagnostics.get("worst_stream", "") or "")
     offending_streams = lag_diagnostics.get("offending_streams", {})
 
-    checks: List[Dict[str, object]] = []
+    checks: list[dict[str, object]] = []
     checks.append({"name": "elapsed_window", "pass": elapsed_hours >= gate_hours, "value_hours": round(elapsed_hours, 2), "required_hours": gate_hours})
     checks.append({"name": "missing_correlation", "pass": missing_corr == 0, "value": missing_corr, "required": 0})
     checks.append(

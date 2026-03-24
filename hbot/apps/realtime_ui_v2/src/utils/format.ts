@@ -1,6 +1,17 @@
 export function toNum(value: unknown): number | null {
+  if (value === null || value === undefined || value === "") return null;
   const parsed = Number(value);
   return Number.isFinite(parsed) ? parsed : null;
+}
+
+const numberFormatCache = new Map<number, Intl.NumberFormat>();
+function getNumberFormat(digits: number): Intl.NumberFormat {
+  let fmt = numberFormatCache.get(digits);
+  if (!fmt) {
+    fmt = new Intl.NumberFormat(undefined, { minimumFractionDigits: 0, maximumFractionDigits: digits });
+    numberFormatCache.set(digits, fmt);
+  }
+  return fmt;
 }
 
 export function formatNumber(value: unknown, digits = 2): string {
@@ -8,10 +19,7 @@ export function formatNumber(value: unknown, digits = 2): string {
   if (!Number.isFinite(parsed)) {
     return "n/a";
   }
-  return parsed.toLocaleString(undefined, {
-    minimumFractionDigits: 0,
-    maximumFractionDigits: digits,
-  });
+  return getNumberFormat(digits).format(parsed);
 }
 
 export function formatSigned(value: unknown, digits = 2): string {

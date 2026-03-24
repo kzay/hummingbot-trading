@@ -6,13 +6,12 @@ import json
 import re
 import shutil
 import time
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
-from typing import Dict, List, Tuple
 
 _ENV_LINE_RE = re.compile(r"^([A-Za-z_][A-Za-z0-9_]*)=(.*)$")
 
-_MODE_FLAGS: Dict[str, Dict[str, str]] = {
+_MODE_FLAGS: dict[str, dict[str, str]] = {
     "db_primary": {
         "OPS_DATA_PLANE_MODE": "db_primary",
         "OPS_DB_READ_PREFERRED": "true",
@@ -29,12 +28,12 @@ _MODE_FLAGS: Dict[str, Dict[str, str]] = {
 
 
 def _utc_now() -> str:
-    return datetime.now(timezone.utc).isoformat()
+    return datetime.now(UTC).isoformat()
 
 
-def _write_report(report_dir: Path, stem: str, payload: Dict[str, object]) -> None:
+def _write_report(report_dir: Path, stem: str, payload: dict[str, object]) -> None:
     report_dir.mkdir(parents=True, exist_ok=True)
-    stamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
+    stamp = datetime.now(UTC).strftime("%Y%m%dT%H%M%SZ")
     ts_path = report_dir / f"{stem}_{stamp}.json"
     latest_path = report_dir / f"{stem}_latest.json"
     raw = json.dumps(payload, indent=2)
@@ -42,7 +41,7 @@ def _write_report(report_dir: Path, stem: str, payload: Dict[str, object]) -> No
     latest_path.write_text(raw, encoding="utf-8")
 
 
-def _apply_flags(lines: List[str], flags: Dict[str, str]) -> List[str]:
+def _apply_flags(lines: list[str], flags: dict[str, str]) -> list[str]:
     out = list(lines)
     updated = set()
     for idx, line in enumerate(out):
@@ -59,8 +58,8 @@ def _apply_flags(lines: List[str], flags: Dict[str, str]) -> List[str]:
     return out
 
 
-def _extract_flags(lines: List[str], keys: List[str]) -> Dict[str, str]:
-    parsed: Dict[str, str] = {}
+def _extract_flags(lines: list[str], keys: list[str]) -> dict[str, str]:
+    parsed: dict[str, str] = {}
     key_set = set(keys)
     for line in lines:
         m = _ENV_LINE_RE.match(line.strip())
@@ -72,7 +71,7 @@ def _extract_flags(lines: List[str], keys: List[str]) -> Dict[str, str]:
     return parsed
 
 
-def _rollback_commands(env_file: Path) -> List[str]:
+def _rollback_commands(env_file: Path) -> list[str]:
     env_rel = str(env_file).replace("\\", "/")
     return [
         f"python scripts/ops/data_plane_rollback_drill.py --env-file {env_rel} --apply --from-mode db_primary --to-mode csv_compat",
@@ -88,7 +87,7 @@ def run_drill(
     apply: bool,
     max_rto_sec: float,
     rpo_lost_commands: float,
-) -> Dict[str, object]:
+) -> dict[str, object]:
     from_flags = _MODE_FLAGS.get(str(from_mode).strip().lower())
     to_flags = _MODE_FLAGS.get(str(to_mode).strip().lower())
     if not from_flags or not to_flags:
@@ -107,7 +106,7 @@ def run_drill(
     duration_sec = max(0.0, time.time() - start)
     env_backup = ""
     if apply:
-        stamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
+        stamp = datetime.now(UTC).strftime("%Y%m%dT%H%M%SZ")
         report_dir.mkdir(parents=True, exist_ok=True)
         if env_file.exists():
             backup_path = report_dir / f"data_plane_mode_backup_{stamp}.env"

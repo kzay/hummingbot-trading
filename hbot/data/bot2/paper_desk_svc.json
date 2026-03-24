@@ -1,0 +1,30 @@
+{
+  "portfolio": {
+    "balances": {
+      "USDT": "500.0"
+    },
+    "positions": {},
+    "peak_equity": "0",
+    "daily_open_equity": null,
+    "daily_open_day_key": null,
+    "leverage_by_key": {},
+    "position_margin_reserved": {}
+  },
+  "funding_timestamps": {},
+  "order_counter": 0,
+  "risk_counters": {
+    "margin_call_events_total": 0,
+    "liquidation_events_total": 0,
+    "liquidation_actions_total": 0,
+    "last_margin_level": "safe"
+  },
+  "execution_quality": {
+    "fill_count": 0,
+    "maker_fill_count": 0,
+    "maker_fill_pct": "0.0",
+    "avg_slippage_bps": "0.00",
+    "avg_mid_slippage_bps": "0.00",
+    "expired_count": 0
+  },
+  "ts_utc": "2026-03-23T16:54:19.467098+00:00"
+}

@@ -6,9 +6,8 @@ ATR volatility band, and adverse drift, with regime-hold anti-flap logic.
 from __future__ import annotations
 
 from decimal import Decimal
-from typing import Dict, Optional, Tuple
 
-from controllers.runtime.market_making_types import RegimeSpec
+from controllers.runtime.runtime_types import RegimeSpec
 
 _ZERO = Decimal("0")
 _ONE = Decimal("1")
@@ -24,7 +23,7 @@ class RegimeDetector:
 
     def __init__(
         self,
-        specs: Dict[str, RegimeSpec],
+        specs: dict[str, RegimeSpec],
         high_vol_band_pct: Decimal,
         shock_drift_30s_pct: Decimal,
         shock_drift_atr_multiplier: Decimal = Decimal("1.25"),
@@ -42,7 +41,7 @@ class RegimeDetector:
         self._pending_regime: str = "neutral_low_vol"
         self._regime_hold_counter: int = 0
         self._regime_source: str = "price_buffer"
-        self._changed_one_sided: Optional[str] = None
+        self._changed_one_sided: str | None = None
 
     @property
     def active_regime(self) -> str:
@@ -53,18 +52,18 @@ class RegimeDetector:
         return self._regime_source
 
     @property
-    def changed_one_sided(self) -> Optional[str]:
+    def changed_one_sided(self) -> str | None:
         """Old one_sided value when a regime transition changed it; ``None`` otherwise."""
         return self._changed_one_sided
 
     def detect(
         self,
         mid: Decimal,
-        ema_val: Optional[Decimal],
+        ema_val: Decimal | None,
         band_pct: Decimal,
         drift: Decimal,
         regime_source_tag: str = "price_buffer",
-    ) -> Tuple[str, RegimeSpec]:
+    ) -> tuple[str, RegimeSpec]:
         """Classify market regime and apply hold-counter anti-flap.
 
         Returns ``(regime_name, regime_spec)``.

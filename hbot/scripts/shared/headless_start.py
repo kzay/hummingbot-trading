@@ -2,8 +2,8 @@
 """Headless startup wrapper that patches wait_for_gateway_ready to handle
 paper-trade connectors whose settings return None from AllConnectorSettings."""
 import importlib.util
-import sys
 import os
+import sys
 
 # Load hummingbot_quickstart as a module from file path
 spec = importlib.util.spec_from_file_location(

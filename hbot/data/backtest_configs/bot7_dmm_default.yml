@@ -1,0 +1,46 @@
+strategy_class: ""
+strategy_config:
+  adapter_mode: "directional_mm"
+  ema_fast: 12
+  ema_slow: 34
+  atr_period: 14
+  base_spread: "0.0020"
+  max_spread: "0.0060"
+  trend_skew: "0.50"
+  base_size_pct: "0.03"
+  trend_size_mult: "1.5"
+  contra_size_mult: "0.5"
+  max_inventory_pct: "0.30"
+  inventory_skew_factor: "2.0"
+  levels: 2
+  level_spacing: "0.50"
+  max_daily_loss_pct: "0.03"
+  max_drawdown_pct: "0.05"
+  vol_spread_mult: "1.5"
+  min_warmup_bars: 40
+
+data_source:
+  exchange: bitget
+  pair: BTC-USDT
+  resolution: 1m
+  instrument_type: perp
+  start_date: "2025-01-01"
+  end_date: "2025-01-31"
+  catalog_dir: data/historical
+
+initial_equity: 500
+fill_model: latency_aware
+seed: 42
+leverage: 1
+step_interval_s: 60
+warmup_bars: 60
+
+synthesis:
+  base_spread_bps: "5.0"
+  vol_spread_mult: "1.0"
+  depth_levels: 10
+  depth_decay: "0.70"
+  base_depth_size: "0.5"
+  steps_per_bar: 4
+
+output_dir: reports/backtest

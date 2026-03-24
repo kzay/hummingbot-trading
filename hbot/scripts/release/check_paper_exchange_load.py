@@ -4,17 +4,17 @@ from __future__ import annotations
 import argparse
 import json
 import os
-import time
-from datetime import datetime, timezone
+from collections.abc import Iterable
+from datetime import UTC, datetime
 from pathlib import Path
-from typing import Any, Dict, Iterable, List, Optional, Tuple
+from typing import Any
 
 try:
     import redis  # type: ignore
 except Exception:  # pragma: no cover
     redis = None
 
-from services.contracts.stream_names import (
+from platform_lib.contracts.stream_names import (
     PAPER_EXCHANGE_COMMAND_STREAM,
     PAPER_EXCHANGE_EVENT_STREAM,
     PAPER_EXCHANGE_HEARTBEAT_STREAM,
@@ -26,7 +26,7 @@ MISSING_RESTART_SENTINEL_COUNT = 999
 
 
 def _utc_now() -> str:
-    return datetime.now(timezone.utc).isoformat()
+    return datetime.now(UTC).isoformat()
 
 
 def _safe_int(value: object, default: int = 0) -> int:
@@ -47,7 +47,7 @@ def _safe_float(value: object, default: float = 0.0) -> float:
         return default
 
 
-def _parse_ts(value: str) -> Optional[datetime]:
+def _parse_ts(value: str) -> datetime | None:
     text = str(value or "").strip()
     if not text:
         return None
@@ -59,7 +59,7 @@ def _parse_ts(value: str) -> Optional[datetime]:
         return None
 
 
-def _decode_stream_payload(data: Dict[str, object]) -> Dict[str, object]:
+def _decode_stream_payload(data: dict[str, object]) -> dict[str, object]:
     payload = data.get("payload")
     if isinstance(payload, dict):
         return payload
@@ -81,15 +81,15 @@ def _stream_id_ms(stream_id: object) -> int:
     return _safe_int(text.split("-", 1)[0], 0)
 
 
-def _percentile(sorted_vals: List[float], p: float) -> float:
+def _percentile(sorted_vals: list[float], p: float) -> float:
     if not sorted_vals:
         return 0.0
     idx = int(max(0, min(len(sorted_vals) - 1, (len(sorted_vals) - 1) * p)))
     return float(sorted_vals[idx])
 
 
-def _parse_xinfo_groups(raw: object) -> Dict[str, Dict[str, int]]:
-    out: Dict[str, Dict[str, int]] = {}
+def _parse_xinfo_groups(raw: object) -> dict[str, dict[str, int]]:
+    out: dict[str, dict[str, int]] = {}
     if not isinstance(raw, list):
         return out
     for item in raw:
@@ -118,13 +118,13 @@ def _parse_xinfo_groups(raw: object) -> Dict[str, Dict[str, int]]:
 
 
 def _extract_command_timestamps(
-    rows: Iterable[Tuple[object, Dict[str, object]]],
+    rows: Iterable[tuple[object, dict[str, object]]],
     *,
     cutoff_ms: int,
     load_run_id: str = "",
-) -> Tuple[Dict[str, int], Dict[str, int]]:
-    out: Dict[str, int] = {}
-    counts_by_instance: Dict[str, int] = {}
+) -> tuple[dict[str, int], dict[str, int]]:
+    out: dict[str, int] = {}
+    counts_by_instance: dict[str, int] = {}
     run_id_filter = str(load_run_id or "").strip()
     for stream_id, data in rows:
         payload = _decode_stream_payload(data if isinstance(data, dict) else {})
@@ -149,11 +149,11 @@ def _extract_command_timestamps(
 
 
 def _extract_result_timestamps(
-    rows: Iterable[Tuple[object, Dict[str, object]]],
+    rows: Iterable[tuple[object, dict[str, object]]],
     *,
     cutoff_ms: int,
-) -> Dict[str, int]:
-    out: Dict[str, int] = {}
+) -> dict[str, int]:
+    out: dict[str, int] = {}
     for stream_id, data in rows:
         payload = _decode_stream_payload(data if isinstance(data, dict) else {})
         if str(payload.get("event_type", "")).strip() not in {"paper_exchange_event", ""}:
@@ -170,15 +170,15 @@ def _extract_result_timestamps(
 
 
 def _extract_heartbeat_processed_counters(
-    rows: Iterable[Tuple[object, Dict[str, object]]],
+    rows: Iterable[tuple[object, dict[str, object]]],
     *,
     cutoff_ms: int,
-    window_start_ms: Optional[int] = None,
-    window_end_ms: Optional[int] = None,
+    window_start_ms: int | None = None,
+    window_end_ms: int | None = None,
     consumer_group_filter: str = "",
     consumer_name_filter: str = "",
-) -> List[Tuple[int, int]]:
-    out: List[Tuple[int, int]] = []
+) -> list[tuple[int, int]]:
+    out: list[tuple[int, int]] = []
     for stream_id, data in rows:
         payload = _decode_stream_payload(data if isinstance(data, dict) else {})
         if str(payload.get("event_type", "")).strip() not in {"paper_exchange_heartbeat", ""}:
@@ -211,8 +211,8 @@ def _extract_heartbeat_processed_counters(
 def build_report(
     root: Path,
     *,
-    now_ts: Optional[float] = None,
-    redis_client: Optional[Any] = None,
+    now_ts: float | None = None,
+    redis_client: Any | None = None,
     command_stream: str = PAPER_EXCHANGE_COMMAND_STREAM,
     event_stream: str = PAPER_EXCHANGE_EVENT_STREAM,
     heartbeat_stream: str = PAPER_EXCHANGE_HEARTBEAT_STREAM,
@@ -232,17 +232,17 @@ def build_report(
     max_backlog_growth_pct_per_10min: float = 1.0,
     max_restart_count: float = 0.0,
     load_run_id: str = "",
-) -> Dict[str, object]:
-    now_ts = float(now_ts if now_ts is not None else datetime.now(timezone.utc).timestamp())
+) -> dict[str, object]:
+    now_ts = float(now_ts if now_ts is not None else datetime.now(UTC).timestamp())
     now_ms = int(now_ts * 1000)
     cutoff_ms = now_ms - max(1, int(lookback_sec)) * 1000
 
     redis_ok = redis_client is not None
     redis_error = ""
-    command_rows: List[Tuple[object, Dict[str, object]]] = []
-    result_rows: List[Tuple[object, Dict[str, object]]] = []
-    heartbeat_rows: List[Tuple[object, Dict[str, object]]] = []
-    group_stats: Dict[str, Dict[str, int]] = {}
+    command_rows: list[tuple[object, dict[str, object]]] = []
+    result_rows: list[tuple[object, dict[str, object]]] = []
+    heartbeat_rows: list[tuple[object, dict[str, object]]] = []
+    group_stats: dict[str, dict[str, int]] = {}
     if redis_client is not None:
         try:
             command_rows = redis_client.xrevrange(command_stream, "+", "-", count=max(1, int(sample_count)))
@@ -271,8 +271,8 @@ def build_report(
         ]
     )
 
-    command_window_start_ms: Optional[int] = None
-    command_window_end_ms: Optional[int] = None
+    command_window_start_ms: int | None = None
+    command_window_end_ms: int | None = None
     if command_ts_by_id:
         command_ts_vals = sorted(command_ts_by_id.values())
         window_sec = max(1.0, (float(command_ts_vals[-1]) - float(command_ts_vals[0])) / 1000.0)
@@ -349,12 +349,12 @@ def build_report(
         "consumer_group_present": str(consumer_group or "").strip() in group_stats,
         "minimum_instance_coverage": int(instance_coverage_count) >= int(max(1, min_instance_coverage)),
         "minimum_command_samples": int(command_count) >= int(max(1, min_latency_samples)),
-        "minimum_latency_samples": int(len(latency_ms_values)) >= int(max(1, min_latency_samples)),
+        "minimum_latency_samples": len(latency_ms_values) >= int(max(1, min_latency_samples)),
         "minimum_window_seconds": (float(window_sec) + 1.0) >= float(max(1, min_window_sec)),
         "minimum_sustained_window_seconds": bool(sustained_window_qualified),
         "heartbeat_samples_present": len(heartbeat_samples) > 0,
     }
-    budget_checks: Dict[str, bool] = {}
+    budget_checks: dict[str, bool] = {}
     if bool(enforce_budget_checks):
         budget_checks = {
             "throughput_within_budget": float(throughput_cmds_per_sec) >= float(min_throughput_cmds_per_sec),
@@ -403,8 +403,8 @@ def build_report(
             "processed_count": int(processed_count_effective),
             "processed_count_from_result_matches": int(processed_count_from_results),
             "processed_count_effective": int(processed_count_effective),
-            "matched_latency_samples": int(len(latency_ms_values)),
-            "heartbeat_sample_count": int(len(heartbeat_samples)),
+            "matched_latency_samples": len(latency_ms_values),
+            "heartbeat_sample_count": len(heartbeat_samples),
             "heartbeat_window_start_ms": int(heartbeat_window_start_ms or 0),
             "heartbeat_window_end_ms": int(heartbeat_window_end_ms or 0),
             "consumer_group_lag": _safe_int(current_group.get("lag"), -1),
@@ -454,7 +454,7 @@ def run_check(
 ) -> int:
     root = Path("/workspace/hbot") if Path("/.dockerenv").exists() else Path(__file__).resolve().parents[2]
 
-    redis_client: Optional[Any] = None
+    redis_client: Any | None = None
     redis_error = ""
     if redis is None:
         redis_error = "redis_python_module_missing"
@@ -507,7 +507,7 @@ def run_check(
 
     out_dir = root / "reports" / "verification"
     out_dir.mkdir(parents=True, exist_ok=True)
-    stamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
+    stamp = datetime.now(UTC).strftime("%Y%m%dT%H%M%SZ")
     out_path = out_dir / f"paper_exchange_load_{stamp}.json"
     latest_path = out_dir / "paper_exchange_load_latest.json"
     out_path.write_text(json.dumps(report, indent=2), encoding="utf-8")

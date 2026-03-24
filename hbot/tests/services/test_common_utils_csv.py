@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from services.common.utils import read_last_csv_row
+from platform_lib.core.utils import read_last_csv_row
 
 
 def test_read_last_csv_row_handles_quoted_commas_in_large_csv_tail(tmp_path) -> None:

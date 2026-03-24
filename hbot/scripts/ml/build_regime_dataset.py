@@ -7,8 +7,8 @@ Requirements:
     pip install pandas pyarrow
 
 Usage:
-    python hbot/scripts/ml/build_regime_dataset.py
-    python hbot/scripts/ml/build_regime_dataset.py --root hbot/data/bot1/logs/epp_v24/bot1_a --output hbot/data/ml
+    PYTHONPATH=hbot python -m scripts.ml.build_regime_dataset
+    PYTHONPATH=hbot python -m scripts.ml.build_regime_dataset --root data/bot1/logs/epp_v24/bot1_a --output data/ml
 
 Gate: Run after collecting >= 10,000 minute.csv rows (~7 days of 1-minute bars).
 """
@@ -17,9 +17,8 @@ from __future__ import annotations
 import argparse
 import csv
 import sys
-from datetime import datetime, timezone
+from datetime import datetime
 from pathlib import Path
-from typing import Dict, List, Optional
 
 REGIME_LABELS = ["neutral_low_vol", "neutral_high_vol", "up", "down", "high_vol_shock"]
 REGIME_TO_INT = {r: i for i, r in enumerate(REGIME_LABELS)}
@@ -51,7 +50,7 @@ def _safe_float(x, default: float = 0.0) -> float:
         return default
 
 
-def _parse_ts(s: str) -> Optional[datetime]:
+def _parse_ts(s: str) -> datetime | None:
     s = (s or "").strip()
     if not s:
         return None
@@ -63,7 +62,7 @@ def _parse_ts(s: str) -> Optional[datetime]:
         return None
 
 
-def load_minute_csv(path: Path) -> List[Dict]:
+def load_minute_csv(path: Path) -> list[dict]:
     rows = []
     if not path.exists():
         print(f"ERROR: minute.csv not found at {path}", file=sys.stderr)
@@ -79,8 +78,8 @@ def load_minute_csv(path: Path) -> List[Dict]:
     return rows
 
 
-def build_features_from_row(row: Dict) -> Dict[str, float]:
-    feats: Dict[str, float] = {}
+def build_features_from_row(row: dict) -> dict[str, float]:
+    feats: dict[str, float] = {}
     for col in FEATURE_COLUMNS:
         feats[col] = _safe_float(row.get(col, 0))
 
@@ -101,10 +100,10 @@ def build_features_from_row(row: Dict) -> Dict[str, float]:
     return feats
 
 
-def add_lag_features(rows: List[Dict], feature_rows: List[Dict[str, float]]) -> List[Dict[str, float]]:
+def add_lag_features(rows: list[dict], feature_rows: list[dict[str, float]]) -> list[dict[str, float]]:
     """Add lag features for mid price returns at t-1, t-2, t-5."""
     n = len(feature_rows)
-    result: List[Dict[str, float]] = []
+    result: list[dict[str, float]] = []
     for i in range(n):
         row = dict(feature_rows[i])
         mid_now = row.get("mid", 0)
@@ -164,8 +163,8 @@ def build_dataset(minute_path: Path, output_dir: Path) -> Path:
 
 if __name__ == "__main__":
     ap = argparse.ArgumentParser(description="Build ML regime classification dataset from minute.csv")
-    ap.add_argument("--root", default="hbot/data/bot1/logs/epp_v24/bot1_a")
-    ap.add_argument("--output", default="hbot/data/ml")
+    ap.add_argument("--root", default="data/bot1/logs/epp_v24/bot1_a")
+    ap.add_argument("--output", default="data/ml")
     args = ap.parse_args()
 
     minute_path = Path(args.root) / "minute.csv"

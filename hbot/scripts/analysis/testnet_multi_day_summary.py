@@ -4,13 +4,12 @@ from __future__ import annotations
 import argparse
 import json
 import math
-from datetime import date, datetime, timezone
+from datetime import UTC, date, datetime
 from pathlib import Path
-from typing import Dict, List, Optional
 
 
 def _utc_now() -> str:
-    return datetime.now(timezone.utc).isoformat()
+    return datetime.now(UTC).isoformat()
 
 
 def _repo_root() -> Path:
@@ -33,7 +32,7 @@ def _safe_int(value: object, default: int = 0) -> int:
         return default
 
 
-def _extract_day_from_filename(path: Path) -> Optional[str]:
+def _extract_day_from_filename(path: Path) -> str | None:
     stem = path.stem
     prefix = "testnet_daily_scorecard_"
     if not stem.startswith(prefix):
@@ -44,7 +43,7 @@ def _extract_day_from_filename(path: Path) -> Optional[str]:
     return f"{suffix[0:4]}-{suffix[4:6]}-{suffix[6:8]}"
 
 
-def _read_json(path: Path) -> Dict[str, object]:
+def _read_json(path: Path) -> dict[str, object]:
     try:
         payload = json.loads(path.read_text(encoding="utf-8"))
         return payload if isinstance(payload, dict) else {}
@@ -52,7 +51,7 @@ def _read_json(path: Path) -> Dict[str, object]:
         return {}
 
 
-def _annualized_sharpe(daily_pnl: List[float]) -> float:
+def _annualized_sharpe(daily_pnl: list[float]) -> float:
     if len(daily_pnl) < 2:
         return 0.0
     n = len(daily_pnl)
@@ -71,14 +70,14 @@ def build_summary(
     reports_root: Path,
     start: str = "",
     end: str = "",
-) -> Dict[str, object]:
+) -> dict[str, object]:
     strategy_root = reports_root / "strategy"
     scorecard_paths = sorted(strategy_root.glob("testnet_daily_scorecard_*.json"))
     d0 = date.fromisoformat(start) if str(start).strip() else None
     d1 = date.fromisoformat(end) if str(end).strip() else None
 
-    rows: List[Dict[str, object]] = []
-    warnings: List[str] = []
+    rows: list[dict[str, object]] = []
+    warnings: list[str] = []
     for path in scorecard_paths:
         day_str = _extract_day_from_filename(path)
         if day_str is None:
@@ -240,7 +239,7 @@ def main() -> int:
     )
     out_dir = reports_root / "strategy"
     out_dir.mkdir(parents=True, exist_ok=True)
-    stamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
+    stamp = datetime.now(UTC).strftime("%Y%m%dT%H%M%SZ")
     out_ts = out_dir / f"testnet_multi_day_summary_{stamp}.json"
     out_latest = out_dir / "testnet_multi_day_summary_latest.json"
     raw = json.dumps(payload, indent=2)

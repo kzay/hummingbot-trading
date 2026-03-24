@@ -1,0 +1,55 @@
+name: Architecture Contract Tests
+
+on:
+  workflow_dispatch:
+  push:
+    paths:
+      - "hbot/controllers/**"
+      - "hbot/services/**"
+      - "hbot/simulation/**"
+      - "hbot/platform_lib/**"
+      - "hbot/tests/architecture/**"
+      - ".github/workflows/architecture_contracts.yml"
+  pull_request:
+    paths:
+      - "hbot/controllers/**"
+      - "hbot/services/**"
+      - "hbot/simulation/**"
+      - "hbot/platform_lib/**"
+      - "hbot/tests/architecture/**"
+      - ".github/workflows/architecture_contracts.yml"
+
+jobs:
+  architecture-contracts:
+    runs-on: [self-hosted]
+    defaults:
+      run:
+        shell: pwsh
+        working-directory: hbot
+    env:
+      PYTHONPATH: ${{ github.workspace }}/hbot
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install pytest
+
+      - name: Import boundary tests
+        run: python -m pytest tests/architecture/test_import_boundaries.py -v
+
+      - name: Coverage minimum tests
+        run: python -m pytest tests/architecture/test_coverage_minimums.py -v
+
+      - name: Strategy isolation contracts
+        run: python -m pytest tests/controllers/test_strategy_isolation_contract.py -v
+
+      - name: Market-making shim contracts
+        run: python -m pytest tests/controllers/test_market_making_shim_contract.py -v

@@ -33,7 +33,7 @@ class LatencyModel:
         return self.total_insert_ns > 0 or self.total_cancel_ns > 0
 
     @classmethod
-    def from_ms(cls, base_ms: int = 0, insert_ms: int = 0, cancel_ms: int = 0) -> "LatencyModel":
+    def from_ms(cls, base_ms: int = 0, insert_ms: int = 0, cancel_ms: int = 0) -> LatencyModel:
         return cls(
             base_latency_ns=base_ms * 1_000_000,
             insert_latency_ns=insert_ms * 1_000_000,

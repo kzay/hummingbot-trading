@@ -8,19 +8,21 @@ Validates that reserves never leak regardless of:
 
 Invariant checked throughout: sum of active reserves ≤ total balance.
 """
-from decimal import Decimal
 import time
+from decimal import Decimal
 
-import pytest
-
-from controllers.paper_engine_v2.fee_models import MakerTakerFeeModel
-from controllers.paper_engine_v2.fill_models import TopOfBookFillModel, QueuePositionFillModel
-from controllers.paper_engine_v2.latency_model import NO_LATENCY
-from controllers.paper_engine_v2.matching_engine import EngineConfig, OrderMatchingEngine
-from controllers.paper_engine_v2.portfolio import MultiAssetLedger, PaperPortfolio, PortfolioConfig
-from controllers.paper_engine_v2.types import OrderSide, _ZERO
+from simulation.fee_models import MakerTakerFeeModel
+from simulation.fill_models import QueuePositionFillModel, TopOfBookFillModel
+from simulation.latency_model import NO_LATENCY
+from simulation.matching_engine import EngineConfig, OrderMatchingEngine
+from simulation.portfolio import MultiAssetLedger, PaperPortfolio, PortfolioConfig
+from simulation.types import _ZERO
 from tests.controllers.test_paper_engine_v2.conftest import (
-    BTC_SPOT, BTC_PERP, ETH_SPOT, make_book, make_order, make_spec,
+    BTC_SPOT,
+    ETH_SPOT,
+    make_book,
+    make_order,
+    make_spec,
 )
 
 _USDT_START = Decimal("10000")
@@ -64,7 +66,7 @@ class TestReserveNoLeak:
         engine.update_book(make_book())
         now = int(time.time() * 1e9)
         order = make_order("buy", "limit_maker", "99.95", "1.0")
-        from controllers.paper_engine_v2.types import OrderAccepted
+        from simulation.types import OrderAccepted
         event = engine.submit_order(order, now)
         # Check order was accepted (not rejected)
         assert isinstance(event, OrderAccepted), f"Expected OrderAccepted, got {event}"
@@ -76,7 +78,7 @@ class TestReserveNoLeak:
         assert portfolio.available("USDT") == _USDT_START  # fully released
 
     def test_repeated_submit_cancel_no_cumulative_leak(self):
-        from controllers.paper_engine_v2.types import OrderStatus
+        from simulation.types import OrderStatus
         engine, portfolio = _make_engine()
         engine.update_book(make_book())
         for i in range(10):
@@ -92,7 +94,7 @@ class TestReserveNoLeak:
 
     def test_fill_and_cancel_remaining_no_leak(self):
         """Partially fill then cancel — reserve should reflect remaining only."""
-        from controllers.paper_engine_v2.fill_models import QueuePositionFillModel, QueuePositionConfig
+        from simulation.fill_models import QueuePositionConfig
         cfg = QueuePositionConfig(
             queue_participation=Decimal("0.5"),
             min_partial_fill_ratio=Decimal("0.5"),

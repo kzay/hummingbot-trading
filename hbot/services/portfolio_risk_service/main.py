@@ -5,11 +5,26 @@ import json
 import os
 import time
 import uuid
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
-from typing import Dict, List, Optional
 
-from services.contracts.stream_names import (
+from platform_lib.core.event_store_reader import load_bot_snapshot_windows
+from platform_lib.core.utils import (
+    now_ms as _now_ms,
+)
+from platform_lib.core.utils import (
+    safe_bool as _safe_bool,
+)
+from platform_lib.core.utils import (
+    safe_float as _safe_float,
+)
+from platform_lib.core.utils import (
+    today_utc as _today,
+)
+from platform_lib.core.utils import (
+    utc_now as _utc_now,
+)
+from platform_lib.contracts.stream_names import (
     AUDIT_STREAM,
     BOT_TELEMETRY_STREAM,
     EXECUTION_INTENT_STREAM,
@@ -19,17 +34,7 @@ from services.contracts.stream_names import (
 from services.hb_bridge.redis_client import RedisStreamClient
 
 
-from services.common.utils import (
-    now_ms as _now_ms,
-    safe_bool as _safe_bool,
-    safe_float as _safe_float,
-    today_utc as _today,
-    utc_now as _utc_now,
-)
-from services.common.event_store_reader import load_bot_snapshot_windows
-
-
-def _read_json(path: Path, default: Dict[str, object]) -> Dict[str, object]:
+def _read_json(path: Path, default: dict[str, object]) -> dict[str, object]:
     if not path.exists():
         return default
     try:
@@ -39,13 +44,13 @@ def _read_json(path: Path, default: Dict[str, object]) -> Dict[str, object]:
         return default
 
 
-def _append_jsonl(path: Path, payload: Dict[str, object]) -> None:
+def _append_jsonl(path: Path, payload: dict[str, object]) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     with path.open("a", encoding="utf-8") as f:
         f.write(json.dumps(payload) + "\n")
 
 
-def _load_limits(path: Path) -> Dict[str, object]:
+def _load_limits(path: Path) -> dict[str, object]:
     default = {
         "version": 1,
         "global_daily_loss_cap_pct": 0.03,
@@ -62,7 +67,7 @@ def _load_limits(path: Path) -> Dict[str, object]:
     return merged
 
 
-def _severity_and_action(value: float, cap: float, warn_buffer_ratio: float, hard_action: str) -> Dict[str, object]:
+def _severity_and_action(value: float, cap: float, warn_buffer_ratio: float, hard_action: str) -> dict[str, object]:
     warn_level = cap * warn_buffer_ratio
     if value >= cap:
         return {"severity": "critical", "action": hard_action, "warn_level": warn_level}
@@ -71,7 +76,7 @@ def _severity_and_action(value: float, cap: float, warn_buffer_ratio: float, har
     return {"severity": "ok", "action": "allow", "warn_level": warn_level}
 
 
-def _build_intent_payload(bot: str, action: str, reason: str, details: Dict[str, object]) -> Dict[str, object]:
+def _build_intent_payload(bot: str, action: str, reason: str, details: dict[str, object]) -> dict[str, object]:
     event_id = str(uuid.uuid4())
     now_ms = _now_ms()
     event = {
@@ -96,9 +101,9 @@ def _build_audit_payload(
     category: str,
     message: str,
     bot: str,
-    details: Dict[str, object],
-    correlation_id: Optional[str] = None,
-) -> Dict[str, object]:
+    details: dict[str, object],
+    correlation_id: str | None = None,
+) -> dict[str, object]:
     event_id = str(uuid.uuid4())
     event = {
         "schema_version": "1.0",
@@ -122,9 +127,9 @@ def _build_portfolio_snapshot_payload(
     status: str,
     critical_count: int,
     warning_count: int,
-    risk_scope_bots: List[str],
-    metrics: Dict[str, object],
-) -> Dict[str, object]:
+    risk_scope_bots: list[str],
+    metrics: dict[str, object],
+) -> dict[str, object]:
     event_id = str(uuid.uuid4())
     return {
         "schema_version": "1.0",
@@ -177,7 +182,7 @@ def run(once: bool = False, synthetic_breach: bool = False) -> None:
         bot_overrides = limits.get("bot_overrides", {})
         bot_overrides = bot_overrides if isinstance(bot_overrides, dict) else {}
 
-        bots: Dict[str, Dict[str, object]] = {}
+        bots: dict[str, dict[str, object]] = {}
         snapshot_windows = load_bot_snapshot_windows(event_store_root, max_snapshots_per_bot=1)
         for bot, snapshots in snapshot_windows.items():
             row = snapshots[0] if snapshots else {}
@@ -219,6 +224,15 @@ def run(once: bool = False, synthetic_breach: bool = False) -> None:
             ) / total_equity
 
         net_exposure_quote = abs(sum(float(v["directional_exposure_quote"]) for v in scoped_bots.values()))
+        gross_exposure_quote = sum(float(v["base_exposure_abs_quote"]) for v in scoped_bots.values())
+
+        stress_drop_pct = _safe_float(limits.get("stress_scenario_drop_pct"), 0.05)
+        stress_max_loss_pct = _safe_float(limits.get("stress_max_portfolio_loss_pct"), 0.10)
+        stress_loss_quote = sum(
+            float(v["directional_exposure_quote"]) * stress_drop_pct for v in scoped_bots.values()
+        )
+        stress_loss_pct = abs(stress_loss_quote) / total_equity if total_equity > 0 else 0.0
+
         concentration_min_equity = _safe_float(limits.get("concentration_min_equity_quote"), 100.0)
         concentration_candidates = {
             bot: payload
@@ -239,8 +253,8 @@ def run(once: bool = False, synthetic_breach: bool = False) -> None:
             )
             max_equity_share = max(max_equity_share, _safe_float(limits.get("concentration_cap_pct"), 0.70) + 0.10)
 
-        findings: List[Dict[str, object]] = []
-        actions: List[Dict[str, object]] = []
+        findings: list[dict[str, object]] = []
+        actions: list[dict[str, object]] = []
 
         daily_cfg = _severity_and_action(
             value=weighted_daily_loss,
@@ -283,6 +297,55 @@ def run(once: bool = False, synthetic_breach: bool = False) -> None:
                     },
                 }
             )
+
+        gross_exposure_cap = _safe_float(limits.get("cross_bot_gross_exposure_cap_quote"), 50000.0)
+        if gross_exposure_cap >= 0:
+            gross_cfg = _severity_and_action(
+                value=gross_exposure_quote,
+                cap=gross_exposure_cap,
+                warn_buffer_ratio=warn_buffer_ratio,
+                hard_action="kill_switch",
+            )
+            if gross_cfg["severity"] != "ok":
+                findings.append(
+                    {
+                        "severity": gross_cfg["severity"],
+                        "check": "cross_bot_gross_exposure_cap",
+                        "message": "cross_bot_gross_exposure_breach"
+                        if gross_cfg["severity"] == "critical"
+                        else "cross_bot_gross_exposure_warning",
+                        "details": {
+                            "gross_exposure_quote": gross_exposure_quote,
+                            "cap_quote": gross_exposure_cap,
+                            "warn_level_quote": gross_cfg["warn_level"],
+                        },
+                    }
+                )
+
+        if stress_max_loss_pct > 0:
+            stress_cfg = _severity_and_action(
+                value=stress_loss_pct,
+                cap=stress_max_loss_pct,
+                warn_buffer_ratio=warn_buffer_ratio,
+                hard_action="soft_pause",
+            )
+            if stress_cfg["severity"] != "ok":
+                findings.append(
+                    {
+                        "severity": stress_cfg["severity"],
+                        "check": "stress_scenario",
+                        "message": f"stress_{stress_drop_pct:.0%}_drop_breach"
+                        if stress_cfg["severity"] == "critical"
+                        else f"stress_{stress_drop_pct:.0%}_drop_warning",
+                        "details": {
+                            "scenario": f"BTC drops {stress_drop_pct:.0%}",
+                            "estimated_loss_quote": abs(stress_loss_quote),
+                            "estimated_loss_pct": stress_loss_pct,
+                            "cap_pct": stress_max_loss_pct,
+                            "warn_level_pct": stress_cfg["warn_level"],
+                        },
+                    }
+                )
 
         if len(concentration_candidates) >= 2:
             concentration_cfg = _severity_and_action(
@@ -377,6 +440,10 @@ def run(once: bool = False, synthetic_breach: bool = False) -> None:
             "metrics": {
                 "portfolio_daily_loss_pct": weighted_daily_loss,
                 "abs_net_exposure_quote": net_exposure_quote,
+                "gross_exposure_quote": gross_exposure_quote,
+                "stress_scenario_loss_pct": stress_loss_pct,
+                "stress_scenario_loss_quote": abs(stress_loss_quote),
+                "stress_scenario_drop_pct": stress_drop_pct,
                 "max_equity_share_pct": max_equity_share,
                 "total_equity_quote": total_equity,
                 "concentration_candidate_bot_count": len(concentration_candidates),
@@ -388,7 +455,7 @@ def run(once: bool = False, synthetic_breach: bool = False) -> None:
             "actions": [{"bot": a["bot"], "action": a["action"], "event_id": a["event"].get("event_id")} for a in actions],
         }
 
-        stamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
+        stamp = datetime.now(UTC).strftime("%Y%m%dT%H%M%SZ")
         report_path = reports_root / f"portfolio_risk_{stamp}.json"
         report_path.write_text(json.dumps(report, indent=2), encoding="utf-8")
         (reports_root / "latest.json").write_text(json.dumps(report, indent=2), encoding="utf-8")

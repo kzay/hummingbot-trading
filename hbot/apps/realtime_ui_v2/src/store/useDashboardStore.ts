@@ -21,14 +21,26 @@ import type {
   WsInboundMessage,
   WsSnapshotMessage,
 } from "../types/realtime";
-import { readLocalStorage, readSessionStorage, writeLocalStorage, writeSessionStorage } from "../utils/browserStorage";
+import type { InstanceStatusRow } from "../utils/realtimeParsers";
+import {
+  alignLoopbackApiBaseWithPageHost,
+  readLocalStorage,
+  readSessionStorage,
+  writeLocalStorage,
+  writeSessionStorage,
+} from "../utils/browserStorage";
+import {
+  MAX_EVENT_LINES,
+  MAX_PAYLOAD_RECORDS,
+  MAX_FILLS,
+  MAX_CANDLES,
+  RUNTIME_EVENT_RETENTION_MS,
+  MAX_RUNTIME_EVENTS,
+  getDefaultApiBase,
+} from "../constants";
 
-const MAX_EVENT_LINES = 100;
-const MAX_PAYLOAD_RECORDS = 20;
-const MAX_FILLS = 220;
-const MAX_CANDLES = 300;
-const RUNTIME_EVENT_RETENTION_MS = 5 * 60 * 1000;
-const MAX_RUNTIME_EVENTS = 600;
+alignLoopbackApiBaseWithPageHost();
+
 const LAST_MESSAGE_UI_UPDATE_MS = 250;
 
 export interface DashboardSettings {
@@ -99,10 +111,12 @@ interface DashboardState {
   eventLines: string[];
   payloads: PayloadRecord[];
   selectedPayloadId: string | null;
-  runtimeEvents: RuntimeEvent[];
   instanceNames: string[];
+  instanceStatuses: InstanceStatusRow[];
+  instanceStatusesError: string;
   updateSettings: (patch: Partial<DashboardSettings>) => void;
   setInstanceNames: (names: string[]) => void;
+  setInstanceStatuses: (rows: InstanceStatusRow[], error?: string) => void;
   setSelectedPayloadId: (id: string | null) => void;
   clearEventFeed: () => void;
   appendEventLine: (line: string) => void;
@@ -118,12 +132,14 @@ interface DashboardState {
   ingestSnapshot: (snapshot: WsSnapshotMessage) => void;
   ingestEventMessage: (message: WsEventMessage) => void;
   ingestRestState: (payload: RestStatePayload, requestedInstanceName?: string) => void;
-  pruneRuntimeEvents: () => void;
   resetLiveData: () => void;
 }
 
 const DEFAULT_SETTINGS: DashboardSettings = {
-  apiBase: readLocalStorage("hbV2ApiBase", "http://localhost:9910") || "http://localhost:9910",
+  apiBase: (() => {
+    const stored = readLocalStorage("hbV2ApiBase", "").trim();
+    return stored || getDefaultApiBase();
+  })(),
   apiToken: readSessionStorage("hbV2ApiToken", ""),
   instanceName: readLocalStorage("hbV2InstanceName", "bot1") || "bot1",
   timeframeS: Number(readLocalStorage("hbV2TimeframeS", "60") || 60) || 60,
@@ -177,8 +193,7 @@ function mergeSummaryWindow(
   }
   const currentRecord = (currentWindow ?? {}) as Record<string, unknown>;
   const incomingRecord = incomingWindow as Record<string, unknown>;
-  const mergedRecord = { ...currentRecord, ...incomingRecord };
-  return shallowEqualRecord(currentRecord, mergedRecord) ? currentWindow : mergedRecord;
+  return shallowEqualRecord(currentRecord, incomingRecord) ? currentWindow : incomingWindow;
 }
 
 function mergeSummaryActivity(current: SummaryActivity, incoming?: SummaryActivity): SummaryActivity {
@@ -444,7 +459,7 @@ function normalizePair(value: unknown): string {
   return String(value ?? "")
     .trim()
     .toUpperCase()
-    .replace(/[\/_\s]+/g, "-");
+    .replace(/[/_\s]+/g, "-");
 }
 
 function resolvedStatePair(state: Pick<DashboardState, "market" | "depth" | "position">): string {
@@ -504,6 +519,13 @@ function normalizeMarket(value: unknown): UiMarket {
   return value as UiMarket;
 }
 
+export function candlePrice(market: UiMarket): number | null {
+  const ltp = toNum(market.last_trade_price);
+  if (ltp !== null && ltp > 0) return ltp;
+  const mid = toNum(market.mid_price);
+  return mid !== null && mid > 0 ? mid : null;
+}
+
 function normalizePosition(value: unknown): UiPosition {
   if (!value || typeof value !== "object") {
     return {};
@@ -543,7 +565,7 @@ function sameDepth(left: UiDepth, right: UiDepth): boolean {
 
 function normalizeFill(fill: unknown): UiFill {
   const raw = fill && typeof fill === "object" ? (fill as Record<string, unknown>) : {};
-  const timestampMs = Number(raw.timestamp_ms ?? raw.ts ?? 0) || 0;
+  const timestampMs = toEpochMs(raw.timestamp_ms) || toEpochMs(raw.ts_utc) || toEpochMs(raw.ts);
   const side = String(raw.side ?? "").toUpperCase();
   const price = Number(raw.price ?? 0) || 0;
   const amountBase = Number(raw.amount_base ?? raw.amount ?? 0) || 0;
@@ -581,16 +603,44 @@ function sameFills(left: UiFill[], right: UiFill[]): boolean {
   return left.length === right.length && left.every((entry, index) => sameFill(entry, right[index]));
 }
 
+function fillKey(fill: UiFill): string {
+  return [fill.order_id ?? "", fill.timestamp_ms ?? "", fill.side ?? "", fill.price ?? "", fill.amount_base ?? ""].join("|");
+}
+
+function fillOrderSideKey(fill: UiFill): string {
+  return fill.order_id ? [fill.order_id, fill.side ?? "", fill.price ?? "", fill.amount_base ?? ""].join("|") : "";
+}
+
+function hasFillMatch(fills: UiFill[], candidate: UiFill): boolean {
+  const normalizedCandidate = normalizeFill(candidate);
+  const candidateKey = fillKey(normalizedCandidate);
+  const candidateOrderSideKey = fillOrderSideKey(normalizedCandidate);
+  return fills.some((entry) => {
+    const normalizedEntry = normalizeFill(entry);
+    return fillKey(normalizedEntry) === candidateKey || (
+      candidateOrderSideKey !== "" && fillOrderSideKey(normalizedEntry) === candidateOrderSideKey
+    );
+  });
+}
+
 function mergeRecentFills(existingFills: UiFill[], incomingFills: UiFill[], maxRows: number): UiFill[] {
   const merged: UiFill[] = [];
   const seen = new Set<string>();
+  const seenByOrderSide = new Set<string>();
   const pushFill = (rawFill: UiFill) => {
     const fill = normalizeFill(rawFill);
-    const key = [fill.order_id ?? "", fill.timestamp_ms ?? "", fill.side ?? "", fill.price ?? "", fill.amount_base ?? ""].join("|");
+    const key = fillKey(fill);
     if (seen.has(key)) {
       return;
     }
+    const orderSideKey = fillOrderSideKey(fill);
+    if (orderSideKey && seenByOrderSide.has(orderSideKey)) {
+      return;
+    }
     seen.add(key);
+    if (orderSideKey) {
+      seenByOrderSide.add(orderSideKey);
+    }
     merged.push(fill);
   };
   existingFills.forEach(pushFill);
@@ -612,19 +662,22 @@ function normalizeCandle(rawCandle: unknown): UiCandle | null {
   if (!Number.isFinite(time) || !Number.isFinite(open) || !Number.isFinite(high) || !Number.isFinite(low) || !Number.isFinite(close)) {
     return null;
   }
+  if (open <= 0 || high <= 0 || low <= 0 || close <= 0) {
+    return null;
+  }
   return { time, open, high, low, close };
 }
 
 function applyCandleData(rawCandles: unknown[], fallbackMid: number | null): UiCandle[] {
   const candles = (rawCandles || []).map((entry) => normalizeCandle(entry)).filter(Boolean) as UiCandle[];
-  if (candles.length === 0 && Number.isFinite(fallbackMid)) {
+  if (candles.length === 0 && fallbackMid !== null && Number.isFinite(fallbackMid) && fallbackMid > 0) {
     const nowSec = Math.floor(Date.now() / 1000);
     candles.push({
       time: nowSec,
-      open: Number(fallbackMid),
-      high: Number(fallbackMid),
-      low: Number(fallbackMid),
-      close: Number(fallbackMid),
+      open: fallbackMid,
+      high: fallbackMid,
+      low: fallbackMid,
+      close: fallbackMid,
     });
   }
   return candles.slice(-MAX_CANDLES);
@@ -644,14 +697,14 @@ function sameCandles(left: UiCandle[], right: UiCandle[]): boolean {
   return left.length === right.length && left.every((entry, index) => sameCandle(entry, right[index] ?? null));
 }
 
-interface CandleStreamState {
+export interface CandleStreamState {
   candles: UiCandle[];
   latestCandle: UiCandle | null;
 }
 
-function pushMidCandle(candles: UiCandle[], latestCandle: UiCandle | null, tsMs: number, mid: number, timeframeS: number): CandleStreamState {
-  const price = Number(mid);
-  if (!Number.isFinite(price)) {
+export function pushCandleTick(candles: UiCandle[], latestCandle: UiCandle | null, tsMs: number, tradePrice: number, timeframeS: number): CandleStreamState {
+  const price = Number(tradePrice);
+  if (!Number.isFinite(price) || price <= 0) {
     return { candles, latestCandle };
   }
   const tfSec = Math.max(1, Number(timeframeS || 60));
@@ -662,11 +715,14 @@ function pushMidCandle(candles: UiCandle[], latestCandle: UiCandle | null, tsMs:
     return { candles: [firstCandle], latestCandle: firstCandle };
   }
   if (lastCandle.time === bucketSec) {
+    const safeOpen = lastCandle.open > 0 ? lastCandle.open : price;
+    const safeLow = lastCandle.low > 0 ? lastCandle.low : price;
+    const safeHigh = lastCandle.high > 0 ? lastCandle.high : price;
     const nextLatestCandle: UiCandle = {
       time: lastCandle.time,
-      open: lastCandle.open,
-      high: Math.max(lastCandle.high, price),
-      low: Math.min(lastCandle.low, price),
+      open: safeOpen,
+      high: Math.max(safeHigh, price),
+      low: Math.min(safeLow, price),
       close: price,
     };
     return { candles, latestCandle: nextLatestCandle };
@@ -676,9 +732,10 @@ function pushMidCandle(candles: UiCandle[], latestCandle: UiCandle | null, tsMs:
       candles.length === 0
         ? []
         : [...candles.slice(0, Math.max(0, candles.length - 1)), lastCandle];
+    const prevClose = lastCandle.close > 0 ? lastCandle.close : price;
     const nextLatestCandle: UiCandle = {
       time: bucketSec,
-      open: Number(lastCandle.close),
+      open: prevClose,
       high: price,
       low: price,
       close: price,
@@ -694,13 +751,13 @@ function pushMidCandle(candles: UiCandle[], latestCandle: UiCandle | null, tsMs:
 function depthMid(depth: UiDepth): number | null {
   const bestBid = toNum(depth.best_bid ?? depth.bids?.[0]?.price);
   const bestAsk = toNum(depth.best_ask ?? depth.asks?.[0]?.price);
-  if (bestBid !== null && bestAsk !== null) {
+  if (bestBid !== null && bestBid > 0 && bestAsk !== null && bestAsk > 0) {
     return (bestBid + bestAsk) / 2;
   }
-  if (bestBid !== null) {
+  if (bestBid !== null && bestBid > 0) {
     return bestBid;
   }
-  if (bestAsk !== null) {
+  if (bestAsk !== null && bestAsk > 0) {
     return bestAsk;
   }
   return null;
@@ -766,6 +823,31 @@ function stableOrders(current: UiOrder[], next: UiOrder[]): UiOrder[] {
   return sameOrders(current, next) ? current : next;
 }
 
+const ORDER_TERMINAL_STATES = new Set(["filled", "cancelled", "canceled", "rejected", "expired"]);
+
+function upsertOrder(orders: UiOrder[], incoming: UiOrder): UiOrder[] {
+  const incomingId = String(incoming.order_id ?? incoming.client_order_id ?? "").trim();
+  if (!incomingId) return orders;
+  const idx = orders.findIndex((o) => {
+    const oid = String(o.order_id ?? o.client_order_id ?? "").trim();
+    return oid !== "" && oid === incomingId;
+  });
+  if (idx >= 0) {
+    const updated = [...orders];
+    updated[idx] = { ...orders[idx], ...incoming };
+    return updated;
+  }
+  return [incoming, ...orders].slice(0, 200);
+}
+
+function removeOrderById(orders: UiOrder[], orderId: string): UiOrder[] {
+  if (!orderId) return orders;
+  return orders.filter((o) => {
+    const oid = String(o.order_id ?? o.client_order_id ?? "").trim();
+    return oid !== orderId;
+  });
+}
+
 function stableFills(current: UiFill[], next: UiFill[]): UiFill[] {
   return sameFills(current, next) ? current : next;
 }
@@ -774,13 +856,42 @@ function stableCandles(current: UiCandle[], next: UiCandle[]): UiCandle[] {
   return sameCandles(current, next) ? current : next;
 }
 
-function trimRuntimeEvents(events: RuntimeEvent[]): RuntimeEvent[] {
-  if (events.length <= MAX_RUNTIME_EVENTS) {
-    return events;
+/**
+ * Module-level ring buffer for runtime events.
+ * Lives outside React/Zustand state so high-frequency pushes
+ * never trigger subscriber notifications or array spreads.
+ */
+let _runtimeEventsBuffer: RuntimeEvent[] = [];
+let _runtimeEventsVersion = 0;
+
+export function pushRuntimeEvent(eventType: string, tsMs: number): void {
+  _runtimeEventsBuffer.push({ eventType, tsMs });
+  if (_runtimeEventsBuffer.length > MAX_RUNTIME_EVENTS) {
+    _runtimeEventsBuffer = _runtimeEventsBuffer.slice(-MAX_RUNTIME_EVENTS);
   }
+  _runtimeEventsVersion += 1;
+}
+
+export function getRuntimeEvents(): RuntimeEvent[] {
+  return _runtimeEventsBuffer;
+}
+
+export function getRuntimeEventsVersion(): number {
+  return _runtimeEventsVersion;
+}
+
+export function pruneRuntimeEventsBuffer(): void {
   const cutoff = Date.now() - RUNTIME_EVENT_RETENTION_MS;
-  const filtered = events.filter((entry) => entry.tsMs >= cutoff);
-  return filtered.length > MAX_RUNTIME_EVENTS ? filtered.slice(-MAX_RUNTIME_EVENTS) : filtered;
+  const before = _runtimeEventsBuffer.length;
+  _runtimeEventsBuffer = _runtimeEventsBuffer.filter((entry) => entry.tsMs >= cutoff);
+  if (_runtimeEventsBuffer.length !== before) {
+    _runtimeEventsVersion += 1;
+  }
+}
+
+export function clearRuntimeEventsBuffer(): void {
+  _runtimeEventsBuffer = [];
+  _runtimeEventsVersion += 1;
 }
 
 function getPriceDirection(previousMid: number | null, nextMid: number | null): "up" | "down" | "flat" {
@@ -869,9 +980,9 @@ const EMPTY_FILLS: UiFill[] = [];
 const EMPTY_CANDLES: UiCandle[] = [];
 const EMPTY_EVENT_LINES: string[] = [];
 const EMPTY_PAYLOADS: PayloadRecord[] = [];
-const EMPTY_RUNTIME_EVENTS: RuntimeEvent[] = [];
 const EMPTY_ALERTS: SummaryAlert[] = [];
 const EMPTY_INSTANCE_NAMES: string[] = [];
+const EMPTY_INSTANCE_STATUSES: InstanceStatusRow[] = [];
 
 export const useDashboardStore = create<DashboardState>()(
   subscribeWithSelector((set, get) => ({
@@ -900,8 +1011,9 @@ export const useDashboardStore = create<DashboardState>()(
       eventLines: EMPTY_EVENT_LINES,
       payloads: EMPTY_PAYLOADS,
       selectedPayloadId: null,
-      runtimeEvents: EMPTY_RUNTIME_EVENTS,
       instanceNames: EMPTY_INSTANCE_NAMES,
+      instanceStatuses: EMPTY_INSTANCE_STATUSES,
+      instanceStatusesError: "",
       updateSettings: (patch) => {
         set((state) => {
           const nextSettings = { ...state.settings, ...patch };
@@ -925,11 +1037,14 @@ export const useDashboardStore = create<DashboardState>()(
           return sameStringArray(state.instanceNames, nextInstanceNames) ? {} : { instanceNames: nextInstanceNames };
         });
       },
+      setInstanceStatuses: (rows, error = "") => {
+        set({ instanceStatuses: rows.length === 0 ? EMPTY_INSTANCE_STATUSES : rows, instanceStatusesError: error });
+      },
       setSelectedPayloadId: (id) => {
         set({ selectedPayloadId: id });
       },
       clearEventFeed: () => {
-        set({ eventLines: [] });
+        set({ eventLines: EMPTY_EVENT_LINES });
       },
       appendEventLine: (line) => {
         set((state) => {
@@ -1062,7 +1177,7 @@ export const useDashboardStore = create<DashboardState>()(
             : [];
         const streamFills = Array.isArray(stream.fills) ? stream.fills : [];
         const fallbackFills = Array.isArray(fallback.fills) ? fallback.fills : [];
-        const fills = streamFills.length > 0 ? streamFills : fallbackFills;
+        const fills = Array.isArray(stream.fills) ? streamFills : fallbackFills;
         const fillsTotal = Number(stream.fills_total ?? fallback.fills_total ?? fills.length ?? 0);
         const tsMs = Number(snapshot.ts_ms || Date.now()) || Date.now();
         const incomingControllerId = snapshotControllerId(snapshot);
@@ -1079,26 +1194,28 @@ export const useDashboardStore = create<DashboardState>()(
           const incomingPositionTsMs = maxTsMs(summarySystemBase.position_source_ts_ms, positionTsMs(position), tsMs);
           const incomingFillsTsMs = maxTsMs(summarySystemBase.latest_fill_ts_ms, fillsLatestTsMs(normalizedSnapshotFills));
           const incomingOrdersTsMs = ordersLatestTsMs(openOrders.slice(0, 200) as UiOrder[], incomingMarketTsMs);
-          const snapshotMid = toNum(market.mid_price ?? fallback.minute?.mid);
+          const rawSnapshotMid = toNum(market.mid_price ?? fallback.minute?.mid);
+          const snapshotMid = rawSnapshotMid !== null && rawSnapshotMid > 0 ? rawSnapshotMid : null;
+          const snapshotTradePrice = candlePrice(market);
           const latestMid = snapshotMid ?? state.latestMid;
           const midPriceDirection = getPriceDirection(state.latestMid, latestMid);
           const latestQuoteTsMs = snapshotMid !== null ? Math.max(state.latestQuoteTsMs, incomingMarketTsMs) : state.latestQuoteTsMs;
           const nextCandleState = Array.isArray(snapshot.candles)
             ? (() => {
-                const candles = applyCandleData(snapshot.candles, latestMid);
+                const candles = applyCandleData(snapshot.candles, snapshotTradePrice);
                 return {
                   candles,
                   latestCandle: candles[candles.length - 1] ?? null,
                   resetSeries: true,
                 };
               })()
-            : latestMid !== null
+            : snapshotTradePrice !== null
               ? {
-                  ...pushMidCandle(
+                  ...pushCandleTick(
                     state.candles,
                     state.latestCandle,
                     Math.max(incomingMarketTsMs, incomingDepthTsMs, tsMs),
-                    latestMid,
+                    snapshotTradePrice,
                     state.settings.timeframeS,
                   ),
                   resetSeries: false,
@@ -1165,12 +1282,9 @@ export const useDashboardStore = create<DashboardState>()(
             orders: nextOrders,
             fills: nextFills,
             fillsTotal: Number.isFinite(fillsTotal) ? fillsTotal : fills.length,
-            runtimeEvents: trimRuntimeEvents([
-              ...state.runtimeEvents,
-              { eventType: "snapshot", tsMs },
-            ]),
           };
         });
+        pushRuntimeEvent("snapshot", tsMs);
       },
       ingestEventMessage: (message) => {
         const selected = String(get().settings.instanceName ?? "").trim();
@@ -1191,12 +1305,9 @@ export const useDashboardStore = create<DashboardState>()(
           return;
         }
 
-        set((state) => {
-          const nextRuntimeEvents = trimRuntimeEvents([
-            ...state.runtimeEvents,
-            { eventType: runtimeType, tsMs: eventTsMs },
-          ]);
+        pushRuntimeEvent(runtimeType, eventTsMs);
 
+        set((state) => {
           let nextMarket = state.market;
           let nextDepth = state.depth;
           let nextPosition = state.position;
@@ -1216,11 +1327,14 @@ export const useDashboardStore = create<DashboardState>()(
               nextMarket = { ...nextMarket, trading_pair: incomingTradingPair };
             }
             const mid = toNum(nextMarket.mid_price);
-            if (mid !== null) {
+            const tradePrice = candlePrice(nextMarket);
+            if (mid !== null && mid > 0) {
               nextMidPriceDirection = getPriceDirection(state.latestMid, mid);
               nextLatestMid = mid;
               nextLatestQuoteTsMs = eventTsMs;
-              const nextCandleState = pushMidCandle(state.candles, state.latestCandle, eventTsMs, mid, state.settings.timeframeS);
+            }
+            if (tradePrice !== null) {
+              const nextCandleState = pushCandleTick(state.candles, state.latestCandle, eventTsMs, tradePrice, state.settings.timeframeS);
               nextCandles = nextCandleState.candles;
               nextLatestCandle = nextCandleState.latestCandle;
             }
@@ -1234,11 +1348,14 @@ export const useDashboardStore = create<DashboardState>()(
               marketSnapshot.trading_pair = incomingTradingPair;
             }
             const mid = toNum(marketSnapshot.mid_price);
-            if (!hasFreshQuote && mid !== null) {
+            const tradePrice = candlePrice(marketSnapshot);
+            if (!hasFreshQuote && mid !== null && mid > 0) {
               nextMidPriceDirection = getPriceDirection(state.latestMid, mid);
               nextMarket = marketSnapshot;
               nextLatestMid = mid;
-              const nextCandleState = pushMidCandle(state.candles, state.latestCandle, eventTsMs, mid, state.settings.timeframeS);
+            }
+            if (!hasFreshQuote && tradePrice !== null) {
+              const nextCandleState = pushCandleTick(state.candles, state.latestCandle, eventTsMs, tradePrice, state.settings.timeframeS);
               nextCandles = nextCandleState.candles;
               nextLatestCandle = nextCandleState.latestCandle;
             }
@@ -1251,13 +1368,10 @@ export const useDashboardStore = create<DashboardState>()(
             if (incomingTradingPair && !String(nextDepth.trading_pair ?? "").trim()) {
               nextDepth = { ...nextDepth, trading_pair: incomingTradingPair };
             }
-            const mid = depthMid(nextDepth);
-            if (!hasFreshQuote && mid !== null) {
-              nextMidPriceDirection = getPriceDirection(state.latestMid, mid);
-              nextLatestMid = mid;
-              const nextCandleState = pushMidCandle(state.candles, state.latestCandle, eventTsMs, mid, state.settings.timeframeS);
-              nextCandles = nextCandleState.candles;
-              nextLatestCandle = nextCandleState.latestCandle;
+            const bookMid = depthMid(nextDepth);
+            if (!hasFreshQuote && bookMid !== null) {
+              nextMidPriceDirection = getPriceDirection(state.latestMid, bookMid);
+              nextLatestMid = bookMid;
             }
             nextSummarySystem = { ...nextSummarySystem, latest_market_ts_ms: Math.max(toNum(nextSummarySystem.latest_market_ts_ms) ?? 0, eventTsMs) };
             nextFreshness = {
@@ -1282,18 +1396,117 @@ export const useDashboardStore = create<DashboardState>()(
             };
           }
 
+          if (eventType === "bot_minute_snapshot" && eventPayload) {
+            const posData = eventPayload.position;
+            if (posData && typeof posData === "object") {
+              nextPosition = normalizePosition(posData as UiPosition);
+              if (incomingTradingPair && !String(nextPosition.trading_pair ?? "").trim()) {
+                nextPosition = { ...nextPosition, trading_pair: incomingTradingPair };
+              }
+              nextSummarySystem = {
+                ...nextSummarySystem,
+                position_source_ts_ms: Math.max(toNum(nextSummarySystem.position_source_ts_ms) ?? 0, positionTsMs(nextPosition, eventTsMs)),
+              };
+              nextFreshness = {
+                ...nextFreshness,
+                positionTsMs: Math.max(nextFreshness.positionTsMs, positionTsMs(nextPosition, eventTsMs)),
+              };
+            }
+          }
+
+          let nextOrders = state.orders;
           let nextFills = state.fills;
           let nextFillsTotal = state.fillsTotal;
           if (eventType === "bot_fill" && eventPayload) {
             const incomingFill = normalizeFill(eventPayload);
+            const fillAlreadyTracked = hasFillMatch(state.fills, incomingFill);
             nextFills = mergeRecentFills(state.fills, [incomingFill], MAX_FILLS);
-            nextFillsTotal = Math.max(Number(state.fillsTotal || 0) + 1, nextFills.length);
+            nextFillsTotal = fillAlreadyTracked
+              ? Math.max(Number(state.fillsTotal || 0), nextFills.length)
+              : Math.max(Number(state.fillsTotal || 0) + 1, nextFills.length);
             const latestFillTsMs = maxTsMs(eventTsMs, incomingFill.timestamp_ms, incomingFill.ts);
             nextSummarySystem = { ...nextSummarySystem, latest_fill_ts_ms: Math.max(toNum(nextSummarySystem.latest_fill_ts_ms) ?? 0, latestFillTsMs) };
             nextFreshness = {
               ...nextFreshness,
               fillsTsMs: Math.max(nextFreshness.fillsTsMs, latestFillTsMs),
             };
+          }
+          if (eventType === "paper_exchange_event" && eventPayload) {
+            const cmd = String(eventPayload.command ?? "").trim();
+            const peOrderId = String(eventPayload.order_id ?? "").trim();
+            const peMeta = typeof eventPayload.metadata === "object" && eventPayload.metadata !== null
+              ? (eventPayload.metadata as Record<string, unknown>)
+              : {};
+            const peTradingPair = String(eventPayload.trading_pair ?? incomingTradingPair ?? "").trim();
+
+            // --- fill ingestion (order_fill / fill / fill_order) ---
+            if (cmd === "order_fill" || cmd === "fill" || cmd === "fill_order") {
+              const syntheticFill: Record<string, unknown> = {
+                order_id: peOrderId || peMeta.order_id,
+                trading_pair: peTradingPair || peMeta.trading_pair,
+                instance_name: eventPayload.instance_name ?? message.instance_name,
+                side: peMeta.side ?? "",
+                price: peMeta.fill_price ?? 0,
+                amount_base: peMeta.fill_amount_base ?? 0,
+                notional_quote: peMeta.fill_notional_quote ?? 0,
+                fee_quote: peMeta.fill_fee_quote ?? 0,
+                realized_pnl_quote: peMeta.realized_pnl_quote ?? 0,
+                is_maker: peMeta.is_maker === "1" || peMeta.is_maker === true,
+                timestamp_ms: eventTsMs,
+              };
+              const incomingFill = normalizeFill(syntheticFill as UiFill);
+              const fillAlreadyTracked = hasFillMatch(state.fills, incomingFill);
+              nextFills = mergeRecentFills(state.fills, [incomingFill], MAX_FILLS);
+              nextFillsTotal = fillAlreadyTracked
+                ? Math.max(Number(state.fillsTotal || 0), nextFills.length)
+                : Math.max(Number(state.fillsTotal || 0) + 1, nextFills.length);
+              nextSummarySystem = { ...nextSummarySystem, latest_fill_ts_ms: Math.max(toNum(nextSummarySystem.latest_fill_ts_ms) ?? 0, eventTsMs) };
+              nextFreshness = { ...nextFreshness, fillsTsMs: Math.max(nextFreshness.fillsTsMs, eventTsMs) };
+              // Remove fully filled order from live orders list
+              const fillOrderState = String(peMeta.order_state ?? "partially_filled").trim().toLowerCase();
+              if (peOrderId && fillOrderState === "filled") {
+                nextOrders = removeOrderById(nextOrders, peOrderId);
+                nextFreshness = { ...nextFreshness, ordersTsMs: Math.max(nextFreshness.ordersTsMs, eventTsMs) };
+              }
+            }
+
+            // --- submit_order: upsert new/updated open order, or prune terminal ---
+            if (cmd === "submit_order" && peOrderId) {
+              const orderState = String(peMeta.order_state ?? "working").trim().toLowerCase();
+              if (ORDER_TERMINAL_STATES.has(orderState)) {
+                nextOrders = removeOrderById(nextOrders, peOrderId);
+              } else {
+                const price = peMeta.price != null ? Number(peMeta.price) : null;
+                const amount = peMeta.amount_base != null ? Number(peMeta.amount_base) : null;
+                const syntheticOrder: UiOrder = {
+                  order_id: peOrderId,
+                  trading_pair: peTradingPair,
+                  side: String(peMeta.side ?? "").toUpperCase() || undefined,
+                  price: price !== null && !isNaN(price) ? price : null,
+                  amount: amount !== null && !isNaN(amount) ? amount : null,
+                  state: orderState || "working",
+                  is_estimated: false,
+                  created_ts_ms: eventTsMs,
+                  updated_ts_ms: eventTsMs,
+                };
+                nextOrders = upsertOrder(nextOrders, syntheticOrder);
+              }
+              nextFreshness = { ...nextFreshness, ordersTsMs: Math.max(nextFreshness.ordersTsMs, eventTsMs) };
+            }
+
+            // --- cancel_order: remove the specific order ---
+            if (cmd === "cancel_order" && peOrderId) {
+              nextOrders = removeOrderById(nextOrders, peOrderId);
+              nextFreshness = { ...nextFreshness, ordersTsMs: Math.max(nextFreshness.ordersTsMs, eventTsMs) };
+            }
+
+            // --- cancel_all: remove all orders for the pair (or all orders) ---
+            if (cmd === "cancel_all") {
+              nextOrders = peTradingPair
+                ? nextOrders.filter((o) => String(o.trading_pair ?? "").trim() !== peTradingPair)
+                : [];
+              nextFreshness = { ...nextFreshness, ordersTsMs: Math.max(nextFreshness.ordersTsMs, eventTsMs) };
+            }
           }
 
           let nextEventLines = state.eventLines;
@@ -1317,9 +1530,9 @@ export const useDashboardStore = create<DashboardState>()(
             latestQuoteTsMs: nextLatestQuoteTsMs,
             candles: stableCandles(state.candles, nextCandles),
             latestCandle: sameCandle(state.latestCandle, nextLatestCandle) ? state.latestCandle : nextLatestCandle,
+            orders: stableOrders(state.orders, nextOrders),
             fills: stableFills(state.fills, nextFills),
             fillsTotal: nextFillsTotal,
-            runtimeEvents: nextRuntimeEvents,
             eventLines: nextEventLines,
           };
         });
@@ -1347,7 +1560,7 @@ export const useDashboardStore = create<DashboardState>()(
             : [];
         const streamFills = Array.isArray(stream.fills) ? stream.fills : [];
         const fallbackFills = Array.isArray(fallback.fills) ? fallback.fills : [];
-        const fills = streamFills.length > 0 ? streamFills : fallbackFills;
+        const fills = Array.isArray(stream.fills) ? streamFills : fallbackFills;
         const fillsTotal = Number(stream.fills_total ?? fallback.fills_total ?? fills.length ?? 0);
         const incomingControllerId = restStateControllerId(payload);
         const incomingTradingPair = restStateTradingPair(payload);
@@ -1405,20 +1618,30 @@ export const useDashboardStore = create<DashboardState>()(
             incomingSummaryFillTsMs > 0 &&
             incomingSummaryFillTsMs < currentSummaryFillTsMs
           );
+          // Per-segment merges: do not freeze fill-derived activity when only market/depth/order
+          // snapshots regress (stream vs CSV). Use acceptFills for activity — not allowRestFills,
+          // which can false-negative when summary.latest_fill_ts_ms lags fill-row timestamps.
+          const mergeActivity = freshnessDecision.acceptFills;
+          const mergeAccount =
+            freshnessDecision.acceptPosition &&
+            allowRestMarket &&
+            allowRestFills;
+          const shouldMergeAlerts = freshnessDecision.reasons.length === 0;
           const summarySystem = mergeSummarySystem(state.summarySystem, {
             ...payload.summary?.system,
             latest_market_ts_ms: Math.max(toNum(state.summarySystem.latest_market_ts_ms) ?? 0, incomingFreshness.marketTsMs, incomingFreshness.depthTsMs),
             latest_fill_ts_ms: Math.max(toNum(state.summarySystem.latest_fill_ts_ms) ?? 0, incomingFreshness.fillsTsMs),
             position_source_ts_ms: Math.max(toNum(state.summarySystem.position_source_ts_ms) ?? 0, incomingFreshness.positionTsMs),
           });
-          const summaryActivity = allowRestFills
+          const summaryActivity = mergeActivity
             ? mergeSummaryActivity(state.summaryActivity, payload.summary?.activity)
             : state.summaryActivity;
-          const summaryAccountBase =
-            freshnessDecision.reasons.length === 0
-              ? mergeSummaryAccount(state.summaryAccount, payload.summary?.account)
-              : state.summaryAccount;
-          const alerts = freshnessDecision.reasons.length === 0 ? mergeAlerts(state.alerts, payload.summary?.alerts) : state.alerts;
+          const summaryAccountBase = mergeAccount
+            ? mergeSummaryAccount(state.summaryAccount, payload.summary?.account)
+            : state.summaryAccount;
+          const alerts = shouldMergeAlerts
+            ? mergeAlerts(state.alerts, payload.summary?.alerts)
+            : state.alerts;
           const nextSummaryAccount =
             incomingControllerId && !String(summaryAccountBase.controller_id ?? "").trim()
               ? mergeSummaryAccount(summaryAccountBase, { controller_id: incomingControllerId })
@@ -1456,7 +1679,9 @@ export const useDashboardStore = create<DashboardState>()(
           const nextFills = allowRestFills
             ? stableFills(state.fills, mergeRecentFills([], normalizedRestFills, MAX_FILLS))
             : state.fills;
-          const candidateMid = toNum(nextMarket.mid_price ?? fallback.minute?.mid) ?? depthMid(nextDepth);
+          const rawCandidateMid = toNum(nextMarket.mid_price ?? fallback.minute?.mid) ?? depthMid(nextDepth);
+          const candidateMid = rawCandidateMid !== null && rawCandidateMid > 0 ? rawCandidateMid : null;
+          const candidateTradePrice = candlePrice(nextMarket);
           const latestMid = candidateMid ?? state.latestMid;
           const midPriceDirection =
             candidateMid !== null && (allowRestMarket || freshnessDecision.acceptDepth)
@@ -1464,8 +1689,8 @@ export const useDashboardStore = create<DashboardState>()(
               : state.midPriceDirection;
           const candleReferenceTsMs = Math.max(incomingFreshness.marketTsMs, incomingFreshness.depthTsMs, Date.now());
           const nextCandleState =
-            candidateMid !== null && (allowRestMarket || freshnessDecision.acceptDepth)
-              ? pushMidCandle(state.candles, state.latestCandle, candleReferenceTsMs, candidateMid, state.settings.timeframeS)
+            candidateTradePrice !== null && allowRestMarket
+              ? pushCandleTick(state.candles, state.latestCandle, candleReferenceTsMs, candidateTradePrice, state.settings.timeframeS)
               : { candles: state.candles, latestCandle: state.latestCandle };
           const nextCandles = stableCandles(state.candles, nextCandleState.candles);
           const nextLatestCandle = sameCandle(state.latestCandle, nextCandleState.latestCandle) ? state.latestCandle : nextCandleState.latestCandle;
@@ -1510,10 +1735,8 @@ export const useDashboardStore = create<DashboardState>()(
           };
         });
       },
-      pruneRuntimeEvents: () => {
-        set((state) => ({ runtimeEvents: trimRuntimeEvents(state.runtimeEvents) }));
-      },
       resetLiveData: () => {
+        clearRuntimeEventsBuffer();
         set({
           mode: "",
           source: "",
@@ -1537,7 +1760,6 @@ export const useDashboardStore = create<DashboardState>()(
           eventLines: EMPTY_EVENT_LINES,
           payloads: EMPTY_PAYLOADS,
           selectedPayloadId: null,
-          runtimeEvents: EMPTY_RUNTIME_EVENTS,
         });
       },
     })),

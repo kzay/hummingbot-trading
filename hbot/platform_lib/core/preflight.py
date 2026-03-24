@@ -3,16 +3,16 @@ from __future__ import annotations
 import json
 import re
 from pathlib import Path
-from typing import Any, Dict, List
+from typing import Any
 
-from services.common.exchange_profiles import resolve_profile
+from platform_lib.market_data.exchange_profiles import resolve_profile
 
 
-def _read_yaml(path: Path) -> Dict[str, Any]:
+def _read_yaml(path: Path) -> dict[str, Any]:
     if not path.exists():
         return {}
     try:
-        import yaml  # type: ignore
+        import yaml  # type: ignore[import-untyped]
 
         with path.open("r", encoding="utf-8") as f:
             payload = yaml.safe_load(f) or {}
@@ -20,7 +20,7 @@ def _read_yaml(path: Path) -> Dict[str, Any]:
     except Exception:
         # Minimal fallback parser for environments without PyYAML.
         text = path.read_text(encoding="utf-8", errors="ignore").splitlines()
-        result: Dict[str, Any] = {"paper_trade": {"paper_trade_exchanges": []}}
+        result: dict[str, Any] = {"paper_trade": {"paper_trade_exchanges": []}}
         in_paper = False
         in_exchanges = False
         for line in text:
@@ -43,7 +43,7 @@ def _read_yaml(path: Path) -> Dict[str, Any]:
         return result
 
 
-def _read_json(path: Path) -> Dict[str, Any]:
+def _read_json(path: Path) -> dict[str, Any]:
     if not path.exists():
         return {}
     with path.open("r", encoding="utf-8") as f:
@@ -51,8 +51,8 @@ def _read_json(path: Path) -> Dict[str, Any]:
     return payload if isinstance(payload, dict) else {}
 
 
-def run_controller_preflight(controller_cfg: Any) -> List[str]:
-    errors: List[str] = []
+def run_controller_preflight(controller_cfg: Any) -> list[str]:
+    errors: list[str] = []
     connector_name = str(getattr(controller_cfg, "connector_name", "") or "")
     trading_pair = str(getattr(controller_cfg, "trading_pair", "") or "")
     fee_profile = str(getattr(controller_cfg, "fee_profile", "vip0") or "vip0")

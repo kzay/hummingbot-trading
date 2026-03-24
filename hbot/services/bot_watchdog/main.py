@@ -40,9 +40,8 @@ import os
 import sys
 import time
 import urllib.request
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
-from typing import Dict, List, Tuple
 
 logging.basicConfig(
     level=logging.INFO,
@@ -162,18 +161,19 @@ def _load_state() -> dict:
 
 
 def _save_state(state: dict) -> None:
+    STATE_FILE.parent.mkdir(parents=True, exist_ok=True)
     STATE_FILE.write_text(json.dumps(state, indent=2))
 
 
 # ── Health check ──────────────────────────────────────────────────────
-def _find_minute_csvs(bot: str) -> List[Path]:
+def _find_minute_csvs(bot: str) -> list[Path]:
     bot_data = DATA_ROOT / bot / "logs"
     if not bot_data.exists():
         return []
     return list(bot_data.rglob("minute.csv"))
 
 
-def _find_heartbeat_files(bot: str) -> List[Path]:
+def _find_heartbeat_files(bot: str) -> list[Path]:
     bot_logs = DATA_ROOT / bot / "logs"
     if not bot_logs.exists():
         return []
@@ -237,7 +237,7 @@ def _check_circuit_breaker(bot: str, state: dict) -> tuple[bool, int]:
     """Returns (breaker_open, restart_count_in_window)."""
     now = time.time()
     key = f"{bot}_restarts"
-    restarts: List[float] = state.get(key, [])
+    restarts: list[float] = state.get(key, [])
     # Prune outside window
     restarts = [t for t in restarts if now - t < WINDOW_S]
     state[key] = restarts
@@ -250,7 +250,7 @@ def _record_restart(bot: str, state: dict) -> None:
     state[f"{bot}_last_restart_ts"] = time.time()
 
 
-def _restart_backoff_active(bot: str, state: dict) -> Tuple[bool, int]:
+def _restart_backoff_active(bot: str, state: dict) -> tuple[bool, int]:
     restarts = state.get(f"{bot}_restarts", [])
     if not isinstance(restarts, list):
         restarts = []
@@ -267,7 +267,7 @@ def _failure_fingerprint(reason: str, container_state: str) -> str:
     return f"{reason}|{container_state}"
 
 
-def _fingerprint_suppressed(bot: str, fingerprint: str, state: dict) -> Tuple[bool, int]:
+def _fingerprint_suppressed(bot: str, fingerprint: str, state: dict) -> tuple[bool, int]:
     key = f"{bot}_fingerprints"
     fp_map = state.get(key, {})
     if not isinstance(fp_map, dict):
@@ -325,7 +325,7 @@ def run() -> None:
     while True:
         try:
             state = _load_state()
-            now_str = datetime.now(timezone.utc).strftime("%H:%M UTC")
+            now_str = datetime.now(UTC).strftime("%H:%M UTC")
 
             for bot in BOT_NAMES:
                 container = f"{CONTAINER_PREFIX}{bot}"

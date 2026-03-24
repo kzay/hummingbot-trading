@@ -10,12 +10,14 @@ class _FakeRedis:
     def __init__(self) -> None:
         self.calls = []
 
-    def xadd(self, **kwargs):  # noqa: ANN003
+    def xadd(self, **kwargs):
         self.calls.append(kwargs)
         return "1-0"
 
 
 def _make_client(fake: _FakeRedis) -> RedisStreamClient:
+    from concurrent.futures import ThreadPoolExecutor
+
     client = RedisStreamClient.__new__(RedisStreamClient)
     client._logger = logging.getLogger(__name__)  # type: ignore[attr-defined]
     client._enabled = True  # type: ignore[attr-defined]
@@ -27,6 +29,10 @@ def _make_client(fake: _FakeRedis) -> RedisStreamClient:
     client._last_reconnect_attempt = 0.0  # type: ignore[attr-defined]
     client._consecutive_failures = 0  # type: ignore[attr-defined]
     client._redis_down_since = 0.0  # type: ignore[attr-defined]
+    client._executor = ThreadPoolExecutor(max_workers=2)  # type: ignore[attr-defined]
+    client._io_timeout_s = 1.0  # type: ignore[attr-defined]
+    client._io_latency_samples = []  # type: ignore[attr-defined]
+    client._io_timeout_count = 0  # type: ignore[attr-defined]
     return client
 
 

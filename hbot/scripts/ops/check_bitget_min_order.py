@@ -25,7 +25,7 @@ import argparse
 import json
 import os
 import sys
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from decimal import Decimal
 from pathlib import Path
 
@@ -108,7 +108,7 @@ def _check(symbol: str, public: bool) -> dict:
 
     result = {
         "symbol": symbol,
-        "timestamp": datetime.now(timezone.utc).isoformat(),
+        "timestamp": datetime.now(UTC).isoformat(),
         "mid_price_usdt": float(mid_price) if mid_price else None,
         "min_amount_base": min_amount,
         "max_amount_base": max_amount,

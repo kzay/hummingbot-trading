@@ -1,27 +1,29 @@
+# Bot6 - CVD Divergence directional lane (paper engine)
+# Trend-following via spot-vs-perp CVD divergence on BTC-USDT perpetual.
 id: epp_v2_4_bot6_bitget_cvd_paper
 controller_name: epp_v2_4_bot6
-controller_type: market_making
+controller_type: directional
 
 connector_name: bitget_perpetual
 connector_type: perp
 trading_pair: BTC-USDT
-position_mode: HEDGE
+position_mode: ONEWAY
 
-total_amount_quote: 140
-buy_spreads: "0.00018,0.00045"
-sell_spreads: "0.00018,0.00045"
-buy_amounts_pct: "50,50"
-sell_amounts_pct: "50,50"
+total_amount_quote: 400
+buy_spreads: "0.0012"
+sell_spreads: "0.0012"
+buy_amounts_pct: "100"
+sell_amounts_pct: "100"
 executor_refresh_time: 45
 cooldown_time: 10
 leverage: 1
+max_order_notional_quote: 200
 stop_loss: 0.004
 take_profit: 0.010
 time_limit: 900
 take_profit_order_type: LIMIT
 skip_rebalance: true
 position_rebalance_min_base_mult: 5.0
-max_order_notional_quote: 80
 
 variant: a
 enabled: true
@@ -36,141 +38,120 @@ spot_fee_pct: 0.0002
 slippage_est_pct: 0.00005
 turnover_cap_x: 20.0
 turnover_penalty_step: 0.0001
-
-min_net_edge_bps: 1.75
-edge_resume_bps: 2.50
-edge_state_hold_s: 60
-ob_imbalance_depth: 10
+# MM-only params (edge gate, adaptive spreads, governor) are disabled by DirectionalRuntimeConfig
+edge_state_hold_s: 75
 trend_eps_pct: 0.0006
-regime_hold_ticks: 2
 high_vol_band_pct: 0.0065
 shock_drift_30s_pct: 0.0020
 shock_drift_atr_multiplier: 1.10
-drift_spike_threshold_bps: 5
-drift_spike_mult_max: 1.25
-spread_step_multiplier: 0.20
-vol_penalty_multiplier: 0.20
-adaptive_params_enabled: true
-adaptive_edge_relax_max_bps: 2
-adaptive_edge_tighten_max_bps: 4
-adaptive_min_edge_bps_floor: 1.00
 
-# Bot6 owns its own CVD-divergence gate logic in `controllers/bots/bot6/cvd_divergence_v1.py`.
-# Keep the shared bot1-style alpha/selective soft-pause layers disabled here.
-shared_edge_gate_enabled: false
-alpha_policy_enabled: false
-selective_quoting_enabled: false
-adverse_fill_soft_pause_enabled: false
-edge_confidence_soft_pause_enabled: false
-slippage_soft_pause_enabled: false
+# ── Indicators ────────────────────────────────────────────────────────
+atr_period: 14
 
+# ── CVD divergence signal ─────────────────────────────────────────────
 bot6_spot_connector_name: bitget
 bot6_spot_trading_pair: BTC-USDT
-bot6_candle_interval: 15m
+bot6_candle_interval: 1m
 bot6_sma_fast_period: 20
 bot6_sma_slow_period: 60
 bot6_adx_period: 14
 bot6_adx_threshold: 18
+
+# ── Trade flow windows ────────────────────────────────────────────────
 bot6_trade_window_count: 30
 bot6_spot_trade_window_count: 30
 bot6_trade_features_stale_after_ms: 90000
+
+# ── Signal scoring ────────────────────────────────────────────────────
 bot6_cvd_divergence_threshold_pct: 0.15
 bot6_stacked_imbalance_min: 3
 bot6_delta_spike_threshold: 3.0
 bot6_signal_score_threshold: 5
+
+# ── Position sizing ──────────────────────────────────────────────────
 bot6_directional_target_net_base_pct: 0.12
 bot6_dynamic_size_floor_mult: 0.80
 bot6_dynamic_size_cap_mult: 1.50
+
+# ── Funding filter ───────────────────────────────────────────────────
 bot6_long_funding_max: 0.0005
 bot6_short_funding_min: -0.0003
+
+# ── Hedge / flip ─────────────────────────────────────────────────────
 bot6_partial_exit_on_flip_ratio: 0.50
 bot6_enable_hedge_bias: true
 
 startup_position_sync: true
-auto_calibration_enabled: false
-max_quote_to_market_spread_mult: 0.00
 min_side_spread_bps: 0.30
-pnl_governor_enabled: false
-daily_pnl_target_pct: 0.8
-pnl_governor_max_edge_bps_cut: 3
-pnl_governor_max_size_boost_pct: 0.15
-pnl_governor_turnover_soft_cap_x: 5.0
-pnl_governor_drawdown_soft_cap_pct: 0.012
 
 regime_specs_override:
   up:
     one_sided: "off"
-    spread_min: "0.00018"
-    spread_max: "0.00065"
+    spread_min: "0.0012"
+    spread_max: "0.0045"
     levels_min: 1
     levels_max: 1
     refresh_s: 45
     target_base_pct: "0.0"
     fill_factor: "0.90"
     quote_size_pct_min: "0.0025"
-    quote_size_pct_max: "0.0040"
+    quote_size_pct_max: "0.0035"
   down:
     one_sided: "off"
-    spread_min: "0.00018"
-    spread_max: "0.00065"
+    spread_min: "0.0012"
+    spread_max: "0.0045"
     levels_min: 1
     levels_max: 1
     refresh_s: 45
     target_base_pct: "0.0"
     fill_factor: "0.90"
     quote_size_pct_min: "0.0025"
-    quote_size_pct_max: "0.0040"
+    quote_size_pct_max: "0.0035"
   neutral_low_vol:
     one_sided: "off"
-    spread_min: "0.00012"
-    spread_max: "0.00035"
+    spread_min: "0.0008"
+    spread_max: "0.0035"
     levels_min: 1
     levels_max: 1
     refresh_s: 40
     target_base_pct: "0.0"
     fill_factor: "0.95"
     quote_size_pct_min: "0.0030"
-    quote_size_pct_max: "0.0050"
+    quote_size_pct_max: "0.0045"
   neutral_high_vol:
     one_sided: "off"
-    spread_min: "0.00022"
-    spread_max: "0.00085"
+    spread_min: "0.0015"
+    spread_max: "0.0055"
     levels_min: 1
-    levels_max: 2
+    levels_max: 1
     refresh_s: 35
     target_base_pct: "0.0"
     fill_factor: "0.85"
     quote_size_pct_min: "0.0025"
-    quote_size_pct_max: "0.0040"
+    quote_size_pct_max: "0.0035"
   high_vol_shock:
     one_sided: "off"
-    spread_min: "0.00030"
-    spread_max: "0.00100"
+    spread_min: "0.0020"
+    spread_max: "0.0075"
     levels_min: 1
     levels_max: 1
     refresh_s: 30
     target_base_pct: "0.0"
-    fill_factor: "0.75"
+    fill_factor: "0.70"
     quote_size_pct_min: "0.0020"
-    quote_size_pct_max: "0.0035"
+    quote_size_pct_max: "0.0030"
 
 perp_target_net_base_pct: 0.0
-min_base_pct: 0.0
+min_base_pct: -0.50
 max_base_pct: 0.50
-max_total_notional_quote: 140
+max_total_notional_quote: 400
 max_daily_turnover_x_hard: 40.0
-max_daily_loss_pct_hard: 0.030
-max_drawdown_pct_hard: 0.040
-max_active_executors: 8
-adverse_fill_spread_multiplier: 1.25
-adverse_fill_count_threshold: 16
+max_daily_loss_pct_hard: 0.025
+max_drawdown_pct_hard: 0.035
+max_active_executors: 4
 
-paper_edge_gate_bypass: false
-paper_use_portfolio_equity_for_risk: true
-paper_state_reconcile_enabled: true
-paper_daily_baseline_auto_reset_on_startup: true
 paper_engine:
-  paper_equity_quote: 250
+  paper_equity_quote: 1000
   paper_realism_profile: balanced
   paper_seed: 23
   paper_reset_state_on_startup: false
@@ -197,6 +178,7 @@ paper_engine:
   paper_max_fills_per_order: 3
 
 sample_interval_s: 10
+price_buffer_source: mark
 spread_floor_recalc_s: 30
 cancel_budget_per_min: 30
 position_drift_soft_pause_pct: 2.0

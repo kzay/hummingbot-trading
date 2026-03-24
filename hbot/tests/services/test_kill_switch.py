@@ -1,19 +1,17 @@
 """Tests for kill_switch — cancel-all, retry logic, partial cancel, dry run, container stop."""
 from __future__ import annotations
 
-import json
-import time
-from pathlib import Path
-from unittest.mock import MagicMock, call, patch
+from unittest.mock import MagicMock, patch
 
 from services.kill_switch.main import (
     _cancel_all_orders_ccxt,
-    _kill_execution_succeeded,
+    _combine_kill_result,
     _flatten_position_ccxt,
+    _kill_execution_succeeded,
+    _log_escalation_if_needed,
     _publish_audit,
     _stop_bot_container,
 )
-
 
 # ── helpers ──────────────────────────────────────────────────────────
 
@@ -236,7 +234,8 @@ class TestRetryLogic:
 class TestPartialCancel:
     @patch("services.kill_switch.main.ccxt")
     @patch("services.kill_switch.main.time")
-    def test_some_orders_fail_partial_status(self, mock_time, mock_ccxt):
+    @patch("services.kill_switch.main.logger")
+    def test_some_orders_fail_partial_status(self, mock_logger, mock_time, mock_ccxt):
         mock_time.sleep = MagicMock()
         exchange_inst = MagicMock()
         exchange_inst.fetch_open_orders.return_value = [
@@ -264,6 +263,12 @@ class TestPartialCancel:
         assert result["status"] == "partial"
         assert "o1" in result["cancelled"]
         assert "o2" in result["failed"]
+
+        combined = _combine_kill_result(result, {"status": "disabled", "error": ""})
+        _log_escalation_if_needed(combined)
+        mock_logger.error.assert_called()
+        msg = str(mock_logger.error.call_args[0][0])
+        assert "Kill switch escalation" in msg or "non-success" in msg
 
 
 # ── Dry run mode ─────────────────────────────────────────────────────

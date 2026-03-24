@@ -5,9 +5,8 @@ import argparse
 import json
 import os
 from dataclasses import dataclass
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Tuple
 
 
 @dataclass(frozen=True)
@@ -18,7 +17,7 @@ class ThresholdClause:
     target: float
 
 
-THRESHOLD_CLAUSES: List[ThresholdClause] = [
+THRESHOLD_CLAUSES: list[ThresholdClause] = [
     # [P0-PAPER-SVC-20260301-1]
     ThresholdClause("P0-PAPER-SVC-20260301-1", "p0_1_schema_validation_error_rate_pct", "le", 0.0),
     ThresholdClause("P0-PAPER-SVC-20260301-1", "p0_1_heartbeat_p99_gap_ms", "le", 5000.0),
@@ -137,7 +136,7 @@ THRESHOLD_CLAUSES: List[ThresholdClause] = [
 ]
 
 
-def _source_artifacts_for_metric(metric_name: str) -> List[str]:
+def _source_artifacts_for_metric(metric_name: str) -> list[str]:
     metric = str(metric_name or "").strip()
     if metric.startswith("p0_11_"):
         return ["paper_exchange_hb_compatibility_latest", "paper_exchange_golden_path_latest"]
@@ -171,10 +170,10 @@ def _source_artifacts_for_metric(metric_name: str) -> List[str]:
 
 
 def _utc_now() -> str:
-    return datetime.now(timezone.utc).isoformat()
+    return datetime.now(UTC).isoformat()
 
 
-def _parse_ts(value: str) -> Optional[datetime]:
+def _parse_ts(value: str) -> datetime | None:
     s = str(value or "").strip()
     if not s:
         return None
@@ -200,7 +199,7 @@ def _minutes_since_file_mtime(path: Path, now_ts: float) -> float:
         return 1e9
 
 
-def _read_json(path: Path) -> Dict[str, object]:
+def _read_json(path: Path) -> dict[str, object]:
     if not path.exists():
         return {}
     try:
@@ -210,7 +209,7 @@ def _read_json(path: Path) -> Dict[str, object]:
         return {}
 
 
-def _to_float(value: object) -> Optional[float]:
+def _to_float(value: object) -> float | None:
     try:
         if value is None:
             return None
@@ -229,28 +228,28 @@ def _compare(observed: float, op: str, target: float) -> bool:
     raise ValueError(f"unsupported comparator: {op}")
 
 
-def default_pass_metrics() -> Dict[str, float]:
-    out: Dict[str, float] = {}
+def default_pass_metrics() -> dict[str, float]:
+    out: dict[str, float] = {}
     for clause in THRESHOLD_CLAUSES:
         out[clause.metric] = float(clause.target)
     return out
 
 
-def evaluate_thresholds(metrics: Dict[str, object]) -> Dict[str, object]:
+def evaluate_thresholds(metrics: dict[str, object]) -> dict[str, object]:
     working_metrics = dict(metrics)
     clause_count = len(THRESHOLD_CLAUSES)
     coverage_pct = 100.0 if clause_count > 0 else 0.0
     # Auto-populated metric so item 18 can validate matrix coverage deterministically.
     working_metrics["p0_18_threshold_clause_coverage_pct"] = coverage_pct
 
-    clause_results: List[Dict[str, object]] = []
-    per_item: Dict[str, Dict[str, object]] = {}
-    failed_items: List[str] = []
+    clause_results: list[dict[str, object]] = []
+    per_item: dict[str, dict[str, object]] = {}
+    failed_items: list[str] = []
     passed_clauses = 0
-    missing_metric_clauses: List[str] = []
-    non_numeric_metric_clauses: List[str] = []
-    threshold_breach_clauses: List[str] = []
-    failed_clause_sources: Dict[str, List[str]] = {}
+    missing_metric_clauses: list[str] = []
+    non_numeric_metric_clauses: list[str] = []
+    threshold_breach_clauses: list[str] = []
+    failed_clause_sources: dict[str, list[str]] = {}
 
     for clause in THRESHOLD_CLAUSES:
         item_bucket = per_item.setdefault(
@@ -327,16 +326,16 @@ def evaluate_thresholds(metrics: Dict[str, object]) -> Dict[str, object]:
 def build_report(
     root: Path,
     *,
-    now_ts: Optional[float] = None,
+    now_ts: float | None = None,
     max_input_age_min: float = 20.0,
     require_input_fresh: bool = True,
-    inputs_path: Optional[Path] = None,
-    inputs_payload: Optional[Dict[str, object]] = None,
-) -> Dict[str, object]:
-    now_ts = float(now_ts if now_ts is not None else datetime.now(timezone.utc).timestamp())
+    inputs_path: Path | None = None,
+    inputs_payload: dict[str, object] | None = None,
+) -> dict[str, object]:
+    now_ts = float(now_ts if now_ts is not None else datetime.now(UTC).timestamp())
     resolved_inputs_path = inputs_path or (root / "reports" / "verification" / "paper_exchange_threshold_inputs_latest.json")
 
-    payload: Dict[str, object] = dict(inputs_payload or {})
+    payload: dict[str, object] = dict(inputs_payload or {})
     source = "inline_payload" if inputs_payload is not None else str(resolved_inputs_path)
     input_present = bool(payload) if inputs_payload is not None else resolved_inputs_path.exists()
     if inputs_payload is None:
@@ -435,7 +434,7 @@ def run_check(
 
     out_dir = root / "reports" / "verification"
     out_dir.mkdir(parents=True, exist_ok=True)
-    stamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
+    stamp = datetime.now(UTC).strftime("%Y%m%dT%H%M%SZ")
     out_path = out_dir / f"paper_exchange_thresholds_{stamp}.json"
     latest_path = out_dir / "paper_exchange_thresholds_latest.json"
     out_path.write_text(json.dumps(report, indent=2), encoding="utf-8")

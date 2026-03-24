@@ -17,7 +17,7 @@ class _FailCreateCursor:
     def __exit__(self, exc_type, exc, tb):
         return False
 
-    def execute(self, sql, params=None):  # noqa: ANN001
+    def execute(self, sql, params=None):
         raise RuntimeError("extension not available")
 
     def fetchone(self):

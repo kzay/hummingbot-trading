@@ -4,20 +4,19 @@ import argparse
 import json
 import subprocess
 import sys
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
-from typing import Dict, List, Tuple
 
 
 def _utc_now() -> str:
-    return datetime.now(timezone.utc).isoformat()
+    return datetime.now(UTC).isoformat()
 
 
 def _root() -> Path:
     return Path("/workspace/hbot") if Path("/.dockerenv").exists() else Path(__file__).resolve().parents[2]
 
 
-def _read_json(path: Path, default: Dict[str, object]) -> Dict[str, object]:
+def _read_json(path: Path, default: dict[str, object]) -> dict[str, object]:
     if not path.exists():
         return default
     try:
@@ -37,7 +36,7 @@ def _latest_matching_excluding(path: Path, pattern: str, exclude_name: str) -> P
     return files[-1] if files else None
 
 
-def _run(root: Path, cmd: List[str]) -> Tuple[int, str]:
+def _run(root: Path, cmd: list[str]) -> tuple[int, str]:
     proc = subprocess.run(cmd, cwd=str(root), capture_output=True, text=True, check=False)
     out = (proc.stdout or "") + ("\n" + proc.stderr if proc.stderr else "")
     return int(proc.returncode), out.strip()
@@ -109,7 +108,7 @@ def main() -> int:
 
     status = "pass" if all(checks.values()) else "fail"
     out_dir.mkdir(parents=True, exist_ok=True)
-    stamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
+    stamp = datetime.now(UTC).strftime("%Y%m%dT%H%M%SZ")
     out_file = out_dir / f"bus_recovery_{args.label}_{stamp}.json"
     payload = {
         "ts_utc": _utc_now(),

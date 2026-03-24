@@ -22,3 +22,13 @@ dist-ssr
 *.njsproj
 *.sln
 *.sw?
+
+# Local dev / Playwright artifacts (do not commit)
+test-results/
+playwright-report/
+playwright/.cache/
+*.trace.zip
+trace.zip
+screenshot-*.png
+screenshot-*.js
+screenshot-*.cjs

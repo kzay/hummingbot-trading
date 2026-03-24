@@ -5,16 +5,17 @@ import argparse
 import json
 import os
 from collections import Counter
-from datetime import datetime, timezone
+from collections.abc import Iterable
+from datetime import UTC, datetime
 from pathlib import Path
-from typing import Any, Dict, Iterable, List, Optional, Tuple
+from typing import Any
 
 try:
     import redis  # type: ignore
 except Exception:  # pragma: no cover
     redis = None
 
-from services.contracts.stream_names import PAPER_EXCHANGE_HEARTBEAT_STREAM
+from platform_lib.contracts.stream_names import PAPER_EXCHANGE_HEARTBEAT_STREAM
 
 DEFAULT_NON_CRITICAL_DEAD_LETTER_REASONS = [
     "local_authority_reject",
@@ -23,7 +24,7 @@ DEFAULT_NON_CRITICAL_DEAD_LETTER_REASONS = [
 
 
 def _utc_now() -> str:
-    return datetime.now(timezone.utc).isoformat()
+    return datetime.now(UTC).isoformat()
 
 
 def _safe_int(value: object, default: int = 0) -> int:
@@ -44,7 +45,7 @@ def _safe_float(value: object, default: float = 0.0) -> float:
         return default
 
 
-def _parse_ts(ts_utc: str) -> Optional[datetime]:
+def _parse_ts(ts_utc: str) -> datetime | None:
     s = (ts_utc or "").strip()
     if not s:
         return None
@@ -56,7 +57,7 @@ def _parse_ts(ts_utc: str) -> Optional[datetime]:
         return None
 
 
-def _read_json(path: Path) -> Dict[str, object]:
+def _read_json(path: Path) -> dict[str, object]:
     if not path.exists():
         return {}
     try:
@@ -75,7 +76,7 @@ def _age_seconds_from_ts_or_mtime(ts_utc: str, path: Path, now_ts: float) -> flo
     return 1e9
 
 
-def _decode_stream_payload(data: Dict[str, object]) -> Dict[str, object]:
+def _decode_stream_payload(data: dict[str, object]) -> dict[str, object]:
     payload = data.get("payload")
     if isinstance(payload, dict):
         return payload
@@ -97,8 +98,8 @@ def _stream_id_ms(stream_id: object) -> int:
     return _safe_int(text.split("-", 1)[0], 0)
 
 
-def _parse_xinfo_groups(raw: object) -> Dict[str, Dict[str, int]]:
-    out: Dict[str, Dict[str, int]] = {}
+def _parse_xinfo_groups(raw: object) -> dict[str, dict[str, int]]:
+    out: dict[str, dict[str, int]] = {}
     if not isinstance(raw, list):
         return out
     for item in raw:
@@ -127,11 +128,11 @@ def _parse_xinfo_groups(raw: object) -> Dict[str, Dict[str, int]]:
 
 
 def _dead_letter_stats(
-    dead_rows: Iterable[Tuple[object, Dict[str, object]]],
+    dead_rows: Iterable[tuple[object, dict[str, object]]],
     now_ms: int,
     lookback_sec: int,
     non_critical_reasons: Iterable[str],
-) -> Dict[str, object]:
+) -> dict[str, object]:
     cutoff_ms = now_ms - max(1, int(lookback_sec)) * 1000
     allow = {str(x).strip().lower() for x in non_critical_reasons if str(x).strip()}
     reason_counts: Counter[str] = Counter()
@@ -170,10 +171,10 @@ def _dead_letter_stats(
 def build_report(
     root: Path,
     *,
-    now_ts: Optional[float] = None,
-    redis_client: Optional[Any] = None,
-    required_groups: Optional[List[str]] = None,
-    bots: Optional[List[str]] = None,
+    now_ts: float | None = None,
+    redis_client: Any | None = None,
+    required_groups: list[str] | None = None,
+    bots: list[str] | None = None,
     lookback_sec: int = 900,
     max_critical_dead_letters: int = 0,
     max_group_lag: int = 0,
@@ -181,7 +182,7 @@ def build_report(
     heartbeat_max_age_s: int = 120,
     snapshot_max_age_s: int = 180,
     dead_letter_scan_count: int = 5000,
-    non_critical_dead_letter_reasons: Optional[List[str]] = None,
+    non_critical_dead_letter_reasons: list[str] | None = None,
     check_paper_exchange: bool = False,
     paper_exchange_heartbeat_stream: str = PAPER_EXCHANGE_HEARTBEAT_STREAM,
     paper_exchange_heartbeat_max_age_s: int = 30,
@@ -191,8 +192,8 @@ def build_report(
     max_paper_exchange_backlog_growth_pct_per_10min: float = 5.0,
     max_paper_exchange_latency_p95_ms: float = 500.0,
     max_paper_exchange_latency_p99_ms: float = 1000.0,
-) -> Dict[str, object]:
-    now_ts = float(now_ts if now_ts is not None else datetime.now(timezone.utc).timestamp())
+) -> dict[str, object]:
+    now_ts = float(now_ts if now_ts is not None else datetime.now(UTC).timestamp())
     now_ms = int(now_ts * 1000)
     required_groups = required_groups or ["hb_group_bot1", "hb_group_bot3", "hb_group_bot4"]
     bots = bots or ["bot1", "bot3", "bot4"]
@@ -200,11 +201,11 @@ def build_report(
         non_critical_dead_letter_reasons or list(DEFAULT_NON_CRITICAL_DEAD_LETTER_REASONS)
     )
 
-    checks: Dict[str, bool] = {}
-    details: Dict[str, object] = {}
+    checks: dict[str, bool] = {}
+    details: dict[str, object] = {}
 
     # 1) Heartbeat freshness per bot
-    heartbeat_info: Dict[str, Dict[str, object]] = {}
+    heartbeat_info: dict[str, dict[str, object]] = {}
     for bot in bots:
         hb_path = root / "data" / bot / "logs" / "heartbeat" / "strategy_heartbeat.json"
         hb_payload = _read_json(hb_path)
@@ -238,7 +239,7 @@ def build_report(
     }
 
     # 3) Redis stream SLOs (consumer lag/pending + dead letters)
-    group_stats: Dict[str, Dict[str, int]] = {}
+    group_stats: dict[str, dict[str, int]] = {}
     dead_letter = {
         "scanned": 0,
         "in_lookback_window": 0,
@@ -427,8 +428,8 @@ def run_check(
     redis_port: int,
     redis_db: int,
     redis_password: str,
-    required_groups: List[str],
-    bots: List[str],
+    required_groups: list[str],
+    bots: list[str],
     lookback_sec: int,
     max_critical_dead_letters: int,
     max_group_lag: int,
@@ -436,7 +437,7 @@ def run_check(
     heartbeat_max_age_s: int,
     snapshot_max_age_s: int,
     dead_letter_scan_count: int,
-    non_critical_dead_letter_reasons: List[str],
+    non_critical_dead_letter_reasons: list[str],
     check_paper_exchange: bool,
     paper_exchange_heartbeat_stream: str,
     paper_exchange_heartbeat_max_age_s: int,
@@ -449,7 +450,7 @@ def run_check(
 ) -> int:
     root = Path("/workspace/hbot") if Path("/.dockerenv").exists() else Path(__file__).resolve().parents[2]
 
-    redis_client: Optional[Any] = None
+    redis_client: Any | None = None
     redis_error = ""
     if redis is None:
         redis_error = "redis_python_module_missing"
@@ -502,7 +503,7 @@ def run_check(
 
     out_dir = root / "reports" / "ops"
     out_dir.mkdir(parents=True, exist_ok=True)
-    stamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
+    stamp = datetime.now(UTC).strftime("%Y%m%dT%H%M%SZ")
     out_path = out_dir / f"reliability_slo_{stamp}.json"
     latest_path = out_dir / "reliability_slo_latest.json"
     out_path.write_text(json.dumps(report, indent=2), encoding="utf-8")
@@ -515,7 +516,7 @@ def run_check(
     return 0
 
 
-def _csv_list(value: str) -> List[str]:
+def _csv_list(value: str) -> list[str]:
     return [item.strip() for item in str(value).split(",") if item.strip()]
 
 

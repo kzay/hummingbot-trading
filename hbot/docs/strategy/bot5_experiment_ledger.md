@@ -164,3 +164,33 @@ Use it to:
   - `hbot/reports/desk_snapshot/bot5/latest.json`
 - Result: `inconclusive`
 - Decision / next step: the dedicated controller is live, but the observed bottleneck is not missing strategy code anymore. The lane is still spending too much time in `adverse_fill_soft_pause`, and the directional layer never actually activated in this sample. The next required improvement should focus on why bot5 is failing into adverse-fill pause while holding inventory, and on making directional activation observable under valid flow conditions before changing broader spread/size logic again.
+
+## EXP-BOT5-20260317-01: Bounded viability assessment
+
+**Status**: `proposed`
+**Date**: 2026-03-17
+
+**Hypothesis**: IFT flow imbalance signal generates positive PnL/fill net of fees on BTC-USDT perpetual.
+
+**Prerequisites**:
+- P0-QUANT-20260317-1 done (bot1 trading enabled, baseline data available)
+- Bot5 config verified for directional runtime
+
+**Config**: Current bot5 config with directional parameters unchanged
+
+**Duration**: 48h minimum
+
+**Primary KPIs**:
+- Fill count (target: >= 20)
+- PnL per fill net of fees (target: > 0)
+- Hit rate (record, no target)
+- Max drawdown (guardrail: < 3%)
+
+**Guardrails**:
+- Stop if max DD > 3%
+- Stop if > 10 consecutive losing fills
+- Stop if bot enters HARD_STOP
+
+**Success criteria**: PnL/fill > 0 net of fees with >= 20 fills
+**Failure criteria**: PnL/fill < -2 bps or < 10 fills in 48h
+**Rollback**: Disable bot5 container, revert to freeze state

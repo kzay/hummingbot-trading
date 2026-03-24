@@ -7,9 +7,8 @@ parameters.
 from __future__ import annotations
 
 from decimal import Decimal
-from typing import List, Optional, Tuple
 
-from controllers.runtime.market_making_types import (
+from controllers.runtime.runtime_types import (
     QuoteGeometry,
     RegimeSpec,
     RuntimeLevelState,
@@ -91,7 +90,7 @@ class SpreadEngine:
             _ONE,
         )
         span = regime_spec.levels_max - regime_spec.levels_min
-        return max(regime_spec.levels_min, int(regime_spec.levels_max - int(round(float(ratio) * span))))
+        return max(regime_spec.levels_min, int(regime_spec.levels_max - round(float(ratio) * span)))
 
     def build_side_spreads(
         self,
@@ -100,12 +99,12 @@ class SpreadEngine:
         levels: int,
         one_sided: str,
         min_side_spread: Decimal,
-    ) -> Tuple[List[Decimal], List[Decimal]]:
+    ) -> tuple[list[Decimal], list[Decimal]]:
         """Build per-level buy and sell spread arrays with skew and one-sided filtering."""
         half = spread_pct / _TWO
         step = half * self._spread_step_multiplier
-        buy: List[Decimal] = []
-        sell: List[Decimal] = []
+        buy: list[Decimal] = []
+        sell: list[Decimal] = []
         for i in range(levels):
             level_offset = half + step * Decimal(i)
             buy.append(max(min_side_spread, level_offset - skew))
@@ -157,12 +156,12 @@ class SpreadEngine:
         is_perp: bool,
         funding_rate: Decimal,
         adverse_fill_count: int,
-        fill_edge_ewma: Optional[Decimal],
-        override_spread_pct: Optional[Decimal] = None,
-        min_edge_threshold_override_pct: Optional[Decimal] = None,
-        market_spread_floor_pct: Optional[Decimal] = None,
-        adaptive_vol_ratio: Optional[Decimal] = None,
-    ) -> Tuple[SpreadEdgeState, Decimal]:
+        fill_edge_ewma: Decimal | None,
+        override_spread_pct: Decimal | None = None,
+        min_edge_threshold_override_pct: Decimal | None = None,
+        market_spread_floor_pct: Decimal | None = None,
+        adaptive_vol_ratio: Decimal | None = None,
+    ) -> tuple[SpreadEdgeState, Decimal]:
         """Compute spread, edge, skew, and spread floor.
 
         Returns ``(spread_edge_state, spread_floor_pct)``.
@@ -289,8 +288,8 @@ class SpreadEngine:
     def apply_runtime_spreads_and_sizing(
         self,
         runtime_levels: RuntimeLevelState,
-        buy_spreads: List[Decimal],
-        sell_spreads: List[Decimal],
+        buy_spreads: list[Decimal],
+        sell_spreads: list[Decimal],
         equity_quote: Decimal,
         mid: Decimal,
         quote_size_pct: Decimal,
@@ -349,7 +348,7 @@ class SpreadEngine:
         runtime_levels.total_amount_quote = total_amount_quote
 
     @staticmethod
-    def _equal_split_pct_values(level_count: int) -> List[Decimal]:
+    def _equal_split_pct_values(level_count: int) -> list[Decimal]:
         if level_count <= 0:
             return []
         unit = Decimal("100") / Decimal(level_count)

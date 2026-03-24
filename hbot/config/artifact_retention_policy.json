@@ -76,6 +76,76 @@
       "name": "ops_db_writer",
       "glob": "reports/ops_db_writer/*",
       "keep_days": 30
+    },
+    {
+      "name": "bot_minute_csv",
+      "glob": "data/bot*/logs/**/minute*.csv",
+      "keep_days": 30
+    },
+    {
+      "name": "bot_fills_csv",
+      "glob": "data/bot*/logs/**/fills*.csv",
+      "keep_days": 90
+    },
+    {
+      "name": "bot_daily_csv",
+      "glob": "data/bot*/logs/**/daily*.csv",
+      "keep_days": 90
+    },
+    {
+      "name": "bot_desk_events_jsonl",
+      "glob": "data/bot*/logs/**/desk_events_*.jsonl",
+      "keep_days": 14
+    },
+    {
+      "name": "bot_legacy_csv",
+      "glob": "data/bot*/logs/**/*.legacy_*.csv",
+      "keep_days": 7
+    },
+    {
+      "name": "bot_hummingbot_logs",
+      "glob": "data/bot*/logs/*.log*",
+      "keep_days": 7
+    },
+    {
+      "name": "bot_error_logs",
+      "glob": "data/bot*/logs/errors.log*",
+      "keep_days": 14
+    },
+    {
+      "name": "bot_archive",
+      "glob": "data/bot*/archive/*",
+      "keep_days": 30
+    },
+    {
+      "name": "exchange_snapshots",
+      "glob": "reports/exchange_snapshots/*",
+      "keep_days": 30
+    },
+    {
+      "name": "market_data_service",
+      "glob": "reports/market_data_service/*",
+      "keep_days": 14
+    },
+    {
+      "name": "coordination",
+      "glob": "reports/coordination/*",
+      "keep_days": 30
+    },
+    {
+      "name": "desk_snapshot",
+      "glob": "reports/desk_snapshot/**/*",
+      "keep_days": 14
+    },
+    {
+      "name": "strategy",
+      "glob": "reports/strategy/*",
+      "keep_days": 30
+    },
+    {
+      "name": "kill_switch",
+      "glob": "reports/kill_switch/*",
+      "keep_days": 90
     }
   ],
   "protect_latest": [
@@ -104,6 +174,15 @@
     "reports/ops/go_live_checklist_evidence_latest.json",
     "reports/ops/market_bar_v2_backfill_latest.json",
     "reports/ops_retention/latest.json",
-    "reports/ops_db_writer/latest.json"
+    "reports/ops_db_writer/latest.json",
+    "reports/exchange_snapshots/latest.json",
+    "reports/market_data_service/latest.json",
+    "reports/coordination/latest.json",
+    "data/bot1/logs/epp_v24/bot1_a/minute.csv",
+    "data/bot1/logs/epp_v24/bot1_a/fills.csv",
+    "data/bot1/logs/epp_v24/bot1_a/daily.csv",
+    "data/bot1/logs/epp_v24/bot1_a/fills.wal",
+    "reports/strategy/edge_measurement_latest.json",
+    "reports/kill_switch/latest.json"
   ]
 }

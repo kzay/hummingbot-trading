@@ -2,10 +2,9 @@ from __future__ import annotations
 
 import time
 import uuid
-from typing import Dict, List, Literal, Optional
+from typing import Literal
 
 from pydantic import BaseModel, Field
-
 
 SCHEMA_VERSION = "1.0"
 
@@ -18,7 +17,7 @@ class EventEnvelope(BaseModel):
     schema_version: str = Field(default=SCHEMA_VERSION)
     event_type: str
     event_id: str = Field(default_factory=lambda: str(uuid.uuid4()))
-    correlation_id: Optional[str] = None
+    correlation_id: str | None = None
     producer: str
     timestamp_ms: int = Field(default_factory=now_ms)
 
@@ -38,17 +37,17 @@ class MarketSnapshotEvent(EventEnvelope):
     turnover_x: float
     state: str
     # Exchange-like L1 extensions (backward compatible as optional fields).
-    best_bid: Optional[float] = None
-    best_ask: Optional[float] = None
-    best_bid_size: Optional[float] = None
-    best_ask_size: Optional[float] = None
-    last_trade_price: Optional[float] = None
-    mark_price: Optional[float] = None
-    funding_rate: Optional[float] = None
-    exchange_ts_ms: Optional[int] = None
-    ingest_ts_ms: Optional[int] = None
-    market_sequence: Optional[int] = None
-    extra: Dict[str, str] = Field(default_factory=dict)
+    best_bid: float | None = None
+    best_ask: float | None = None
+    best_bid_size: float | None = None
+    best_ask_size: float | None = None
+    last_trade_price: float | None = None
+    mark_price: float | None = None
+    funding_rate: float | None = None
+    exchange_ts_ms: int | None = None
+    ingest_ts_ms: int | None = None
+    market_sequence: int | None = None
+    extra: dict[str, str] = Field(default_factory=dict)
 
 
 class MarketQuoteEvent(EventEnvelope):
@@ -57,32 +56,32 @@ class MarketQuoteEvent(EventEnvelope):
     trading_pair: str
     best_bid: float
     best_ask: float
-    best_bid_size: Optional[float] = None
-    best_ask_size: Optional[float] = None
-    mid_price: Optional[float] = None
-    last_trade_price: Optional[float] = None
-    mark_price: Optional[float] = None
-    funding_rate: Optional[float] = None
-    exchange_ts_ms: Optional[int] = None
-    ingest_ts_ms: Optional[int] = None
-    market_sequence: Optional[int] = None
-    venue_symbol: Optional[str] = None
-    extra: Dict[str, str] = Field(default_factory=dict)
+    best_bid_size: float | None = None
+    best_ask_size: float | None = None
+    mid_price: float | None = None
+    last_trade_price: float | None = None
+    mark_price: float | None = None
+    funding_rate: float | None = None
+    exchange_ts_ms: int | None = None
+    ingest_ts_ms: int | None = None
+    market_sequence: int | None = None
+    venue_symbol: str | None = None
+    extra: dict[str, str] = Field(default_factory=dict)
 
 
 class MarketTradeEvent(EventEnvelope):
     event_type: Literal["market_trade"] = "market_trade"
     connector_name: str
     trading_pair: str
-    trade_id: Optional[str] = None
-    side: Optional[Literal["buy", "sell"]] = None
+    trade_id: str | None = None
+    side: Literal["buy", "sell"] | None = None
     price: float
     size: float
-    exchange_ts_ms: Optional[int] = None
-    ingest_ts_ms: Optional[int] = None
-    market_sequence: Optional[int] = None
-    venue_symbol: Optional[str] = None
-    extra: Dict[str, str] = Field(default_factory=dict)
+    exchange_ts_ms: int | None = None
+    ingest_ts_ms: int | None = None
+    market_sequence: int | None = None
+    venue_symbol: str | None = None
+    extra: dict[str, str] = Field(default_factory=dict)
 
 
 class MarketDepthLevel(BaseModel):
@@ -97,17 +96,17 @@ class MarketDepthSnapshotEvent(EventEnvelope):
     connector_name: str
     trading_pair: str
     depth_levels: int = 20
-    bids: List[MarketDepthLevel] = Field(default_factory=list)
-    asks: List[MarketDepthLevel] = Field(default_factory=list)
-    best_bid: Optional[float] = None
-    best_ask: Optional[float] = None
-    last_trade_price: Optional[float] = None
-    mark_price: Optional[float] = None
-    funding_rate: Optional[float] = None
-    exchange_ts_ms: Optional[int] = None
-    ingest_ts_ms: Optional[int] = None
-    market_sequence: Optional[int] = None
-    extra: Dict[str, str] = Field(default_factory=dict)
+    bids: list[MarketDepthLevel] = Field(default_factory=list)
+    asks: list[MarketDepthLevel] = Field(default_factory=list)
+    best_bid: float | None = None
+    best_ask: float | None = None
+    last_trade_price: float | None = None
+    mark_price: float | None = None
+    funding_rate: float | None = None
+    exchange_ts_ms: int | None = None
+    ingest_ts_ms: int | None = None
+    market_sequence: int | None = None
+    extra: dict[str, str] = Field(default_factory=dict)
 
 
 class MarketDepthDeltaEvent(EventEnvelope):
@@ -117,13 +116,13 @@ class MarketDepthDeltaEvent(EventEnvelope):
     connector_name: str
     trading_pair: str
     depth_levels: int = 20
-    sequence_start: Optional[int] = None
-    sequence_end: Optional[int] = None
-    bids: List[MarketDepthLevel] = Field(default_factory=list)
-    asks: List[MarketDepthLevel] = Field(default_factory=list)
-    exchange_ts_ms: Optional[int] = None
-    ingest_ts_ms: Optional[int] = None
-    extra: Dict[str, str] = Field(default_factory=dict)
+    sequence_start: int | None = None
+    sequence_end: int | None = None
+    bids: list[MarketDepthLevel] = Field(default_factory=list)
+    asks: list[MarketDepthLevel] = Field(default_factory=list)
+    exchange_ts_ms: int | None = None
+    ingest_ts_ms: int | None = None
+    extra: dict[str, str] = Field(default_factory=dict)
 
 
 class StrategySignalEvent(EventEnvelope):
@@ -132,7 +131,17 @@ class StrategySignalEvent(EventEnvelope):
     signal_name: str
     signal_value: float
     confidence: float = 0.0
-    metadata: Dict[str, str] = Field(default_factory=dict)
+    metadata: dict[str, str] = Field(default_factory=dict)
+
+
+class MlFeatureEvent(EventEnvelope):
+    """ML features and predictions published per pair per bar by ml-feature-service."""
+    event_type: Literal["ml_features"] = "ml_features"
+    exchange: str
+    trading_pair: str
+    features: dict[str, float] = Field(default_factory=dict)
+    predictions: dict[str, dict] = Field(default_factory=dict)
+    model_versions: dict[str, str] = Field(default_factory=dict)
 
 
 class MlSignalEvent(EventEnvelope):
@@ -150,7 +159,7 @@ class MlSignalEvent(EventEnvelope):
     inference_latency_ms: int
     signal_age_ms: int = 0
     inference_ts_ms: int = Field(default_factory=now_ms)
-    metadata: Dict[str, str] = Field(default_factory=dict)
+    metadata: dict[str, str] = Field(default_factory=dict)
 
 
 class RiskDecisionEvent(EventEnvelope):
@@ -158,9 +167,9 @@ class RiskDecisionEvent(EventEnvelope):
     instance_name: str
     approved: bool
     reason: str
-    max_notional_quote: Optional[float] = None
-    min_spread_pct: Optional[float] = None
-    metadata: Dict[str, str] = Field(default_factory=dict)
+    max_notional_quote: float | None = None
+    min_spread_pct: float | None = None
+    metadata: dict[str, str] = Field(default_factory=dict)
 
 
 class ExecutionIntentEvent(EventEnvelope):
@@ -168,9 +177,9 @@ class ExecutionIntentEvent(EventEnvelope):
     instance_name: str
     controller_id: str
     action: Literal["set_target_base_pct", "set_daily_pnl_target_pct", "soft_pause", "resume", "kill_switch"]
-    target_base_pct: Optional[float] = None
-    expires_at_ms: Optional[int] = None
-    metadata: Dict[str, str] = Field(default_factory=dict)
+    target_base_pct: float | None = None
+    expires_at_ms: int | None = None
+    metadata: dict[str, str] = Field(default_factory=dict)
 
 
 class AuditEvent(EventEnvelope):
@@ -179,7 +188,7 @@ class AuditEvent(EventEnvelope):
     severity: Literal["info", "warning", "error"] = "info"
     category: str
     message: str
-    metadata: Dict[str, str] = Field(default_factory=dict)
+    metadata: dict[str, str] = Field(default_factory=dict)
 
 
 class BotMinuteSnapshotEvent(EventEnvelope):
@@ -206,7 +215,7 @@ class BotMinuteSnapshotEvent(EventEnvelope):
     maker_fee_pct: float
     taker_fee_pct: float
     risk_reasons: str
-    metadata: Dict[str, str] = Field(default_factory=dict)
+    metadata: dict[str, str] = Field(default_factory=dict)
 
 
 class BotFillEvent(EventEnvelope):
@@ -232,7 +241,7 @@ class BotFillEvent(EventEnvelope):
     is_maker: bool = False
     realized_pnl_quote: float = 0.0
     bot_state: str = ""                          # ops guard state at fill time
-    metadata: Dict[str, str] = Field(default_factory=dict)
+    metadata: dict[str, str] = Field(default_factory=dict)
 
 
 class PaperExchangeCommandEvent(EventEnvelope):
@@ -243,16 +252,16 @@ class PaperExchangeCommandEvent(EventEnvelope):
     command: Literal["submit_order", "cancel_order", "cancel_all", "sync_state"]
     connector_name: str
     trading_pair: str
-    order_id: Optional[str] = None
-    side: Optional[Literal["buy", "sell"]] = None
-    order_type: Optional[str] = None
-    amount_base: Optional[float] = None
-    price: Optional[float] = None
-    expires_at_ms: Optional[int] = None
+    order_id: str | None = None
+    side: Literal["buy", "sell"] | None = None
+    order_type: str | None = None
+    amount_base: float | None = None
+    price: float | None = None
+    expires_at_ms: int | None = None
     reduce_only: bool = False
-    position_action: Optional[str] = None
-    position_mode: Optional[str] = None
-    metadata: Dict[str, str] = Field(default_factory=dict)
+    position_action: str | None = None
+    position_mode: str | None = None
+    metadata: dict[str, str] = Field(default_factory=dict)
 
 
 class PaperExchangeEvent(EventEnvelope):
@@ -266,10 +275,10 @@ class PaperExchangeEvent(EventEnvelope):
     reason: str = ""
     connector_name: str
     trading_pair: str
-    order_id: Optional[str] = None
-    position_action: Optional[str] = None
-    position_mode: Optional[str] = None
-    metadata: Dict[str, str] = Field(default_factory=dict)
+    order_id: str | None = None
+    position_action: str | None = None
+    position_mode: str | None = None
+    metadata: dict[str, str] = Field(default_factory=dict)
 
 
 class PaperExchangeHeartbeatEvent(EventEnvelope):
@@ -283,5 +292,5 @@ class PaperExchangeHeartbeatEvent(EventEnvelope):
     stale_pairs: int = 0
     newest_snapshot_age_ms: int = 0
     oldest_snapshot_age_ms: int = 0
-    metadata: Dict[str, str] = Field(default_factory=dict)
+    metadata: dict[str, str] = Field(default_factory=dict)
 

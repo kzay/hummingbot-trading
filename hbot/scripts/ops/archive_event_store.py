@@ -13,11 +13,9 @@ from __future__ import annotations
 import argparse
 import gzip
 import logging
-import os
 import shutil
 import sys
 import time
-from datetime import datetime, timezone
 from pathlib import Path
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")

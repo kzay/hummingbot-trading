@@ -4,7 +4,6 @@ from __future__ import annotations
 import importlib.util
 from decimal import Decimal
 from types import SimpleNamespace
-from typing import Optional
 
 import pytest
 
@@ -21,11 +20,11 @@ HUMMINGBOT_AVAILABLE = _hummingbot_available()
 if HUMMINGBOT_AVAILABLE:
     from controllers.bots.bot7.pullback_v1 import PullbackV1Config, PullbackV1Controller
     from controllers.epp_v2_4_bot7_pullback import EppV24Bot7PullbackConfig, EppV24Bot7PullbackController
+    from controllers.runtime.data_context import RuntimeDataContext
     from controllers.runtime.directional_config import DirectionalRuntimeConfig
     from controllers.runtime.directional_runtime import DirectionalRuntimeController
-    from controllers.runtime.data_context import RuntimeDataContext
-    from controllers.runtime.market_making_types import MarketConditions, QuoteGeometry, RegimeSpec, SpreadEdgeState
-    from services.common.market_data_plane import MarketTrade
+    from controllers.runtime.runtime_types import MarketConditions, QuoteGeometry, RegimeSpec, SpreadEdgeState
+    from platform_lib.market_data.market_data_plane import MarketTrade
 else:  # pragma: no cover
     PullbackV1Config = object
     PullbackV1Controller = object
@@ -239,7 +238,7 @@ def _make_trade(idx: int, *, price: str, size: str, delta: str, ts_ms: int) -> M
 
 def _make_pb_controller(
     *,
-    config: Optional[SimpleNamespace] = None,
+    config: SimpleNamespace | None = None,
     price_buffer=None,
     trades=None,
     imbalance: Decimal = Decimal("0"),

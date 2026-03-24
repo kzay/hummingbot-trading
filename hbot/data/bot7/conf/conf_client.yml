@@ -2,7 +2,7 @@
 ###   client_config_map config   ###
 ####################################
 
-instance_id: bot7_adaptive_grid_paper_instance
+instance_id: bot7_pullback_paper_instance
 
 # Fetch trading pairs from all exchanges if True, otherwise fetch only from connected exchanges.
 fetch_pairs_from_all_exchanges: false
@@ -15,7 +15,6 @@ strategy_report_interval: 900.0
 
 logger_override_whitelist:
 - hummingbot.strategy.arbitrage
-- hummingbot.strategy.cross_exchange_market_making
 - conf
 
 log_file_path: /home/hummingbot/logs
@@ -38,7 +37,7 @@ mqtt_bridge:
   mqtt_commands: true
   mqtt_events: true
   mqtt_external_events: true
-  mqtt_autostart: true
+  mqtt_autostart: false
 
 # Error log sharing
 send_error_logs: true

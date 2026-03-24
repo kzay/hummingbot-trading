@@ -4,19 +4,18 @@ from __future__ import annotations
 import argparse
 import json
 import re
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
-from typing import Dict, List, Tuple
 
 from services.contracts import stream_names
 
 
 def _utc_now() -> str:
-    return datetime.now(timezone.utc).isoformat()
+    return datetime.now(UTC).isoformat()
 
 
-def _read_env_map(path: Path) -> Dict[str, str]:
-    out: Dict[str, str] = {}
+def _read_env_map(path: Path) -> dict[str, str]:
+    out: dict[str, str] = {}
     if not path.exists():
         return out
     for raw in path.read_text(encoding="utf-8").splitlines():
@@ -28,7 +27,7 @@ def _read_env_map(path: Path) -> Dict[str, str]:
     return out
 
 
-def _check(name: str, ok: bool, reason: str, evidence_paths: List[str]) -> Dict[str, object]:
+def _check(name: str, ok: bool, reason: str, evidence_paths: list[str]) -> dict[str, object]:
     return {
         "name": name,
         "pass": bool(ok),
@@ -45,8 +44,8 @@ def _extract_compose_service_block(compose_text: str, service_name: str) -> str:
     return f"  {service_name}:\n{match.group(1)}"
 
 
-def _controller_paths_with_legacy_internal_paper_enabled(root: Path) -> List[str]:
-    candidates: List[Path] = []
+def _controller_paths_with_legacy_internal_paper_enabled(root: Path) -> list[str]:
+    candidates: list[Path] = []
     controllers_root = root / "data"
     if controllers_root.exists():
         candidates.extend(sorted(controllers_root.glob("*/conf/controllers/*.yml")))
@@ -56,7 +55,7 @@ def _controller_paths_with_legacy_internal_paper_enabled(root: Path) -> List[str
         candidates.extend(sorted(templates_root.glob("*.yml")))
         candidates.extend(sorted(templates_root.glob("*.yaml")))
 
-    flagged: List[str] = []
+    flagged: list[str] = []
     for path in candidates:
         try:
             lines = path.read_text(encoding="utf-8").splitlines()
@@ -72,8 +71,8 @@ def _controller_paths_with_legacy_internal_paper_enabled(root: Path) -> List[str
     return sorted(flagged)
 
 
-def build_report(root: Path) -> Dict[str, object]:
-    checks: List[Dict[str, object]] = []
+def build_report(root: Path) -> dict[str, object]:
+    checks: list[dict[str, object]] = []
 
     service_script = root / "services" / "paper_exchange_service" / "main.py"
     checks.append(
@@ -303,7 +302,7 @@ def run_check(*, strict: bool) -> int:
     out_dir = root / "reports" / "ops"
     out_dir.mkdir(parents=True, exist_ok=True)
     latest_path = out_dir / "preflight_paper_exchange_latest.json"
-    stamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
+    stamp = datetime.now(UTC).strftime("%Y%m%dT%H%M%SZ")
     ts_path = out_dir / f"preflight_paper_exchange_{stamp}.json"
     payload = json.dumps(report, indent=2)
     latest_path.write_text(payload, encoding="utf-8")

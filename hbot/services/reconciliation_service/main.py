@@ -7,16 +7,17 @@ import logging
 import os
 import time
 import uuid
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
-from typing import Dict, List, Optional, Set, Tuple
 from urllib.request import Request, urlopen
 
-from services.common.activity_scope import active_bots_from_minute_logs
-from services.common.event_store_reader import count_bot_fill_events, load_bot_snapshot_windows
-from services.common.log_namespace import iter_bot_log_files
-from services.common.utils import safe_bool as _safe_bool, safe_float as _safe_float, today_utc as _today, utc_now as _utc_now
-from services.contracts.stream_names import EXECUTION_INTENT_STREAM, STREAM_RETENTION_MAXLEN
+from platform_lib.core.activity_scope import active_bots_from_minute_logs
+from platform_lib.core.event_store_reader import count_bot_fill_events, load_bot_snapshot_windows
+from platform_lib.logging.log_namespace import iter_bot_log_files
+from platform_lib.core.utils import safe_bool as _safe_bool
+from platform_lib.core.utils import safe_float as _safe_float
+from platform_lib.core.utils import utc_now as _utc_now
+from platform_lib.contracts.stream_names import EXECUTION_INTENT_STREAM, STREAM_RETENTION_MAXLEN
 from services.hb_bridge.redis_client import RedisStreamClient
 
 logger = logging.getLogger(__name__)
@@ -43,7 +44,7 @@ def _count_event_fills(path: Path, bot: str) -> int:
     return count_bot_fill_events(path.parent, bot, day_utc=path.stem.replace("events_", ""))
 
 
-def _severity(level: str, check_name: str, message: str, bot: str, details: Dict[str, object]) -> Dict[str, object]:
+def _severity(level: str, check_name: str, message: str, bot: str, details: dict[str, object]) -> dict[str, object]:
     return {
         "severity": level,
         "check": check_name,
@@ -53,15 +54,15 @@ def _severity(level: str, check_name: str, message: str, bot: str, details: Dict
     }
 
 
-def _write_json(path: Path, payload: Dict[str, object]) -> None:
+def _write_json(path: Path, payload: dict[str, object]) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(json.dumps(payload, indent=2), encoding="utf-8")
 
 
-def _load_recent_minute_rows(path: Path, *, max_rows: int = 2) -> List[Dict[str, str]]:
+def _load_recent_minute_rows(path: Path, *, max_rows: int = 2) -> list[dict[str, str]]:
     if not path.exists():
         return []
-    rows: List[Dict[str, str]] = []
+    rows: list[dict[str, str]] = []
     try:
         with path.open("r", encoding="utf-8", newline="") as f:
             for row in csv.DictReader(f):
@@ -79,9 +80,9 @@ def _snapshot_windows_with_minute_log_fallback(
     data_root: Path,
     *,
     max_snapshots_per_bot: int = 2,
-) -> Tuple[Dict[str, List[Dict[str, object]]], List[str]]:
+) -> tuple[dict[str, list[dict[str, object]]], list[str]]:
     snapshot_windows = load_bot_snapshot_windows(event_store_root, max_snapshots_per_bot=max_snapshots_per_bot)
-    fallback_bots: List[str] = []
+    fallback_bots: list[str] = []
     for minute_file in iter_bot_log_files(data_root, "minute.csv"):
         try:
             bot = minute_file.parts[-5]
@@ -92,7 +93,7 @@ def _snapshot_windows_with_minute_log_fallback(
         fallback_rows = _load_recent_minute_rows(minute_file, max_rows=max_snapshots_per_bot)
         if not fallback_rows:
             continue
-        merged_rows: List[Dict[str, object]] = []
+        merged_rows: list[dict[str, object]] = []
         for row in fallback_rows:
             merged = dict(row)
             merged.setdefault("instance_name", bot)
@@ -105,7 +106,7 @@ def _snapshot_windows_with_minute_log_fallback(
     return snapshot_windows, sorted(set(fallback_bots))
 
 
-def _load_fill_reconciliation_report(path: Path) -> Dict[str, object]:
+def _load_fill_reconciliation_report(path: Path) -> dict[str, object]:
     if not path.exists():
         return {}
     try:
@@ -115,7 +116,7 @@ def _load_fill_reconciliation_report(path: Path) -> Dict[str, object]:
     return payload if isinstance(payload, dict) else {}
 
 
-def _latest_json_artifact(path: Path, pattern: str) -> Tuple[Optional[Path], Dict[str, object]]:
+def _latest_json_artifact(path: Path, pattern: str) -> tuple[Path | None, dict[str, object]]:
     candidates = sorted(path.glob(pattern))
     if not candidates:
         return None, {}
@@ -127,9 +128,9 @@ def _latest_json_artifact(path: Path, pattern: str) -> Tuple[Optional[Path], Dic
     return artifact_path, payload if isinstance(payload, dict) else {}
 
 
-def _latest_source_compare_with_telemetry(path: Path) -> Tuple[Optional[Path], Dict[str, object]]:
-    fallback_path: Optional[Path] = None
-    fallback_payload: Dict[str, object] = {}
+def _latest_source_compare_with_telemetry(path: Path) -> tuple[Path | None, dict[str, object]]:
+    fallback_path: Path | None = None
+    fallback_payload: dict[str, object] = {}
     for artifact_path in reversed(sorted(path.glob("source_compare_*.json"))):
         try:
             payload = json.loads(artifact_path.read_text(encoding="utf-8"))
@@ -146,17 +147,17 @@ def _latest_source_compare_with_telemetry(path: Path) -> Tuple[Optional[Path], D
     return fallback_path, fallback_payload
 
 
-def _parse_utc_timestamp(value: object) -> Optional[datetime]:
+def _parse_utc_timestamp(value: object) -> datetime | None:
     raw = str(value or "").strip()
     if not raw:
         return None
     try:
-        return datetime.fromisoformat(raw.replace("Z", "+00:00")).astimezone(timezone.utc)
+        return datetime.fromisoformat(raw.replace("Z", "+00:00")).astimezone(UTC)
     except Exception:
         return None
 
 
-def _telemetry_gap_diagnostics(event_store_root: Path, *, minute_ts: str = "") -> Dict[str, object]:
+def _telemetry_gap_diagnostics(event_store_root: Path, *, minute_ts: str = "") -> dict[str, object]:
     integrity_path, integrity = _latest_json_artifact(event_store_root, "integrity_*.json")
     source_compare_path, source_compare = _latest_source_compare_with_telemetry(event_store_root)
 
@@ -191,7 +192,7 @@ def _telemetry_gap_diagnostics(event_store_root: Path, *, minute_ts: str = "") -
     telemetry_delta = int(delta_streams.get("hb.bot_telemetry.v1", 0) or 0)
 
     integrity_ts = _parse_utc_timestamp(integrity.get("last_update_utc") or integrity.get("ts_utc"))
-    source_compare_ts = _parse_utc_timestamp(source_compare.get("ts_utc"))
+    _parse_utc_timestamp(source_compare.get("ts_utc"))
     minute_dt = _parse_utc_timestamp(minute_ts)
 
     suspected_gap_stage = "publisher"
@@ -202,7 +203,7 @@ def _telemetry_gap_diagnostics(event_store_root: Path, *, minute_ts: str = "") -
     elif source_telemetry is not None and source_telemetry <= 0:
         suspected_gap_stage = "publisher"
         diagnostic_basis = "no_bot_telemetry_seen_in_source_stream"
-    elif telemetry_lag > 0 or telemetry_delta > 0 or source_telemetry is not None and source_telemetry > stored_telemetry:
+    elif telemetry_lag > 0 or telemetry_delta > 0 or (source_telemetry is not None and source_telemetry > stored_telemetry):
         suspected_gap_stage = "ingest"
         diagnostic_basis = "bot_telemetry_present_in_source_but_not_fully_persisted"
     elif minute_dt is not None and integrity_ts is not None and integrity_ts < minute_dt:
@@ -224,8 +225,8 @@ def _telemetry_gap_diagnostics(event_store_root: Path, *, minute_ts: str = "") -
 
 
 def _apply_fill_reconciliation_report(
-    findings: List[Dict[str, object]],
-    report: Dict[str, object],
+    findings: list[dict[str, object]],
+    report: dict[str, object],
 ) -> None:
     bots = report.get("bots", [])
     if not isinstance(bots, list):
@@ -274,7 +275,7 @@ def _apply_fill_reconciliation_report(
         )
 
 
-def _parse_action_scope(raw: str) -> Set[str]:
+def _parse_action_scope(raw: str) -> set[str]:
     return {part.strip() for part in raw.split(",") if part.strip()}
 
 
@@ -286,12 +287,12 @@ def _critical_action_name(raw: str) -> str:
 
 
 def _derive_reconciliation_actions(
-    findings: List[Dict[str, object]],
-    previous_critical_bots: Set[str],
-    allowed_scope: Set[str],
-) -> Tuple[List[Tuple[str, str]], Set[str]]:
+    findings: list[dict[str, object]],
+    previous_critical_bots: set[str],
+    allowed_scope: set[str],
+) -> tuple[list[tuple[str, str]], set[str]]:
     """Return action transitions as ``[(bot, action)]`` and current critical set."""
-    critical_bots: Set[str] = set()
+    critical_bots: set[str] = set()
     for finding in findings:
         if str(finding.get("severity", "")) != "critical":
             continue
@@ -302,7 +303,7 @@ def _derive_reconciliation_actions(
             continue
         critical_bots.add(bot)
 
-    actions: List[Tuple[str, str]] = []
+    actions: list[tuple[str, str]] = []
     for bot in sorted(critical_bots - previous_critical_bots):
         actions.append((bot, "enter_critical"))
     for bot in sorted(previous_critical_bots - critical_bots):
@@ -310,7 +311,7 @@ def _derive_reconciliation_actions(
     return actions, critical_bots
 
 
-def _build_execution_intent(bot: str, action: str, reason: str, details: Dict[str, object]) -> Dict[str, object]:
+def _build_execution_intent(bot: str, action: str, reason: str, details: dict[str, object]) -> dict[str, object]:
     event_id = str(uuid.uuid4())
     now_ms = int(time.time() * 1000)
     return {
@@ -332,7 +333,7 @@ def _build_execution_intent(bot: str, action: str, reason: str, details: Dict[st
     }
 
 
-def _inventory_drift_from_minute(minute: Dict[str, str], is_perp: bool, bot_cfg: Dict[str, object]) -> Dict[str, object]:
+def _inventory_drift_from_minute(minute: dict[str, str], is_perp: bool, bot_cfg: dict[str, object]) -> dict[str, object]:
     """Compute inventory drift using a deterministic, mode-aware basis.
 
     Basis choices:
@@ -368,7 +369,7 @@ def _alert_rank(level: str) -> int:
     return {"ok": 0, "warning": 1, "critical": 2}.get(level, 0)
 
 
-def _emit_webhook_alert(report: Dict[str, object], webhook_url: str, min_severity: str) -> bool:
+def _emit_webhook_alert(report: dict[str, object], webhook_url: str, min_severity: str) -> bool:
     status = str(report.get("status", "ok"))
     if _alert_rank(status) < _alert_rank(min_severity):
         return False
@@ -391,7 +392,7 @@ def _emit_webhook_alert(report: Dict[str, object], webhook_url: str, min_severit
 
 
 def _apply_exchange_snapshot_check(
-    findings: List[Dict[str, object]],
+    findings: list[dict[str, object]],
     bot: str,
     base_pct: float,
     exchange_snapshot_path: Path,
@@ -460,7 +461,7 @@ def _apply_exchange_snapshot_check(
         )
 
 
-def _load_thresholds(path: Path) -> Dict[str, object]:
+def _load_thresholds(path: Path) -> dict[str, object]:
     default = {
         "defaults": {
             "inventory_warn": 0.25,
@@ -487,7 +488,7 @@ def _load_thresholds(path: Path) -> Dict[str, object]:
         return default
 
 
-def _bot_thresholds(cfg: Dict[str, object], bot: str) -> Dict[str, object]:
+def _bot_thresholds(cfg: dict[str, object], bot: str) -> dict[str, object]:
     defaults = cfg.get("defaults", {}) if isinstance(cfg.get("defaults"), dict) else {}
     bots = cfg.get("bots", {}) if isinstance(cfg.get("bots"), dict) else {}
     row = bots.get(bot, {}) if isinstance(bots.get(bot, {}), dict) else {}
@@ -574,13 +575,13 @@ def run(once: bool = False, synthetic_drift: bool = False) -> None:
         password=os.getenv("REDIS_PASSWORD", "") or None,
         enabled=publish_actions_enabled,
     )
-    critical_latched_bots: Set[str] = set()
+    critical_latched_bots: set[str] = set()
 
     while True:
         threshold_cfg = _load_thresholds(thresholds_path)
-        findings: List[Dict[str, object]] = []
-        accounting_snapshots: List[Dict[str, object]] = []
-        checked_bot_names: Set[str] = set()
+        findings: list[dict[str, object]] = []
+        accounting_snapshots: list[dict[str, object]] = []
+        checked_bot_names: set[str] = set()
         raw_snapshot_windows = load_bot_snapshot_windows(event_store_root, max_snapshots_per_bot=2)
         snapshot_windows, fallback_snapshot_bots = _snapshot_windows_with_minute_log_fallback(
             event_store_root,
@@ -641,7 +642,7 @@ def run(once: bool = False, synthetic_drift: bool = False) -> None:
 
             equity_quote = _safe_float(minute.get("equity_quote"), -1.0)
             base_pct = _safe_float(minute.get("base_pct"), -1.0)
-            target_base_pct = _safe_float(minute.get("target_base_pct"), base_pct)
+            _safe_float(minute.get("target_base_pct"), base_pct)
             exchange_name = str(minute.get("connector_name", minute.get("exchange", ""))).lower()
             is_perp = ("perpetual" in exchange_name) or exchange_name.endswith("_perp") or ("_perp_" in exchange_name)
             bot_cfg = _bot_thresholds(threshold_cfg, bot)
@@ -759,7 +760,7 @@ def run(once: bool = False, synthetic_drift: bool = False) -> None:
                 # IMPORTANT: `fills.csv` is cumulative across days, while `event_file` is per-day.
                 # Only flag when the bot has activity *today* (per-minute snapshot) but no `order_filled`
                 # events were persisted for today.
-                today_day = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+                today_day = datetime.now(UTC).strftime("%Y-%m-%d")
                 fills_today = int(_safe_float(minute.get("fills_count_today"), 0.0))
                 if minute_day == today_day and fills_today > 0 and fills_events == 0:
                     fill_gap_diag = _telemetry_gap_diagnostics(event_store_root, minute_ts=minute_ts)
@@ -899,7 +900,7 @@ def run(once: bool = False, synthetic_drift: bool = False) -> None:
                         )
                     )
 
-        fill_reconciliation_report: Dict[str, object] = {}
+        fill_reconciliation_report: dict[str, object] = {}
         if fill_reconciliation_enabled:
             fill_reconciliation_report = _load_fill_reconciliation_report(fill_reconciliation_report_path)
             _apply_fill_reconciliation_report(findings, fill_reconciliation_report)
@@ -923,7 +924,7 @@ def run(once: bool = False, synthetic_drift: bool = False) -> None:
             previous_critical_bots=critical_latched_bots,
             allowed_scope=action_scope,
         )
-        published_actions: List[Dict[str, object]] = []
+        published_actions: list[dict[str, object]] = []
         for bot, transition in transition_actions:
             if transition == "enter_critical":
                 action = critical_action
@@ -983,7 +984,7 @@ def run(once: bool = False, synthetic_drift: bool = False) -> None:
             "findings": findings,
             "actions": published_actions,
         }
-        report_path = reports_root / f"reconciliation_{datetime.now(timezone.utc).strftime('%Y%m%dT%H%M%SZ')}.json"
+        report_path = reports_root / f"reconciliation_{datetime.now(UTC).strftime('%Y%m%dT%H%M%SZ')}.json"
         _write_json(report_path, report)
 
         latest_path = reports_root / "latest.json"

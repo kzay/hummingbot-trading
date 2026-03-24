@@ -4,16 +4,15 @@ import argparse
 import json
 import subprocess
 import sys
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
-from typing import Dict, List
 
 
 def _utc_now() -> str:
-    return datetime.now(timezone.utc).isoformat()
+    return datetime.now(UTC).isoformat()
 
 
-def _run(root: Path, name: str, cmd: List[str], dry_run: bool) -> Dict[str, object]:
+def _run(root: Path, name: str, cmd: list[str], dry_run: bool) -> dict[str, object]:
     if dry_run:
         return {"name": name, "rc": 0, "status": "skipped", "cmd": cmd, "output_tail": "dry_run=true"}
     try:
@@ -30,7 +29,7 @@ def _run(root: Path, name: str, cmd: List[str], dry_run: bool) -> Dict[str, obje
         return {"name": name, "rc": 99, "status": "fail", "cmd": cmd, "output_tail": str(exc)}
 
 
-def _write_md(path: Path, payload: Dict[str, object]) -> None:
+def _write_md(path: Path, payload: dict[str, object]) -> None:
     steps = payload.get("steps", []) if isinstance(payload.get("steps"), list) else []
     lines = [
         "# CI Pipeline Summary",
@@ -69,7 +68,7 @@ def main() -> int:
         default="auto",
         help="Runtime passed to run_tests.py and run_promotion_gates.py.",
     )
-    parser.add_argument("--cov-fail-under", type=float, default=5.0, help="Coverage threshold for test step.")
+    parser.add_argument("--cov-fail-under", type=float, default=30.0, help="Coverage threshold for test step.")
     parser.add_argument("--min-events", type=int, default=1000, help="Minimum event rows for replay regression.")
     parser.add_argument("--dry-run", action="store_true", help="Do not execute steps; only emit planned pipeline.")
     args = parser.parse_args()
@@ -168,7 +167,7 @@ def main() -> int:
         },
     }
 
-    stamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
+    stamp = datetime.now(UTC).strftime("%Y%m%dT%H%M%SZ")
     out_json = reports_root / f"ci_pipeline_{stamp}.json"
     out_md = reports_root / f"ci_pipeline_{stamp}.md"
     out_json.write_text(json.dumps(payload, indent=2), encoding="utf-8")

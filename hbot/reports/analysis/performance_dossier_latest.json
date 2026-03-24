@@ -1,112 +1,112 @@
 {
-  "ts_utc": "2026-03-10T00:40:50.218494+00:00",
+  "ts_utc": "2026-03-22T22:54:29.495034+00:00",
   "status": "warning",
-  "bot_log_root": "F:\\Environement\\git-repo\\hummingbot_custo\\hbot\\data\\bot1\\logs\\epp_v24\\bot1_a",
+  "bot_log_root": "data\\bot1\\logs\\epp_v24\\bot1_a",
   "lookback_days": 7,
   "data_source_mode": "csv",
   "summary": {
-    "days_included": 4,
-    "total_net_pnl_quote": -7.130434458537085,
-    "mean_fee_bps": 2.371469644018388,
-    "mean_maker_ratio": 0.8135889798957557,
-    "maker_ratio_mean_daily": 0.8135889798957557,
-    "maker_ratio_weighted": 0.778169014084507,
-    "max_slippage_p95_bps": 4.163225042650315,
-    "max_drawdown_pct": 0.0030448211251818927,
-    "soft_pause_ratio": 0.001488095238095238,
-    "soft_pause_state_ratio": 0.001488095238095238,
-    "soft_pause_edge_ratio": 0.0,
-    "soft_pause_state_rows": 4,
-    "soft_pause_edge_rows": 0,
+    "days_included": 6,
+    "total_net_pnl_quote": -5.766473043085151,
+    "mean_fee_bps": 4.196504913319862,
+    "mean_maker_ratio": 0.5111111111111111,
+    "maker_ratio_mean_daily": 0.5111111111111111,
+    "maker_ratio_weighted": 0.14864864864864866,
+    "max_slippage_p95_bps": 7.0025883431993154,
+    "max_drawdown_pct": 0.0023463535273015044,
+    "soft_pause_ratio": 0.9619200858138911,
+    "soft_pause_state_ratio": 0.9619200858138911,
+    "soft_pause_edge_ratio": 0.002145347278090641,
+    "soft_pause_state_rows": 3587,
+    "soft_pause_edge_rows": 8,
     "selective_quote_block_rows": 0,
     "selective_quote_block_ratio": 0.0,
     "selective_quote_reduce_rows": 0,
     "selective_quote_reduce_ratio": 0.0,
-    "alpha_no_trade_rows": 44,
-    "alpha_no_trade_ratio": 0.01636904761904762,
+    "alpha_no_trade_rows": 143,
+    "alpha_no_trade_ratio": 0.038348082595870206,
     "alpha_aggressive_rows": 0,
     "alpha_aggressive_ratio": 0.0,
     "order_book_stale_rows": 0,
-    "cancel_before_fill_rows": 24,
-    "cancel_before_fill_rate": 0.008928571428571428,
-    "expectancy_sample_count": 284,
-    "expectancy_per_fill_quote": -0.025107163586398164,
-    "expectancy_ci95_low_quote": -0.03526755008268691,
-    "expectancy_ci95_high_quote": -0.01494677709010942,
+    "cancel_before_fill_rows": 0,
+    "cancel_before_fill_rate": 0.0,
+    "expectancy_sample_count": 74,
+    "expectancy_per_fill_quote": -0.07792531139304257,
+    "expectancy_ci95_low_quote": -0.13279804943130985,
+    "expectancy_ci95_high_quote": -0.023052573354775292,
     "rolling_expectancy_window_fills": 300,
-    "rolling_expectancy_sample_count": 284,
-    "rolling_expectancy_per_fill_quote": -0.025107163586398164,
-    "rolling_expectancy_ci95_low_quote": -0.03526755008268691,
-    "rolling_expectancy_ci95_high_quote": -0.01494677709010942,
+    "rolling_expectancy_sample_count": 74,
+    "rolling_expectancy_per_fill_quote": -0.07792531139304257,
+    "rolling_expectancy_ci95_low_quote": -0.13279804943130985,
+    "rolling_expectancy_ci95_high_quote": -0.023052573354775292,
     "rolling_expectancy_gate_min_fills": 300,
     "rolling_expectancy_gate_ready": false,
     "rolling_expectancy_gate_fail": false,
-    "maker_expectancy_sample_count": 221,
-    "maker_expectancy_per_fill_quote": -0.022392970602298258,
-    "maker_expectancy_ci95_low_quote": -0.034689184007598524,
-    "maker_expectancy_ci95_high_quote": -0.01009675719699799,
-    "maker_rolling_expectancy_sample_count": 221,
-    "maker_rolling_expectancy_per_fill_quote": -0.022392970602298258,
-    "maker_rolling_expectancy_ci95_low_quote": -0.034689184007598524,
-    "maker_rolling_expectancy_ci95_high_quote": -0.01009675719699799,
+    "maker_expectancy_sample_count": 11,
+    "maker_expectancy_per_fill_quote": -0.00021082809641292754,
+    "maker_expectancy_ci95_low_quote": -0.041143689581109734,
+    "maker_expectancy_ci95_high_quote": 0.040722033388283875,
+    "maker_rolling_expectancy_sample_count": 11,
+    "maker_rolling_expectancy_per_fill_quote": -0.00021082809641292754,
+    "maker_rolling_expectancy_ci95_low_quote": -0.041143689581109734,
+    "maker_rolling_expectancy_ci95_high_quote": 0.040722033388283875,
     "taker_expectancy_sample_count": 63,
-    "taker_expectancy_per_fill_quote": -0.034628380244907386,
-    "taker_expectancy_ci95_low_quote": -0.04995627917163076,
-    "taker_expectancy_ci95_high_quote": -0.01930048131818402,
+    "taker_expectancy_per_fill_quote": -0.0914945068892795,
+    "taker_expectancy_ci95_low_quote": -0.15505790353050924,
+    "taker_expectancy_ci95_high_quote": -0.02793111024804977,
     "taker_rolling_expectancy_sample_count": 63,
-    "taker_rolling_expectancy_per_fill_quote": -0.034628380244907386,
-    "taker_rolling_expectancy_ci95_low_quote": -0.04995627917163076,
-    "taker_rolling_expectancy_ci95_high_quote": -0.01930048131818402,
+    "taker_rolling_expectancy_per_fill_quote": -0.0914945068892795,
+    "taker_rolling_expectancy_ci95_low_quote": -0.15505790353050924,
+    "taker_rolling_expectancy_ci95_high_quote": -0.02793111024804977,
     "alpha_policy_expectancy": {
-      "no_trade": {
-        "fills": 25.0,
-        "expectancy_per_fill_quote": -0.026311969735343693,
-        "ci95_low_quote": -0.03593426100428003,
-        "ci95_high_quote": -0.016689678466407353
-      },
       "maker_bias_buy": {
-        "fills": 29.0,
-        "expectancy_per_fill_quote": -0.0404216179576299,
-        "ci95_low_quote": -0.06348393595880433,
-        "ci95_high_quote": -0.017359299956455472
+        "fills": 36.0,
+        "expectancy_per_fill_quote": -0.0514271195579523,
+        "ci95_low_quote": -0.0741282510839614,
+        "ci95_high_quote": -0.02872598803194321
       },
       "maker_bias_sell": {
-        "fills": 21.0,
-        "expectancy_per_fill_quote": -0.08239072229668688,
-        "ci95_low_quote": -0.17370783850531393,
-        "ci95_high_quote": 0.008926393911940167
+        "fills": 25.0,
+        "expectancy_per_fill_quote": -0.15058758372287487,
+        "ci95_low_quote": -0.2996390508392749,
+        "ci95_high_quote": -0.0015361166064748188
       },
       "maker_two_sided": {
-        "fills": 209.0,
-        "expectancy_per_fill_quote": -0.017082311608381803,
-        "ci95_low_quote": -0.026632183763972195,
-        "ci95_high_quote": -0.007532439452791412
+        "fills": 7.0,
+        "expectancy_per_fill_quote": 0.029708608396145225,
+        "ci95_low_quote": -0.14777038228104286,
+        "ci95_high_quote": 0.2071875990733333
+      },
+      "no_trade": {
+        "fills": 6.0,
+        "expectancy_per_fill_quote": -0.059727900783335314,
+        "ci95_low_quote": -0.09628143610874074,
+        "ci95_high_quote": -0.02317436545792989
       }
     },
     "regime_expectancy": {
-      "neutral_low_vol": {
-        "fills": 112.0,
-        "expectancy_per_fill_quote": -0.02936936988210847,
-        "ci95_low_quote": -0.04168064698239271,
-        "ci95_high_quote": -0.017058092781824227
-      },
       "up": {
-        "fills": 69.0,
-        "expectancy_per_fill_quote": -0.019383824558948475,
-        "ci95_low_quote": -0.0396419826689689,
-        "ci95_high_quote": 0.0008743335510719499
+        "fills": 15.0,
+        "expectancy_per_fill_quote": -0.054407764989775655,
+        "ci95_low_quote": -0.07837033622645552,
+        "ci95_high_quote": -0.03044519375309579
       },
       "down": {
-        "fills": 71.0,
-        "expectancy_per_fill_quote": -0.026541293491860365,
-        "ci95_low_quote": -0.05452523586884121,
-        "ci95_high_quote": 0.001442648885120485
+        "fills": 19.0,
+        "expectancy_per_fill_quote": -0.09821020970412048,
+        "ci95_low_quote": -0.30688441626890584,
+        "ci95_high_quote": 0.11046399686066488
       },
       "high_vol_shock": {
+        "fills": 8.0,
+        "expectancy_per_fill_quote": -0.0724839261723273,
+        "ci95_low_quote": -0.1773678547140266,
+        "ci95_high_quote": 0.03240000236937203
+      },
+      "neutral_low_vol": {
         "fills": 32.0,
-        "expectancy_per_fill_quote": -0.019348415601606266,
-        "ci95_low_quote": -0.043404772946625356,
-        "ci95_high_quote": 0.004707941743412821
+        "expectancy_per_fill_quote": -0.07826534920255024,
+        "ci95_low_quote": -0.1023138658286005,
+        "ci95_high_quote": -0.05421683257649998
       }
     }
   },
@@ -114,13 +114,13 @@
     {
       "name": "net_pnl_non_negative",
       "pass": false,
-      "value": -7.130434458537085,
+      "value": -5.766473043085151,
       "threshold": 0.0
     },
     {
       "name": "mean_fee_bps_within_0_to_12",
       "pass": true,
-      "value": 2.371469644018388,
+      "value": 4.196504913319862,
       "threshold": [
         0.0,
         12.0
@@ -128,27 +128,27 @@
     },
     {
       "name": "maker_ratio_at_least_45pct",
-      "pass": true,
-      "value": 0.778169014084507,
+      "pass": false,
+      "value": 0.14864864864864866,
       "threshold": 0.45,
       "note": "weighted_by_fills"
     },
     {
       "name": "slippage_p95_below_25bps",
       "pass": true,
-      "value": 4.163225042650315,
+      "value": 7.0025883431993154,
       "threshold": 25.0
     },
     {
       "name": "drawdown_below_2pct",
       "pass": true,
-      "value": 0.0030448211251818927,
+      "value": 0.0023463535273015044,
       "threshold": 0.02
     },
     {
       "name": "soft_pause_state_ratio_below_30pct",
-      "pass": true,
-      "value": 0.001488095238095238,
+      "pass": false,
+      "value": 0.9619200858138911,
       "threshold": 0.3
     },
     {
@@ -166,55 +166,77 @@
     {
       "name": "rolling_expectancy_ci95_upper_non_negative",
       "pass": false,
-      "value": -0.01494677709010942,
+      "value": -0.023052573354775292,
       "threshold": 0.0,
-      "note": "window_fills=300; sample=284; gate_min_fills=300; gate_ready=False"
+      "note": "window_fills=300; sample=74; gate_min_fills=300; gate_ready=False"
     }
   ],
   "daily_breakdown": [
     {
-      "day": "2026-03-07",
-      "fills": 85,
-      "realized_pnl_quote": -2.044896071116553,
-      "fees_quote": 0.6365239946119289,
-      "net_pnl_quote": -2.681420065728482,
-      "fee_bps": 3.4858785760735502,
-      "maker_ratio": 0.3176470588235294,
-      "slippage_median_bps": -0.3309814039936952,
-      "slippage_p95_bps": 2.732479905961875
-    },
-    {
-      "day": "2026-03-08",
-      "fills": 79,
-      "realized_pnl_quote": -2.1694551436248006,
-      "fees_quote": 0.5616025349986681,
-      "net_pnl_quote": -2.731057678623469,
-      "fee_bps": 2.0000000000000004,
-      "maker_ratio": 0.9367088607594937,
-      "slippage_median_bps": 0.09584991966953589,
-      "slippage_p95_bps": 3.908411655488967
-    },
-    {
-      "day": "2026-03-09",
-      "fills": 119,
-      "realized_pnl_quote": -0.9278570607977793,
-      "fees_quote": 0.7790107222251553,
-      "net_pnl_quote": -1.7068677830229346,
+      "day": "2026-03-17",
+      "fills": 2,
+      "realized_pnl_quote": 0.16662787174545585,
+      "fees_quote": 0.014997736348644859,
+      "net_pnl_quote": 0.151630135396811,
       "fee_bps": 1.9999999999999998,
       "maker_ratio": 1.0,
-      "slippage_median_bps": 0.2953813714347493,
-      "slippage_p95_bps": 4.163225042650315
+      "slippage_median_bps": 0.19514387823521157,
+      "slippage_p95_bps": 0.19514387823521157
     },
     {
-      "day": "2026-03-10",
-      "fills": 1,
-      "realized_pnl_quote": 0.0,
-      "fees_quote": 0.011088931162199597,
-      "net_pnl_quote": -0.011088931162199597,
-      "fee_bps": 2.0,
+      "day": "2026-03-18",
+      "fills": 3,
+      "realized_pnl_quote": 0.06608710859907585,
+      "fees_quote": 0.00899518088507219,
+      "net_pnl_quote": 0.05709192771400366,
+      "fee_bps": 1.9999999999999998,
       "maker_ratio": 1.0,
-      "slippage_median_bps": -0.7041440693292732,
-      "slippage_p95_bps": -0.7041440693292732
+      "slippage_median_bps": 3.2193119611060905,
+      "slippage_p95_bps": 3.2193119611060905
+    },
+    {
+      "day": "2026-03-19",
+      "fills": 3,
+      "realized_pnl_quote": -1.8329289615190092,
+      "fees_quote": 0.10595529108053915,
+      "net_pnl_quote": -1.9388842525995484,
+      "fee_bps": 4.188524427745741,
+      "maker_ratio": 0.6666666666666666,
+      "slippage_median_bps": 2.6516500399800242,
+      "slippage_p95_bps": 2.6516500399800242
+    },
+    {
+      "day": "2026-03-20",
+      "fills": 10,
+      "realized_pnl_quote": 0.17307279945142529,
+      "fees_quote": 0.28177619551250355,
+      "net_pnl_quote": -0.10870339606107826,
+      "fee_bps": 4.990505052173434,
+      "maker_ratio": 0.4,
+      "slippage_median_bps": 2.01492468240141,
+      "slippage_p95_bps": 7.0025883431993154
+    },
+    {
+      "day": "2026-03-21",
+      "fills": 52,
+      "realized_pnl_quote": -2.4218970407623526,
+      "fees_quote": 2.19847931829,
+      "net_pnl_quote": -4.6203763590523526,
+      "fee_bps": 6.000000000000001,
+      "maker_ratio": 0.0,
+      "slippage_median_bps": 2.5070950700362413,
+      "slippage_p95_bps": 3.5833944223104632
+    },
+    {
+      "day": "2026-03-22",
+      "fills": 4,
+      "realized_pnl_quote": 0.8582145431170138,
+      "fees_quote": 0.1654456416,
+      "net_pnl_quote": 0.6927689015170139,
+      "fee_bps": 5.999999999999999,
+      "maker_ratio": 0.0,
+      "slippage_median_bps": 2.187757036958982,
+      "slippage_p95_bps": 4.520833921984061
     }
   ],
   "external": {

@@ -5,20 +5,19 @@ import json
 import os
 import re
 import subprocess
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
-from typing import Dict, List
 
 
 def _utc_now() -> str:
-    return datetime.now(timezone.utc).isoformat()
+    return datetime.now(UTC).isoformat()
 
 
 def _root() -> Path:
     return Path("/workspace/hbot") if Path("/.dockerenv").exists() else Path(__file__).resolve().parents[2]
 
 
-def _compose_cmd(root: Path) -> List[str]:
+def _compose_cmd(root: Path) -> list[str]:
     return [
         "docker",
         "compose",
@@ -30,7 +29,7 @@ def _compose_cmd(root: Path) -> List[str]:
     ]
 
 
-def _run_config_with_target(root: Path, target_image: str) -> Dict[str, object]:
+def _run_config_with_target(root: Path, target_image: str) -> dict[str, object]:
     env = dict(**os.environ)
     env["HUMMINGBOT_IMAGE"] = target_image
     cmd = _compose_cmd(root)
@@ -46,9 +45,9 @@ def _run_config_with_target(root: Path, target_image: str) -> Dict[str, object]:
         return {"cmd": cmd, "rc": 2, "stdout": "", "stderr": str(exc)}
 
 
-def _load_env_secret_values(root: Path) -> List[str]:
+def _load_env_secret_values(root: Path) -> list[str]:
     env_path = root / "env" / ".env"
-    values: List[str] = []
+    values: list[str] = []
     if not env_path.exists():
         return values
     secret_key_hints = ("KEY", "SECRET", "PASSPHRASE", "TOKEN", "PASSWORD")
@@ -65,7 +64,7 @@ def _load_env_secret_values(root: Path) -> List[str]:
     return values
 
 
-def _sanitize_text(text: str, secret_values: List[str]) -> str:
+def _sanitize_text(text: str, secret_values: list[str]) -> str:
     out = text
     for secret in secret_values:
         if secret:
@@ -84,7 +83,7 @@ def _current_default_image(compose_text: str) -> str:
     return m.group(1).strip() if m else ""
 
 
-def _write_report(path: Path, payload: Dict[str, object]) -> None:
+def _write_report(path: Path, payload: dict[str, object]) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(json.dumps(payload, indent=2), encoding="utf-8")
 
@@ -112,7 +111,7 @@ def main() -> int:
         "compose_render_with_target": bool(render_ok),
         "target_differs_from_current_default": bool(changed),
     }
-    notes: List[str] = []
+    notes: list[str] = []
     if not changed:
         notes.append("target image equals current default; no upgrade delta")
     if not render_ok:
@@ -129,7 +128,7 @@ def main() -> int:
     }
 
     out_dir = root / "reports" / "upgrade"
-    stamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
+    stamp = datetime.now(UTC).strftime("%Y%m%dT%H%M%SZ")
     out = out_dir / f"hb_upgrade_readiness_{stamp}.json"
     _write_report(out, payload)
     _write_report(out_dir / "latest.json", payload)

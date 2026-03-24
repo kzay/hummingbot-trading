@@ -4,11 +4,13 @@ import argparse
 import json
 import logging
 import os
+import ssl
 import threading
 import time
+from collections.abc import Iterable
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any, Dict, Iterable, List, Optional, Set, Tuple
+from typing import Any
 
 try:
     import ccxt  # type: ignore
@@ -16,13 +18,31 @@ except Exception:  # pragma: no cover - optional in lightweight test environment
     ccxt = None  # type: ignore[assignment]
 
 try:
+    import certifi as _certifi  # type: ignore
+
+    _SSL_CA_CERTS: str | None = _certifi.where()
+except Exception:  # pragma: no cover - certifi optional; fall back to no extra CA bundle
+    _SSL_CA_CERTS = None
+
+try:
     import websocket  # type: ignore
 except Exception:  # pragma: no cover - optional in lightweight test environments.
     websocket = None  # type: ignore[assignment]
 
-from services.common.logging_config import configure_logging
-from services.common.models import RedisSettings
-from services.contracts.event_schemas import MarketDepthSnapshotEvent, MarketQuoteEvent, MarketTradeEvent
+
+def _ws_sslopt() -> dict:
+    """Return an sslopt dict for websocket-client that trusts certifi's CA bundle.
+
+    Falls back to the system default if certifi is unavailable, and never
+    disables verification entirely — this guards against MITM on public feeds.
+    """
+    if _SSL_CA_CERTS:
+        return {"ca_certs": _SSL_CA_CERTS, "cert_reqs": ssl.CERT_REQUIRED}
+    return {}
+
+from platform_lib.logging.logging_config import configure_logging
+from platform_lib.core.models import RedisSettings
+from platform_lib.contracts.event_schemas import MarketDepthSnapshotEvent, MarketQuoteEvent, MarketTradeEvent
 from services.hb_bridge.publisher import HBEventPublisher
 from services.hb_bridge.redis_client import RedisStreamClient
 
@@ -34,7 +54,7 @@ def _now_ms() -> int:
     return int(time.time() * 1000)
 
 
-def _safe_float(value: Any) -> Optional[float]:
+def _safe_float(value: Any) -> float | None:
     try:
         if value in (None, ""):
             return None
@@ -43,7 +63,7 @@ def _safe_float(value: Any) -> Optional[float]:
         return None
 
 
-def _safe_int(value: Any) -> Optional[int]:
+def _safe_int(value: Any) -> int | None:
     try:
         if value in (None, ""):
             return None
@@ -81,16 +101,16 @@ def _connector_market_type(connector_name: str) -> str:
     return "spot"
 
 
-def _mid_price(best_bid: Optional[float], best_ask: Optional[float], fallback: Optional[float]) -> Optional[float]:
+def _mid_price(best_bid: float | None, best_ask: float | None, fallback: float | None) -> float | None:
     if best_bid is not None and best_ask is not None and best_ask >= best_bid:
         return (best_bid + best_ask) / 2.0
     return fallback
 
 
-def _normalize_depth_levels(levels: Any, max_levels: int) -> List[Dict[str, float]]:
+def _normalize_depth_levels(levels: Any, max_levels: int) -> list[dict[str, float]]:
     if not isinstance(levels, list):
         return []
-    out: List[Dict[str, float]] = []
+    out: list[dict[str, float]] = []
     for row in levels:
         price = None
         size = None
@@ -108,7 +128,7 @@ def _normalize_depth_levels(levels: Any, max_levels: int) -> List[Dict[str, floa
     return out
 
 
-def _extract_market_sequence(*sources: Any, keys: Tuple[str, ...] = ("u", "seq", "sequence", "version")) -> Optional[int]:
+def _extract_market_sequence(*sources: Any, keys: tuple[str, ...] = ("u", "seq", "sequence", "version")) -> int | None:
     for source in sources:
         if not isinstance(source, dict):
             continue
@@ -129,8 +149,8 @@ class MarketSubscription:
         return _normalize_pair(self.trading_pair)
 
 
-def _parse_subscriptions(raw: str) -> List[MarketSubscription]:
-    subscriptions: List[MarketSubscription] = []
+def _parse_subscriptions(raw: str) -> list[MarketSubscription]:
+    subscriptions: list[MarketSubscription] = []
     for chunk in str(raw or "").split(","):
         item = chunk.strip()
         if not item:
@@ -147,7 +167,7 @@ def _canonical_connector_name(value: str) -> str:
     if not raw.endswith("_paper_trade"):
         return raw
     try:
-        from services.common.exchange_profiles import resolve_profile
+        from platform_lib.market_data.exchange_profiles import resolve_profile
 
         profile = resolve_profile(raw)
         if isinstance(profile, dict):
@@ -159,14 +179,14 @@ def _canonical_connector_name(value: str) -> str:
     return raw[:-12]
 
 
-def _subscription_key(subscription: MarketSubscription) -> Tuple[str, str]:
+def _subscription_key(subscription: MarketSubscription) -> tuple[str, str]:
     return (
         _canonical_connector_name(subscription.connector_name).strip().lower(),
         subscription.normalized_pair,
     )
 
 
-def _read_controller_subscription(path: Path) -> Optional[MarketSubscription]:
+def _read_controller_subscription(path: Path) -> MarketSubscription | None:
     connector_name = ""
     trading_pair = ""
     try:
@@ -192,9 +212,9 @@ def _read_controller_subscription(path: Path) -> Optional[MarketSubscription]:
     )
 
 
-def _discover_subscriptions_from_controller_configs(root: Path) -> List[MarketSubscription]:
-    subscriptions: List[MarketSubscription] = []
-    seen: Set[Tuple[str, str]] = set()
+def _discover_subscriptions_from_controller_configs(root: Path) -> list[MarketSubscription]:
+    subscriptions: list[MarketSubscription] = []
+    seen: set[tuple[str, str]] = set()
     try:
         candidates = sorted(root.glob("bot*/conf/controllers/*.yml"))
     except Exception:
@@ -211,7 +231,7 @@ def _discover_subscriptions_from_controller_configs(root: Path) -> List[MarketSu
     return subscriptions
 
 
-def _resolve_subscriptions() -> List[MarketSubscription]:
+def _resolve_subscriptions() -> list[MarketSubscription]:
     configured = _parse_subscriptions(os.getenv("MARKET_DATA_SERVICE_SUBSCRIPTIONS", ""))
     auto_discover = os.getenv("MARKET_DATA_SERVICE_AUTO_DISCOVER", "true").strip().lower() in {"1", "true", "yes", "on"}
     if not auto_discover:
@@ -229,8 +249,8 @@ def _resolve_subscriptions() -> List[MarketSubscription]:
             for subscription in discovered
             if subscription.connector_name.strip().lower() in allowed_connectors
         ]
-    merged: List[MarketSubscription] = []
-    seen: Set[Tuple[str, str]] = set()
+    merged: list[MarketSubscription] = []
+    seen: set[tuple[str, str]] = set()
     for subscription in configured + discovered:
         key = _subscription_key(subscription)
         if key in seen:
@@ -245,7 +265,7 @@ def _resolve_subscriptions() -> List[MarketSubscription]:
     return merged
 
 
-def _ccxt_exchange_id(connector_name: str) -> Optional[str]:
+def _ccxt_exchange_id(connector_name: str) -> str | None:
     normalized = str(connector_name or "").strip().lower()
     if normalized.startswith("bitget"):
         return "bitget"
@@ -256,7 +276,7 @@ def _ccxt_exchange_id(connector_name: str) -> Optional[str]:
     return None
 
 
-def _fetch_rest_bootstrap_quote(subscription: MarketSubscription) -> Optional[MarketQuoteEvent]:
+def _fetch_rest_bootstrap_quote(subscription: MarketSubscription) -> MarketQuoteEvent | None:
     if ccxt is None:
         return None
     exchange_id = _ccxt_exchange_id(subscription.connector_name)
@@ -296,7 +316,7 @@ def _fetch_rest_bootstrap_quote(subscription: MarketSubscription) -> Optional[Ma
         return None
 
 
-def _build_bitget_quote_event(payload: Dict[str, Any], subscription: MarketSubscription) -> Optional[MarketQuoteEvent]:
+def _build_bitget_quote_event(payload: dict[str, Any], subscription: MarketSubscription) -> MarketQuoteEvent | None:
     data = payload.get("data")
     if not isinstance(data, list) or not data:
         return None
@@ -330,7 +350,7 @@ def _build_bitget_quote_event(payload: Dict[str, Any], subscription: MarketSubsc
     )
 
 
-def _build_binance_quote_event(payload: Dict[str, Any], subscription: MarketSubscription) -> Optional[MarketQuoteEvent]:
+def _build_binance_quote_event(payload: dict[str, Any], subscription: MarketSubscription) -> MarketQuoteEvent | None:
     best_bid = _safe_float(payload.get("b"))
     best_ask = _safe_float(payload.get("a"))
     if best_bid is None or best_ask is None:
@@ -356,13 +376,13 @@ def _build_binance_quote_event(payload: Dict[str, Any], subscription: MarketSubs
     )
 
 
-def _build_bitget_trade_events(payload: Dict[str, Any], subscription: MarketSubscription) -> List[MarketTradeEvent]:
+def _build_bitget_trade_events(payload: dict[str, Any], subscription: MarketSubscription) -> list[MarketTradeEvent]:
     data = payload.get("data")
     if not isinstance(data, list):
         return []
     channel = str(((payload.get("arg") or {}) if isinstance(payload.get("arg"), dict) else {}).get("channel", ""))
     venue_symbol = str(((payload.get("arg") or {}) if isinstance(payload.get("arg"), dict) else {}).get("instId", "")) or _bitget_inst_id(subscription.normalized_pair)
-    out: List[MarketTradeEvent] = []
+    out: list[MarketTradeEvent] = []
     for row in data:
         if not isinstance(row, dict):
             continue
@@ -396,7 +416,7 @@ def _build_bitget_trade_events(payload: Dict[str, Any], subscription: MarketSubs
     return out
 
 
-def _build_binance_trade_event(payload: Dict[str, Any], subscription: MarketSubscription) -> Optional[MarketTradeEvent]:
+def _build_binance_trade_event(payload: dict[str, Any], subscription: MarketSubscription) -> MarketTradeEvent | None:
     price = _safe_float(payload.get("p"))
     size = _safe_float(payload.get("q"))
     if price is None or size is None or price <= 0 or size <= 0:
@@ -426,11 +446,11 @@ def _build_binance_trade_event(payload: Dict[str, Any], subscription: MarketSubs
 
 
 def _build_bitget_depth_event(
-    payload: Dict[str, Any],
+    payload: dict[str, Any],
     subscription: MarketSubscription,
     *,
     depth_levels: int,
-) -> Optional[MarketDepthSnapshotEvent]:
+) -> MarketDepthSnapshotEvent | None:
     data = payload.get("data")
     if not isinstance(data, list) or not data:
         return None
@@ -464,11 +484,11 @@ def _build_bitget_depth_event(
 
 
 def _build_binance_depth_event(
-    payload: Dict[str, Any],
+    payload: dict[str, Any],
     subscription: MarketSubscription,
     *,
     depth_levels: int,
-) -> Optional[MarketDepthSnapshotEvent]:
+) -> MarketDepthSnapshotEvent | None:
     bids = _normalize_depth_levels(payload.get("b"), depth_levels)
     asks = _normalize_depth_levels(payload.get("a"), depth_levels)
     if not bids and not asks:
@@ -500,7 +520,7 @@ class MarketDataServiceConfig:
     enabled: bool = field(
         default_factory=lambda: os.getenv("MARKET_DATA_SERVICE_ENABLED", "false").strip().lower() in {"1", "true", "yes"}
     )
-    subscriptions: List[MarketSubscription] = field(
+    subscriptions: list[MarketSubscription] = field(
         default_factory=_resolve_subscriptions
     )
     reconnect_delay_sec: float = field(
@@ -529,12 +549,12 @@ class _AdapterThread(threading.Thread):
         self._cfg = cfg
         self._publisher = publisher
         self._stop = threading.Event()
-        self._last_quote_ms: Optional[int] = None
-        self._last_depth_ms: Optional[int] = None
-        self._last_trade_ms: Optional[int] = None
+        self._last_quote_ms: int | None = None
+        self._last_depth_ms: int | None = None
+        self._last_trade_ms: int | None = None
         self._last_error: str = ""
         self._connected = False
-        self._last_depth_publish_key: Optional[Tuple[Optional[float], Optional[float], Optional[float], Optional[float]]] = None
+        self._last_depth_publish_key: tuple[float | None, float | None, float | None, float | None] | None = None
 
     @property
     def subscription(self) -> MarketSubscription:
@@ -543,7 +563,7 @@ class _AdapterThread(threading.Thread):
     def stop(self) -> None:
         self._stop.set()
 
-    def status(self) -> Dict[str, Any]:
+    def status(self) -> dict[str, Any]:
         quote_age_ms = None if self._last_quote_ms is None else max(0, _now_ms() - self._last_quote_ms)
         depth_age_ms = None if self._last_depth_ms is None else max(0, _now_ms() - self._last_depth_ms)
         trade_age_ms = None if self._last_trade_ms is None else max(0, _now_ms() - self._last_trade_ms)
@@ -584,7 +604,7 @@ class _AdapterThread(threading.Thread):
 
     def _should_publish_depth(
         self,
-        depth_key: Tuple[Optional[float], Optional[float], Optional[float], Optional[float]],
+        depth_key: tuple[float | None, float | None, float | None, float | None],
         *,
         now_ms: int,
     ) -> bool:
@@ -642,7 +662,7 @@ class _BitgetQuoteAdapter(_AdapterThread):
         market_type = _connector_market_type(subscription.connector_name)
         inst_type = "USDT-FUTURES" if market_type == "perp" else "SPOT"
 
-        def on_open(ws_app) -> None:  # noqa: ANN001
+        def on_open(ws_app) -> None:
             self._connected = True
             args = [
                 {
@@ -675,7 +695,7 @@ class _BitgetQuoteAdapter(_AdapterThread):
                 )
             )
 
-        def on_message(_ws_app, raw: str) -> None:  # noqa: ANN001
+        def on_message(_ws_app, raw: str) -> None:
             if not raw:
                 return
             payload = json.loads(raw)
@@ -696,15 +716,15 @@ class _BitgetQuoteAdapter(_AdapterThread):
                 if depth_event is not None:
                     self._publish_depth(depth_event)
 
-        def on_error(_ws_app, err: Any) -> None:  # noqa: ANN001
+        def on_error(_ws_app, err: Any) -> None:
             self._connected = False
             self._last_error = str(err)
 
-        def on_close(_ws_app, _code: Any, _msg: Any) -> None:  # noqa: ANN001
+        def on_close(_ws_app, _code: Any, _msg: Any) -> None:
             self._connected = False
 
         app = websocket.WebSocketApp(url, on_open=on_open, on_message=on_message, on_error=on_error, on_close=on_close)
-        app.run_forever(ping_interval=20, ping_timeout=10)
+        app.run_forever(ping_interval=20, ping_timeout=10, sslopt=_ws_sslopt())
 
 
 class _BinanceQuoteAdapter(_AdapterThread):
@@ -722,10 +742,10 @@ class _BinanceQuoteAdapter(_AdapterThread):
             else:
                 url = f"wss://stream.binance.com:9443/stream?streams={symbol}@bookTicker/{symbol}@trade"
 
-        def on_open(_ws_app) -> None:  # noqa: ANN001
+        def on_open(_ws_app) -> None:
             self._connected = True
 
-        def on_message(_ws_app, raw: str) -> None:  # noqa: ANN001
+        def on_message(_ws_app, raw: str) -> None:
             if not raw:
                 return
             payload = json.loads(raw)
@@ -748,15 +768,15 @@ class _BinanceQuoteAdapter(_AdapterThread):
                 if depth_event is not None:
                     self._publish_depth(depth_event)
 
-        def on_error(_ws_app, err: Any) -> None:  # noqa: ANN001
+        def on_error(_ws_app, err: Any) -> None:
             self._connected = False
             self._last_error = str(err)
 
-        def on_close(_ws_app, _code: Any, _msg: Any) -> None:  # noqa: ANN001
+        def on_close(_ws_app, _code: Any, _msg: Any) -> None:
             self._connected = False
 
         app = websocket.WebSocketApp(url, on_open=on_open, on_message=on_message, on_error=on_error, on_close=on_close)
-        app.run_forever(ping_interval=20, ping_timeout=10)
+        app.run_forever(ping_interval=20, ping_timeout=10, sslopt=_ws_sslopt())
 
 
 def _build_adapter(subscription: MarketSubscription, cfg: MarketDataServiceConfig, publisher: HBEventPublisher) -> _AdapterThread:

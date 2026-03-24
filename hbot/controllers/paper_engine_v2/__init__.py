@@ -2,22 +2,22 @@
 
 Import from here rather than individual modules.
 """
-from controllers.paper_engine_v2.data_feeds import (
+from simulation.config import PaperEngineConfig
+from simulation.data_feeds import (
     HummingbotDataFeed,
     MarketDataFeed,
     NullDataFeed,
     ReplayDataFeed,
     StaticDataFeed,
 )
-from controllers.paper_engine_v2.config import PaperEngineConfig
-from controllers.paper_engine_v2.desk import DeskConfig, PaperDesk
-from controllers.paper_engine_v2.fee_models import (
+from simulation.desk import DeskConfig, PaperDesk
+from simulation.fee_models import (
     FeeModel,
     FixedFeeModel,
     MakerTakerFeeModel,
     TieredFeeModel,
 )
-from controllers.paper_engine_v2.fill_models import (
+from simulation.fill_models import (
     BestPriceFillModel,
     CompetitionAwareFillModel,
     FillDecision,
@@ -28,22 +28,23 @@ from controllers.paper_engine_v2.fill_models import (
     QueuePositionFillModel,
     SizeAwareFillModel,
     ThreeTierFillModel,
-    TwoTierFillModel,
     TopOfBookFillModel,
+    TwoTierFillModel,
 )
-from controllers.paper_engine_v2.funding_simulator import FundingSimulator
-from controllers.paper_engine_v2.latency_model import (
+from simulation.funding_simulator import FundingSimulator
+from simulation.latency_model import (
     FAST_LATENCY,
     NO_LATENCY,
     PAPER_DEFAULT_LATENCY,
     REALISTIC_LATENCY,
     LatencyModel,
 )
-from controllers.paper_engine_v2.matching_engine import EngineConfig, OrderMatchingEngine
-from controllers.paper_engine_v2.portfolio import PaperPortfolio, PortfolioConfig
-from controllers.paper_engine_v2.state_store import DeskStateStore
-from controllers.paper_engine_v2.types import (
+from simulation.matching_engine import EngineConfig, OrderMatchingEngine
+from simulation.portfolio import PaperPortfolio, PortfolioConfig
+from simulation.state_store import DeskStateStore
+from simulation.types import (
     BookLevel,
+    CancelRejected,
     EngineError,
     EngineEvent,
     FundingApplied,
@@ -52,6 +53,7 @@ from controllers.paper_engine_v2.types import (
     OrderAccepted,
     OrderBookSnapshot,
     OrderCanceled,
+    OrderExpired,
     OrderFilled,
     OrderRejected,
     OrderSide,
@@ -64,62 +66,64 @@ from controllers.paper_engine_v2.types import (
 )
 
 __all__ = [
-    # Types
-    "InstrumentId",
-    "InstrumentSpec",
+    "FAST_LATENCY",
+    "NO_LATENCY",
+    "PAPER_DEFAULT_LATENCY",
+    "REALISTIC_LATENCY",
+    "BestPriceFillModel",
     "BookLevel",
-    "OrderBookSnapshot",
-    "PaperOrder",
-    "PaperOrderType",
-    "PaperPosition",
-    "PositionAction",
-    "OrderSide",
-    "OrderStatus",
+    "CancelRejected",
+    "CompetitionAwareFillModel",
+    "DeskConfig",
+    "DeskStateStore",
+    "EngineConfig",
+    "EngineError",
     # Events
     "EngineEvent",
-    "OrderAccepted",
-    "OrderRejected",
-    "OrderFilled",
-    "OrderCanceled",
-    "PositionChanged",
-    "FundingApplied",
-    "EngineError",
-    # Core
-    "OrderMatchingEngine",
-    "EngineConfig",
-    "PaperPortfolio",
-    "PortfolioConfig",
-    "PaperDesk",
-    "DeskConfig",
-    "PaperEngineConfig",
+    "FeeModel",
     # Models
     "FillDecision",
     "FillModel",
-    "BestPriceFillModel",
-    "OneTickSlippageFillModel",
-    "TwoTierFillModel",
-    "ThreeTierFillModel",
-    "CompetitionAwareFillModel",
-    "SizeAwareFillModel",
-    "MarketHoursAwareFillModel",
-    "QueuePositionFillModel",
-    "TopOfBookFillModel",
-    "LatencyAwareFillModel",
-    "FeeModel",
-    "MakerTakerFeeModel",
-    "TieredFeeModel",
     "FixedFeeModel",
-    "LatencyModel",
-    "NO_LATENCY",
-    "FAST_LATENCY",
-    "REALISTIC_LATENCY",
-    "PAPER_DEFAULT_LATENCY",
+    "FundingApplied",
     # Utilities
     "FundingSimulator",
-    "DeskStateStore",
-    "MarketDataFeed",
-    "NullDataFeed",
-    "StaticDataFeed",
     "HummingbotDataFeed",
+    # Types
+    "InstrumentId",
+    "InstrumentSpec",
+    "LatencyAwareFillModel",
+    "LatencyModel",
+    "MakerTakerFeeModel",
+    "MarketDataFeed",
+    "MarketHoursAwareFillModel",
+    "NullDataFeed",
+    "OneTickSlippageFillModel",
+    "OrderAccepted",
+    "OrderBookSnapshot",
+    "OrderCanceled",
+    "OrderExpired",
+    "OrderFilled",
+    # Core
+    "OrderMatchingEngine",
+    "OrderRejected",
+    "OrderSide",
+    "OrderStatus",
+    "PaperDesk",
+    "PaperEngineConfig",
+    "PaperOrder",
+    "PaperOrderType",
+    "PaperPortfolio",
+    "PaperPosition",
+    "PortfolioConfig",
+    "PositionAction",
+    "PositionChanged",
+    "QueuePositionFillModel",
     "ReplayDataFeed",
+    "SizeAwareFillModel",
+    "StaticDataFeed",
+    "ThreeTierFillModel",
+    "TieredFeeModel",
+    "TopOfBookFillModel",
+    "TwoTierFillModel",
 ]

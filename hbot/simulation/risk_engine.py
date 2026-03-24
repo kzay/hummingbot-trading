@@ -14,17 +14,16 @@ Liquidation ladder (inspired by exchange perp liquidation systems):
 from __future__ import annotations
 
 import logging
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from decimal import Decimal
-from enum import Enum
-from typing import Dict, List, Optional, Tuple
+from enum import Enum, StrEnum
 
-from controllers.paper_engine_v2.types import (
+from simulation.types import (
+    _ZERO,
     InstrumentId,
     InstrumentSpec,
     OrderSide,
     PaperOrder,
-    _ZERO,
 )
 
 logger = logging.getLogger(__name__)
@@ -34,7 +33,7 @@ logger = logging.getLogger(__name__)
 # Risk levels
 # ---------------------------------------------------------------------------
 
-class MarginLevel(str, Enum):
+class MarginLevel(StrEnum):
     SAFE = "safe"
     WARN = "warn"
     CRITICAL = "critical"
@@ -107,7 +106,7 @@ class RiskEngine:
         portfolio_peak_equity: Decimal,
         position_abs_qty: Decimal,
         net_exposure_quote: Decimal,
-        mid_price: Optional[Decimal] = None,
+        mid_price: Decimal | None = None,
         margin_level: MarginLevel = MarginLevel.SAFE,
     ) -> RiskDecision:
         """Pre-trade risk check. Returns RiskDecision(allowed=True/False)."""
@@ -120,9 +119,11 @@ class RiskEngine:
             if dd > self._cfg.max_drawdown_pct_hard:
                 return RiskDecision(False, "drawdown_hard_stop")
 
-        # Block new opening trades during critical/liquidate margin states
+        # Block new opening trades during critical/liquidate margin states,
+        # but allow reduce_only orders so the position can unwind.
         if margin_level in (MarginLevel.CRITICAL, MarginLevel.LIQUIDATE, MarginLevel.BANKRUPT):
-            return RiskDecision(False, f"margin_level_{margin_level.value}")
+            if not order.reduce_only:
+                return RiskDecision(False, f"margin_level_{margin_level.value}")
 
         # Position notional cap
         new_notional = (position_abs_qty + order.quantity) * mid_price
@@ -176,8 +177,8 @@ class RiskEngine:
         self,
         equity: Decimal,
         maintenance_margin: Decimal,
-        positions: Dict[str, Tuple[Decimal, InstrumentId]],  # key -> (signed_qty, iid)
-    ) -> Tuple[MarginLevel, List[LiquidationAction]]:
+        positions: dict[str, tuple[Decimal, InstrumentId]],  # key -> (signed_qty, iid)
+    ) -> tuple[MarginLevel, list[LiquidationAction]]:
         """Post-trade risk evaluation. Returns margin level + any actions.
 
         Liquidation actions are advisory: the desk should route them as
@@ -197,11 +198,11 @@ class RiskEngine:
         (MarginLevel, list[LiquidationAction])
         """
         level = self.assess_margin_level(equity, maintenance_margin)
-        actions: List[LiquidationAction] = []
+        actions: list[LiquidationAction] = []
 
         if level == MarginLevel.BANKRUPT:
             # Force-close all positions.
-            for key, (qty, iid) in positions.items():
+            for _key, (qty, iid) in positions.items():
                 if qty == _ZERO or not iid.is_perp:
                     continue
                 side = OrderSide.SELL if qty > _ZERO else OrderSide.BUY
@@ -216,7 +217,7 @@ class RiskEngine:
         elif level == MarginLevel.LIQUIDATE:
             # Reduce each perp position by `liquidation_reduce_pct`.
             reduce_pct = self._cfg.liquidation_reduce_pct
-            for key, (qty, iid) in positions.items():
+            for _key, (qty, iid) in positions.items():
                 if qty == _ZERO or not iid.is_perp:
                     continue
                 reduce_qty = abs(qty) * reduce_pct

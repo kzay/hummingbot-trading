@@ -14,13 +14,13 @@ import json
 import logging
 from decimal import Decimal
 from pathlib import Path
-from typing import Dict, Optional, Protocol
+from typing import Protocol
 
-from controllers.paper_engine_v2.types import (
+from simulation.types import (
+    _ZERO,
     BookLevel,
     InstrumentId,
     OrderBookSnapshot,
-    _ZERO,
 )
 
 logger = logging.getLogger(__name__)
@@ -31,8 +31,8 @@ logger = logging.getLogger(__name__)
 # ---------------------------------------------------------------------------
 
 class MarketDataFeed(Protocol):
-    def get_book(self, instrument_id: InstrumentId) -> Optional[OrderBookSnapshot]: ...
-    def get_mid_price(self, instrument_id: InstrumentId) -> Optional[Decimal]: ...
+    def get_book(self, instrument_id: InstrumentId) -> OrderBookSnapshot | None: ...
+    def get_mid_price(self, instrument_id: InstrumentId) -> Decimal | None: ...
     def get_funding_rate(self, instrument_id: InstrumentId) -> Decimal: ...
 
 
@@ -43,10 +43,10 @@ class MarketDataFeed(Protocol):
 class NullDataFeed:
     """Returns None for all queries. Used in unit tests."""
 
-    def get_book(self, instrument_id: InstrumentId) -> Optional[OrderBookSnapshot]:
+    def get_book(self, instrument_id: InstrumentId) -> OrderBookSnapshot | None:
         return None
 
-    def get_mid_price(self, instrument_id: InstrumentId) -> Optional[Decimal]:
+    def get_mid_price(self, instrument_id: InstrumentId) -> Decimal | None:
         return None
 
     def get_funding_rate(self, instrument_id: InstrumentId) -> Decimal:
@@ -64,10 +64,10 @@ class StaticDataFeed:
         self._book = book
         self._rate = funding_rate
 
-    def get_book(self, instrument_id: InstrumentId) -> Optional[OrderBookSnapshot]:
+    def get_book(self, instrument_id: InstrumentId) -> OrderBookSnapshot | None:
         return self._book
 
-    def get_mid_price(self, instrument_id: InstrumentId) -> Optional[Decimal]:
+    def get_mid_price(self, instrument_id: InstrumentId) -> Decimal | None:
         return self._book.mid_price if self._book else None
 
     def get_funding_rate(self, instrument_id: InstrumentId) -> Decimal:
@@ -89,7 +89,7 @@ class HummingbotDataFeed:
         self._connector = connector
         self._trading_pair = trading_pair
 
-    def get_book(self, instrument_id: InstrumentId) -> Optional[OrderBookSnapshot]:
+    def get_book(self, instrument_id: InstrumentId) -> OrderBookSnapshot | None:
         try:
             book = self._connector.get_order_book(self._trading_pair)
             if book is None:
@@ -104,7 +104,7 @@ class HummingbotDataFeed:
                     s = Decimal(str(getattr(entry, "amount", 0)))
                     if p > _ZERO and s > _ZERO:
                         bids.append(BookLevel(price=p, size=s))
-            except Exception:
+            except Exception:  # connector API: broad catch justified
                 pass
 
             try:
@@ -113,7 +113,7 @@ class HummingbotDataFeed:
                     s = Decimal(str(getattr(entry, "amount", 0)))
                     if p > _ZERO and s > _ZERO:
                         asks.append(BookLevel(price=p, size=s))
-            except Exception:
+            except Exception:  # connector API: broad catch justified
                 pass
 
             if not bids and not asks:
@@ -130,9 +130,9 @@ class HummingbotDataFeed:
             logger.debug("HB book read failed: %s", exc)
             return None
 
-    def get_mid_price(self, instrument_id: InstrumentId) -> Optional[Decimal]:
+    def get_mid_price(self, instrument_id: InstrumentId) -> Decimal | None:
         try:
-            from hummingbot.core.data_type.common import PriceType  # type: ignore
+            from hummingbot.core.data_type.common import PriceType  # type: ignore[import-untyped]
             v = self._connector.get_price_by_type(self._trading_pair, PriceType.MidPrice)
             p = Decimal(str(v)) if v else None
             return p if p and p > _ZERO else None
@@ -147,7 +147,7 @@ class HummingbotDataFeed:
                 v = rates.get(self._trading_pair)
                 if v is not None:
                     return Decimal(str(v))
-        except Exception:
+        except (ValueError, TypeError, AttributeError, ArithmeticError):
             pass
         return _ZERO
 
@@ -165,7 +165,7 @@ class ReplayDataFeed:
 
     def __init__(self, events_path: str, trading_pair: str):
         self._trading_pair = trading_pair
-        self._snapshots: list[Dict] = []
+        self._snapshots: list[dict] = []
         self._idx: int = 0
         self._load(events_path)
 
@@ -184,11 +184,11 @@ class ReplayDataFeed:
                     continue
                 if ev.get("event_type") in {"market_snapshot", "market_quote"}:
                     self._snapshots.append(ev)
-            except Exception:
+            except (json.JSONDecodeError, ValueError, KeyError, TypeError):
                 pass
         logger.info("ReplayDataFeed: loaded %d snapshots for %s", len(self._snapshots), self._trading_pair)
 
-    def get_book(self, instrument_id: InstrumentId) -> Optional[OrderBookSnapshot]:
+    def get_book(self, instrument_id: InstrumentId) -> OrderBookSnapshot | None:
         if self._idx >= len(self._snapshots):
             return None
         ev = self._snapshots[self._idx]
@@ -216,7 +216,7 @@ class ReplayDataFeed:
             timestamp_ns=int(ev.get("timestamp_ms", 0) * 1_000_000),
         )
 
-    def get_mid_price(self, instrument_id: InstrumentId) -> Optional[Decimal]:
+    def get_mid_price(self, instrument_id: InstrumentId) -> Decimal | None:
         book = self.get_book(instrument_id)
         return book.mid_price if book else None
 

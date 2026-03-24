@@ -7,10 +7,10 @@ from __future__ import annotations
 
 import logging
 from decimal import Decimal
-from typing import Any, Optional
+from typing import Any
 
-from services.common.fee_provider import FeeResolver
-from services.common.utils import to_decimal
+from platform_lib.execution.fee_provider import FeeResolver
+from platform_lib.core.utils import to_decimal
 
 logger = logging.getLogger(__name__)
 

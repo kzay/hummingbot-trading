@@ -15,12 +15,12 @@ export function GateTimelineTable({ rows, emptyMessage }: GateTimelineTableProps
       <table>
         <thead>
           <tr>
-            <th>Start</th>
-            <th>End</th>
-            <th>Duration</th>
-            <th>Status</th>
-            <th>Reason</th>
-            <th>State / Regime</th>
+            <th scope="col">Start</th>
+            <th scope="col">End</th>
+            <th scope="col">Duration</th>
+            <th scope="col">Status</th>
+            <th scope="col">Reason</th>
+            <th scope="col">State / Regime</th>
           </tr>
         </thead>
         <tbody>

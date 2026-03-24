@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from services.common.canonical_market_state import parse_canonical_market_state
+from platform_lib.market_data.canonical_market_state import parse_canonical_market_state
 from services.market_data_service.main import (
     MarketDataServiceConfig,
     MarketSubscription,

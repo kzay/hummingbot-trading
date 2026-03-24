@@ -8,8 +8,7 @@
 - Compose runtime:
   - `infra/compose/docker-compose.yml`
   - new services:
-    - `postgres` (profile `ops`)
-    - optional `pgadmin` (profile `ops-tools`)
+    - `postgres` (default profile — no `--profile` flag needed)
   - new volume:
     - `postgres-data`
 - Grafana datasource provisioning:

@@ -3,9 +3,8 @@ from __future__ import annotations
 
 import argparse
 import json
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
-from typing import Dict
 
 from scripts.analysis.pnl_governor_ab_tuning import _build_report, _compute_metrics, _utc_now
 
@@ -18,7 +17,7 @@ def _run_window(
     single_root: str,
     label_a: str,
     label_b: str,
-) -> Dict:
+) -> dict:
     until = _utc_now()
     since = until
     if hours > 0:
@@ -91,7 +90,7 @@ def main() -> int:
     out_2h.write_text(json.dumps(reports["2h"], indent=2), encoding="utf-8")
     out_24h.write_text(json.dumps(reports["24h"], indent=2), encoding="utf-8")
     combined = {
-        "ts_utc": datetime.now(timezone.utc).isoformat(),
+        "ts_utc": datetime.now(UTC).isoformat(),
         "reports": reports,
     }
     out_combined.write_text(json.dumps(combined, indent=2), encoding="utf-8")

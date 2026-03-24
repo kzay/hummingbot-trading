@@ -7,15 +7,38 @@ from __future__ import annotations
 
 import csv
 import json
-from datetime import datetime, timezone
-from decimal import Decimal
+import math
+from datetime import UTC, datetime
+from decimal import Decimal, InvalidOperation
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import Any
+
+_ZERO = Decimal("0")
 
 
 def to_decimal(value: Any) -> Decimal:
     """Convert any value to Decimal via its string representation (safe)."""
     return Decimal(str(value))
+
+
+def safe_decimal(value: Any, default: Decimal = _ZERO) -> Decimal:
+    """Convert to Decimal, returning *default* for NaN, Inf, and parse failures.
+
+    Use this at trust boundaries (risk checks, indicator outputs, external data)
+    to guarantee that downstream comparisons never see NaN/Inf.
+    """
+    try:
+        if value is None or value == "":
+            return default
+        if isinstance(value, float):
+            if math.isnan(value) or math.isinf(value):
+                return default
+        d = Decimal(str(value))
+        if d.is_nan() or d.is_infinite():
+            return default
+        return d
+    except (TypeError, ValueError, InvalidOperation):
+        return default
 
 
 def safe_float(value: object, default: float = 0.0) -> float:
@@ -61,28 +84,28 @@ def env_bool(name: str, default: bool) -> bool:
 
 
 def utc_now() -> str:
-    """Return the current UTC time as an ISO-8601 string."""
-    return datetime.now(timezone.utc).isoformat()
+    """Return the current timezone.utc time as an ISO-8601 string."""
+    return datetime.now(UTC).isoformat()
 
 
 def today_utc() -> str:
-    """Return the current UTC date as ``YYYYMMDD``."""
-    return datetime.now(timezone.utc).strftime("%Y%m%d")
+    """Return the current timezone.utc date as ``YYYYMMDD``."""
+    return datetime.now(UTC).strftime("%Y%m%d")
 
 
 def now_ms() -> int:
-    """Epoch milliseconds (UTC)."""
+    """Epoch milliseconds (timezone.utc)."""
     import time
 
     return int(time.time() * 1000)
 
 
-def parse_iso_ts(value: object) -> Optional[datetime]:
+def parse_iso_ts(value: object) -> datetime | None:
     """Parse an ISO-8601 timestamp string to a timezone-aware datetime."""
     if not value:
         return None
     try:
-        return datetime.fromisoformat(str(value).replace("Z", "+00:00")).astimezone(timezone.utc)
+        return datetime.fromisoformat(str(value).replace("Z", "+00:00")).astimezone(UTC)
     except Exception:
         return None
 
@@ -91,7 +114,7 @@ def parse_iso_ts(value: object) -> Optional[datetime]:
 # JSON helpers
 # ---------------------------------------------------------------------------
 
-def read_json(path: Path, default: Optional[Dict[str, object]] = None) -> Dict[str, object]:
+def read_json(path: Path, default: dict[str, object] | None = None) -> dict[str, object]:
     """Read a JSON file and return its dict payload, or *default* on error."""
     if default is None:
         default = {}
@@ -104,7 +127,7 @@ def read_json(path: Path, default: Optional[Dict[str, object]] = None) -> Dict[s
         return default
 
 
-def write_json(path: Path, payload: Dict[str, object]) -> None:
+def write_json(path: Path, payload: dict[str, object]) -> None:
     """Write a dict as pretty-printed JSON, creating parent directories."""
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(json.dumps(payload, indent=2), encoding="utf-8")
@@ -114,7 +137,7 @@ def write_json(path: Path, payload: Dict[str, object]) -> None:
 # CSV helpers
 # ---------------------------------------------------------------------------
 
-def read_last_csv_row(path: Path) -> Optional[Dict[str, str]]:
+def read_last_csv_row(path: Path) -> dict[str, str] | None:
     """Return the last data row from a CSV file, or ``None``.
 
     Uses a tail-seek strategy: reads the last 8 KB of the file to find the
@@ -148,10 +171,10 @@ def read_last_csv_row(path: Path) -> Optional[Dict[str, str]]:
                         continue
                     try:
                         values = next(csv.reader([stripped]))
-                    except Exception:
+                    except (csv.Error, StopIteration):
                         continue
                     if len(values) == len(fieldnames):
-                        return dict(zip(fieldnames, values))
+                        return dict(zip(fieldnames, values, strict=True))
         # Fallback for edge cases where tail parsing cannot recover
         # a complete row (e.g., embedded delimiters/quotes near buffer cut).
         with path.open("r", encoding="utf-8", newline="") as f:
@@ -165,14 +188,14 @@ def read_last_csv_row(path: Path) -> Optional[Dict[str, str]]:
     return None
 
 
-def read_last_n_csv_rows(path: Path, n: int = 2) -> List[Dict[str, str]]:
+def read_last_n_csv_rows(path: Path, n: int = 2) -> list[dict[str, str]]:
     """Return the last *n* data rows from a CSV file."""
     if not path.exists() or n <= 0:
         return []
     try:
         with path.open("r", encoding="utf-8", newline="") as f:
             reader = csv.DictReader(f)
-            rows: List[Dict[str, str]] = []
+            rows: list[dict[str, str]] = []
             for row in reader:
                 rows.append(row)
                 if len(rows) > n:
@@ -208,13 +231,13 @@ class CachedJsonFile:
     on every access when the file hasn't been modified.
     """
 
-    def __init__(self, path: Path, default: Optional[Dict[str, object]] = None):
+    def __init__(self, path: Path, default: dict[str, object] | None = None):
         self._path = path
         self._default = default if default is not None else {}
         self._mtime: float = 0.0
-        self._cached: Dict[str, object] = dict(self._default)
+        self._cached: dict[str, object] = dict(self._default)
 
-    def get(self) -> Dict[str, object]:
+    def get(self) -> dict[str, object]:
         """Return the cached payload, re-reading only if mtime changed."""
         import os
         try:

@@ -1,12 +1,12 @@
 from __future__ import annotations
 
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 
 from scripts.release.testnet_readiness_gate import build_kill_switch_evidence
 
 
 def test_build_kill_switch_evidence_passes_for_fresh_non_dry_run() -> None:
-    now = datetime.now(timezone.utc).isoformat()
+    now = datetime.now(UTC).isoformat()
     payload = {
         "ts_utc": now,
         "dry_run": False,
@@ -21,7 +21,7 @@ def test_build_kill_switch_evidence_passes_for_fresh_non_dry_run() -> None:
 
 def test_build_kill_switch_evidence_fails_for_dry_run() -> None:
     payload = {
-        "ts_utc": datetime.now(timezone.utc).isoformat(),
+        "ts_utc": datetime.now(UTC).isoformat(),
         "dry_run": True,
         "entry_id": "1-0",
         "result": {"status": "executed"},
@@ -32,7 +32,7 @@ def test_build_kill_switch_evidence_fails_for_dry_run() -> None:
 
 
 def test_build_kill_switch_evidence_fails_when_stale() -> None:
-    stale = (datetime.now(timezone.utc) - timedelta(days=2)).isoformat()
+    stale = (datetime.now(UTC) - timedelta(days=2)).isoformat()
     payload = {
         "ts_utc": stale,
         "dry_run": False,

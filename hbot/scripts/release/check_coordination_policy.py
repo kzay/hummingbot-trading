@@ -1,16 +1,15 @@
 from __future__ import annotations
 
 import json
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
-from typing import Dict, List, Tuple
 
 
 def _utc_now() -> str:
-    return datetime.now(timezone.utc).isoformat()
+    return datetime.now(UTC).isoformat()
 
 
-def _read_json(path: Path) -> Dict[str, object]:
+def _read_json(path: Path) -> dict[str, object]:
     payload = json.loads(path.read_text(encoding="utf-8"))
     if not isinstance(payload, dict):
         raise ValueError(f"expected object in {path}")
@@ -24,7 +23,7 @@ def _service_block(compose_text: str, service_name: str) -> str:
         return ""
     rest = compose_text[start:]
     lines = rest.splitlines()
-    out: List[str] = []
+    out: list[str] = []
     first = True
     for line in lines:
         if not first and line.startswith("  ") and not line.startswith("    "):
@@ -34,8 +33,8 @@ def _service_block(compose_text: str, service_name: str) -> str:
     return "\n".join(out)
 
 
-def _check(root: Path) -> Tuple[bool, List[str], Dict[str, object]]:
-    errors: List[str] = []
+def _check(root: Path) -> tuple[bool, list[str], dict[str, object]]:
+    errors: list[str] = []
     policy_path = root / "config" / "coordination_policy_v1.json"
     multi_path = root / "config" / "multi_bot_policy_v1.json"
     compose_path = root / "compose" / "docker-compose.yml"
@@ -116,7 +115,7 @@ def main() -> int:
             "details": {},
         }
 
-    stamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
+    stamp = datetime.now(UTC).strftime("%Y%m%dT%H%M%SZ")
     out_file = reports_root / f"coordination_policy_check_{stamp}.json"
     out_file.write_text(json.dumps(payload, indent=2), encoding="utf-8")
     (reports_root / "coordination_policy_latest.json").write_text(json.dumps(payload, indent=2), encoding="utf-8")

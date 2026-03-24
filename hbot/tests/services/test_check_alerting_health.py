@@ -11,10 +11,10 @@ def _read_evidence(tmp_path):
 
 
 def test_run_check_fails_closed_when_telegram_configured_and_unhealthy(monkeypatch, tmp_path) -> None:
-    def _fake_probe_telegram(token: str, chat_id: str, timeout: float = 8.0):  # noqa: ARG001
+    def _fake_probe_telegram(token: str, chat_id: str, timeout: float = 8.0):
         return False, "Telegram 403 Forbidden (token revoked?)"
 
-    def _fake_probe_http_get(url: str, timeout: float = 4.0):  # noqa: ARG001
+    def _fake_probe_http_get(url: str, timeout: float = 4.0):
         return True, "HTTP 200"
 
     monkeypatch.setattr(alerting_health, "_probe_telegram", _fake_probe_telegram)
@@ -39,7 +39,7 @@ def test_run_check_fails_closed_when_telegram_configured_and_unhealthy(monkeypat
 
 
 def test_run_check_allows_local_dev_degraded_when_not_strict(monkeypatch, tmp_path) -> None:
-    def _fake_probe_http_get(url: str, timeout: float = 4.0):  # noqa: ARG001
+    def _fake_probe_http_get(url: str, timeout: float = 4.0):
         return False, "connection refused"
 
     monkeypatch.setattr(alerting_health, "_probe_http_get", _fake_probe_http_get)
@@ -61,7 +61,7 @@ def test_run_check_allows_local_dev_degraded_when_not_strict(monkeypatch, tmp_pa
 
 
 def test_run_check_requires_real_endpoint_in_strict_mode(monkeypatch, tmp_path) -> None:
-    def _fake_probe_http_get(url: str, timeout: float = 4.0):  # noqa: ARG001
+    def _fake_probe_http_get(url: str, timeout: float = 4.0):
         return False, "timeout"
 
     monkeypatch.setattr(alerting_health, "_probe_http_get", _fake_probe_http_get)

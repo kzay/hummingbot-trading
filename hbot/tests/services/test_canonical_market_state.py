@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from decimal import Decimal
 
-from services.common.canonical_market_state import (
+from platform_lib.market_data.canonical_market_state import (
     canonical_market_state_age_ms,
     canonical_market_state_is_stale,
     parse_canonical_market_state,
