@@ -1,4 +1,4 @@
-"""Composed desk risk gate — evaluates all three layers in sequence."""
+"""Composed desk risk gate — evaluates all layers in sequence."""
 
 from __future__ import annotations
 
@@ -12,9 +12,9 @@ from controllers.runtime.v3.types import MarketSnapshot
 
 
 class DeskRiskGate:
-    """Composes three risk layers with short-circuit evaluation.
+    """Composes risk layers with short-circuit evaluation.
 
-    Order: portfolio → bot → signal.
+    Order: portfolio → bot → regime → signal.
     If any layer rejects, subsequent layers are skipped.
     If a layer modifies the signal (e.g. reduces sizing),
     subsequent layers see the modified signal.
@@ -25,12 +25,15 @@ class DeskRiskGate:
         portfolio: PortfolioRiskGate | None = None,
         bot: BotRiskGate | None = None,
         signal: SignalRiskGate | None = None,
+        regime: RiskLayer | None = None,
     ) -> None:
         self._layers: list[RiskLayer] = []
         if portfolio is not None:
             self._layers.append(portfolio)
         if bot is not None:
             self._layers.append(bot)
+        if regime is not None:
+            self._layers.append(regime)
         if signal is not None:
             self._layers.append(signal)
 
