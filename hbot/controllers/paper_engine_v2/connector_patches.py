@@ -269,7 +269,7 @@ def _install_portfolio_snapshot(connector: Any, desk: PaperDesk, iid: Instrument
                     eq = portfolio.equity_quote({iid.key: mid_d}, quote_asset=quote_asset)
                     snapshot["equity_quote"] = Decimal(str(eq))
                 except Exception:
-                    pass
+                    pass  # Justification: optional portfolio metric — equity_quote may fail for some desk states
             return snapshot
 
         connector.paper_portfolio_snapshot = _paper_portfolio_snapshot

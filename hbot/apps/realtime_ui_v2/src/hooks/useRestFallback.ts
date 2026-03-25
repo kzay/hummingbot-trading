@@ -1,6 +1,6 @@
 import { useDashboardStore } from "../store/useDashboardStore";
 import { parseHealthPayload, parseRestStatePayload } from "../utils/realtimeParsers";
-import { buildHeaders } from "../utils/fetch";
+import { buildHeaders, fetchWithTimeout } from "../utils/fetch";
 import { STATE_REFRESH_STALE_AFTER_MS } from "../constants";
 import { type TransportContext, setRestOnlyMode } from "./useWebSocketManager";
 
@@ -34,8 +34,9 @@ export function createRestFallback(
     const store = useDashboardStore.getState();
     const { apiBase: base, apiToken: token } = store.settings;
     try {
-      const response = await fetch(`${base}/health`, {
+      const response = await fetchWithTimeout(`${base}/health`, {
         headers: buildHeaders(token),
+        timeoutMs: 10_000,
       });
       if (!response.ok) {
         throw new Error(`health HTTP ${response.status}`);
@@ -89,9 +90,10 @@ export function createRestFallback(
     const params = new URLSearchParams();
     params.set("instance_name", requestInstanceName);
     try {
-      const response = await fetch(`${base}/api/v1/state?${params.toString()}`, {
+      const response = await fetchWithTimeout(`${base}/api/v1/state?${params.toString()}`, {
         headers: buildHeaders(token),
         signal: controller.signal,
+        timeoutMs: 15_000,
       });
       if (!response.ok) {
         throw new Error(`state HTTP ${response.status}`);

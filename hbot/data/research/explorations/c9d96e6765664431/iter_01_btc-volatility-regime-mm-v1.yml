@@ -1,0 +1,57 @@
+name: btc-volatility-regime-mm-v1
+hypothesis: BTC-USDT perpetual exhibits distinct volatility regimes identifiable via  Bollinger
+  Band width. During low-volatility regimes (BB width < 20th percentile), market-making
+  with tighter spreads captures mean-reversion. During high-volatility regimes (BB
+  width > 80th percentile), wider spreads protect against adverse selection. The strategy
+  achieves positive Sharpe by dynamically adjusting spread based on volatility regime
+  classification.
+adapter_mode: smc_mm
+parameter_space:
+  bb_period:
+  - 14
+  - 20
+  - 28
+  regime_threshold:
+  - 0.15
+  - 0.25
+  - 0.35
+  fvg_lookback:
+  - 3
+  - 5
+  - 8
+  base_spread_mult:
+  - 1.2
+  - 2.0
+  - 3.0
+entry_logic: Calculate Bollinger Band width over bb_period. Classify regime as low-vol
+  if BB width < regime_threshold percentile, high-vol if > (1-regime_threshold). In
+  low-vol regime, place tight quotes at mid +/- base_spread_mult * 0.5 * ATR. In high-vol
+  regime, widen to mid +/- base_spread_mult * 2.0 * ATR. Use Fair Value Gap detection
+  over fvg_lookback bars to bias quote placement toward gap fill direction.
+exit_logic: Manage inventory via asymmetric pricing when position exceeds 50% of target.
+  Force flat position when volatility regime changes to prevent regime-shift adverse
+  selection. Hard stop at 80% equity drawdown.
+base_config:
+  strategy_class: smc_mm
+  strategy_config:
+    bb_period: 20
+    regime_threshold: 0.25
+    fvg_lookback: 5
+    base_spread_mult: 2.0
+  data_source:
+    exchange: bitget
+    pair: BTC-USDT
+    resolution: 15m
+    instrument_type: perp
+  initial_equity: '500'
+  leverage: 1
+  seed: 42
+  step_interval_s: 900
+  warmup_bars: 60
+required_tests:
+- test_adapter_compiles
+- test_no_lookahead_in_entry
+metadata:
+  author: llm_exploration
+  version: '1.0'
+lifecycle: candidate

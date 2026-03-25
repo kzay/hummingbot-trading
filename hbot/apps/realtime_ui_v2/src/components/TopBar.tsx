@@ -4,7 +4,7 @@ import { useShallow } from "zustand/react/shallow";
 import { getDefaultApiBase } from "../constants";
 import { useDashboardStore } from "../store/useDashboardStore";
 
-type ActiveView = "realtime" | "history" | "service" | "daily" | "weekly" | "journal" | "backtest" | "research";
+type ActiveView = "realtime" | "history" | "service" | "daily" | "weekly" | "journal" | "backtest" | "research" | "ml";
 
 const VIEW_OPTIONS: Array<{ id: ActiveView; label: string; shortcut: string }> = [
   { id: "realtime", label: "Realtime", shortcut: "1" },
@@ -15,6 +15,7 @@ const VIEW_OPTIONS: Array<{ id: ActiveView; label: string; shortcut: string }> =
   { id: "journal", label: "Journal", shortcut: "6" },
   { id: "backtest", label: "Backtest", shortcut: "7" },
   { id: "research", label: "Research", shortcut: "8" },
+  { id: "ml", label: "ML Features", shortcut: "9" },
 ];
 
 interface TopBarProps {
@@ -31,6 +32,8 @@ export function TopBar({ activeView, onActiveViewChange }: TopBarProps) {
     fallbackActive,
     tradingPair,
     selectedInstance,
+    streamAgeMs,
+    summaryAgeMs,
   } = useDashboardStore(
     useShallow((state) => ({
       apiBase: state.settings.apiBase,
@@ -40,6 +43,8 @@ export function TopBar({ activeView, onActiveViewChange }: TopBarProps) {
       fallbackActive: state.summarySystem.fallback_active ?? false,
       tradingPair: state.market.trading_pair ?? "",
       selectedInstance: state.settings.instanceName ?? "",
+      streamAgeMs: state.health.streamAgeMs,
+      summaryAgeMs: state.summarySystem.stream_age_ms,
     })),
   );
 
@@ -99,6 +104,10 @@ export function TopBar({ activeView, onActiveViewChange }: TopBarProps) {
     }
   };
 
+  const ageMs = streamAgeMs ?? summaryAgeMs;
+  const ageStr = ageMs != null && ageMs > 0 ? `Age ${(ageMs / 1000).toFixed(1)} s` : "";
+  const isStale = ageMs != null && ageMs > 30_000;
+
   return (
     <>
       {wsDisconnected && (
@@ -121,6 +130,8 @@ export function TopBar({ activeView, onActiveViewChange }: TopBarProps) {
         </div>
 
         <div className="topbar-right">
+          {isStale && <span style={{ color: 'var(--red)', fontWeight: 700, fontSize: '11px', marginRight: '6px', textTransform: 'uppercase', letterSpacing: '0.05em' }}>STALE</span>}
+          {ageStr && <span className="utc-clock" style={{ marginRight: '8px' }}>{ageStr}</span>}
           <span className="utc-clock">{utcStr} UTC</span>
           <div style={{ position: "relative" }}>
             <button 

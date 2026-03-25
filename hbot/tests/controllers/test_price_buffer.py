@@ -941,3 +941,183 @@ class TestAppendBar:
         atr_val = buf.atr(14)
         assert atr_val is not None
         assert atr_val > _D("0"), f"ATR should be > 0 with real H/L range, got {atr_val}"
+
+
+# ------------------------------------------------------------------
+# MACD indicator tests
+# ------------------------------------------------------------------
+
+class TestMacd:
+
+    def test_macd_none_when_insufficient_bars(self):
+        buf = PriceBuffer()
+        _fill_buffer(buf, [100] * 30)
+        assert buf.macd(12, 26, 9) is None
+
+    def test_macd_returns_tuple_with_enough_bars(self):
+        buf = PriceBuffer()
+        _fill_buffer(buf, [100 + i * 0.5 for i in range(50)])
+        result = buf.macd(12, 26, 9)
+        assert result is not None
+        macd_line, signal_line, histogram = result
+        assert isinstance(macd_line, Decimal)
+        assert isinstance(signal_line, Decimal)
+        assert histogram == macd_line - signal_line
+
+    def test_macd_default_params(self):
+        buf = PriceBuffer()
+        _fill_buffer(buf, [100 + i * 0.3 for i in range(60)])
+        result = buf.macd()
+        assert result is not None
+
+    def test_macd_positive_histogram_on_uptrend(self):
+        buf = PriceBuffer()
+        _fill_buffer(buf, [100 + i * 2 for i in range(60)])
+        result = buf.macd(12, 26, 9)
+        assert result is not None
+        assert result[2] > _D("0"), "Uptrend should produce positive histogram"
+
+    def test_macd_negative_histogram_on_downtrend(self):
+        buf = PriceBuffer()
+        _fill_buffer(buf, [200 - i * 2 for i in range(60)])
+        result = buf.macd(12, 26, 9)
+        assert result is not None
+        assert result[2] < _D("0"), "Downtrend should produce negative histogram"
+
+    def test_macd_zero_for_constant_price(self):
+        buf = PriceBuffer()
+        _fill_buffer(buf, [100.0] * 60)
+        result = buf.macd(12, 26, 9)
+        assert result is not None
+        assert abs(result[0]) < _D("0.01")
+        assert abs(result[1]) < _D("0.01")
+        assert abs(result[2]) < _D("0.01")
+
+    def test_macd_cached_returns_same_value(self):
+        buf = PriceBuffer()
+        _fill_buffer(buf, [100 + i * 0.5 for i in range(50)])
+        first = buf.macd(12, 26, 9)
+        second = buf.macd(12, 26, 9)
+        assert first == second
+
+    def test_macd_cache_invalidated_on_new_bar(self):
+        buf = PriceBuffer()
+        _fill_buffer(buf, [100 + i * 0.5 for i in range(50)])
+        before = buf.macd(12, 26, 9)
+        _fill_buffer(buf, [200], start_ts=1000.0 + 50 * 60)
+        after = buf.macd(12, 26, 9)
+        assert before != after
+
+    def test_macd_invalid_params_return_none(self):
+        buf = PriceBuffer()
+        _fill_buffer(buf, [100] * 60)
+        assert buf.macd(0, 26, 9) is None
+        assert buf.macd(12, 0, 9) is None
+        assert buf.macd(12, 26, 0) is None
+
+    @pytest.mark.parametrize("resolution", [1, 5, 15, 60])
+    def test_macd_all_resolutions(self, resolution):
+        buf = PriceBuffer(resolution_minutes=resolution)
+        n_bars = (26 + 9) * resolution + 10
+        bars = [
+            MinuteBar(
+                ts_minute=60 * i,
+                open=_D(str(100 + i * 0.1)),
+                high=_D(str(101 + i * 0.1)),
+                low=_D(str(99 + i * 0.1)),
+                close=_D(str(100.5 + i * 0.1)),
+            )
+            for i in range(n_bars)
+        ]
+        buf.seed_bars(bars)
+        result = buf.macd(12, 26, 9)
+        assert result is not None, f"MACD should be computable at resolution={resolution}"
+
+
+# ------------------------------------------------------------------
+# Stochastic RSI indicator tests
+# ------------------------------------------------------------------
+
+class TestStochRsi:
+
+    def test_stoch_rsi_none_when_insufficient_bars(self):
+        buf = PriceBuffer()
+        _fill_buffer(buf, [100] * 20)
+        assert buf.stoch_rsi(14, 14, 3, 3) is None
+
+    def test_stoch_rsi_returns_tuple_with_enough_bars(self):
+        buf = PriceBuffer()
+        _fill_buffer(buf, [100 + (i % 10) * 0.5 for i in range(80)])
+        result = buf.stoch_rsi(14, 14, 3, 3)
+        assert result is not None
+        k, d = result
+        assert isinstance(k, Decimal)
+        assert isinstance(d, Decimal)
+
+    def test_stoch_rsi_default_params(self):
+        buf = PriceBuffer()
+        _fill_buffer(buf, [100 + (i % 10) * 0.5 for i in range(80)])
+        result = buf.stoch_rsi()
+        assert result is not None
+
+    def test_stoch_rsi_bounded_0_100(self):
+        buf = PriceBuffer()
+        _fill_buffer(buf, [100 + (i % 15) * 2 - 10 for i in range(80)])
+        result = buf.stoch_rsi(14, 14, 3, 3)
+        assert result is not None
+        k, d = result
+        assert _D("0") <= k <= _D("100"), f"K={k} out of range"
+        assert _D("0") <= d <= _D("100"), f"D={d} out of range"
+
+    def test_stoch_rsi_flat_price_guard(self):
+        """Flat prices => RSI constant => stochastic range is zero.
+        Should return (50, 50) instead of crashing."""
+        buf = PriceBuffer()
+        _fill_buffer(buf, [100.0] * 80)
+        result = buf.stoch_rsi(14, 14, 3, 3)
+        assert result is not None
+        k, d = result
+        assert abs(k - _D("50")) < _D("1")
+        assert abs(d - _D("50")) < _D("1")
+
+    def test_stoch_rsi_cached_returns_same_value(self):
+        buf = PriceBuffer()
+        _fill_buffer(buf, [100 + (i % 10) * 0.5 for i in range(80)])
+        first = buf.stoch_rsi(14, 14, 3, 3)
+        second = buf.stoch_rsi(14, 14, 3, 3)
+        assert first == second
+
+    def test_stoch_rsi_cache_invalidated_on_new_bar(self):
+        buf = PriceBuffer()
+        prices = [100 + i * 0.3 + (i % 7) * 0.5 for i in range(80)]
+        _fill_buffer(buf, prices)
+        before = buf.stoch_rsi(14, 14, 3, 3)
+        _fill_buffer(buf, [50], start_ts=1000.0 + 80 * 60)
+        after = buf.stoch_rsi(14, 14, 3, 3)
+        assert before != after
+
+    def test_stoch_rsi_invalid_params_return_none(self):
+        buf = PriceBuffer()
+        _fill_buffer(buf, [100] * 80)
+        assert buf.stoch_rsi(0, 14, 3, 3) is None
+        assert buf.stoch_rsi(14, 0, 3, 3) is None
+        assert buf.stoch_rsi(14, 14, 0, 3) is None
+        assert buf.stoch_rsi(14, 14, 3, 0) is None
+
+    @pytest.mark.parametrize("resolution", [1, 5, 15, 60])
+    def test_stoch_rsi_all_resolutions(self, resolution):
+        buf = PriceBuffer(resolution_minutes=resolution)
+        n_bars = (14 + 1 + 14 + 3 + 3) * resolution + 10
+        bars = [
+            MinuteBar(
+                ts_minute=60 * i,
+                open=_D(str(100 + (i % 10) * 0.3)),
+                high=_D(str(101 + (i % 10) * 0.3)),
+                low=_D(str(99 + (i % 10) * 0.3)),
+                close=_D(str(100 + (i % 10) * 0.5)),
+            )
+            for i in range(n_bars)
+        ]
+        buf.seed_bars(bars)
+        result = buf.stoch_rsi(14, 14, 3, 3)
+        assert result is not None, f"StochRSI should be computable at resolution={resolution}"

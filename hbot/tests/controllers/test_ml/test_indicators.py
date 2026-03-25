@@ -37,40 +37,29 @@ def hlc_bars(price_series) -> list[tuple[float, float, float]]:
     return bars
 
 
-class TestSMA:
-    def test_matches_decimal(self, price_series):
+@pytest.mark.parametrize(
+    "name, ref_fn, ml_fn, period, tol",
+    [
+        ("SMA", ref_ind.sma, ml_ind.sma, 20, TOLERANCE),
+        ("EMA", ref_ind.ema, ml_ind.ema, 20, TOLERANCE),
+        ("RSI", ref_ind.rsi, ml_ind.rsi, 14, 1.0),
+        ("Stddev", ref_ind.stddev, ml_ind.stddev, 20, TOLERANCE),
+    ],
+    ids=["sma", "ema", "rsi", "stddev"],
+)
+class TestScalarIndicatorMatchesDecimal:
+    def test_matches_decimal(self, price_series, name, ref_fn, ml_fn, period, tol):
         closes_dec = [Decimal(str(p)) for p in price_series]
         closes_pd = pd.Series(price_series)
 
-        ref = ref_ind.sma(closes_dec, 20)
-        ml = ml_ind.sma(closes_pd, 20).iloc[-1]
+        ref = ref_fn(closes_dec, period)
+        ml = ml_fn(closes_pd, period).iloc[-1]
 
         assert ref is not None
-        assert abs(float(ref) - ml) / float(ref) < TOLERANCE
-
-
-class TestEMA:
-    def test_matches_decimal(self, price_series):
-        closes_dec = [Decimal(str(p)) for p in price_series]
-        closes_pd = pd.Series(price_series)
-
-        ref = ref_ind.ema(closes_dec, 20)
-        ml = ml_ind.ema(closes_pd, 20).iloc[-1]
-
-        assert ref is not None
-        assert abs(float(ref) - ml) / float(ref) < TOLERANCE
-
-
-class TestRSI:
-    def test_matches_decimal(self, price_series):
-        closes_dec = [Decimal(str(p)) for p in price_series]
-        closes_pd = pd.Series(price_series)
-
-        ref = ref_ind.rsi(closes_dec, 14)
-        ml = ml_ind.rsi(closes_pd, 14).iloc[-1]
-
-        assert ref is not None
-        assert abs(float(ref) - ml) < 1.0  # RSI values [0-100], within 1pt
+        if tol >= 1.0:
+            assert abs(float(ref) - ml) < tol, f"{name}: {ref} vs {ml}"
+        else:
+            assert abs(float(ref) - ml) / float(ref) < tol, f"{name}: {ref} vs {ml}"
 
 
 class TestATR:
@@ -105,13 +94,60 @@ class TestBollingerBands:
         assert abs(float(ref_upper) - upper_ml.iloc[-1]) / float(ref_upper) < TOLERANCE
 
 
-class TestStddev:
-    def test_matches_decimal(self, price_series):
-        closes_dec = [Decimal(str(p)) for p in price_series]
-        closes_pd = pd.Series(price_series)
+class TestWilliamsR:
+    def test_output_range(self, hlc_bars):
+        h = pd.Series([b[0] for b in hlc_bars])
+        l = pd.Series([b[1] for b in hlc_bars])
+        c = pd.Series([b[2] for b in hlc_bars])
+        result = ml_ind.williams_r(h, l, c, 14)
+        valid = result.dropna()
+        assert (valid >= 0.0).all()
+        assert (valid <= 1.0).all()
 
-        ref = ref_ind.stddev(closes_dec, 20)
-        ml = ml_ind.stddev(closes_pd, 20).iloc[-1]
+    def test_warmup_nan(self, hlc_bars):
+        h = pd.Series([b[0] for b in hlc_bars])
+        l = pd.Series([b[1] for b in hlc_bars])
+        c = pd.Series([b[2] for b in hlc_bars])
+        result = ml_ind.williams_r(h, l, c, 14)
+        assert result.iloc[:13].isna().all(), "First period-1 values must be NaN"
+        assert result.iloc[13:].notna().all(), "Values from period onward must be valid"
 
-        assert ref is not None
-        assert abs(float(ref) - ml) / max(float(ref), 1e-10) < TOLERANCE
+    def test_at_period_high_equals_one(self):
+        """Close always at the period high → W%R == 1.0."""
+        n, period = 50, 10
+        h = pd.Series([100.0] * n)
+        l = pd.Series([90.0] * n)
+        c = pd.Series([100.0] * n)
+        result = ml_ind.williams_r(h, l, c, period)
+        valid = result.dropna()
+        assert np.allclose(valid.values, 1.0)
+
+    def test_at_period_low_equals_zero(self):
+        """Close always at the period low → W%R == 0.0."""
+        n, period = 50, 10
+        h = pd.Series([100.0] * n)
+        l = pd.Series([90.0] * n)
+        c = pd.Series([90.0] * n)
+        result = ml_ind.williams_r(h, l, c, period)
+        valid = result.dropna()
+        assert np.allclose(valid.values, 0.0, atol=1e-9)
+
+    def test_flat_range_returns_midpoint(self):
+        """Flat price (HH == LL) should return 0.5 rather than NaN."""
+        n, period = 20, 5
+        h = pd.Series([100.0] * n)
+        l = pd.Series([100.0] * n)
+        c = pd.Series([100.0] * n)
+        result = ml_ind.williams_r(h, l, c, period)
+        valid = result.dropna()
+        assert np.allclose(valid.values, 0.5)
+
+    def test_midpoint_price(self):
+        """Close at exact midpoint of range → W%R == 0.5."""
+        n, period = 50, 10
+        h = pd.Series([100.0] * n)
+        l = pd.Series([90.0] * n)
+        c = pd.Series([95.0] * n)
+        result = ml_ind.williams_r(h, l, c, period)
+        valid = result.dropna()
+        assert np.allclose(valid.values, 0.5)

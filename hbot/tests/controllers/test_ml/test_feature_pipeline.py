@@ -118,6 +118,100 @@ class TestSentimentFeatures:
         assert result["basis"].isna().all()
 
 
+class TestWilliamsRFeatures:
+    def test_wr_columns_present(self, candles_1m):
+        result = compute_price_features(candles_1m)
+        for col in ["wr_1m_p14", "wr_1m_p50", "wr_divergence_1m_1h", "wr_extreme_1m"]:
+            assert col in result.columns, f"Missing W%R column: {col}"
+        # NaN columns for missing higher TFs should still be present
+        for tf in ["5m", "15m", "1h", "4h"]:
+            for p in [14, 50]:
+                assert f"wr_{tf}_p{p}" in result.columns
+
+    def test_wr_range(self, candles_1m):
+        result = compute_price_features(candles_1m)
+        valid = result["wr_1m_p14"].dropna()
+        assert (valid >= 0.0).all(), "W%R must be >= 0"
+        assert (valid <= 1.0).all(), "W%R must be <= 1"
+
+    def test_wr_nan_for_missing_timeframes(self, candles_1m):
+        result = compute_price_features(candles_1m, None, None, None)
+        assert result["wr_5m_p14"].isna().all()
+        assert result["wr_15m_p14"].isna().all()
+        assert result["wr_1h_p14"].isna().all()
+
+    def test_wr_extreme_is_binary(self, candles_1m):
+        result = compute_price_features(candles_1m)
+        valid = result["wr_extreme_1m"].dropna()
+        assert valid.isin([0.0, 1.0]).all(), "wr_extreme_1m must be 0 or 1"
+
+    def test_wr_warmup_nan(self, candles_1m):
+        result = compute_price_features(candles_1m)
+        # First 13 rows (period-1=13) of wr_1m_p14 should be NaN
+        assert result["wr_1m_p14"].iloc[:13].isna().all()
+        assert result["wr_1m_p14"].iloc[13:].notna().all()
+
+
+class TestCrossTFConfluenceFeatures:
+    """Tests for cross-TF confluence: vol_regime_agreement, wr_divergence."""
+
+    @pytest.fixture
+    def candles_5m(self, candles_1m) -> pd.DataFrame:
+        df = candles_1m.copy()
+        df["dt"] = pd.to_datetime(df["timestamp_ms"], unit="ms", utc=True)
+        df = df.set_index("dt")
+        return df.resample("5min", label="left", closed="left").agg({
+            "timestamp_ms": "first", "open": "first", "high": "max",
+            "low": "min", "close": "last", "volume": "sum",
+        }).dropna(subset=["timestamp_ms"]).reset_index(drop=True)
+
+    def test_vol_regime_agreement_present(self, candles_1m, candles_5m):
+        result = compute_price_features(candles_1m, candles_5m=candles_5m)
+        assert "vol_regime_agreement" in result.columns
+
+    def test_vol_regime_agreement_range(self, candles_1m, candles_5m):
+        result = compute_price_features(candles_1m, candles_5m=candles_5m)
+        valid = result["vol_regime_agreement"].dropna()
+        if len(valid) > 0:
+            assert (valid >= 0.0).all()
+            assert (valid <= 1.0).all()
+
+    def test_vol_regime_agreement_nan_when_no_higher_tf(self, candles_1m):
+        result = compute_price_features(candles_1m)
+        assert result["vol_regime_agreement"].isna().all()
+
+    def test_wr_divergence_for_available_tfs(self, candles_1m, candles_5m):
+        result = compute_price_features(candles_1m, candles_5m=candles_5m)
+        assert "wr_divergence_1m_5m" in result.columns
+        assert "wr_divergence_1m_1h" in result.columns
+
+    def test_dynamic_rolling_window(self):
+        import os
+        original = os.environ.get("ML_ROLLING_WINDOW")
+        original_tf = os.environ.get("ML_TIMEFRAMES")
+        try:
+            if "ML_ROLLING_WINDOW" in os.environ:
+                del os.environ["ML_ROLLING_WINDOW"]
+            os.environ["ML_TIMEFRAMES"] = "1m,5m,15m,1h"
+            from services.ml_feature_service.pair_state import _compute_rolling_window
+            assert _compute_rolling_window() == 7200
+
+            os.environ["ML_TIMEFRAMES"] = "1m,5m,15m,1h,4h"
+            assert _compute_rolling_window() == 28800
+
+            os.environ["ML_ROLLING_WINDOW"] = "999"
+            assert _compute_rolling_window() == 999
+        finally:
+            if original is None:
+                os.environ.pop("ML_ROLLING_WINDOW", None)
+            else:
+                os.environ["ML_ROLLING_WINDOW"] = original
+            if original_tf is None:
+                os.environ.pop("ML_TIMEFRAMES", None)
+            else:
+                os.environ["ML_TIMEFRAMES"] = original_tf
+
+
 class TestTimeFeatures:
     def test_cyclical_range(self, candles_1m):
         result = compute_time_features(candles_1m["timestamp_ms"])

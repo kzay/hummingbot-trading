@@ -1,5 +1,5 @@
 {
-  "version": 1,
+  "version": 2,
   "policy_id": "ml_governance_policy_v1",
   "enabled_default": false,
   "require_report_when_enabled": true,
@@ -12,7 +12,22 @@
   },
   "promotion_thresholds": {
     "min_sharpe_delta": 0.05,
-    "min_pnl_bps_delta": 5.0
+    "min_pnl_bps_delta": 5.0,
+    "min_oos_accuracy": {
+      "regime": 0.55,
+      "direction": 0.55,
+      "adverse": 0.60
+    },
+    "min_improvement_over_baseline": {
+      "default": 0.05,
+      "adverse": 0.03
+    }
+  },
+  "shadow_evaluation": {
+    "enabled": false,
+    "min_soak_bars": 1440,
+    "min_agreement_rate": 0.70,
+    "promote_on_realized_improvement": true
   },
   "drift_limits": {
     "max_feature_psi": 0.2,
@@ -22,5 +37,10 @@
     "max_consecutive_underperformance_days": 5,
     "max_critical_incidents_7d": 1,
     "fail_action": "disable_ml"
+  },
+  "model_types": ["regime", "direction", "sizing", "adverse"],
+  "feature_importance": {
+    "top_k": 15,
+    "min_stability": 0.3
   }
 }

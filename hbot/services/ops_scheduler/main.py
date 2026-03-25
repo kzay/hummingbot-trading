@@ -93,6 +93,15 @@ JOBS: list[dict] = [
         "interval_env": "EXCHANGE_SNAPSHOT_INTERVAL_SEC",
         "interval_default": 120,
     },
+    {
+        "name": "data-refresh",
+        "command": [
+            sys.executable,
+            str(WORKSPACE / "scripts/ops/data_refresh.py"),
+        ],
+        "interval_env": "DATA_REFRESH_INTERVAL_SEC",
+        "interval_default": 21600,
+    },
 ]
 
 
@@ -101,12 +110,25 @@ def _get_interval(job: dict) -> int:
     return max(30, int(raw)) if raw.isdigit() else max(30, job["interval_default"])
 
 
-def _write_heartbeat(status: dict) -> None:
-    try:
-        HEARTBEAT_PATH.parent.mkdir(parents=True, exist_ok=True)
-        HEARTBEAT_PATH.write_text(json.dumps(status, indent=2))
-    except Exception:
-        pass
+_heartbeat_lock = threading.Lock()
+_last_heartbeat_write: float = 0.0
+_HEARTBEAT_MIN_INTERVAL_S = 30
+
+
+def _write_heartbeat(status: dict, *, force: bool = False) -> None:
+    global _last_heartbeat_write
+    now = time.monotonic()
+    if not force and (now - _last_heartbeat_write) < _HEARTBEAT_MIN_INTERVAL_S:
+        return
+    with _heartbeat_lock:
+        if not force and (now - _last_heartbeat_write) < _HEARTBEAT_MIN_INTERVAL_S:
+            return
+        try:
+            HEARTBEAT_PATH.parent.mkdir(parents=True, exist_ok=True)
+            HEARTBEAT_PATH.write_text(json.dumps(status, indent=2))
+            _last_heartbeat_write = time.monotonic()
+        except Exception:
+            pass  # Justification: heartbeat write is best-effort — scheduler must not crash on I/O failure
 
 
 def _job_loop(job: dict, status: dict) -> None:
@@ -125,7 +147,7 @@ def _job_loop(job: dict, status: dict) -> None:
                 text=True,
                 timeout=max(interval * 2, 300),
                 cwd=str(WORKSPACE),
-                env={**os.environ, "PYTHONPATH": str(WORKSPACE)},
+                env={**os.environ, "PYTHONPATH": str(WORKSPACE), "PYTHONPYCACHEPREFIX": "/tmp/pycache"},
             )
             elapsed = time.monotonic() - t0
             status[name] = {

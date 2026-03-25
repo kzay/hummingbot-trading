@@ -1,0 +1,53 @@
+name: btc-volume-spike-reversion-v1
+hypothesis: BTC-USDT 15m bars exhibit mean-reverting behavior after volume spikes
+  (>2x  average volume) combined with price moves >1.5 ATR. Market-making with  asymmetric
+  spreads captures the reversion while avoiding adverse selection  during genuine
+  breakouts by widening spreads on high volume.
+adapter_mode: atr_mm
+parameter_space:
+  atr_period:
+  - 8
+  - 14
+  - 21
+  spread_multiplier:
+  - 1.8
+  - 2.8
+  - 4.0
+  inventory_target_base:
+  - 0.4
+  - 0.8
+  volume_spike_threshold:
+  - 1.5
+  - 2.0
+  - 2.5
+entry_logic: Place buy/sell quotes at mid +/- spread_multiplier * ATR(atr_period).
+  When current bar volume exceeds volume_spike_threshold * SMA(volume, 20) AND price
+  move exceeds 1.5 * ATR, widen spreads by 50% to avoid adverse fills during potential
+  breakouts.
+exit_logic: Reduce inventory when position exceeds inventory_target_base of equity
+  via skewed pricing toward the heavy side. Apply hard stop at 90% of equity for risk
+  control.
+base_config:
+  strategy_class: atr_mm
+  strategy_config:
+    atr_period: 14
+    spread_multiplier: 2.8
+    inventory_target_base: 0.6
+    volume_spike_threshold: 2.0
+  data_source:
+    exchange: bitget
+    pair: BTC-USDT
+    resolution: 15m
+    instrument_type: perp
+  initial_equity: '500'
+  leverage: 1
+  seed: 42
+  step_interval_s: 900
+  warmup_bars: 60
+required_tests:
+- test_adapter_compiles
+- test_no_lookahead_in_entry
+metadata:
+  author: llm_exploration
+  version: '1.0'
+lifecycle: candidate

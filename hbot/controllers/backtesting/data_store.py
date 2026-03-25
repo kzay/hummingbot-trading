@@ -598,6 +598,33 @@ def validate_candles(
 
 
 # ---------------------------------------------------------------------------
+# Gap scanning
+# ---------------------------------------------------------------------------
+
+
+def scan_gaps(
+    timestamps_ms: list[int],
+    expected_interval_ms: int = 60_000,
+) -> list[tuple[int, int]]:
+    """Find gaps in a sorted list of timestamps.
+
+    Returns ``[(gap_start_ms, gap_end_ms), ...]`` for every pair of
+    consecutive timestamps where the distance exceeds
+    ``expected_interval_ms * 1.5``.
+    """
+    if len(timestamps_ms) < 2:
+        return []
+
+    threshold = int(expected_interval_ms * 1.5)
+    gaps: list[tuple[int, int]] = []
+    for i in range(1, len(timestamps_ms)):
+        delta = timestamps_ms[i] - timestamps_ms[i - 1]
+        if delta > threshold:
+            gaps.append((timestamps_ms[i - 1], timestamps_ms[i]))
+    return gaps
+
+
+# ---------------------------------------------------------------------------
 # Path resolution
 # ---------------------------------------------------------------------------
 

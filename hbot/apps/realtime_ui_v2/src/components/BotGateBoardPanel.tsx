@@ -78,12 +78,13 @@ function BotGateSection({ group }: { group: BotGateGroup }) {
 }
 
 export const BotGateBoardPanel = memo(function BotGateBoardPanel() {
-  const { quoteGatesInput, quotingStatus, regime, botGatesInput } = useDashboardStore(
+  const { quoteGatesInput, quotingStatus, regime, botGatesInput, hasConnected } = useDashboardStore(
     useShallow((state) => ({
       quoteGatesInput: state.summaryAccount.quote_gates,
       quotingStatus: state.summaryAccount.quoting_status,
       regime: state.summaryAccount.regime,
       botGatesInput: state.summaryAccount.bot_gates,
+      hasConnected: state.connection.connectedAtMs > 0,
     })),
   );
   const quoteGates = useMemo(() => {
@@ -139,7 +140,7 @@ export const BotGateBoardPanel = memo(function BotGateBoardPanel() {
           <tbody>
             {quoteGates.length === 0 ? (
               <tr>
-                <td colSpan={3}>No gate status available.</td>
+                <td colSpan={3}>{hasConnected ? "No gate status available." : "Loading\u2026"}</td>
               </tr>
             ) : (
               quoteGates.map((gate, index) => (

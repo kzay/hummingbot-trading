@@ -218,7 +218,7 @@ def backfill(
             try:
                 fp.close()
             except Exception:
-                pass
+                pass  # Justification: best-effort I/O — file may already be closed
 
     return total_rows, appended
 

@@ -192,88 +192,9 @@ class SharedRuntimeKernel(FillHandlerMixin, RiskMixin, TelemetryMixin, AutoCalib
         self._is_perp = config.resolved_connector_type == "perp"
         self._resolved_specs = self._resolve_specs(config.regime_specs_override)
         self._bot_mode = config.bot_mode
-        if self._bot_mode == "paper" and not config.connector_name.endswith("_paper_trade"):
-            # In Paper Engine v2 mode we often use the "real" connector name for market data,
-            # while execution is intercepted by the paper desk bridge. Keep this as an info
-            # breadcrumb (not a scary warning) so ops can sanity-check routing.
-            logger.info(
-                "BOT_MODE=paper with connector_name=%s (no '_paper_trade' suffix). "
-                "Ensure the PaperDesk bridge is installed and no live trading keys are at risk.",
-                config.connector_name,
-            )
-        if config.internal_paper_enabled:
-            logger.warning(
-                "internal_paper_enabled is deprecated and ignored at runtime. "
-                "Set BOT_MODE=paper|live via environment."
-            )
-        if int(config.leverage) > config.max_leverage:
-            raise ValueError(
-                f"leverage={config.leverage} exceeds max_leverage={config.max_leverage}. "
-                f"Increase max_leverage in config if intentional."
-            )
-        self._regime_detector = RegimeDetector(
-            specs=self._resolved_specs,
-            high_vol_band_pct=config.high_vol_band_pct,
-            shock_drift_30s_pct=config.shock_drift_30s_pct,
-            shock_drift_atr_multiplier=config.shock_drift_atr_multiplier,
-            trend_eps_pct=config.trend_eps_pct,
-            regime_hold_ticks=config.regime_hold_ticks,
-        )
-        self._spread_engine = SpreadEngine(
-            turnover_cap_x=config.turnover_cap_x,
-            spread_step_multiplier=config.spread_step_multiplier,
-            vol_penalty_multiplier=config.vol_penalty_multiplier,
-            high_vol_band_pct=config.high_vol_band_pct,
-            trend_skew_factor=config.trend_skew_factor,
-            neutral_skew_factor=config.neutral_skew_factor,
-            inventory_skew_cap_pct=config.inventory_skew_cap_pct,
-            inventory_skew_vol_multiplier=config.inventory_skew_vol_multiplier,
-            slippage_est_pct=config.slippage_est_pct,
-            min_net_edge_bps=config.min_net_edge_bps,
-            edge_resume_bps=config.edge_resume_bps,
-            drift_spike_threshold_bps=config.drift_spike_threshold_bps,
-            drift_spike_mult_max=config.drift_spike_mult_max,
-            adverse_fill_spread_multiplier=config.adverse_fill_spread_multiplier,
-            adverse_fill_count_threshold=config.adverse_fill_count_threshold,
-            turnover_penalty_step=config.turnover_penalty_step,
-            adaptive_vol_spread_widen_max=config.adaptive_vol_spread_widen_max,
-        )
-        self._risk_evaluator = RiskEvaluator(
-            min_base_pct=config.min_base_pct,
-            max_base_pct=config.max_base_pct,
-            max_total_notional_quote=config.max_total_notional_quote,
-            max_daily_turnover_x_hard=config.max_daily_turnover_x_hard,
-            max_daily_loss_pct_hard=config.max_daily_loss_pct_hard,
-            max_drawdown_pct_hard=config.max_drawdown_pct_hard,
-            edge_state_hold_s=config.edge_state_hold_s,
-            margin_ratio_hard_stop_pct=config.margin_ratio_hard_stop_pct,
-            margin_ratio_soft_pause_pct=config.margin_ratio_soft_pause_pct,
-            position_drift_soft_pause_pct=config.position_drift_soft_pause_pct,
-        )
-        self._runtime_adapter = ConnectorRuntimeAdapter(self)
-        self._runtime_compat = resolve_runtime_compatibility(
-            config,
-            runtime_impl=type(self).__name__.replace("Controller", "") or "shared_mm_v24",
-        )
-        self._family_adapter = self._make_runtime_family_adapter()
-        self._runtime_levels = RuntimeLevelState(
-            buy_spreads=[to_decimal(x) for x in config.buy_spreads],
-            sell_spreads=[to_decimal(x) for x in config.sell_spreads],
-            buy_amounts_pct=[to_decimal(x) for x in config.buy_amounts_pct],
-            sell_amounts_pct=[to_decimal(x) for x in config.sell_amounts_pct],
-            total_amount_quote=to_decimal(config.total_amount_quote),
-            executor_refresh_time=int(config.executor_refresh_time),
-            cooldown_time=int(config.cooldown_time),
-        )
-        self._price_buffer = PriceBuffer(sample_interval_sec=config.sample_interval_s)
-        self._price_sampler_task: asyncio.Task | None = None
-        self._history_provider = None
-        self._history_seed_attempted = False
-        self._history_seed_status = "disabled"
-        self._history_seed_reason = ""
-        self._history_seed_source = ""
-        self._history_seed_bars = 0
-        self._history_seed_latency_ms = 0.0
+        self._validate_config(config)
+        self._init_core_components(config)
+        self._init_price_buffer(config)
         self._ops_guard = OpsGuard()
         self._artifact_namespace = self._runtime_compat.artifact_namespace
         self._csv = CsvSplitLogger(
@@ -529,6 +450,132 @@ class SharedRuntimeKernel(FillHandlerMixin, RiskMixin, TelemetryMixin, AutoCalib
                 "══════════════════════════════════════════════════════════════",
                 self.config.connector_name, self.config.trading_pair, int(self.config.leverage),
             )
+
+    # ── Framework boundary: encapsulated access to shared state ────────
+
+    def enqueue_stale_cancels(self, actions: list[Any]) -> None:
+        """Append StopExecutorActions to the pending stale-cancel queue.
+
+        Bot lanes and mixins MUST use this instead of direct list mutation.
+        """
+        self._pending_stale_cancel_actions.extend(actions)
+
+    def replace_stale_cancels(self, actions: list[Any]) -> None:
+        """Replace the pending stale-cancel queue wholesale.
+
+        Used by regime_mixin when a regime flip requires a fresh cancel set.
+        """
+        self._pending_stale_cancel_actions = list(actions)
+
+    def _reset_issued_levels(self) -> None:
+        """Clear the recently-issued-levels tracking dict.
+
+        Bot lanes MUST call this instead of direct dict assignment.
+        """
+        self._recently_issued_levels.clear()
+
+    def _strategy_extra_actions(self) -> list[Any]:
+        """Hook for bot-lane-specific actions to be merged into determine_executor_actions.
+
+        Override in subclasses that need to inject extra actions (e.g. trailing
+        stops, partial takes) without overriding determine_executor_actions.
+        Default returns empty list.
+        """
+        return []
+
+    # ── Init helpers (extracted from __init__ for readability) ─────────
+
+    def _validate_config(self, config: EppV24Config) -> None:
+        if self._bot_mode == "paper" and not config.connector_name.endswith("_paper_trade"):
+            logger.info(
+                "BOT_MODE=paper with connector_name=%s (no '_paper_trade' suffix). "
+                "Ensure the PaperDesk bridge is installed and no live trading keys are at risk.",
+                config.connector_name,
+            )
+        if config.internal_paper_enabled:
+            logger.warning(
+                "internal_paper_enabled is deprecated and ignored at runtime. "
+                "Set BOT_MODE=paper|live via environment."
+            )
+        if int(config.leverage) > config.max_leverage:
+            raise ValueError(
+                f"leverage={config.leverage} exceeds max_leverage={config.max_leverage}. "
+                f"Increase max_leverage in config if intentional."
+            )
+
+    def _init_core_components(self, config: EppV24Config) -> None:
+        self._regime_detector = RegimeDetector(
+            specs=self._resolved_specs,
+            high_vol_band_pct=config.high_vol_band_pct,
+            shock_drift_30s_pct=config.shock_drift_30s_pct,
+            shock_drift_atr_multiplier=config.shock_drift_atr_multiplier,
+            trend_eps_pct=config.trend_eps_pct,
+            regime_hold_ticks=config.regime_hold_ticks,
+        )
+        self._spread_engine = SpreadEngine(
+            turnover_cap_x=config.turnover_cap_x,
+            spread_step_multiplier=config.spread_step_multiplier,
+            vol_penalty_multiplier=config.vol_penalty_multiplier,
+            high_vol_band_pct=config.high_vol_band_pct,
+            trend_skew_factor=config.trend_skew_factor,
+            neutral_skew_factor=config.neutral_skew_factor,
+            inventory_skew_cap_pct=config.inventory_skew_cap_pct,
+            inventory_skew_vol_multiplier=config.inventory_skew_vol_multiplier,
+            slippage_est_pct=config.slippage_est_pct,
+            min_net_edge_bps=config.min_net_edge_bps,
+            edge_resume_bps=config.edge_resume_bps,
+            drift_spike_threshold_bps=config.drift_spike_threshold_bps,
+            drift_spike_mult_max=config.drift_spike_mult_max,
+            adverse_fill_spread_multiplier=config.adverse_fill_spread_multiplier,
+            adverse_fill_count_threshold=config.adverse_fill_count_threshold,
+            turnover_penalty_step=config.turnover_penalty_step,
+            adaptive_vol_spread_widen_max=config.adaptive_vol_spread_widen_max,
+        )
+        self._risk_evaluator = RiskEvaluator(
+            min_base_pct=config.min_base_pct,
+            max_base_pct=config.max_base_pct,
+            max_total_notional_quote=config.max_total_notional_quote,
+            max_daily_turnover_x_hard=config.max_daily_turnover_x_hard,
+            max_daily_loss_pct_hard=config.max_daily_loss_pct_hard,
+            max_drawdown_pct_hard=config.max_drawdown_pct_hard,
+            edge_state_hold_s=config.edge_state_hold_s,
+            margin_ratio_hard_stop_pct=config.margin_ratio_hard_stop_pct,
+            margin_ratio_soft_pause_pct=config.margin_ratio_soft_pause_pct,
+            position_drift_soft_pause_pct=config.position_drift_soft_pause_pct,
+        )
+        self._runtime_adapter = ConnectorRuntimeAdapter(self)
+        self._runtime_compat = resolve_runtime_compatibility(
+            config,
+            runtime_impl=type(self).__name__.replace("Controller", "") or "shared_mm_v24",
+        )
+        self._family_adapter = self._make_runtime_family_adapter()
+        self._runtime_levels = RuntimeLevelState(
+            buy_spreads=[to_decimal(x) for x in config.buy_spreads],
+            sell_spreads=[to_decimal(x) for x in config.sell_spreads],
+            buy_amounts_pct=[to_decimal(x) for x in config.buy_amounts_pct],
+            sell_amounts_pct=[to_decimal(x) for x in config.sell_amounts_pct],
+            total_amount_quote=to_decimal(config.total_amount_quote),
+            executor_refresh_time=int(config.executor_refresh_time),
+            cooldown_time=int(config.cooldown_time),
+        )
+
+    def _init_price_buffer(self, config: EppV24Config) -> None:
+        from controllers.runtime.kernel.config import _RESOLUTION_TO_MINUTES
+        self._resolution_minutes: int = _RESOLUTION_TO_MINUTES.get(
+            getattr(config, "indicator_resolution", "1m"), 1
+        )
+        self._price_buffer = PriceBuffer(
+            sample_interval_sec=config.sample_interval_s,
+            resolution_minutes=self._resolution_minutes,
+        )
+        self._price_sampler_task: asyncio.Task | None = None
+        self._history_provider = None
+        self._history_seed_attempted = False
+        self._history_seed_status = "disabled"
+        self._history_seed_reason = ""
+        self._history_seed_source = ""
+        self._history_seed_bars = 0
+        self._history_seed_latency_ms = 0.0
 
     # ── Tick loop ───────────────────────────────────────────────────────
 
@@ -815,6 +862,68 @@ class SharedRuntimeKernel(FillHandlerMixin, RiskMixin, TelemetryMixin, AutoCalib
             )
             return None, None, None
 
+        edge_result = self._compute_adaptive_edge_bps(now_ts, regime_name, selective_state, selective_score)
+        effective_min_edge_bps = edge_result["effective_min_edge_bps"]
+        fill_age_s = edge_result["fill_age_s"]
+        vol_ratio = edge_result["vol_ratio"]
+        stale_ratio = edge_result["stale_ratio"]
+        edge_relax_bps = edge_result["edge_relax_bps"]
+
+        gov = self._compute_pnl_governor(
+            now_ts, equity_quote, effective_min_edge_bps, stale_ratio, selective_state,
+        )
+        effective_min_edge_bps = gov["effective_min_edge_bps"]
+        governor_edge_relax_bps = gov["governor_edge_relax_bps"]
+
+        if effective_min_edge_bps < _ZERO:
+            fee_drag_bps = edge_relax_bps + governor_edge_relax_bps
+            logger.warning(
+                "Effective edge floor negative (%.2f bps): total drag %.2f bps "
+                "exceeds base edge %.2f bps — clamping to 0",
+                float(effective_min_edge_bps),
+                float(fee_drag_bps),
+                float(Decimal(self.config.min_net_edge_bps)),
+            )
+            effective_min_edge_bps = _ZERO
+
+        effective_min_edge_bps = _clip(
+            effective_min_edge_bps,
+            max(_ZERO, to_decimal(self.config.adaptive_min_edge_bps_floor)),
+            to_decimal(self.config.adaptive_min_edge_bps_cap),
+        )
+        effective_min_edge_pct = effective_min_edge_bps / _10K
+
+        market_floor_pct = (self._market_spread_bps_ewma / _10K) * to_decimal(self.config.adaptive_market_floor_factor)
+        market_floor_pct = max(_ZERO, market_floor_pct)
+
+        self._adaptive_effective_min_edge_pct = effective_min_edge_pct
+        self._adaptive_fill_age_s = fill_age_s
+        self._adaptive_market_floor_pct = market_floor_pct
+        self._adaptive_vol_ratio = vol_ratio
+        self._pnl_governor_active = gov["governor_active"]
+        self._pnl_governor_day_progress = gov["governor_day_progress"]
+        self._pnl_governor_target_pnl_pct = gov["governor_target_pct"]
+        self._pnl_governor_target_pnl_quote = gov["governor_target_quote"]
+        self._pnl_governor_expected_pnl_quote = gov["governor_expected_quote"]
+        self._pnl_governor_actual_pnl_quote = gov["governor_actual_quote"]
+        self._pnl_governor_deficit_ratio = gov["governor_deficit_ratio"]
+        self._pnl_governor_edge_relax_bps = governor_edge_relax_bps
+        self._pnl_governor_target_mode = gov["governor_target_mode"]
+        self._pnl_governor_target_source = gov["governor_target_source"]
+        self._pnl_governor_target_equity_open_quote = gov["open_equity"]
+        self._pnl_governor_target_effective_pct = gov["governor_target_effective_pct"]
+        self._pnl_governor_activation_reason = gov["governor_activation_reason"]
+        self._increment_governor_reason_count(
+            "_pnl_governor_activation_reason_counts", gov["governor_activation_reason"]
+        )
+        result = (effective_min_edge_pct, market_floor_pct, vol_ratio)
+        self._adaptive_knobs_cache = (cache_key, result)
+        return result
+
+    def _compute_adaptive_edge_bps(
+        self, now_ts: float, regime_name: str, selective_state: str, selective_score: Decimal,
+    ) -> dict:
+        """Compute fill-age ratios, market/vol bonuses, and selective tightening."""
         target_age_s = Decimal(max(60, int(self.config.adaptive_fill_target_age_s)))
         fill_age_s = target_age_s * Decimal("2")
         if self._last_fill_ts > 0:
@@ -835,8 +944,6 @@ class SharedRuntimeKernel(FillHandlerMixin, RiskMixin, TelemetryMixin, AutoCalib
         vol_edge_bonus_bps = vol_ratio * to_decimal(self.config.adaptive_vol_edge_bonus_cap_bps)
         edge_relax_bps = stale_ratio * to_decimal(self.config.adaptive_edge_relax_max_bps)
         if self._fill_edge_below_cost_floor():
-            # Do not lower the entry standard just because fills are stale when
-            # recent realized edge already says the strategy is trading below cost.
             edge_relax_bps = _ZERO
         elif selective_state == "blocked":
             edge_relax_bps = _ZERO
@@ -861,9 +968,23 @@ class SharedRuntimeKernel(FillHandlerMixin, RiskMixin, TelemetryMixin, AutoCalib
             + selective_edge_tighten_bps
             - edge_relax_bps
         )
+        return {
+            "effective_min_edge_bps": effective_min_edge_bps,
+            "fill_age_s": fill_age_s,
+            "vol_ratio": vol_ratio,
+            "stale_ratio": stale_ratio,
+            "edge_relax_bps": edge_relax_bps,
+        }
 
-        # Daily PnL governor: when behind target by more than a buffer, relax min-edge
-        # threshold to increase fill probability while preserving bounded risk controls.
+    def _compute_pnl_governor(
+        self,
+        now_ts: float,
+        equity_quote: Decimal,
+        effective_min_edge_bps: Decimal,
+        stale_ratio: Decimal,
+        selective_state: str,
+    ) -> dict:
+        """Daily PnL governor: relax min-edge when behind target to recover fill cadence."""
         governor_active = False
         governor_day_progress = _ZERO
         external_daily_target_pct_override = getattr(self, "_external_daily_pnl_target_pct_override", None)
@@ -920,10 +1041,6 @@ class SharedRuntimeKernel(FillHandlerMixin, RiskMixin, TelemetryMixin, AutoCalib
                 elif selective_state != "inactive":
                     governor_activation_reason = "selective_quote_filter"
                 elif stale_ratio > _ZERO:
-                    # Stale-fill relaxation already lowers the entry threshold to
-                    # recover cadence. Avoid stacking a second discount from the
-                    # daily governor, which can collapse the effective min-edge
-                    # all the way to the hard floor.
                     governor_activation_reason = "stale_fill_relaxation_active"
                 else:
                     governor_active = True
@@ -938,50 +1055,22 @@ class SharedRuntimeKernel(FillHandlerMixin, RiskMixin, TelemetryMixin, AutoCalib
         elif self.config.pnl_governor_enabled:
             governor_activation_reason = "no_target"
 
-        if effective_min_edge_bps < _ZERO:
-            fee_drag_bps = edge_relax_bps + governor_edge_relax_bps
-            logger.warning(
-                "Effective edge floor negative (%.2f bps): total drag %.2f bps "
-                "exceeds base edge %.2f bps — clamping to 0",
-                float(effective_min_edge_bps),  # float: log-formatting
-                float(fee_drag_bps),  # float: log-formatting
-                float(base_min_edge_bps),  # float: log-formatting
-            )
-            effective_min_edge_bps = _ZERO
-
-        effective_min_edge_bps = _clip(
-            effective_min_edge_bps,
-            max(_ZERO, to_decimal(self.config.adaptive_min_edge_bps_floor)),
-            to_decimal(self.config.adaptive_min_edge_bps_cap),
-        )
-        effective_min_edge_pct = effective_min_edge_bps / _10K
-
-        market_floor_pct = (self._market_spread_bps_ewma / _10K) * to_decimal(self.config.adaptive_market_floor_factor)
-        market_floor_pct = max(_ZERO, market_floor_pct)
-
-        self._adaptive_effective_min_edge_pct = effective_min_edge_pct
-        self._adaptive_fill_age_s = fill_age_s
-        self._adaptive_market_floor_pct = market_floor_pct
-        self._adaptive_vol_ratio = vol_ratio
-        self._pnl_governor_active = governor_active
-        self._pnl_governor_day_progress = governor_day_progress
-        self._pnl_governor_target_pnl_pct = governor_target_pct
-        self._pnl_governor_target_pnl_quote = governor_target_quote
-        self._pnl_governor_expected_pnl_quote = governor_expected_quote
-        self._pnl_governor_actual_pnl_quote = governor_actual_quote
-        self._pnl_governor_deficit_ratio = governor_deficit_ratio
-        self._pnl_governor_edge_relax_bps = governor_edge_relax_bps
-        self._pnl_governor_target_mode = governor_target_mode
-        self._pnl_governor_target_source = governor_target_source
-        self._pnl_governor_target_equity_open_quote = open_equity
-        self._pnl_governor_target_effective_pct = governor_target_effective_pct
-        self._pnl_governor_activation_reason = governor_activation_reason
-        self._increment_governor_reason_count(
-            "_pnl_governor_activation_reason_counts", governor_activation_reason
-        )
-        result = (effective_min_edge_pct, market_floor_pct, vol_ratio)
-        self._adaptive_knobs_cache = (cache_key, result)
-        return result
+        return {
+            "effective_min_edge_bps": effective_min_edge_bps,
+            "governor_active": governor_active,
+            "governor_day_progress": governor_day_progress,
+            "governor_target_pct": governor_target_pct,
+            "governor_target_quote": governor_target_quote,
+            "governor_expected_quote": governor_expected_quote,
+            "governor_actual_quote": governor_actual_quote,
+            "governor_deficit_ratio": governor_deficit_ratio,
+            "governor_edge_relax_bps": governor_edge_relax_bps,
+            "governor_target_mode": governor_target_mode,
+            "governor_target_source": governor_target_source,
+            "open_equity": open_equity,
+            "governor_target_effective_pct": governor_target_effective_pct,
+            "governor_activation_reason": governor_activation_reason,
+        }
 
 
 # ── Alias subclasses ────────────────────────────────────────────────────

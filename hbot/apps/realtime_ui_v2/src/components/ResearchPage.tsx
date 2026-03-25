@@ -4,23 +4,21 @@ import {
   useRef,
   useState,
 } from "react";
-import { useShallow } from "zustand/react/shallow";
 
 import { Panel } from "./Panel";
-import { useDashboardStore } from "../store/useDashboardStore";
+import { useResearchData } from "../hooks/useResearchData";
 import type {
   CandidateDetail,
   ExplorationSession,
   IterationEvent,
   ResearchCandidate,
 } from "../types/research";
+import type { LaunchExplorationRequest } from "../types/research";
 import {
+  cancelExploration,
   explorationLogUrl,
-  fetchCandidateDetail,
-  fetchCandidates,
-  fetchExplorationDetail,
-  fetchExplorations,
   fetchReport,
+  launchExploration,
 } from "../utils/researchApi";
 
 function fmtScore(v: number | null | undefined, decimals = 1): string {
@@ -235,9 +233,21 @@ function CandidateDetailView({ detail, onBack, apiBase, token }: {
   );
 }
 
-function ExplorationTable({ sessions, onSelect }: {
+function explorationStatusColor(status: string): string {
+  switch (status) {
+    case "completed": return "var(--clr-up, #26a69a)";
+    case "running": return "var(--clr-warn, #ffa726)";
+    case "failed":
+    case "timed_out": return "var(--clr-dn, #ef5350)";
+    case "cancelled": return "var(--clr-muted, #777)";
+    default: return "var(--clr-muted, #777)";
+  }
+}
+
+function ExplorationTable({ sessions, onSelect, onRerun }: {
   sessions: ExplorationSession[];
   onSelect: (id: string) => void;
+  onRerun: (params: Partial<LaunchExplorationRequest>) => void;
 }) {
   if (!sessions.length) return <div className="panel-empty">No exploration sessions</div>;
 
@@ -252,6 +262,7 @@ function ExplorationTable({ sessions, onSelect }: {
             <th>Best Score</th>
             <th>Best Candidate</th>
             <th>Date</th>
+            <th></th>
           </tr>
         </thead>
         <tbody>
@@ -259,7 +270,7 @@ function ExplorationTable({ sessions, onSelect }: {
             <tr key={s.session_id} onClick={() => onSelect(s.session_id)} style={{ cursor: "pointer" }}>
               <td className="rs-name-cell">{s.session_id.slice(0, 12)}</td>
               <td>
-                <span className="rs-badge" style={{ background: s.status === "completed" ? "var(--clr-up, #26a69a)" : "var(--clr-warn, #ffa726)" }}>
+                <span className="rs-badge" style={{ background: explorationStatusColor(s.status) }}>
                   {s.status}
                 </span>
               </td>
@@ -267,10 +278,100 @@ function ExplorationTable({ sessions, onSelect }: {
               <td>{fmtScore(s.best_score)}</td>
               <td>{s.best_candidate || "\u2014"}</td>
               <td>{s.created_at?.slice(0, 16).replace("T", " ") || "\u2014"}</td>
+              <td onClick={(e) => e.stopPropagation()} style={{ whiteSpace: "nowrap" }}>
+                {s.status !== "running" && (
+                  <button
+                    className="rs-rerun-btn"
+                    title="Re-run with same parameters"
+                    onClick={() => onRerun(s.launch_params ?? {})}
+                  >
+                    ↺ Re-run
+                  </button>
+                )}
+              </td>
             </tr>
           ))}
         </tbody>
       </table>
+    </div>
+  );
+}
+
+function IterationCard({ ev }: { ev: IterationEvent }) {
+  const [expanded, setExpanded] = useState(false);
+  const fullText = ev.hypothesis_full || ev.hypothesis || "";
+  const hasExtra = !!(ev.entry_logic || ev.exit_logic || (ev.parameter_space && Object.keys(ev.parameter_space).length > 0));
+  const canExpand = hasExtra || fullText.length > 120;
+  const blueprintColor = "var(--clr-accent, #89b4fa)";
+
+  return (
+    <div className={`rs-iter-card${ev.is_blueprint ? " rs-iter-card-blueprint" : ""}`}>
+      {/* Header row */}
+      <div className="rs-iter-card-header">
+        <span className="rs-iter-num">#{ev.iteration}</span>
+        <span className="rs-iter-name">{ev.candidate_name}</span>
+        {ev.adapter_mode && (
+          <span className="rs-badge rs-iter-adapter-badge">{ev.adapter_mode}</span>
+        )}
+        {ev.is_blueprint && (
+          <span className="rs-badge" style={{ background: blueprintColor, color: "#1e1e2e", fontWeight: 700 }}>
+            BLUEPRINT
+          </span>
+        )}
+        {ev.recommendation && !ev.is_blueprint && (
+          <span className="rs-badge" style={{ background: recColor(ev.recommendation) }}>
+            {ev.recommendation}
+          </span>
+        )}
+        <div className="rs-iter-score-area">
+          <ScoreBar score={ev.is_blueprint ? null : ev.score} />
+        </div>
+      </div>
+
+      {/* Hypothesis */}
+      {fullText && (
+        <div className={`rs-iter-hypothesis${expanded ? " rs-iter-hypothesis-expanded" : ""}`}>
+          {fullText}
+        </div>
+      )}
+
+      {/* Expand toggle */}
+      {canExpand && (
+        <button className="rs-iter-expand-btn" onClick={() => setExpanded((p) => !p)}>
+          {expanded ? "\u25b2 Collapse" : "\u25bc Entry/Exit logic \u00b7 Parameter space"}
+        </button>
+      )}
+
+      {/* Expanded detail */}
+      {expanded && (
+        <div className="rs-iter-detail">
+          {ev.entry_logic && (
+            <div className="rs-iter-logic">
+              <span className="rs-iter-logic-label">Entry</span>
+              {ev.entry_logic}
+            </div>
+          )}
+          {ev.exit_logic && (
+            <div className="rs-iter-logic">
+              <span className="rs-iter-logic-label">Exit</span>
+              {ev.exit_logic}
+            </div>
+          )}
+          {ev.parameter_space && Object.keys(ev.parameter_space).length > 0 && (
+            <div className="rs-iter-params-block">
+              <div className="rs-iter-params-title">Parameter Space</div>
+              <div className="rs-iter-params">
+                {Object.entries(ev.parameter_space).map(([k, v]) => (
+                  <span key={k} className="rs-param-chip">
+                    <span className="rs-param-key">{k}</span>
+                    <span className="rs-param-vals">{Array.isArray(v) ? `[${v.join(", ")}]` : String(v)}</span>
+                  </span>
+                ))}
+              </div>
+            </div>
+          )}
+        </div>
+      )}
     </div>
   );
 }
@@ -283,8 +384,7 @@ function ExplorationLogPanel({ apiBase, token, sessionId }: {
   const [events, setEvents] = useState<IterationEvent[]>([]);
   const [done, setDone] = useState(false);
   const [summary, setSummary] = useState<Record<string, unknown> | null>(null);
-  const preRef = useRef<HTMLPreElement | null>(null);
-  const [autoScroll, setAutoScroll] = useState(true);
+  const [cancelling, setCancelling] = useState(false);
   const esRef = useRef<EventSource | null>(null);
 
   useEffect(() => {
@@ -313,105 +413,254 @@ function ExplorationLogPanel({ apiBase, token, sessionId }: {
     return () => es.close();
   }, [apiBase, token, sessionId]);
 
-  useEffect(() => {
-    if (autoScroll && preRef.current) {
-      preRef.current.scrollTop = preRef.current.scrollHeight;
-    }
-  }, [events, autoScroll]);
+  const handleCancel = useCallback(async () => {
+    setCancelling(true);
+    try {
+      await cancelExploration(apiBase, token, sessionId);
+      setDone(true);
+    } catch { /* ignore */ }
+    setCancelling(false);
+  }, [apiBase, token, sessionId]);
 
-  const handleScroll = useCallback(() => {
-    if (!preRef.current) return;
-    const { scrollTop, scrollHeight, clientHeight } = preRef.current;
-    setAutoScroll(scrollHeight - scrollTop - clientHeight < 40);
-  }, []);
+  const bestRec = summary?.best_recommendation as string | null | undefined;
 
   return (
     <div className="rs-exploration-log">
-      <div className="rs-section-title">Live Iterations</div>
-      <pre ref={preRef} className="rs-log-panel" onScroll={handleScroll}>
-        {events.length
-          ? events.map((ev) =>
-              `[iter ${ev.iteration}] ${ev.candidate_name}  score=${fmtScore(ev.score)}  rec=${ev.recommendation ?? "\u2014"}`
-            ).join("\n")
-          : "Waiting for iteration events\u2026"}
-      </pre>
-      {!autoScroll && (
-        <button
-          className="bt-scroll-btn"
-          onClick={() => {
-            setAutoScroll(true);
-            if (preRef.current) preRef.current.scrollTop = preRef.current.scrollHeight;
-          }}
-        >
-          &darr; Jump to bottom
-        </button>
-      )}
+      {/* Toolbar */}
+      <div className="rs-iter-toolbar">
+        <span className="rs-section-title" style={{ margin: 0 }}>
+          {done ? `Results \u2014 ${events.length} iteration${events.length !== 1 ? "s" : ""}` : "Live Iterations\u2026"}
+        </span>
+        {!done && (
+          <button className="bt-btn" onClick={handleCancel} disabled={cancelling} style={{ fontSize: "0.75rem" }}>
+            {cancelling ? "Cancelling\u2026" : "Cancel"}
+          </button>
+        )}
+      </div>
+
+      {/* Session summary card (shown once done) */}
       {done && summary && (
-        <div className="rs-summary-block">
-          <strong>Session complete</strong>
-          <span>Best: {String(summary.best_observed_candidate || "\u2014")} ({fmtScore(summary.best_observed_score as number | null)})</span>
-          <span>Iterations: {String(summary.iterations ?? "\u2014")}</span>
+        <div className="rs-session-summary">
+          <div className="rs-summary-item">
+            <span className="rs-summary-label">Best Candidate</span>
+            <span className="rs-summary-value rs-name-cell">
+              {String(summary.best_observed_candidate || "\u2014")}
+            </span>
+          </div>
+          <div className="rs-summary-item">
+            <span className="rs-summary-label">Best Score</span>
+            <span className="rs-summary-value">
+              {fmtScore(summary.best_observed_score as number | null)}
+            </span>
+          </div>
+          {bestRec && (
+            <div className="rs-summary-item">
+              <span className="rs-summary-label">Recommendation</span>
+              <span className="rs-badge" style={{ background: recColor(bestRec), display: "inline-block", marginTop: 2 }}>
+                {bestRec}
+              </span>
+            </div>
+          )}
+          <div className="rs-summary-item">
+            <span className="rs-summary-label">Iterations</span>
+            <span className="rs-summary-value">{String(summary.iterations ?? "\u2014")}</span>
+          </div>
+          {(summary.total_tokens_used as number) > 0 && (
+            <div className="rs-summary-item">
+              <span className="rs-summary-label">Tokens Used</span>
+              <span className="rs-summary-value">
+                {Number(summary.total_tokens_used).toLocaleString()}
+              </span>
+            </div>
+          )}
+        </div>
+      )}
+
+      {/* Waiting state */}
+      {!done && events.length === 0 && (
+        <div className="panel-loading">Waiting for iteration events\u2026</div>
+      )}
+
+      {/* Iteration cards */}
+      {events.length > 0 && (
+        <div className="rs-iter-list">
+          {events.map((ev) => (
+            <IterationCard key={`${ev.iteration}-${ev.candidate_name}`} ev={ev} />
+          ))}
         </div>
       )}
     </div>
   );
 }
 
-type ResearchSubView = "scoreboard" | "candidate-detail" | "exploration-detail";
+const ALL_ADAPTERS = [
+  "atr_mm", "atr_mm_v2", "smc_mm", "combo_mm",
+  "pullback", "pullback_v2", "momentum_scalper",
+  "directional_mm", "simple",
+] as const;
 
-export function ResearchPage() {
-  const { apiBase, apiToken } = useDashboardStore(
-    useShallow((s) => ({ apiBase: s.settings.apiBase, apiToken: s.settings.apiToken })),
-  );
+const DEFAULT_LAUNCH_CONFIG: LaunchExplorationRequest = {
+  provider: "anthropic",
+  iterations: 5,
+  temperature: 0.7,
+  adapters: [...ALL_ADAPTERS],
+  skip_sweep: false,
+  skip_walkforward: false,
+  extra_context: "",
+};
 
-  const [subView, setSubView] = useState<ResearchSubView>("scoreboard");
-  const [candidates, setCandidates] = useState<ResearchCandidate[]>([]);
-  const [explorations, setExplorations] = useState<ExplorationSession[]>([]);
-  const [selectedDetail, setSelectedDetail] = useState<CandidateDetail | null>(null);
-  const [selectedExplorationId, setSelectedExplorationId] = useState<string | null>(null);
+function LaunchExplorationModal({ onClose, onLaunched, apiBase, token, initialConfig }: {
+  onClose: () => void;
+  onLaunched: (sessionId: string) => void;
+  apiBase: string;
+  token: string;
+  initialConfig?: Partial<LaunchExplorationRequest>;
+}) {
+  const [config, setConfig] = useState<LaunchExplorationRequest>({ ...DEFAULT_LAUNCH_CONFIG, ...initialConfig });
+  const [launching, setLaunching] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const [loading, setLoading] = useState(false);
 
-  const refreshAll = useCallback(async () => {
-    setLoading(true);
+  const handleLaunch = useCallback(async () => {
+    setLaunching(true);
     setError(null);
     try {
-      const [cands, expls] = await Promise.all([
-        fetchCandidates(apiBase, apiToken),
-        fetchExplorations(apiBase, apiToken),
-      ]);
-      setCandidates(cands);
-      setExplorations(expls);
+      const res = await launchExploration(apiBase, token, config);
+      onLaunched(res.session_id);
     } catch (e: unknown) {
       setError(e instanceof Error ? e.message : String(e));
     } finally {
-      setLoading(false);
+      setLaunching(false);
     }
-  }, [apiBase, apiToken]);
+  }, [apiBase, token, config, onLaunched]);
 
-  useEffect(() => { void refreshAll(); }, [refreshAll]);
-
-  const handleCandidateSelect = useCallback(async (name: string) => {
-    setError(null);
-    try {
-      const detail = await fetchCandidateDetail(apiBase, apiToken, name);
-      setSelectedDetail(detail);
-      setSubView("candidate-detail");
-    } catch (e: unknown) {
-      setError(e instanceof Error ? e.message : String(e));
-    }
-  }, [apiBase, apiToken]);
-
-  const handleExplorationSelect = useCallback((sessionId: string) => {
-    setSelectedExplorationId(sessionId);
-    setSubView("exploration-detail");
+  const toggleAdapter = useCallback((adapter: string) => {
+    setConfig((prev) => {
+      const has = prev.adapters.includes(adapter);
+      const next = has
+        ? prev.adapters.filter((a) => a !== adapter)
+        : [...prev.adapters, adapter];
+      return { ...prev, adapters: next.length ? next : prev.adapters };
+    });
   }, []);
 
-  const handleBack = useCallback(() => {
-    setSubView("scoreboard");
-    setSelectedDetail(null);
-    setSelectedExplorationId(null);
-  }, []);
+  return (
+    <div className="rs-modal-backdrop" onClick={onClose}>
+      <div className="rs-modal" onClick={(e) => e.stopPropagation()}>
+        <div className="rs-modal-header">
+          <h3>Launch Exploration</h3>
+          <button className="rs-modal-close" onClick={onClose}>&times;</button>
+        </div>
+
+        <div className="rs-modal-body">
+          <div className="rs-form-row">
+            <label>Provider</label>
+            <select
+              value={config.provider}
+              onChange={(e) => setConfig((p) => ({ ...p, provider: e.target.value as "anthropic" | "openai" }))}
+            >
+              <option value="anthropic">Anthropic</option>
+              <option value="openai">OpenAI</option>
+            </select>
+          </div>
+
+          <div className="rs-form-row">
+            <label>Iterations</label>
+            <input
+              type="number"
+              min={1}
+              max={20}
+              value={config.iterations}
+              onChange={(e) => setConfig((p) => ({ ...p, iterations: Math.max(1, Math.min(20, Number(e.target.value) || 1)) }))}
+            />
+          </div>
+
+          <div className="rs-form-row">
+            <label>Temperature</label>
+            <input
+              type="number"
+              min={0}
+              max={2}
+              step={0.1}
+              value={config.temperature}
+              onChange={(e) => setConfig((p) => ({ ...p, temperature: Math.max(0, Math.min(2, Number(e.target.value) || 0.7)) }))}
+            />
+          </div>
+
+          <div className="rs-form-row">
+            <label>Adapters (LLM can also propose new ones)</label>
+            <div className="rs-checkbox-group">
+              {ALL_ADAPTERS.map((a) => (
+                <label key={a} className="rs-checkbox-label">
+                  <input
+                    type="checkbox"
+                    checked={config.adapters.includes(a)}
+                    onChange={() => toggleAdapter(a)}
+                  />
+                  {a}
+                </label>
+              ))}
+            </div>
+            <span style={{ fontSize: "0.75rem", color: "#888", marginTop: 4, display: "block" }}>
+              The LLM is free to invent new adapter architectures. Novel proposals are saved as blueprints for development.
+            </span>
+          </div>
+
+          <div className="rs-form-row">
+            <label className="rs-checkbox-label">
+              <input
+                type="checkbox"
+                checked={config.skip_sweep}
+                onChange={(e) => setConfig((p) => ({ ...p, skip_sweep: e.target.checked }))}
+              />
+              Skip parameter sweep
+            </label>
+          </div>
+
+          <div className="rs-form-row">
+            <label className="rs-checkbox-label">
+              <input
+                type="checkbox"
+                checked={config.skip_walkforward}
+                onChange={(e) => setConfig((p) => ({ ...p, skip_walkforward: e.target.checked }))}
+              />
+              Skip walk-forward
+            </label>
+          </div>
+
+          <div className="rs-form-row">
+            <label>Extra context</label>
+            <input
+              type="text"
+              placeholder="e.g. high volatility regime"
+              value={config.extra_context}
+              onChange={(e) => setConfig((p) => ({ ...p, extra_context: e.target.value }))}
+              maxLength={500}
+            />
+          </div>
+
+          {error && <div className="panel-error" role="alert">{error}</div>}
+        </div>
+
+        <div className="rs-modal-footer">
+          <button className="bt-btn" onClick={onClose} disabled={launching}>Cancel</button>
+          <button className="bt-btn bt-btn-run" onClick={handleLaunch} disabled={launching}>
+            {launching ? "Launching\u2026" : "Launch"}
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+export function ResearchPage() {
+  const {
+    apiBase, apiToken, subView,
+    candidates, explorations, selectedDetail, selectedExplorationId,
+    error, loading, showLaunchModal, rerunConfig,
+    refreshAll, handleCandidateSelect, handleExplorationSelect,
+    handleBack, handleRerun, handleLaunched,
+    openLaunchModal, closeLaunchModal,
+  } = useResearchData();
 
   if (subView === "candidate-detail" && selectedDetail) {
     return (
@@ -457,8 +706,23 @@ export function ResearchPage() {
       </Panel>
 
       <Panel title="Exploration Sessions" className="panel-span-12">
-        <ExplorationTable sessions={explorations} onSelect={handleExplorationSelect} />
+        <div className="rs-toolbar">
+          <button className="bt-btn bt-btn-run" onClick={openLaunchModal}>
+            New Exploration
+          </button>
+        </div>
+        <ExplorationTable sessions={explorations} onSelect={handleExplorationSelect} onRerun={handleRerun} />
       </Panel>
+
+      {showLaunchModal && (
+        <LaunchExplorationModal
+          onClose={closeLaunchModal}
+          onLaunched={handleLaunched}
+          apiBase={apiBase}
+          token={apiToken}
+          initialConfig={rerunConfig}
+        />
+      )}
     </>
   );
 }

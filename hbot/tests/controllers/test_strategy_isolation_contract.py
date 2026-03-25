@@ -202,6 +202,188 @@ def test_directional_runtime_extends_kernel_not_mm() -> None:
         raise AssertionError("DirectionalRuntimeController class not found")
 
 
+def test_bot_lanes_do_not_directly_mutate_pending_stale_cancel_actions() -> None:
+    """Bot lanes must use enqueue_stale_cancels/replace_stale_cancels, not direct list mutation."""
+    lane_files = _bot_lane_files()
+    violations: list[str] = []
+    for path in lane_files:
+        src = path.read_text(encoding="utf-8")
+        for i, line in enumerate(src.splitlines(), 1):
+            stripped = line.strip()
+            if "_pending_stale_cancel_actions" in stripped and (
+                ".extend(" in stripped or ".append(" in stripped or "= [" in stripped or "= self._cancel" in stripped
+            ):
+                violations.append(f"{path.name}:{i}: {stripped}")
+    assert not violations, (
+        "Bot lanes must NOT directly mutate _pending_stale_cancel_actions — "
+        "use enqueue_stale_cancels() or replace_stale_cancels(). "
+        + "Violations -> " + "; ".join(violations)
+    )
+
+
+def test_bot_lanes_do_not_directly_assign_recently_issued_levels() -> None:
+    """Bot lanes must use _reset_issued_levels(), not direct assignment."""
+    lane_files = _bot_lane_files()
+    violations: list[str] = []
+    for path in lane_files:
+        src = path.read_text(encoding="utf-8")
+        for i, line in enumerate(src.splitlines(), 1):
+            stripped = line.strip()
+            if "_recently_issued_levels" in stripped and "= {}" in stripped:
+                violations.append(f"{path.name}:{i}: {stripped}")
+    assert not violations, (
+        "Bot lanes must NOT directly clear _recently_issued_levels — "
+        "use _reset_issued_levels(). "
+        + "Violations -> " + "; ".join(violations)
+    )
+
+
+def test_bot_lanes_do_not_override_executor_refresh_time() -> None:
+    """Bot lanes must not write to _runtime_levels.executor_refresh_time."""
+    lane_files = _bot_lane_files()
+    violations: list[str] = []
+    for path in lane_files:
+        src = path.read_text(encoding="utf-8")
+        for i, line in enumerate(src.splitlines(), 1):
+            stripped = line.strip()
+            if "executor_refresh_time" in stripped and "=" in stripped and not stripped.startswith("#"):
+                if "==" not in stripped and "!=" not in stripped and "metadata" not in stripped:
+                    violations.append(f"{path.name}:{i}: {stripped}")
+    assert not violations, (
+        "Bot lanes must NOT override _runtime_levels.executor_refresh_time — "
+        "use open_order_timeout_s on config instead. "
+        + "Violations -> " + "; ".join(violations)
+    )
+
+
+def test_shared_kernel_exposes_framework_boundary_methods() -> None:
+    """SharedRuntimeKernel must expose encapsulated framework boundary methods."""
+    kernel_path = CONTROLLERS_DIR / "runtime" / "kernel" / "controller.py"
+    tree = ast.parse(kernel_path.read_text(encoding="utf-8"))
+    required_methods = {
+        "enqueue_stale_cancels",
+        "replace_stale_cancels",
+        "_reset_issued_levels",
+        "_strategy_extra_actions",
+    }
+    found: set[str] = set()
+    for node in ast.walk(tree):
+        if isinstance(node, ast.ClassDef) and node.name == "SharedRuntimeKernel":
+            for item in node.body:
+                if isinstance(item, (ast.FunctionDef, ast.AsyncFunctionDef)):
+                    if item.name in required_methods:
+                        found.add(item.name)
+    missing = required_methods - found
+    assert not missing, (
+        "SharedRuntimeKernel must expose framework boundary methods. "
+        f"Missing: {sorted(missing)}"
+    )
+
+
+def test_directional_config_has_open_order_timeout_field() -> None:
+    """DirectionalRuntimeConfig must declare open_order_timeout_s."""
+    dc_path = CONTROLLERS_DIR / "runtime" / "directional_config.py"
+    src = dc_path.read_text(encoding="utf-8")
+    assert "open_order_timeout_s" in src, (
+        "DirectionalRuntimeConfig must declare open_order_timeout_s field"
+    )
+
+
+# ── v3 Trading Desk isolation contracts ──────────────────────────────
+
+
+def test_v3_signal_modules_have_no_framework_imports() -> None:
+    """Signal modules in v3/ SHALL NOT import from controllers.runtime,
+    hummingbot, services, or simulation.  Only standard library, decimal,
+    dataclasses, typing, and the v3 type modules are allowed."""
+    v3_dir = CONTROLLERS_DIR / "runtime" / "v3"
+    forbidden_prefixes = (
+        "controllers.runtime.kernel",
+        "controllers.runtime.base",
+        "controllers.runtime.core",
+        "controllers.runtime.contracts",
+        "controllers.epp",
+        "controllers.shared_runtime",
+        "hummingbot",
+        "services.",
+        "simulation.",
+    )
+    # Only check signal-related files (not the framework itself)
+    signal_files = [
+        p for p in v3_dir.rglob("*.py")
+        if p.name not in ("__init__.py", "data_surface.py", "migration_shim.py", "trading_desk.py", "telemetry.py")
+        and "risk" not in str(p.relative_to(v3_dir))
+        and "execution" not in str(p.relative_to(v3_dir))
+    ]
+    violations: list[str] = []
+    for path in signal_files:
+        if not path.exists():
+            continue
+        modules = _imported_modules(path)
+        bad = sorted(
+            m for m in modules
+            if any(m.startswith(p) for p in forbidden_prefixes)
+        )
+        if bad:
+            violations.append(f"{path.name}: {', '.join(bad)}")
+    assert not violations, (
+        "v3 signal/type modules must not import framework internals. "
+        + "Violations -> " + "; ".join(violations)
+    )
+
+
+def test_v3_types_are_frozen_dataclasses() -> None:
+    """All v3 snapshot and signal types must be frozen dataclasses."""
+    import dataclasses
+    from controllers.runtime.v3.types import (
+        EquitySnapshot, FundingSnapshot, IndicatorSnapshot,
+        MarketSnapshot, MlSnapshot, OrderBookSnapshot,
+        PositionSnapshot, RegimeSnapshot, TradeFlowSnapshot,
+    )
+    from controllers.runtime.v3.signals import (
+        SignalLevel, TelemetryField, TelemetrySchema, TradingSignal,
+    )
+    from controllers.runtime.v3.orders import (
+        DeskOrder, SubmitOrder, CancelOrder, ModifyOrder,
+        ClosePosition, PartialReduce,
+    )
+    from controllers.runtime.v3.risk_types import RiskDecision
+
+    for cls in [
+        EquitySnapshot, FundingSnapshot, IndicatorSnapshot,
+        MarketSnapshot, MlSnapshot, OrderBookSnapshot,
+        PositionSnapshot, RegimeSnapshot, TradeFlowSnapshot,
+        SignalLevel, TelemetryField, TelemetrySchema, TradingSignal,
+        DeskOrder, SubmitOrder, CancelOrder, ModifyOrder,
+        ClosePosition, PartialReduce, RiskDecision,
+    ]:
+        assert dataclasses.is_dataclass(cls), f"{cls.__name__} is not a dataclass"
+        assert cls.__dataclass_params__.frozen, f"{cls.__name__} is not frozen"
+
+
+def test_v3_protocols_are_runtime_checkable() -> None:
+    """All v3 protocols must be runtime_checkable."""
+    from controllers.runtime.v3.protocols import (
+        ExecutionAdapter, RiskLayer, StrategySignalSource, TradingDeskProtocol,
+    )
+    for proto in [ExecutionAdapter, RiskLayer, StrategySignalSource, TradingDeskProtocol]:
+        # runtime_checkable protocols have _is_runtime_protocol attribute
+        assert getattr(proto, "_is_runtime_protocol", False), (
+            f"{proto.__name__} must be @runtime_checkable"
+        )
+
+
+def test_v3_strategy_registry_entries_are_valid() -> None:
+    """All registered strategies must have valid module_path and signal_class."""
+    from controllers.runtime.v3.strategy_registry import STRATEGY_REGISTRY
+    for name, entry in STRATEGY_REGISTRY.items():
+        assert entry.module_path, f"{name}: empty module_path"
+        assert entry.signal_class, f"{name}: empty signal_class"
+        assert entry.execution_family in ("mm_grid", "directional", "hybrid"), (
+            f"{name}: invalid execution_family '{entry.execution_family}'"
+        )
+
+
 def test_legacy_wrappers_map_to_one_strategy_lane() -> None:
     expected = {
         "epp_v2_4_bot5.py": "controllers.bots.bot5.ift_jota_v1",

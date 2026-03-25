@@ -89,6 +89,28 @@ def atr(
     return tr.ewm(alpha=1.0 / period, adjust=False, min_periods=period).mean()
 
 
+def williams_r(
+    high: pd.Series, low: pd.Series, close: pd.Series, period: int,
+) -> pd.Series:
+    """Williams %R normalized to [0, 1] over a rolling *period*-bar window.
+
+    0 = close equals the period low  (maximum oversold),
+    1 = close equals the period high (maximum overbought).
+
+    This is a positive-orientation rescaling of the traditional W%R
+    (raw W%R = −100 × (HH − C) / (HH − LL)).  Leading ``period − 1``
+    values are NaN, matching the warmup behaviour of the other indicators
+    in this module.  Flat-range bars (HH == LL) return 0.5.
+    """
+    hh = high.rolling(window=period, min_periods=period).max()
+    ll = low.rolling(window=period, min_periods=period).min()
+    rng = hh - ll
+    raw = (close - ll) / rng
+    # Flat-range bars: rng == 0 but not NaN (warmup) → midpoint
+    is_flat = (rng == 0) & rng.notna()
+    return raw.where(~is_flat, 0.5)
+
+
 def adx(
     high: pd.Series, low: pd.Series, close: pd.Series, period: int,
 ) -> pd.Series:

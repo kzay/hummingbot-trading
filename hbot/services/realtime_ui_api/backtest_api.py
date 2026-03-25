@@ -392,7 +392,7 @@ def _spawn_worker(
                     try:
                         result_summary = json.loads(report_path.read_text())
                     except Exception:
-                        pass
+                        pass  # Justification: parse failure is expected for malformed report JSON — omit summary
                 try:
                     store.update(
                         job_id,
@@ -425,13 +425,13 @@ def _spawn_worker(
             try:
                 store.update(job_id, status="failed", error=f"Internal waiter error: {exc!r}")
             except Exception:
-                pass
+                pass  # Justification: job store update is best-effort after internal waiter error
         finally:
             _untrack_backtest_proc(proc)
             try:
                 log_fh.close()
             except Exception:
-                pass
+                pass  # Justification: best-effort cleanup — log handle close must not raise
 
     t = threading.Thread(target=_wait_for_completion, daemon=True, name=f"backtest-wait-{job_id}")
     t.start()
@@ -465,7 +465,7 @@ def _read_progress(job_dir: str) -> float:
             data = json.loads(p.read_text())
             return float(data.get("progress_pct", 0.0))
     except Exception:
-        pass
+        pass  # Justification: best-effort I/O — progress file may be missing or invalid; non-critical
     return 0.0
 
 
@@ -483,7 +483,7 @@ def _job_api_payload(store: JobStore, job_row: dict[str, Any]) -> dict[str, Any]
         try:
             result_summary = json.loads(job["result_summary_json"])
         except Exception:
-            pass
+            pass  # Justification: parse failure is expected for malformed stored JSON — omit summary
     return {
         "id": job_id,
         "preset_id": job["preset_id"],
@@ -686,7 +686,7 @@ def create_backtest_routes(auth_check):
                 try:
                     summary = json.loads(job["result_summary_json"])
                 except Exception:
-                    pass
+                    pass  # Justification: parse failure is expected for malformed stored JSON — omit summary
             result.append({
                 "id": job["id"],
                 "preset_id": job["preset_id"],

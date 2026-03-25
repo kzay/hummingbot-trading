@@ -13,6 +13,13 @@ from platform_lib.contracts.event_identity import validate_event_identity
 
 logger = logging.getLogger(__name__)
 
+REGIME_VOL_BUCKET_MAP: dict[int, str] = {
+    0: "neutral_low_vol",
+    1: "neutral_high_vol",
+    2: "neutral_high_vol",
+    3: "high_vol_shock",
+}
+
 # ---------------------------------------------------------------------------
 # Stream name constants
 # ---------------------------------------------------------------------------
@@ -167,6 +174,7 @@ def _consume_ml_features(strategy: Any, bridge_state: Any) -> None:
                 if payload.get("event_type") != "ml_features":
                     continue
                 trading_pair = payload.get("trading_pair", "")
+                event_resolution = payload.get("resolution", "1m")
                 predictions = payload.get("predictions", {})
                 model_versions = payload.get("model_versions", {})
                 if not predictions:
@@ -182,6 +190,9 @@ def _consume_ml_features(strategy: Any, bridge_state: Any) -> None:
                     ctrl_pair = str(getattr(cfg, "trading_pair", ""))
                     if ctrl_pair != trading_pair:
                         continue
+                    bot_resolution = getattr(cfg, "indicator_resolution", "1m")
+                    if event_resolution != bot_resolution:
+                        continue
                     if not hasattr(ctrl, "apply_execution_intent"):
                         continue
 
@@ -191,9 +202,14 @@ def _consume_ml_features(strategy: Any, bridge_state: Any) -> None:
                         regime_pred = predictions["regime"]
                         confidence = float(regime_pred.get("confidence", 0))
                         if confidence >= confidence_threshold:
+                            raw_class = regime_pred.get("class", "")
+                            if isinstance(raw_class, (int, float)):
+                                regime_label = REGIME_VOL_BUCKET_MAP.get(int(raw_class), str(raw_class))
+                            else:
+                                regime_label = str(raw_class)
                             ctrl.apply_execution_intent({
                                 "action": "set_ml_regime",
-                                "regime": str(regime_pred.get("class", "")),
+                                "regime": regime_label,
                                 "confidence": confidence,
                                 "metadata": {"model_version": model_versions.get("regime", "")},
                             })

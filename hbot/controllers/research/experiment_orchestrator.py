@@ -21,6 +21,26 @@ from controllers.research.robustness_scorer import RobustnessScorer, ScoreBreakd
 logger = logging.getLogger(__name__)
 
 
+def _convert_param_space(raw: dict[str, Any]) -> list[Any]:
+    """Convert LLM-produced ``{name: [values]}`` dict to ``list[ParamSpace]``.
+
+    The LLM generates parameter_space as a flat dict mapping param names
+    to lists of discrete values.  The backtesting engine expects
+    ``list[ParamSpace]`` dataclass instances with mode="grid".
+    """
+    from controllers.backtesting.types import ParamSpace
+
+    result = []
+    for name, values in raw.items():
+        if not isinstance(values, list):
+            values = [values]
+        result.append(ParamSpace(name=name, mode="grid", values=values))
+    return result
+
+
+_DEFAULT_SWEEP_WORKERS = 6
+
+
 @dataclass
 class EvaluationConfig:
     """Controls the evaluation pipeline."""
@@ -32,6 +52,7 @@ class EvaluationConfig:
     output_dir: str = "hbot/data/research/reports"
     experiments_dir: str = "hbot/data/research/experiments"
     scorer_weights: dict[str, float] | None = None
+    sweep_workers: int = _DEFAULT_SWEEP_WORKERS
 
 
 @dataclass
@@ -87,9 +108,10 @@ class ExperimentOrchestrator:
         bt = result.backtest_result
 
         # Save result
-        result_path = str(output_dir / "backtest_result.json")
-        from controllers.backtesting.report import save_result_json
-        save_result_json(bt, result_path)
+        result_path_obj = output_dir / "backtest_result.json"
+        result_path = str(result_path_obj)
+        from controllers.backtesting.report import save_json_report
+        save_json_report(bt, result_path_obj)
 
         # Step 2: Sweep
         if not self._config.skip_sweep and candidate.parameter_space:
@@ -155,7 +177,7 @@ class ExperimentOrchestrator:
         ds = DataSourceConfig(
             exchange=ds_data.get("exchange", "bitget"),
             pair=ds_data.get("pair", "BTC-USDT"),
-            resolution=ds_data.get("resolution", "1m"),
+            resolution=ds_data.get("resolution", "15m"),
             start_date=ds_data.get("start_date", ""),
             end_date=ds_data.get("end_date", ""),
             instrument_type=ds_data.get("instrument_type", "perp"),
@@ -172,7 +194,7 @@ class ExperimentOrchestrator:
             fill_model=self._config.fill_model_preset,
             seed=bc.get("seed", 42),
             leverage=bc.get("leverage", 1),
-            step_interval_s=bc.get("step_interval_s", 60),
+            step_interval_s=bc.get("step_interval_s", 900),
             warmup_bars=bc.get("warmup_bars", 60),
         )
 
@@ -182,7 +204,8 @@ class ExperimentOrchestrator:
 
         sweep_config = SweepConfig(
             base_config=copy.deepcopy(base),
-            param_spaces=candidate.parameter_space,
+            param_spaces=_convert_param_space(candidate.parameter_space),
+            workers=self._config.sweep_workers,
         )
         runner = SweepRunner(sweep_config)
         return runner.run()
@@ -195,7 +218,8 @@ class ExperimentOrchestrator:
 
         sweep_config = SweepConfig(
             base_config=copy.deepcopy(base),
-            param_spaces=candidate.parameter_space,
+            param_spaces=_convert_param_space(candidate.parameter_space),
+            workers=self._config.sweep_workers,
         )
         wf_config = WalkForwardConfig(
             sweep_config=sweep_config,

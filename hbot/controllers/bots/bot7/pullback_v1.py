@@ -196,7 +196,7 @@ class PullbackV1Config(DirectionalStrategyRuntimeV24Config):
 
     # ── Signal freshness timeout ──────────────────────────────────────────
     pb_signal_freshness_enabled: bool = Field(default=True)
-    pb_signal_max_age_s: int = Field(default=120, ge=10, le=600)
+    pb_signal_max_age_s: int = Field(default=120, ge=10, le=3600)
 
     # ── Adaptive cooldown ─────────────────────────────────────────────────
     pb_adaptive_cooldown_enabled: bool = Field(default=True)
@@ -221,6 +221,13 @@ class PullbackV1Controller(DirectionalStrategyRuntimeV24Controller):
 
     def __init__(self, config: PullbackV1Config, *args, **kwargs):
         super().__init__(config, *args, **kwargs)
+        if bool(getattr(config, "pb_limit_entry_enabled", True)):
+            timeout_s = int(getattr(config, "pb_entry_timeout_s", 30) or 30)
+            if timeout_s > 0 and int(getattr(config, "open_order_timeout_s", 0) or 0) == 0:
+                try:
+                    object.__setattr__(config, "open_order_timeout_s", timeout_s)
+                except (AttributeError, TypeError):
+                    pass
         self._pb_state: dict[str, Any] = self._empty_pb_state()
         self._pb_last_funding_rate: Decimal = _ZERO
         self._pb_last_signal_ts: dict[str, float] = {}
@@ -246,12 +253,17 @@ class PullbackV1Controller(DirectionalStrategyRuntimeV24Controller):
         self._pb_signal_timestamp: float = 0.0
         self._pb_signal_last_side: str = "off"
 
-    def determine_executor_actions(self) -> list:
+    def _strategy_extra_actions(self) -> list:
         """Drain pending trailing-stop / partial-take actions into the framework."""
-        actions = super().determine_executor_actions()
+        extra = []
         if self._pb_pending_actions:
-            actions.extend(self._pb_pending_actions)
+            extra.extend(self._pb_pending_actions)
             self._pb_pending_actions = []
+        return extra
+
+    def determine_executor_actions(self) -> list:
+        actions = super().determine_executor_actions()
+        actions.extend(self._strategy_extra_actions())
         return actions
 
     def _empty_pb_state(self) -> dict[str, Any]:
@@ -463,7 +475,7 @@ class PullbackV1Controller(DirectionalStrategyRuntimeV24Controller):
             try:
                 object.__setattr__(self.config, "_pb_dynamic_tbc", None)
             except Exception:
-                pass
+                pass  # Justification: pydantic frozen model — setattr may fail; non-critical fallback
         self._pb_state["dynamic_sl"] = sl_pct
         self._pb_state["dynamic_tp"] = tp_pct
 
@@ -1357,7 +1369,7 @@ class PullbackV1Controller(DirectionalStrategyRuntimeV24Controller):
                     if _tob is not None:
                         current_spread = to_decimal(getattr(_tob, "spread_pct", _ZERO))
             except Exception:
-                pass
+                pass  # Justification: TOB read is opportunistic — spread gate defaults to zero
             if current_spread > max_spread and max_spread > _ZERO:
                 side = "off"
                 probe_mode = False
@@ -1591,7 +1603,7 @@ class PullbackV1Controller(DirectionalStrategyRuntimeV24Controller):
 
             if canceled > 0:
                 _logger.info("pullback force-cancel: canceled %d orphaned order(s)", canceled)
-                self._recently_issued_levels = {}
+                self._reset_issued_levels()
             return canceled
         except Exception:
             _logger.debug("pullback force-cancel failed", exc_info=True)
@@ -1617,12 +1629,12 @@ class PullbackV1Controller(DirectionalStrategyRuntimeV24Controller):
         previous_mode = str(getattr(self, "_quote_side_mode", "off") or "off")
         desired_mode = "buy_only" if side == "buy" else ("sell_only" if side == "sell" else "off")
         if previous_mode != desired_mode:
-            self._pending_stale_cancel_actions.extend(
+            self.enqueue_stale_cancels(
                 self._cancel_stale_side_executors(previous_mode, desired_mode)
             )
         if desired_mode == "off":
             self._pb_off_ticks = getattr(self, "_pb_off_ticks", 0) + 1
-            self._pending_stale_cancel_actions.extend(self._cancel_active_quote_executors())
+            self.enqueue_stale_cancels(self._cancel_active_quote_executors())
 
             now = float(getattr(getattr(self, "market_data_provider", None), "time", lambda: 0)() or 0) or _time_mod.time()
             last_sweep = float(getattr(self, "_pb_cancel_sweep_last_ts", 0.0) or 0.0)
@@ -1672,7 +1684,6 @@ class PullbackV1Controller(DirectionalStrategyRuntimeV24Controller):
             regime_name=data_context.regime_name,
         )
         levels = int(state.get("grid_levels", 0) or 0)
-        self._runtime_levels.executor_refresh_time = int(data_context.regime_spec.refresh_s)
         self._resolve_quote_side_mode(
             mid=data_context.mid,
             regime_name=data_context.regime_name,
@@ -1779,10 +1790,6 @@ class PullbackV1Controller(DirectionalStrategyRuntimeV24Controller):
                 first_spread = spacing_pct
             sell_spreads = [first_spread] + [spacing_pct * Decimal(level + 1) for level in range(1, levels)]
 
-        # Override executor refresh time for limit entry timeout
-        if limit_entry and side != "off":
-            entry_timeout = int(getattr(self.config, "pb_entry_timeout_s", 30))
-            self._runtime_levels.executor_refresh_time = entry_timeout
         size_mult = self._compute_pnl_governor_size_mult(
             equity_quote=data_context.equity_quote,
             turnover_x=data_context.spread_state.turnover_x,

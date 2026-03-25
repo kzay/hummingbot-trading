@@ -16,6 +16,7 @@ from platform_lib.contracts.stream_names import (
     MARKET_DATA_STREAM,
     MARKET_DEPTH_STREAM,
     MARKET_QUOTE_STREAM,
+    ML_FEATURES_STREAM,
     PAPER_EXCHANGE_EVENT_STREAM,
 )
 from services.realtime_ui_api._helpers import (
@@ -65,6 +66,8 @@ class RealtimeState:
         # This is the live source of truth for equity, PnL, fills_count, regime, state.
         self._bot_snapshot: dict[tuple[str, str, str], dict[str, Any]] = {}
         self._bot_snapshot_ts_ms: dict[tuple[str, str, str], int] = {}
+        self._ml_features: dict[tuple[str, str], dict[str, Any]] = {}
+        self._ml_features_ts_ms: dict[tuple[str, str], int] = {}
         self._stream_watermark_ms: dict[str, int] = {}
         self._subscribers: list[tuple[queue.Queue[str], tuple[str, str, str]]] = []
         self._publish_seq = 0
@@ -211,6 +214,9 @@ class RealtimeState:
                 if isinstance(position_data, dict) and position_data:
                     self._positions[key] = position_data
                     self._positions_ts_ms[key] = ts_ms
+            elif stream == ML_FEATURES_STREAM and event_type == "ml_features":
+                self._ml_features[pair_key] = payload
+                self._ml_features_ts_ms[pair_key] = ts_ms
             elif stream == BOT_TELEMETRY_STREAM and event_type == "bot_fill":
                 self._fills[key].append(payload)
                 self._fills_ts_ms[key] = ts_ms
@@ -393,6 +399,23 @@ class RealtimeState:
             }
         return sorted(names, key=lambda value: value.lower())
 
+    def _resolve_pair_from_bot_snapshot(self, instance_name: str = "", controller_id: str = "") -> str:
+        """Resolve trading pair from bot_minute_snapshot when no instance-specific
+        market data exists (e.g. bots that rely on shared market-data-service)."""
+        for k, snap in self._bot_snapshot.items():
+            i, c, p = k
+            if instance_name and i and instance_name != i:
+                continue
+            if controller_id and c and controller_id != c:
+                continue
+            pair = str(p or "").strip()
+            if pair:
+                return pair
+            pair = str((snap or {}).get("trading_pair", "")).strip()
+            if pair:
+                return pair
+        return ""
+
     def get_state(self, instance_name: str = "", controller_id: str = "", trading_pair: str = "") -> dict[str, Any]:
         requested_pair_norm = _normalize_pair(trading_pair)
 
@@ -417,6 +440,8 @@ class RealtimeState:
             resolved_trading_pair = str(
                 trading_pair or key[2] or telemetry_market.get("trading_pair") or telemetry_depth.get("trading_pair") or ""
             ).strip()
+            if not resolved_trading_pair:
+                resolved_trading_pair = self._resolve_pair_from_bot_snapshot(instance_name, controller_id)
             resolved_pair_norm = _normalize_pair(resolved_trading_pair)
 
             def _related_key(candidate: tuple[str, str, str]) -> bool:
@@ -474,8 +499,20 @@ class RealtimeState:
                     if candidate:
                         position = candidate
                         break
+            ml_features: dict[str, Any] = {}
+            if effective_pair_norm:
+                for ml_key, ml_payload in self._ml_features.items():
+                    if effective_pair_norm == _normalize_pair(ml_key[1]):
+                        ml_features = ml_payload
+                        break
+            if not ml_features and len(self._ml_features) == 1:
+                ml_features = next(iter(self._ml_features.values()))
         return {
-            "key": {"instance_name": key[0], "controller_id": key[1], "trading_pair": key[2]},
+            "key": {
+                "instance_name": key[0] or instance_name,
+                "controller_id": key[1] or controller_id,
+                "trading_pair": key[2] or resolved_trading_pair,
+            },
             "connector_name": connector_name,
             "market": market,
             "bot_market": telemetry_market,
@@ -484,6 +521,7 @@ class RealtimeState:
             "fills_total": len(fills),
             "paper_events": events,
             "position": position,
+            "ml_features": ml_features,
         }
 
     def get_bot_snapshot(self, instance_name: str = "") -> dict[str, Any] | None:

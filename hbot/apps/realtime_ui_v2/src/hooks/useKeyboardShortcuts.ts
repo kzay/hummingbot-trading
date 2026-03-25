@@ -3,7 +3,7 @@ import { useCallback, useEffect, useState } from "react";
 import type { ActiveView } from "./useReviewData";
 import { useDashboardStore } from "../store/useDashboardStore";
 
-const VIEW_ORDER: ActiveView[] = ["realtime", "history", "service", "daily", "weekly", "journal", "backtest", "research"];
+const VIEW_ORDER: ActiveView[] = ["realtime", "history", "service", "daily", "weekly", "journal", "backtest", "research", "ml"];
 const TIMEFRAMES = [15, 30, 60, 300];
 
 function isEditableTarget(target: EventTarget | null): boolean {
@@ -59,7 +59,7 @@ export function useKeyboardShortcuts(
         return;
       }
 
-      if (/^[1-8]$/.test(event.key)) {
+      if (/^[1-9]$/.test(event.key)) {
         const nextView = VIEW_ORDER[Number(event.key) - 1];
         if (nextView) {
           event.preventDefault();

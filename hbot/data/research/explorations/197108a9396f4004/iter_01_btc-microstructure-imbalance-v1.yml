@@ -1,0 +1,56 @@
+name: btc-microstructure-imbalance-v1
+hypothesis: BTC-USDT 1m bars exhibit exploitable microstructure imbalances where consecutive
+  bars with volume-weighted price action in one direction (3+ bars of close > VWAP)
+  create temporary liquidity voids. Market-making with directional bias against the
+  recent flow captures mean-reversion while FVG detection filters out genuine breakout
+  moves, yielding positive Sharpe ratios over 7-day rolling windows.
+adapter_mode: combo_mm
+parameter_space:
+  fvg_lookback:
+  - 5
+  - 8
+  - 12
+  momentum_guard_period:
+  - 3
+  - 5
+  - 7
+  spread_base:
+  - 0.02
+  - 0.035
+  - 0.05
+  inventory_decay_alpha:
+  - 0.1
+  - 0.3
+  - 0.6
+entry_logic: Detect momentum_guard_period consecutive bars where close > VWAP. Place
+  contrarian quotes (tighter spreads on sell side, wider on buy side) to fade the
+  imbalance. Skip entry if FVG detected in fvg_lookback period to avoid catching falling
+  knives during genuine breakouts. Use microstructure fill feedback to adjust quote
+  placement based on recent adverse selection.
+exit_logic: Decay inventory bias using inventory_decay_alpha exponential smoothing.
+  Exit aggressively when position exceeds risk limits or when new FVG appears in opposite
+  direction, signaling trend continuation rather than mean-reversion setup.
+base_config:
+  strategy_class: combo_mm
+  strategy_config:
+    fvg_lookback: 8
+    momentum_guard_period: 5
+    spread_base: 0.035
+    inventory_decay_alpha: 0.3
+  data_source:
+    exchange: bitget
+    pair: BTC-USDT
+    resolution: 1m
+    instrument_type: perp
+  initial_equity: '500'
+  leverage: 1
+  seed: 42
+  step_interval_s: 60
+  warmup_bars: 60
+required_tests:
+- test_adapter_compiles
+- test_no_lookahead_in_entry
+metadata:
+  author: llm_exploration
+  version: '1.0'
+lifecycle: candidate

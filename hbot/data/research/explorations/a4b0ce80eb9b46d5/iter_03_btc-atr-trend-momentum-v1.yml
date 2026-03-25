@@ -1,0 +1,56 @@
+name: btc-atr-trend-momentum-v1
+hypothesis: BTC-USDT perpetual exhibits strong momentum continuation after ATR-normalized
+  price moves in trending markets. When 15m close breaks above/below recent EMA with
+  momentum exceeding 1.5x ATR, the move continues for 3-8 bars before mean-reversion.
+  Directional MM with trend-aligned bias captures this edge while providing liquidity
+  on counter-trend moves.
+adapter_mode: directional_mm
+parameter_space:
+  trend_lookback:
+  - 20
+  - 40
+  - 60
+  bias_strength:
+  - 0.3
+  - 0.6
+  - 0.9
+  skew_factor:
+  - 1.5
+  - 2.0
+  - 2.5
+  atr_momentum_thresh:
+  - 1.2
+  - 1.8
+  - 2.4
+entry_logic: Calculate trend direction using EMA(trend_lookback) vs current price.
+  Detect momentum when abs(close - EMA) > atr_momentum_thresh * ATR(14). Place directional
+  quotes with bias_strength weight toward trend direction and skew_factor spread asymmetry.
+  Stronger bias when momentum exceeds threshold.
+exit_logic: Reduce inventory via aggressive pricing when position exceeds 70% of max.
+  Close all positions when trend reverses (price crosses back through EMA by >0.5
+  ATR) or after 8 bars without momentum confirmation.
+base_config:
+  strategy_class: directional_mm
+  strategy_config:
+    trend_lookback: 40
+    bias_strength: 0.6
+    skew_factor: 2.0
+    max_position_pct: 0.8
+    base_spread_bps: 15
+  data_source:
+    exchange: bitget
+    pair: BTC-USDT
+    resolution: 15m
+    instrument_type: perp
+  initial_equity: '500'
+  leverage: 1
+  seed: 42
+  step_interval_s: 900
+  warmup_bars: 60
+required_tests:
+- test_adapter_compiles
+- test_no_lookahead_in_entry
+metadata:
+  author: llm_exploration
+  version: '1.0'
+lifecycle: candidate

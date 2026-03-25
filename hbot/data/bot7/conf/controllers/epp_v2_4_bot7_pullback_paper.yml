@@ -14,14 +14,14 @@ buy_spreads: "0.0015,0.0030,0.0045"
 sell_spreads: "0.0015,0.0030,0.0045"
 buy_amounts_pct: "34,33,33"
 sell_amounts_pct: "34,33,33"
-executor_refresh_time: 30
-cooldown_time: 10
+executor_refresh_time: 120
+cooldown_time: 30
 leverage: 1
 position_mode: ONEWAY
 max_order_notional_quote: 400
 stop_loss: 0.0045
 take_profit: 0.0090
-time_limit: 2400
+time_limit: 7200
 take_profit_order_type: LIMIT
 skip_rebalance: true
 position_rebalance_min_base_mult: 5.0
@@ -46,6 +46,9 @@ trend_eps_pct: 0.0006
 high_vol_band_pct: 0.0065
 shock_drift_30s_pct: 0.0020
 shock_drift_atr_multiplier: 1.10
+
+# ── Resolution ────────────────────────────────────────────────────────
+indicator_resolution: "15m"
 
 # ── Indicators ────────────────────────────────────────────────────────
 pb_bb_period: 20
@@ -76,16 +79,16 @@ pb_zone_atr_mult: 0.25
 
 # ── Trade flow timing ─────────────────────────────────────────────────
 pb_trade_window_count: 160
-pb_trade_stale_after_ms: 20000
+pb_trade_stale_after_ms: 30000
 pb_trade_reader_enabled: true
 
 # ── Signal windows ────────────────────────────────────────────────────
 pb_absorption_window: 20
 pb_absorption_min_trade_mult: 2.5
-pb_absorption_max_price_drift_pct: 0.0015
+pb_absorption_max_price_drift_pct: 0.003
 pb_delta_trap_window: 24
 pb_delta_trap_reversal_share: 0.30
-pb_delta_trap_max_price_drift_pct: 0.0020
+pb_delta_trap_max_price_drift_pct: 0.004
 pb_recent_delta_window: 20
 pb_depth_imbalance_threshold: 0.20
 
@@ -95,8 +98,8 @@ pb_per_leg_risk_pct: 0.008
 pb_total_grid_exposure_cap_pct: 0.025
 pb_grid_spacing_atr_mult: 0.50
 pb_grid_spacing_bb_fraction: 0.12
-pb_grid_spacing_floor_pct: 0.0015
-pb_grid_spacing_cap_pct: 0.0100
+pb_grid_spacing_floor_pct: 0.003
+pb_grid_spacing_cap_pct: 0.020
 
 # ── Risk / hedging ────────────────────────────────────────────────────
 pb_hedge_ratio: 0.30
@@ -111,7 +114,7 @@ pb_probe_grid_legs: 1
 pb_probe_size_mult: 0.50
 
 # ── Signal cooldown ───────────────────────────────────────────────────
-pb_signal_cooldown_s: 180
+pb_signal_cooldown_s: 900
 
 # ── Warmup quotes (disabled: no fills during indicator warmup) ────────
 pb_warmup_quote_levels: 0
@@ -121,16 +124,16 @@ pb_warmup_quote_max_bars: 3
 pb_dynamic_barriers_enabled: true
 pb_sl_atr_mult: 1.5
 pb_tp_atr_mult: 3.0
-pb_sl_floor_pct: 0.003
-pb_sl_cap_pct: 0.01
-pb_tp_floor_pct: 0.006
-pb_tp_cap_pct: 0.02
+pb_sl_floor_pct: 0.005
+pb_sl_cap_pct: 0.025
+pb_tp_floor_pct: 0.010
+pb_tp_cap_pct: 0.050
 
 # ── Trend quality gates ──────────────────────────────────────────────
 pb_trend_quality_enabled: true
-pb_basis_slope_bars: 5
+pb_basis_slope_bars: 3
 pb_min_basis_slope_pct: 0.0002
-pb_trend_sma_period: 50
+pb_trend_sma_period: 20
 
 # ── Trailing stop ────────────────────────────────────────────────────
 pb_trailing_stop_enabled: true
@@ -175,23 +178,20 @@ pb_trend_confidence_min_mult: 0.5
 
 # ── RSI divergence booster ──────────────────────────────────────────
 pb_rsi_divergence_enabled: true
-pb_rsi_divergence_lookback: 10
+pb_rsi_divergence_lookback: 5
 
 # ── Signal freshness timeout ────────────────────────────────────────
 pb_signal_freshness_enabled: true
-pb_signal_max_age_s: 120
+pb_signal_max_age_s: 960
 
 # ── Adaptive cooldown ──────────────────────────────────────────────
 pb_adaptive_cooldown_enabled: true
-pb_cooldown_min_s: 90
-pb_cooldown_max_s: 360
+pb_cooldown_min_s: 450
+pb_cooldown_max_s: 1800
 
 # ── Signal diagnostics ───────────────────────────────────────────────
 pb_signal_diagnostics_enabled: true
 pb_min_signals_warn: 3
-
-# ── ICT shadow mode (log-only, no quoting impact) ────────────────────
-ict_shadow_enabled: false
 
 regime_specs_override:
   up:
@@ -290,6 +290,11 @@ paper_engine:
 
 sample_interval_s: 10
 price_buffer_source: mark
+
+# ── ML features ────────────────────────────────────────────────────────
+ml_features_enabled: true
+ml_regime_override_enabled: true
+ml_sizing_hint_enabled: true
 spread_floor_recalc_s: 30
 cancel_budget_per_min: 30
 position_drift_soft_pause_pct: 2.0

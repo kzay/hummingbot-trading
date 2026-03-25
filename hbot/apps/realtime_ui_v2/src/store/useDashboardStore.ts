@@ -108,6 +108,7 @@ interface DashboardState {
   orders: UiOrder[];
   fills: UiFill[];
   fillsTotal: number;
+  mlFeatures: Record<string, unknown> | null;
   eventLines: string[];
   payloads: PayloadRecord[];
   selectedPayloadId: string | null;
@@ -484,7 +485,7 @@ function shouldAcceptSharedMarketEvent(
     return false;
   }
   if (!activePair) {
-    return false;
+    return true;
   }
   return activePair === eventPair;
 }
@@ -1008,6 +1009,7 @@ export const useDashboardStore = create<DashboardState>()(
       orders: EMPTY_ORDERS,
       fills: EMPTY_FILLS,
       fillsTotal: 0,
+      mlFeatures: null,
       eventLines: EMPTY_EVENT_LINES,
       payloads: EMPTY_PAYLOADS,
       selectedPayloadId: null,
@@ -1318,8 +1320,13 @@ export const useDashboardStore = create<DashboardState>()(
           let nextCandles = state.candles;
           let nextLatestCandle = state.latestCandle;
           let nextFreshness = state.freshness;
+          let nextMlFeatures = state.mlFeatures;
 
           const hasFreshQuote = Number(state.latestQuoteTsMs || 0) > 0 && Math.abs(eventTsMs - Number(state.latestQuoteTsMs || 0)) <= 5_000;
+
+          if (eventType === "ml_features" && eventPayload) {
+            nextMlFeatures = eventPayload;
+          }
 
           if (eventType === "market_quote" && eventPayload) {
             nextMarket = normalizeMarket(eventPayload);
@@ -1533,6 +1540,7 @@ export const useDashboardStore = create<DashboardState>()(
             orders: stableOrders(state.orders, nextOrders),
             fills: stableFills(state.fills, nextFills),
             fillsTotal: nextFillsTotal,
+            mlFeatures: nextMlFeatures,
             eventLines: nextEventLines,
           };
         });
@@ -1679,6 +1687,11 @@ export const useDashboardStore = create<DashboardState>()(
           const nextFills = allowRestFills
             ? stableFills(state.fills, mergeRecentFills([], normalizedRestFills, MAX_FILLS))
             : state.fills;
+          const rawMl = stream.ml_features;
+          const nextMlFeatures =
+            rawMl && typeof rawMl === "object" && Object.keys(rawMl).length > 0 && ("features" in rawMl || "predictions" in rawMl)
+              ? rawMl
+              : state.mlFeatures;
           const rawCandidateMid = toNum(nextMarket.mid_price ?? fallback.minute?.mid) ?? depthMid(nextDepth);
           const candidateMid = rawCandidateMid !== null && rawCandidateMid > 0 ? rawCandidateMid : null;
           const candidateTradePrice = candlePrice(nextMarket);
@@ -1731,6 +1744,7 @@ export const useDashboardStore = create<DashboardState>()(
             orders: nextOrders,
             fills: nextFills,
             fillsTotal: allowRestFills ? (Number.isFinite(fillsTotal) ? fillsTotal : fills.length) : state.fillsTotal,
+            mlFeatures: nextMlFeatures,
             eventLines: nextEventLines,
           };
         });

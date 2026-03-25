@@ -224,6 +224,11 @@ ADAPTER_REGISTRY: dict[str, AdapterEntry] = {
         ),
         int_attrs=("ema_period", "atr_period", "min_warmup_bars"),
     ),
+    "ta_composite": AdapterEntry(
+        module_path="controllers.backtesting.ta_composite_adapter",
+        adapter_class="TaCompositeAdapter",
+        config_class="TaCompositeConfig",
+    ),
 }
 
 _RUNTIME_ENTRY = AdapterEntry(

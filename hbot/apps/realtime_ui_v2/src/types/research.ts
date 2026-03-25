@@ -59,19 +59,51 @@ export interface CandidateDetail {
   latest_report_path: string;
 }
 
+export interface LaunchExplorationRequest {
+  provider: "anthropic" | "openai";
+  iterations: number;
+  temperature: number;
+  adapters: string[];
+  skip_sweep: boolean;
+  skip_walkforward: boolean;
+  extra_context: string;
+}
+
 export interface ExplorationSession {
   session_id: string;
-  status: "running" | "completed";
+  status: "running" | "completed" | "failed" | "cancelled" | "timed_out" | "unknown";
   iteration_count: number;
   best_score: number | null;
   best_candidate: string;
   created_at: string;
+  /** Original launch parameters — present when saved (new sessions only). */
+  launch_params?: Partial<LaunchExplorationRequest>;
 }
 
 export interface IterationEvent {
   iteration: number;
   candidate_name: string;
+  adapter_mode?: string;
+  is_blueprint?: boolean;
+  /** Truncated hypothesis (≤120 chars) for compact display */
+  hypothesis?: string;
+  /** Full hypothesis text */
+  hypothesis_full?: string;
+  /** Entry logic description */
+  entry_logic?: string;
+  /** Exit logic description */
+  exit_logic?: string;
+  /** Parameter space: param name → array of candidate values */
+  parameter_space?: Record<string, unknown[]>;
   score: number | null;
   recommendation: string | null;
   file: string;
+}
+
+export interface LaunchExplorationResponse {
+  session_id: string;
+  status: string;
+  pid: number;
+  provider: string;
+  iterations: number;
 }

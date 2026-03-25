@@ -53,6 +53,9 @@ def compute_features(
         Rows aligned to ``candles_1m.timestamp_ms``, feature columns are
         float64.  Leading NaN rows correspond to indicator warmup.
     """
+    if not candles_1m["timestamp_ms"].is_monotonic_increasing:
+        candles_1m = candles_1m.sort_values("timestamp_ms").reset_index(drop=True)
+
     ts = candles_1m[["timestamp_ms"]].copy()
 
     parts = [
@@ -153,6 +156,67 @@ def compute_price_features(
         close_1m,
         14,
     )
+
+    # Williams %R features (multi-period, multi-timeframe)
+    # Normalized to [0, 1]: 0 = oversold (close at period low),
+    #                        1 = overbought (close at period high).
+    _wr_periods = [14, 50]
+    for tf_label, df in tf_map.items():
+        if df is None:
+            for p in _wr_periods:
+                out[f"wr_{tf_label}_p{p}"] = pd.Series(np.nan, index=range(n))
+            continue
+        wr_h = df["high"].reset_index(drop=True)
+        wr_l = df["low"].reset_index(drop=True)
+        wr_c = df["close"].reset_index(drop=True)
+        for p in _wr_periods:
+            wr_val = ind.williams_r(wr_h, wr_l, wr_c, p)
+            if len(df) != n:
+                wr_val = wr_val.reindex(range(n), method="ffill")
+            out[f"wr_{tf_label}_p{p}"] = wr_val
+
+    # Cross-TF WR divergence for all higher TFs (always emit 1m_1h for compat)
+    _wr_1m_fast = out.get("wr_1m_p14", pd.Series(np.nan, index=range(n)))
+    _all_higher = {"5m", "15m", "1h", "4h"}
+    for tf in _all_higher:
+        wr_slow = out.get(f"wr_{tf}_p14", pd.Series(np.nan, index=range(n)))
+        out[f"wr_divergence_1m_{tf}"] = _wr_1m_fast - wr_slow
+
+    # Extreme zone flag: 1 when fast W%R is in deeply oversold (<0.1) or
+    # overbought (>0.9) territory.
+    out["wr_extreme_1m"] = ((_wr_1m_fast < 0.1) | (_wr_1m_fast > 0.9)).astype(float)
+
+    # Cross-TF vol regime agreement: fraction of available higher TFs whose
+    # realized vol rank (percentile over 240 bars) agrees with 1m's rank
+    # direction (above/below median).
+    if candles_1m is not None and len(candles_1m) > 0:
+        close_1m_s = candles_1m["close"].reset_index(drop=True)
+        log_ret_1m = np.log(close_1m_s / close_1m_s.shift(1))
+        rv_1m = log_ret_1m.rolling(60, min_periods=30).std()
+        rv_1m_rank = rv_1m.rolling(240, min_periods=60).rank(pct=True)
+        rv_1m_high = (rv_1m_rank > 0.5).astype(float)
+
+        agreement_scores = []
+        for tf in higher_tfs:
+            df_tf = tf_map.get(tf)
+            if df_tf is None or df_tf.empty:
+                continue
+            close_tf = df_tf["close"].reset_index(drop=True)
+            lr_tf = np.log(close_tf / close_tf.shift(1))
+            rv_tf = lr_tf.rolling(14, min_periods=7).std()
+            rv_tf_rank = rv_tf.rolling(60, min_periods=14).rank(pct=True)
+            rv_tf_high = (rv_tf_rank > 0.5).astype(float)
+            if len(rv_tf_high) != n:
+                rv_tf_high = rv_tf_high.reindex(range(n), method="ffill")
+            agreement_scores.append((rv_1m_high == rv_tf_high).astype(float))
+
+        if agreement_scores:
+            stacked = pd.concat(agreement_scores, axis=1)
+            out["vol_regime_agreement"] = stacked.mean(axis=1)
+        else:
+            out["vol_regime_agreement"] = pd.Series(np.nan, index=range(n))
+    else:
+        out["vol_regime_agreement"] = pd.Series(np.nan, index=range(n))
 
     return pd.DataFrame(out)
 

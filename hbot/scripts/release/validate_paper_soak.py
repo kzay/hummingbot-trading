@@ -49,7 +49,7 @@ def _read_minute_rows(path: Path, window_hours: float) -> list[dict[str, str]]:
                 if ts >= cutoff_ts:
                     rows.append(row)
     except Exception:
-        pass
+        pass  # Justification: best-effort I/O — minute.csv read may fail or be malformed
     return rows
 
 
@@ -72,7 +72,7 @@ def _read_fills_rows(path: Path, window_hours: float) -> list[dict[str, str]]:
                 if ts >= cutoff_ts:
                     rows.append(row)
     except Exception:
-        pass
+        pass  # Justification: best-effort I/O — fills.csv read may fail or be malformed
     return rows
 
 
@@ -174,7 +174,7 @@ def main() -> None:
         try:
             args.window_hours = float(args.minutes) / 60.0
         except Exception:
-            pass
+            pass  # Justification: script CLI — non-critical diagnostic / best-effort cleanup (ignore bad --minutes)
 
     minute_path = Path(args.data_root) / args.bot / "logs" / "epp_v24" / f"{args.bot}_{args.variant}" / "minute.csv"
     fills_path = Path(args.data_root) / args.bot / "logs" / "epp_v24" / f"{args.bot}_{args.variant}" / "fills.csv"

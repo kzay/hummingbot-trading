@@ -340,7 +340,7 @@ def _write_stats(
                 if tmp_path is not None and tmp_path.exists():
                     tmp_path.unlink(missing_ok=True)
             except Exception:
-                pass
+                pass  # Justification: best-effort cleanup of temp stats file — must not mask write errors
     return False
 
 
@@ -424,7 +424,7 @@ def _reconnect_db(current_conn: psycopg.Connection | None) -> psycopg.Connection
             try:
                 current_conn.close()
             except Exception:
-                pass
+                pass  # Justification: best-effort close of broken connection before reconnect
     # Reconnect
     max_attempts = 3
     for attempt in range(1, max_attempts + 1):

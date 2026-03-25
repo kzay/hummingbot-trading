@@ -1,0 +1,57 @@
+name: btc-smc-fvg-reversion-v1
+hypothesis: BTC-USDT perpetual exhibits mean-reversion behavior when price creates
+  Fair Value Gaps (FVG)  during Bollinger Band expansion phases. Market-making with
+  FVG-biased quotes captures  fill probability asymmetry as price returns to fill
+  imbalances, with wider spreads  during high-volatility regimes to avoid adverse
+  selection.
+adapter_mode: smc_mm
+parameter_space:
+  bb_period:
+  - 15
+  - 20
+  - 30
+  fvg_lookback:
+  - 5
+  - 8
+  - 12
+  regime_threshold:
+  - 1.2
+  - 1.8
+  - 2.5
+  spread_base_bps:
+  - 8
+  - 15
+  - 25
+entry_logic: Place market-making quotes with FVG bias when Bollinger Bands are expanding
+  (current BB width > regime_threshold * historical average). Bias quotes toward unfilled
+  FVGs within fvg_lookback bars - tighter spreads on FVG side to capture reversion
+  fills, wider on opposite side to limit adverse selection.
+exit_logic: Reduce inventory aggressively when BB regime shifts to contraction phase
+  or when inventory exceeds risk limits. Close positions immediately if price moves
+  beyond 3 ATR from entry without FVG fill.
+base_config:
+  strategy_class: smc_mm
+  strategy_config:
+    bb_period: 20
+    fvg_lookback: 8
+    regime_threshold: 1.8
+    spread_base_bps: 15
+    max_inventory_pct: 0.6
+    inventory_skew_factor: 0.3
+  data_source:
+    exchange: bitget
+    pair: BTC-USDT
+    resolution: 15m
+    instrument_type: perp
+  initial_equity: '500'
+  leverage: 1
+  seed: 42
+  step_interval_s: 900
+  warmup_bars: 60
+required_tests:
+- test_adapter_compiles
+- test_no_lookahead_in_entry
+metadata:
+  author: llm_exploration
+  version: '1.0'
+lifecycle: candidate

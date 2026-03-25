@@ -334,6 +334,41 @@ def _build_state_payload(
         or (stream_state.get("depth", {}) if isinstance(stream_state.get("depth"), dict) else {}).get("trading_pair")
         or ""
     ).strip()
+
+    # Fallback: resolve trading pair from disk snapshot when stream is empty
+    # (e.g. bot not running but artifacts exist).
+    if not resolved_trading_pair and instance_name:
+        _fb_snap = fallback.get_snapshot(instance_name)
+        _fb_minute = _fb_snap.get("minute", {}) if isinstance(_fb_snap.get("minute"), dict) else {}
+        resolved_trading_pair = str(_fb_minute.get("trading_pair", "")).strip()
+
+    # If we resolved a pair but the stream lacks market data, pull shared
+    # market data (instance_name="") so the UI gets live prices.
+    if resolved_trading_pair and instance_name:
+        _market_dict = stream_state.get("market", {}) if isinstance(stream_state.get("market"), dict) else {}
+        _has_market = bool(_market_dict.get("mid_price") or _market_dict.get("last_trade_price"))
+        if not _has_market:
+            shared_state = state.get_state("", "", resolved_trading_pair)
+            shared_market = shared_state.get("market", {}) if isinstance(shared_state.get("market"), dict) else {}
+            if shared_market.get("mid_price") or shared_market.get("last_trade_price"):
+                stream_state["market"] = dict(shared_market)
+            shared_depth = shared_state.get("depth", {}) if isinstance(shared_state.get("depth"), dict) else {}
+            if shared_depth and not (stream_state.get("depth", {}) if isinstance(stream_state.get("depth"), dict) else {}):
+                stream_state["depth"] = dict(shared_depth)
+            if not connector_name:
+                connector_name = state.resolve_connector_name("", "", resolved_trading_pair)
+
+    # Ensure stream_state.key reflects the resolved pair so the frontend
+    # can bootstrap its activePair correctly.
+    if resolved_trading_pair:
+        _existing_key = stream_state.get("key", {}) if isinstance(stream_state.get("key"), dict) else {}
+        if not _existing_key.get("trading_pair"):
+            stream_state["key"] = {
+                "instance_name": instance_name,
+                "controller_id": controller_id,
+                "trading_pair": resolved_trading_pair,
+            }
+
     account_summary = fallback.account_summary(instance_name) if instance_name else _account_summary_template()
     live_snap = state.get_bot_snapshot(instance_name) if instance_name else None
     _snap_age_ms = (
@@ -1200,29 +1235,47 @@ def create_app(
         timeframe_s = int(websocket.query_params.get("timeframe_s", "60") or "60")
         candle_limit = int(websocket.query_params.get("limit", "300") or "300")
 
+        # Resolve pair from fallback if not provided (bot may not be running).
+        resolved_pair = trading_pair
+        if not resolved_pair and instance_name:
+            _fb_snap = fallback.get_snapshot(instance_name)
+            _fb_minute = _fb_snap.get("minute", {}) if isinstance(_fb_snap.get("minute"), dict) else {}
+            resolved_pair = str(_fb_minute.get("trading_pair", "")).strip()
+
         await websocket.accept()
 
-        q = state.register_subscriber(instance_name, controller_id, trading_pair)
+        q = state.register_subscriber(instance_name, controller_id, resolved_pair or trading_pair)
         try:
             # Send initial snapshot.
             snapshot_payload = await _get_loop().run_in_executor(
                 None,
-                partial(_build_state_payload, cfg, state, worker, fallback, db_reader, instance_name, controller_id, trading_pair),
+                partial(_build_state_payload, cfg, state, worker, fallback, db_reader, instance_name, controller_id, resolved_pair or trading_pair),
             )
             candles_payload = await _get_loop().run_in_executor(
                 None,
                 partial(
                     _build_candles_payload, cfg, state, fallback, db_reader, history_provider,
-                    instance_name, controller_id, trading_pair, timeframe_s, candle_limit,
+                    instance_name, controller_id, resolved_pair or trading_pair, timeframe_s, candle_limit,
                 ),
             )
+            # Extract the final resolved pair from the payload stream key.
+            _snap_stream = snapshot_payload.get("stream", {}) if isinstance(snapshot_payload.get("stream"), dict) else {}
+            _snap_key = _snap_stream.get("key", {}) if isinstance(_snap_stream.get("key"), dict) else {}
+            _snap_market = _snap_stream.get("market", {}) if isinstance(_snap_stream.get("market"), dict) else {}
+            effective_pair = str(
+                resolved_pair
+                or _snap_key.get("trading_pair", "")
+                or _snap_market.get("trading_pair", "")
+                or trading_pair
+            ).strip()
+
             snapshot_msg = {
                 "type": "snapshot",
                 "ts_ms": _now_ms(),
                 "instance_name": instance_name,
                 "controller_id": controller_id,
-                "trading_pair": trading_pair,
-                "key": {"instance_name": instance_name, "controller_id": controller_id, "trading_pair": trading_pair},
+                "trading_pair": effective_pair,
+                "key": {"instance_name": instance_name, "controller_id": controller_id, "trading_pair": effective_pair},
                 "state": snapshot_payload,
                 "candles": candles_payload.get("candles", []),
             }
@@ -1239,24 +1292,23 @@ def create_app(
                     )
                     evt = json.loads(raw) if isinstance(raw, str) else {}
                     event_key = evt.get("key")
-                    if not _stream_key_matches(event_key, instance_name, controller_id, trading_pair):
+                    if not _stream_key_matches(event_key, instance_name, controller_id, effective_pair or trading_pair):
                         continue
                     await websocket.send_text(_json_str({"type": "event", **evt}))
                 except (TimeoutError, queue.Empty):
                     await websocket.send_text(_json_str({"type": "keepalive", "ts_ms": _now_ms()}))
 
-                # Periodic full snapshot every 30s.
                 now_ms = _now_ms()
-                if now_ms - last_snapshot_ms >= 30_000:
+                if now_ms - last_snapshot_ms >= 60_000:
                     periodic_state = await _get_loop().run_in_executor(
                         None,
-                        partial(_build_state_payload, cfg, state, worker, fallback, db_reader, instance_name, controller_id, trading_pair),
+                        partial(_build_state_payload, cfg, state, worker, fallback, db_reader, instance_name, controller_id, effective_pair or trading_pair),
                     )
                     periodic_candles = await _get_loop().run_in_executor(
                         None,
                         partial(
                             _build_candles_payload, cfg, state, fallback, db_reader, history_provider,
-                            instance_name, controller_id, trading_pair, timeframe_s, candle_limit,
+                            instance_name, controller_id, effective_pair or trading_pair, timeframe_s, candle_limit,
                         ),
                     )
                     periodic_msg = {
@@ -1264,8 +1316,8 @@ def create_app(
                         "ts_ms": now_ms,
                         "instance_name": instance_name,
                         "controller_id": controller_id,
-                        "trading_pair": trading_pair,
-                        "key": {"instance_name": instance_name, "controller_id": controller_id, "trading_pair": trading_pair},
+                        "trading_pair": effective_pair,
+                        "key": {"instance_name": instance_name, "controller_id": controller_id, "trading_pair": effective_pair},
                         "state": periodic_state,
                         "candles": periodic_candles.get("candles", []),
                     }
@@ -1321,7 +1373,7 @@ def create_app(
     from services.realtime_ui_api.backtest_api import create_backtest_routes
     backtest_routes = create_backtest_routes(auth_check=_check_auth)
 
-    from services.realtime_ui_api.research_api import create_research_routes
+    from services.common.research_api import create_research_routes
     research_routes = create_research_routes(auth_check=_check_auth)
 
     # ── Routes ──────────────────────────────────────────────────────────

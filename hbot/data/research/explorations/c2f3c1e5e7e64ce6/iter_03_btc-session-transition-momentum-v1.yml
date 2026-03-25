@@ -1,0 +1,69 @@
+name: btc-session-transition-momentum-v1
+hypothesis: BTC-USDT perpetual exhibits directional momentum persistence during major
+  trading session transitions (00:00, 08:00, 16:00 UTC) when combined with RSI divergence
+  signals. Positions held for 15-45 minutes during these windows should capture institutional
+  flow effects while avoiding overnight risk.
+adapter_mode: session_momentum
+parameter_space:
+  session_window_minutes:
+  - 15
+  - 30
+  - 45
+  - 60
+  rsi_period:
+  - 7
+  - 14
+  - 21
+  rsi_oversold:
+  - 25
+  - 30
+  - 35
+  rsi_overbought:
+  - 65
+  - 70
+  - 75
+  momentum_ema_period:
+  - 5
+  - 8
+  - 12
+entry_logic: "Enter long at session transitions (00:00, 08:00, 16:00 UTC \xB1session_window_minutes)\
+  \ when RSI(rsi_period) < rsi_oversold AND price > EMA(momentum_ema_period) AND volume\
+  \ > 1.5x average volume of last 20 bars. Enter short when RSI(rsi_period) > rsi_overbought\
+  \ AND price < EMA(momentum_ema_period) AND volume > 1.5x average volume of last\
+  \ 20 bars."
+exit_logic: Close position after session_window_minutes OR when RSI crosses back through
+  50 (neutral zone) OR when price moves 1.5 ATR(14) against entry OR when volume drops
+  below 0.8x average volume baseline.
+base_config:
+  strategy_class: session_momentum
+  strategy_config:
+    atr_period: 14
+    volume_lookback: 20
+  data_source:
+    exchange: bitget
+    pair: BTC-USDT
+    resolution: 1m
+    instrument_type: perp
+  initial_equity: '500'
+  leverage: 1
+  seed: 42
+  step_interval_s: 60
+  warmup_bars: 60
+required_tests:
+- test_adapter_compiles
+- test_no_lookahead_in_entry
+metadata:
+  author: llm_exploration
+  version: '1.0'
+lifecycle: candidate
+new_adapter_description: 'The session_momentum adapter monitors UTC time to identify
+  major trading session transitions (Asian/London/NY opens at 00:00, 08:00, 16:00
+  UTC). It maintains state for: current session window status, RSI calculations, EMA
+  trend direction, and rolling volume averages. On each tick, it checks if current
+  time falls within configurable windows around session transitions, then evaluates
+  RSI divergence + volume surge + trend alignment conditions. Config parameters: session_window_minutes
+  (transition window size), rsi_period, rsi_oversold/overbought thresholds, momentum_ema_period,
+  atr_period (for stops), volume_lookback (for volume baseline calculation). The adapter
+  processes each 1m bar by updating all indicators, checking time-based session triggers,
+  and managing position lifecycle with time-based, RSI-neutral, ATR-stop, or volume-fade
+  exits.'

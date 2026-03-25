@@ -1,5 +1,55 @@
-import type { BacktestJob, BacktestJobStatus, BacktestPreset, BacktestResultSummary } from "../types/backtest";
+import { z } from "zod";
+import type { BacktestJob, BacktestPreset, BacktestResultSummary } from "../types/backtest";
 import { buildHeaders, fetchWithTimeout } from "./fetch";
+
+const BacktestJobStatusSchema = z.enum([
+  "pending", "running", "completed", "failed", "cancelled", "timed_out",
+]);
+
+const BacktestEquityPointSchema = z.object({
+  date: z.string(),
+  equity: z.string(),
+  drawdown_pct: z.string(),
+  daily_return_pct: z.string(),
+});
+
+const BacktestResultSummarySchema = z.object({
+  total_return_pct: z.number(),
+  sharpe_ratio: z.number(),
+  sortino_ratio: z.number(),
+  calmar_ratio: z.number(),
+  max_drawdown_pct: z.number(),
+  max_drawdown_duration_days: z.number(),
+  cagr_pct: z.number(),
+  fill_count: z.number(),
+  order_count: z.number(),
+  total_ticks: z.number(),
+  win_rate: z.number(),
+  profit_factor: z.number(),
+  total_fees: z.string(),
+  maker_fill_ratio: z.number(),
+  fee_drag_pct: z.number(),
+  avg_slippage_bps: z.number(),
+  spread_capture_efficiency: z.number(),
+  inventory_half_life_minutes: z.number(),
+  run_duration_s: z.number(),
+  warnings: z.array(z.string()),
+  equity_curve: z.array(BacktestEquityPointSchema),
+  config: z.record(z.string(), z.unknown()),
+  fill_disclaimer: z.string().optional(),
+});
+
+const BacktestPresetSchema = z.object({
+  id: z.string(),
+  label: z.string(),
+  strategy: z.string(),
+  pair: z.string(),
+  resolution: z.string(),
+  initial_equity: z.number(),
+  start_date: z.string(),
+  end_date: z.string(),
+  mode: z.string().optional(),
+});
 
 function url(apiBase: string, path: string): string {
   return `${apiBase.replace(/\/$/, "")}${path}`;
@@ -11,7 +61,14 @@ export function normalizeBacktestJob(raw: Record<string, unknown>): BacktestJob 
   if (!id) {
     throw new Error("Invalid job response: missing id");
   }
-  const status = String(raw.status ?? "pending") as BacktestJobStatus;
+  const statusResult = z.safeParse(BacktestJobStatusSchema, raw.status ?? "pending");
+  const status = statusResult.success ? statusResult.data : "pending" as const;
+  const resultRaw = raw.result_summary;
+  let resultSummary: BacktestResultSummary | null = null;
+  if (resultRaw != null && typeof resultRaw === "object") {
+    const parsed = z.safeParse(BacktestResultSummarySchema, resultRaw);
+    if (parsed.success) resultSummary = parsed.data;
+  }
   return {
     id,
     preset_id: String(raw.preset_id ?? ""),
@@ -20,7 +77,7 @@ export function normalizeBacktestJob(raw: Record<string, unknown>): BacktestJob 
     progress_pct: Number(raw.progress_pct ?? 0) || 0,
     created_at: String(raw.created_at ?? ""),
     updated_at: raw.updated_at != null ? String(raw.updated_at) : undefined,
-    result_summary: (raw.result_summary as BacktestResultSummary) ?? null,
+    result_summary: resultSummary,
     error: raw.error != null ? String(raw.error) : null,
   };
 }
@@ -34,7 +91,7 @@ export async function fetchPresets(
   });
   if (!res.ok) throw new Error(`Preset fetch failed: ${res.status}`);
   const data = await res.json();
-  return data.presets ?? [];
+  return z.parse(z.array(BacktestPresetSchema), data.presets ?? []) as BacktestPreset[];
 }
 
 export async function createJob(

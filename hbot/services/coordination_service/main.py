@@ -186,7 +186,7 @@ def run() -> None:
                     predicted_return = float(decision.metadata.get("predicted_return", "0"))
                     confidence = float(decision.metadata.get("confidence", "0"))
                 except Exception:
-                    pass
+                    pass  # Justification: parse failure is expected for malformed risk metadata — use defaults
                 if "model_version" in decision.metadata:
                     action = str(actions_cfg.get("approved_with_model_version", "set_target_base_pct"))
                     if predicted_return > 0:

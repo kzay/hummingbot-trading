@@ -177,7 +177,7 @@ def _compute_fill_stats(fills_path: Path) -> dict[str, Any]:
                     stats["last_price"] = price
                     stats["last_amount"] = amount
                 except Exception:
-                    pass
+                    pass  # Justification: parse failure is expected for malformed fill timestamps — skip row fields
     except Exception as exc:
         logger.debug("fill_stats error %s: %s", fills_path, exc)
     return stats
@@ -248,7 +248,7 @@ def build_snapshot(bot_name: str, bot_data_dir: Path) -> dict[str, Any]:
             try:
                 candidate_epoch = datetime.fromisoformat(ts_str.replace("Z", "+00:00")).timestamp()
             except Exception:
-                pass
+                pass  # Justification: parse failure is expected for malformed minute ts — skip candidate
             if candidate_epoch > active_minute_epoch:
                 active_minute_epoch = candidate_epoch
                 active_log_dir = log_dir

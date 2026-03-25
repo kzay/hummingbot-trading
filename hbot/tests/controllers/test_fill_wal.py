@@ -53,6 +53,64 @@ def test_fill_wal_write_and_flush(tmp_path: Path):
     assert wal_path.read_text(encoding="utf-8").strip() == ""
 
 
+def test_fill_wal_replay_deduplicates_against_existing_csv(tmp_path: Path):
+    """WAL replay must not create duplicate rows when the CSV already contains the same fills.
+
+    Scenario: bot crashes after CSV flush but before WAL truncation.
+    On the next restart the WAL is still present and must be skipped for rows
+    already committed to the CSV.
+    """
+    import csv as _csv
+
+    wal_path = tmp_path / "epp_v24" / "test_a" / "fills.wal"
+    wal_path.parent.mkdir(parents=True, exist_ok=True)
+
+    row = {
+        "ts": "2026-01-01T00:00:00+00:00",
+        "bot_variant": "a",
+        "exchange": "test",
+        "trading_pair": "BTC-USDT",
+        "side": "buy",
+        "price": "50000",
+        "amount_base": "0.001",
+        "notional_quote": "50",
+        "fee_quote": "0.05",
+        "order_id": "o-dedup-1",
+        "exchange_trade_id": "",
+        "state": "running",
+        "regime": "up",
+        "alpha_policy_state": "pb_strategy_gate",
+        "alpha_policy_reason": "vol_ok",
+        "mid_ref": "50000",
+        "expected_spread_pct": "0.003",
+        "adverse_drift_30s": "0",
+        "fee_source": "manual",
+        "is_maker": "True",
+        "realized_pnl_quote": "0",
+    }
+
+    # Pre-write the row to the CSV (simulating a flush that completed).
+    csv_path = tmp_path / "epp_v24" / "test_a" / "fills.csv"
+    with csv_path.open("w", newline="", encoding="utf-8") as cf:
+        writer = _csv.DictWriter(cf, fieldnames=list(row.keys()))
+        writer.writeheader()
+        writer.writerow(row)
+
+    # Also write the same row to the WAL (simulating crash before truncation).
+    import json
+    with wal_path.open("w", encoding="utf-8") as wf:
+        wf.write(json.dumps(row) + "\n")
+
+    # Init logger — WAL replay should skip the duplicate.
+    _logger = CsvSplitLogger(str(tmp_path), "test", "a")
+
+    content = csv_path.read_text(encoding="utf-8")
+    fill_rows = [l for l in content.splitlines() if "o-dedup-1" in l]
+    assert len(fill_rows) == 1, f"Expected 1 row, got {len(fill_rows)}: {fill_rows}"
+
+    assert wal_path.read_text(encoding="utf-8").strip() == ""
+
+
 def test_minute_log_includes_spread_cap_fields(tmp_path: Path):
     logger = CsvSplitLogger(str(tmp_path), "test", "a")
     logger.log_minute(

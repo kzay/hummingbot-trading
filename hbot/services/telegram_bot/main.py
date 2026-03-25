@@ -151,7 +151,7 @@ def _read_desk_snapshot(bot: str) -> dict | None:
             if time.time() - epoch > _SNAPSHOT_STALE_S:
                 return None  # stale — fall back to raw files
         except Exception:
-            pass
+            pass  # Justification: parse failure is expected for malformed snapshot ts — still return snapshot
     return d
 
 
@@ -706,6 +706,15 @@ def run() -> None:
     app.add_handler(CommandHandler("fills", cmd_fills))
     app.add_handler(CommandHandler("risk", cmd_risk))
     app.add_handler(CommandHandler("help", cmd_help))
+
+    import threading
+
+    def _heartbeat_loop() -> None:
+        while True:
+            Path("/tmp/telegram_heartbeat").touch()
+            time.sleep(60)
+
+    threading.Thread(target=_heartbeat_loop, daemon=True).start()
 
     logger.info(
         "Telegram command bot starting (data_root=%s, allowed_chat=%s)",

@@ -12,7 +12,7 @@ from platform_lib.core.utils import (
     utc_now as _utc_now,
 )
 
-from .parsers import (
+from services.ops_db_writer.parsers import (
     SCHEMA_VERSION,
     _EPOCH_TS_UTC,
     _canonical_ts_utc,
@@ -34,12 +34,12 @@ from .parsers import (
     _source_abs,
     _stream_entry_id_to_ts_utc,
 )
-from .schema import (
+from services.ops_db_writer.schema import (
     _apply_schema,
     _apply_timescale,
     _connect,
 )
-from .ingestors import (
+from services.ops_db_writer.ingestors import (
     _ingest_accounting_snapshots,
     _ingest_bot_position_current,
     _ingest_daily,
@@ -161,7 +161,7 @@ def run_once(root: Path, data_root: Path, reports_root: Path, *, apply_schema: b
             if conn:
                 conn.rollback()
         except Exception:
-            pass
+            pass  # Justification: best-effort rollback after DB error — connection may be aborted
         result["status"] = "fail"
         result["errors"] = [str(exc)]
     finally:

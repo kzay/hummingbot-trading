@@ -146,7 +146,7 @@ def _container_status(container: str) -> str:
         try:
             return json.loads(body).get("State", {}).get("Status", "unknown")
         except Exception:
-            pass
+            pass  # Justification: parse failure is expected for malformed Docker API JSON — return unknown
     return "unknown"
 
 
@@ -156,7 +156,7 @@ def _load_state() -> dict:
         try:
             return json.loads(STATE_FILE.read_text())
         except Exception:
-            pass
+            pass  # Justification: best-effort I/O — file may not exist or be locked; non-critical
     return {}
 
 
@@ -438,6 +438,8 @@ def run() -> None:
                     )
 
             _save_state(state)
+
+            Path("/tmp/watchdog_heartbeat").touch()
 
         except Exception as exc:
             logger.error("Watchdog loop error: %s", exc, exc_info=True)

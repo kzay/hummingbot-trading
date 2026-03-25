@@ -120,7 +120,7 @@ def _max_replay_lag_from_day2(day2_payload: dict[str, object], reports_root: Pat
         try:
             return int(lag.get("max_delta_observed", 0) or 0)
         except Exception:
-            pass
+            pass  # Justification: script CLI — non-critical diagnostic / best-effort cleanup (lag field not int)
     source_compare_path_raw = str(day2_payload.get("source_compare_file", "")).strip()
     source_compare_path = Path(source_compare_path_raw) if source_compare_path_raw else None
     if source_compare_path is None or not source_compare_path.exists():

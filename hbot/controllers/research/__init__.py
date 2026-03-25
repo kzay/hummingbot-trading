@@ -54,6 +54,7 @@ class StrategyCandidate:
     required_tests: list[str] = field(default_factory=list)
     metadata: dict[str, Any] = field(default_factory=dict)
     lifecycle: StrategyLifecycle = StrategyLifecycle.CANDIDATE
+    new_adapter_description: str = ""
 
     @classmethod
     def from_yaml(cls, path: str | Path) -> StrategyCandidate:
@@ -81,11 +82,12 @@ class StrategyCandidate:
             required_tests=data.get("required_tests", []),
             metadata=data.get("metadata", {}),
             lifecycle=lifecycle,
+            new_adapter_description=data.get("new_adapter_description", ""),
         )
 
     def to_yaml(self, path: str | Path) -> None:
         """Save the candidate definition to a YAML file."""
-        data = {
+        data: dict[str, Any] = {
             "name": self.name,
             "hypothesis": self.hypothesis,
             "adapter_mode": self.adapter_mode,
@@ -97,5 +99,7 @@ class StrategyCandidate:
             "metadata": self.metadata,
             "lifecycle": self.lifecycle.value,
         }
+        if self.new_adapter_description:
+            data["new_adapter_description"] = self.new_adapter_description
         with open(path, "w") as f:
             yaml.dump(data, f, default_flow_style=False, sort_keys=False)

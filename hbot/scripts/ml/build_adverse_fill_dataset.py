@@ -1,14 +1,18 @@
 """Build training dataset for the ML adverse fill classifier (ROAD-11).
 
-Joins fills.csv with minute.csv on nearest timestamp to get market state features
-at fill time. Labels each fill as adverse (pnl_vs_mid < -2 bps).
+Joins fills.csv (and optionally legacy fills) with minute.csv on nearest
+timestamp to get market state features at fill time.  Labels each fill as
+adverse (pnl_vs_mid < -2 bps).
+
+Supports ``--include-legacy`` to include ``fills.legacy_*.csv`` files for
+larger datasets.
 
 Requirements:
     pip install pandas pyarrow
 
 Usage:
-    PYTHONPATH=hbot python -m scripts.ml.build_adverse_fill_dataset
-    PYTHONPATH=hbot python -m scripts.ml.build_adverse_fill_dataset --root data/bot1/logs/epp_v24/bot1_a
+    PYTHONPATH=hbot python -m scripts.ml.build_adverse_fill_dataset --root data/bot5/logs/epp_v24/bot5_a
+    PYTHONPATH=hbot python -m scripts.ml.build_adverse_fill_dataset --root data/bot5/logs/epp_v24/bot5_a --include-legacy
 
 Gate: Run after collecting >= 5,000 fills (~20 days at current fill rate).
 """
@@ -150,21 +154,62 @@ def build_feature_vector(fill_row: dict, minute_row: dict | None) -> dict[str, f
     return feats
 
 
-def build_dataset(fills_path: Path, minute_path: Path, output_dir: Path) -> Path:
+def _collect_fills(root: Path, include_legacy: bool = False) -> list[Path]:
+    """Find fills.csv and optionally fills.legacy_*.csv under *root*."""
+    found: list[Path] = []
+    fills_main = root / "fills.csv"
+    if fills_main.exists():
+        found.append(fills_main)
+    if include_legacy:
+        for p in sorted(root.glob("fills.legacy_*.csv")):
+            found.append(p)
+    return found
+
+
+def _collect_minute_csvs(root: Path) -> list[Path]:
+    """Find all minute.csv and minute.legacy_*.csv files under *root*."""
+    found: list[Path] = []
+    for p in sorted(root.glob("minute*.csv")):
+        if p.name == "minute.csv" or p.name.startswith("minute.legacy_"):
+            found.append(p)
+    return found
+
+
+def build_dataset(fill_paths: list[Path], minute_paths: list[Path], output_dir: Path) -> Path:
     try:
         import pandas as pd  # type: ignore
     except ImportError:
         print("ERROR: pandas and pyarrow required. Run: pip install pandas pyarrow", file=sys.stderr)
         sys.exit(1)
 
-    fills = _load_csv(fills_path)
-    minute_rows = _load_csv(minute_path)
+    fills: list[dict] = []
+    for fp in fill_paths:
+        chunk = _load_csv(fp)
+        print(f"  fills: {fp}: {len(chunk)} rows", file=sys.stderr)
+        fills.extend(chunk)
+
+    minute_rows: list[dict] = []
+    for mp in minute_paths:
+        chunk = _load_csv(mp)
+        print(f"  minute: {mp}: {len(chunk)} rows", file=sys.stderr)
+        minute_rows.extend(chunk)
+
+    minute_rows.sort(key=lambda r: r["_ts"])
+
+    seen_ts: set[str] = set()
+    deduped_fills: list[dict] = []
+    for f in fills:
+        key = f"{f['_ts'].isoformat()}_{f.get('price', '')}_{f.get('side', '')}"
+        if key not in seen_ts:
+            seen_ts.add(key)
+            deduped_fills.append(f)
+    fills = deduped_fills
 
     if not fills:
-        print(f"ERROR: No fills found at {fills_path}", file=sys.stderr)
+        print("ERROR: No fills found", file=sys.stderr)
         sys.exit(1)
 
-    print(f"Loaded {len(fills)} fills, {len(minute_rows)} minute rows", file=sys.stderr)
+    print(f"Loaded {len(fills)} fills (deduped), {len(minute_rows)} minute rows", file=sys.stderr)
 
     feature_dicts: list[dict[str, float]] = []
     labels: list[int] = []
@@ -205,9 +250,20 @@ def build_dataset(fills_path: Path, minute_path: Path, output_dir: Path) -> Path
 if __name__ == "__main__":
     ap = argparse.ArgumentParser(description="Build adverse fill classification dataset")
     ap.add_argument("--root", default="data/bot1/logs/epp_v24/bot1_a")
+    ap.add_argument("--include-legacy", action="store_true", help="Include fills.legacy_*.csv files")
     ap.add_argument("--output", default="data/ml")
     args = ap.parse_args()
 
     root = Path(args.root)
-    out_path = build_dataset(root / "fills.csv", root / "minute.csv", Path(args.output))
+    fill_paths = _collect_fills(root, include_legacy=args.include_legacy)
+    minute_paths = _collect_minute_csvs(root)
+
+    if not fill_paths:
+        print(f"ERROR: No fills files found under {root}", file=sys.stderr)
+        sys.exit(1)
+    if not minute_paths:
+        minute_paths = [root / "minute.csv"]
+
+    print(f"Loading {len(fill_paths)} fills files, {len(minute_paths)} minute files:", file=sys.stderr)
+    out_path = build_dataset(fill_paths, minute_paths, Path(args.output))
     print(str(out_path))

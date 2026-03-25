@@ -278,7 +278,7 @@ class Bot5IftJotaV1Controller(DirectionalStrategyRuntimeV24Controller):
         gate = self._bot5_gate_metrics()
 
         if gate["fail_closed"]:
-            self._pending_stale_cancel_actions.extend(self._cancel_active_quote_executors())
+            self.enqueue_stale_cancels(self._cancel_active_quote_executors())
             self._cancel_alpha_no_trade_orders()
             self._quote_side_mode = "off"
             self._quote_side_reason = f"bot5_{gate['reason']}"
@@ -292,7 +292,7 @@ class Bot5IftJotaV1Controller(DirectionalStrategyRuntimeV24Controller):
         desired_mode = "buy_only" if str(flow_state.get("direction")) == "buy" else "sell_only"
         previous_mode = str(getattr(self, "_quote_side_mode", base_mode) or "off")
         if previous_mode != desired_mode:
-            self._pending_stale_cancel_actions.extend(
+            self.enqueue_stale_cancels(
                 self._cancel_stale_side_executors(previous_mode, desired_mode)
             )
         self._quote_side_mode = desired_mode

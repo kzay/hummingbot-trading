@@ -1,0 +1,54 @@
+{
+  "total_iterations": 5,
+  "best_observed_score": 0.0,
+  "best_observed_candidate": "",
+  "best_recommendation": "",
+  "total_tokens_used": 13173,
+  "iterations": [
+    {
+      "iteration": 1,
+      "action": "generate",
+      "candidate_name": "btc-volume-surge-breakout-v1",
+      "score": null,
+      "recommendation": "blueprint",
+      "report_path": "",
+      "error": null
+    },
+    {
+      "iteration": 2,
+      "action": "generate",
+      "candidate_name": "btc-gap-fill-reversion-v1",
+      "score": null,
+      "recommendation": "blueprint",
+      "report_path": "",
+      "error": null
+    },
+    {
+      "iteration": 3,
+      "action": "generate",
+      "candidate_name": "btc-session-transition-momentum-v1",
+      "score": null,
+      "recommendation": "blueprint",
+      "report_path": "",
+      "error": null
+    },
+    {
+      "iteration": 4,
+      "action": "generate",
+      "candidate_name": "btc-microstructure-imbalance-v1",
+      "score": null,
+      "recommendation": "blueprint",
+      "report_path": "",
+      "error": null
+    },
+    {
+      "iteration": 5,
+      "action": "generate",
+      "candidate_name": "btc-volatility-regime-mm-v1",
+      "score": null,
+      "recommendation": "blueprint",
+      "report_path": "",
+      "error": null
+    }
+  ]
+}

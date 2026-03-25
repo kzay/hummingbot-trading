@@ -354,7 +354,7 @@ class BotMetricsExporter:
                 try:
                     results[name] = health_fn()
                 except Exception:
-                    pass
+                    pass  # Justification: telemetry is non-critical — must not crash the service
         return results
 
     def _record_source_read_failure(self, source: str) -> None:
@@ -1305,7 +1305,7 @@ class BotMetricsExporter:
                     epoch = datetime.fromisoformat(gen_ts.replace("Z", "+00:00")).timestamp()
                     snap_age = now - epoch
                 except Exception:
-                    pass
+                    pass  # Justification: parse failure is expected for malformed snapshot ts — use default age
                 completeness = float(snap.get("completeness", 0.0))
                 minute_age = snap.get("minute_age_s")
                 fill_age = snap.get("fill_age_s")
@@ -1352,7 +1352,7 @@ class BotMetricsExporter:
                             }
                             lines.append(f"hbot_csv_file_size_bytes{_fmt_labels(csv_labels)} {size_bytes}")
         except Exception:
-            pass
+            pass  # Justification: telemetry is non-critical — must not crash the service
 
         try:
             redis_clients = self._collect_redis_health()
@@ -1368,7 +1368,7 @@ class BotMetricsExporter:
                 lines.append(f"hbot_redis_io_latency_p99_ms{rl} {h.get('io_latency_p99_ms', 0.0)}")
                 lines.append(f"hbot_redis_io_timeout_count{rl} {h.get('io_timeout_count', 0)}")
         except Exception:
-            pass
+            pass  # Justification: telemetry is non-critical — must not crash the service
 
         return "\n".join(lines) + "\n"
 

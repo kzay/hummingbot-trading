@@ -1,0 +1,846 @@
+
+============================================================
+Strategy Research Lab — LLM Exploration Agent
+============================================================
+  Provider:       anthropic
+  Iterations:     5
+  Temperature:    0.7
+  Instrument:     BTC-USDT
+  Exchange:       bitget
+  Adapters:       atr_mm, atr_mm_v2, smc_mm, combo_mm, pullback, pullback_v2, momentum_scalper, directional_mm, simple
+  Auto lifecycle: True
+============================================================
+
+2026-03-24 21:42:37,219 [INFO] controllers.research.exploration_session: === Exploration iteration 1/5 [explore] ===
+2026-03-24 21:42:49,359 [INFO] httpx: HTTP Request: POST https://api.anthropic.com/v1/messages "HTTP/1.1 200 OK"
+2026-03-24 21:42:49,408 [INFO] controllers.research.experiment_orchestrator: Step 1/6: Verification backtest for btc-microstructure-imbalance-v1
+2026-03-24 21:42:59,429 [WARNING] simulation.desk: PaperDesk: clearing persisted state on startup for paper_desk:v2:state
+2026-03-24 21:42:59,429 [INFO] simulation.desk: PaperDesk: registered instrument bitget:BTC-USDT:perp
+2026-03-24 21:42:59,993 [INFO] simulation.portfolio: PaperPortfolio day rollover: 2025-01-01 -> 2025-01-02 (daily_open_equity=500 -> 500)
+2026-03-24 21:43:00,098 [WARNING] simulation.matching_engine: OrderMatchingEngine[bitget:BTC-USDT:perp]: trimming _order_sides (10002 > 10000)
+2026-03-24 21:43:00,352 [WARNING] simulation.desk: PAPER_DESK_PROBE stage=tick_event instrument=bitget:BTC-USDT:perp event=OrderFilled order_id=paper_v2_13027 reason=
+2026-03-24 21:43:00,622 [INFO] simulation.portfolio: PaperPortfolio day rollover: 2025-01-02 -> 2025-01-03 (daily_open_equity=500 -> 500.0152352606892690752507468)
+2026-03-24 21:43:01,102 [WARNING] simulation.desk: PAPER_DESK_PROBE stage=tick_event instrument=bitget:BTC-USDT:perp event=OrderFilled order_id=paper_v2_20959 reason=
+2026-03-24 21:43:01,105 [WARNING] simulation.desk: PAPER_DESK_PROBE stage=tick_event instrument=bitget:BTC-USDT:perp event=OrderFilled order_id=paper_v2_20995 reason=
+2026-03-24 21:43:01,421 [INFO] simulation.portfolio: PaperPortfolio day rollover: 2025-01-03 -> 2025-01-04 (daily_open_equity=500.0152352606892690752507468 -> 500.0935608370081152153784287)
+2026-03-24 21:43:02,061 [WARNING] simulation.desk: PAPER_DESK_PROBE stage=tick_event instrument=bitget:BTC-USDT:perp event=OrderFilled order_id=paper_v2_31292 reason=
+2026-03-24 21:43:02,176 [INFO] simulation.portfolio: PaperPortfolio day rollover: 2025-01-04 -> 2025-01-05 (daily_open_equity=500.0935608370081152153784287 -> 500.1018905295542045117288160)
+2026-03-24 21:43:02,597 [WARNING] simulation.desk: PAPER_DESK_PROBE stage=tick_event instrument=bitget:BTC-USDT:perp event=OrderFilled order_id=paper_v2_37867 reason=
+2026-03-24 21:43:02,866 [INFO] simulation.portfolio: PaperPortfolio day rollover: 2025-01-05 -> 2025-01-06 (daily_open_equity=500.1018905295542045117288160 -> 500.1715040708127110617544561)
+2026-03-24 21:43:03,276 [WARNING] simulation.desk: PAPER_DESK_PROBE stage=tick_event instrument=bitget:BTC-USDT:perp event=OrderFilled order_id=paper_v2_46243 reason=
+2026-03-24 21:43:03,292 [WARNING] simulation.desk: PAPER_DESK_PROBE stage=tick_event instrument=bitget:BTC-USDT:perp event=OrderFilled order_id=paper_v2_46309 reason=
+2026-03-24 21:43:03,295 [WARNING] simulation.desk: PAPER_DESK_PROBE stage=tick_event instrument=bitget:BTC-USDT:perp event=OrderFilled order_id=paper_v2_46340 reason=
+2026-03-24 21:43:03,535 [INFO] simulation.portfolio: PaperPortfolio day rollover: 2025-01-06 -> 2025-01-07 (daily_open_equity=500.1715040708127110617544561 -> 500.8835497560468703695527036)
+2026-03-24 21:43:04,328 [WARNING] simulation.desk: PAPER_DESK_PROBE stage=tick_event instrument=bitget:BTC-USDT:perp event=OrderFilled order_id=paper_v2_56719 reason=
+2026-03-24 21:43:04,362 [INFO] simulation.portfolio: PaperPortfolio day rollover: 2025-01-07 -> 2025-01-08 (daily_open_equity=500.8835497560468703695527036 -> 499.7901022414172772072127168)
+2026-03-24 21:43:04,827 [WARNING] simulation.desk: PAPER_DESK_PROBE stage=tick_event instrument=bitget:BTC-USDT:perp event=OrderFilled order_id=paper_v2_61915 reason=
+2026-03-24 21:43:04,830 [WARNING] simulation.desk: PAPER_DESK_PROBE stage=tick_event instrument=bitget:BTC-USDT:perp event=OrderFilled order_id=paper_v2_61958 reason=
+2026-03-24 21:43:04,833 [WARNING] simulation.desk: PAPER_DESK_PROBE stage=tick_event instrument=bitget:BTC-USDT:perp event=OrderFilled order_id=paper_v2_61987 reason=
+2026-03-24 21:43:04,839 [WARNING] simulation.desk: PAPER_DESK_PROBE stage=tick_event instrument=bitget:BTC-USDT:perp event=OrderFilled order_id=paper_v2_62054 reason=
+2026-03-24 21:43:04,861 [WARNING] simulation.desk: PAPER_DESK_PROBE stage=tick_event instrument=bitget:BTC-USDT:perp event=OrderFilled order_id=paper_v2_62137 reason=
+2026-03-24 21:43:04,920 [WARNING] simulation.desk: PAPER_DESK_PROBE stage=tick_event instrument=bitget:BTC-USDT:perp event=OrderFilled order_id=paper_v2_62605 reason=
+2026-03-24 21:43:05,101 [INFO] simulation.portfolio: PaperPortfolio day rollover: 2025-01-08 -> 2025-01-09 (daily_open_equity=499.7901022414172772072127168 -> 499.3020026295647475578263341)
+2026-03-24 21:43:05,560 [WARNING] simulation.desk: PAPER_DESK_PROBE stage=tick_event instrument=bitget:BTC-USDT:perp event=OrderFilled order_id=paper_v2_68702 reason=
+2026-03-24 21:43:05,560 [WARNING] simulation.desk: PAPER_DESK_PROBE stage=tick_event instrument=bitget:BTC-USDT:perp event=OrderFilled order_id=paper_v2_68704 reason=
+2026-03-24 21:43:05,671 [WARNING] simulation.desk: PAPER_DESK_PROBE stage=tick_event instrument=bitget:BTC-USDT:perp event=OrderFilled order_id=paper_v2_69890 reason=
+2026-03-24 21:43:05,744 [INFO] simulation.portfolio: PaperPortfolio day rollover: 2025-01-09 -> 2025-01-10 (daily_open_equity=499.3020026295647475578263341 -> 498.2584454921478503341055926)
+2026-03-24 21:43:06,280 [WARNING] simulation.desk: PAPER_DESK_PROBE stage=tick_event instrument=bitget:BTC-USDT:perp event=OrderFilled order_id=paper_v2_75633 reason=
+2026-03-24 21:43:06,292 [WARNING] simulation.desk: PAPER_DESK_PROBE stage=tick_event instrument=bitget:BTC-USDT:perp event=OrderFilled order_id=paper_v2_75680 reason=
+2026-03-24 21:43:06,293 [WARNING] simulation.desk: PAPER_DESK_PROBE stage=tick_event instrument=bitget:BTC-USDT:perp event=OrderFilled order_id=paper_v2_75685 reason=
+2026-03-24 21:43:06,293 [WARNING] simulation.desk: PAPER_DESK_PROBE stage=tick_event instrument=bitget:BTC-USDT:perp event=OrderFilled order_id=paper_v2_75689 reason=
+2026-03-24 21:43:06,303 [WARNING] simulation.desk: PAPER_DESK_PROBE stage=tick_event instrument=bitget:BTC-USDT:perp event=OrderFilled order_id=paper_v2_75764 reason=
+2026-03-24 21:43:06,385 [WARNING] simulation.desk: PAPER_DESK_PROBE stage=tick_event instrument=bitget:BTC-USDT:perp event=OrderFilled order_id=paper_v2_76382 reason=
+2026-03-24 21:43:06,531 [INFO] simulation.portfolio: PaperPortfolio day rollover: 2025-01-10 -> 2025-01-11 (daily_open_equity=498.2584454921478503341055926 -> 498.7098444963044175705684988)
+2026-03-24 21:43:07,510 [INFO] simulation.portfolio: PaperPortfolio day rollover: 2025-01-11 -> 2025-01-12 (daily_open_equity=498.7098444963044175705684988 -> 498.6907646528938727677356988)
+2026-03-24 21:43:08,294 [WARNING] simulation.desk: PAPER_DESK_PROBE stage=tick_event instrument=bitget:BTC-USDT:perp event=OrderFilled order_id=paper_v2_94729 reason=
+2026-03-24 21:43:08,328 [INFO] simulation.portfolio: PaperPortfolio day rollover: 2025-01-12 -> 2025-01-13 (daily_open_equity=498.6907646528938727677356988 -> 498.6942679439654468692399252)
+2026-03-24 21:43:08,713 [WARNING] simulation.desk: PAPER_DESK_PROBE stage=tick_event instrument=bitget:BTC-USDT:perp event=OrderFilled order_id=paper_v2_99038 reason=
+2026-03-24 21:43:08,740 [WARNING] simulation.desk: PAPER_DESK_PROBE stage=tick_event instrument=bitget:BTC-USDT:perp event=OrderFilled order_id=paper_v2_99180 reason=
+2026-03-24 21:43:08,742 [WARNING] simulation.desk: PAPER_DESK_PROBE stage=tick_event instrument=bitget:BTC-USDT:perp event=OrderFilled order_id=paper_v2_99188 reason=
+2026-03-24 21:43:08,774 [WARNING] simulation.desk: PAPER_DESK_PROBE stage=tick_event instrument=bitget:BTC-USDT:perp event=OrderFilled order_id=paper_v2_99259 reason=
+2026-03-24 21:43:08,819 [WARNING] simulation.desk: PAPER_DESK_PROBE stage=tick_event instrument=bitget:BTC-USDT:perp event=OrderFilled order_id=paper_v2_99452 reason=
+2026-03-24 21:43:08,853 [WARNING] simulation.desk: PAPER_DESK_PROBE stage=tick_event instrument=bitget:BTC-USDT:perp event=OrderFilled order_id=paper_v2_99704 reason=
+2026-03-24 21:43:08,880 [WARNING] simulation.desk: PAPER_DESK_PROBE stage=tick_event instrument=bitget:BTC-USDT:perp event=OrderFilled order_id=paper_v2_100106 reason=
+2026-03-24 21:43:08,893 [WARNING] simulation.desk: PAPER_DESK_PROBE stage=tick_event instrument=bitget:BTC-USDT:perp event=OrderFilled order_id=paper_v2_100171 reason=
+2026-03-24 21:43:08,896 [WARNING] simulation.desk: PAPER_DESK_PROBE stage=tick_event instrument=bitget:BTC-USDT:perp event=OrderFilled order_id=paper_v2_100202 reason=
+2026-03-24 21:43:08,940 [WARNING] simulation.desk: PAPER_DESK_PROBE stage=tick_event instrument=bitget:BTC-USDT:perp event=OrderFilled order_id=paper_v2_100723 reason=
+2026-03-24 21:43:09,027 [INFO] simulation.portfolio: PaperPortfolio day rollover: 2025-01-13 -> 2025-01-14 (daily_open_equity=498.6942679439654468692399252 -> 497.9357569653139600923617813)
+2026-03-24 21:43:09,475 [WARNING] simulation.desk: PAPER_DESK_PROBE stage=tick_event instrument=bitget:BTC-USDT:perp event=OrderFilled order_id=paper_v2_106754 reason=
+2026-03-24 21:43:09,682 [INFO] simulation.portfolio: PaperPortfolio day rollover: 2025-01-14 -> 2025-01-15 (daily_open_equity=497.9357569653139600923617813 -> 497.8709594072185043438335885)
+2026-03-24 21:43:10,519 [WARNING] simulation.desk: PAPER_DESK_PROBE stage=tick_event instrument=bitget:BTC-USDT:perp event=OrderFilled order_id=paper_v2_114314 reason=
+2026-03-24 21:43:10,809 [INFO] simulation.portfolio: PaperPortfolio day rollover: 2025-01-15 -> 2025-01-16 (daily_open_equity=497.8709594072185043438335885 -> 497.6097900346932786609260619)
+2026-03-24 21:43:11,262 [WARNING] simulation.desk: PAPER_DESK_PROBE stage=tick_event instrument=bitget:BTC-USDT:perp event=OrderFilled order_id=paper_v2_121610 reason=
+2026-03-24 21:43:11,296 [WARNING] simulation.desk: PAPER_DESK_PROBE stage=tick_event instrument=bitget:BTC-USDT:perp event=OrderFilled order_id=paper_v2_121963 reason=
+2026-03-24 21:43:12,083 [WARNING] simulation.desk: PAPER_DESK_PROBE stage=tick_event instrument=bitget:BTC-USDT:perp event=OrderFilled order_id=paper_v2_123398 reason=
+2026-03-24 21:43:12,966 [INFO] simulation.portfolio: PaperPortfolio day rollover: 2025-01-16 -> 2025-01-17 (daily_open_equity=497.6097900346932786609260619 -> 497.6737305966946948973943429)
+2026-03-24 21:43:13,602 [WARNING] simulation.desk: PAPER_DESK_PROBE stage=tick_event instrument=bitget:BTC-USDT:perp event=OrderFilled order_id=paper_v2_129601 reason=
+2026-03-24 21:43:13,856 [INFO] simulation.portfolio: PaperPortfolio day rollover: 2025-01-17 -> 2025-01-18 (daily_open_equity=497.6737305966946948973943429 -> 496.9727431672061866860388557)
+2026-03-24 21:43:14,382 [WARNING] simulation.desk: PAPER_DESK_PROBE stage=tick_event instrument=bitget:BTC-USDT:perp event=OrderFilled order_id=paper_v2_138385 reason=
+2026-03-24 21:43:14,485 [INFO] simulation.portfolio: PaperPortfolio day rollover: 2025-01-18 -> 2025-01-19 (daily_open_equity=496.9727431672061866860388557 -> 496.9304500110399196334627035)
+2026-03-24 21:43:14,866 [WARNING] simulation.desk: PAPER_DESK_PROBE stage=tick_event instrument=bitget:BTC-USDT:perp event=OrderFilled order_id=paper_v2_142802 reason=
+2026-03-24 21:43:14,928 [WARNING] simulation.desk: PAPER_DESK_PROBE stage=tick_event instrument=bitget:BTC-USDT:perp event=OrderFilled order_id=paper_v2_143521 reason=
+2026-03-24 21:43:15,182 [WARNING] simulation.desk: PAPER_DESK_PROBE stage=tick_event instrument=bitget:BTC-USDT:perp event=OrderFilled order_id=paper_v2_146504 reason=
+2026-03-24 21:43:15,186 [WARNING] simulation.desk: PAPER_DESK_PROBE stage=tick_event instrument=bitget:BTC-USDT:perp event=OrderFilled order_id=paper_v2_146546 reason=
+2026-03-24 21:43:15,189 [WARNING] simulation.desk: PAPER_DESK_PROBE stage=tick_event instrument=bitget:BTC-USDT:perp event=OrderFilled order_id=paper_v2_146583 reason=
+2026-03-24 21:43:15,192 [WARNING] simulation.desk: PAPER_DESK_PROBE stage=tick_event instrument=bitget:BTC-USDT:perp event=OrderFilled order_id=paper_v2_146605 reason=
+2026-03-24 21:43:15,200 [WARNING] simulation.desk: PAPER_DESK_PROBE stage=tick_event instrument=bitget:BTC-USDT:perp event=OrderFilled order_id=paper_v2_146632 reason=
+2026-03-24 21:43:15,205 [WARNING] simulation.desk: PAPER_DESK_PROBE stage=tick_event instrument=bitget:BTC-USDT:perp event=OrderFilled order_id=paper_v2_146691 reason=
+2026-03-24 21:43:15,206 [INFO] simulation.portfolio: PaperPortfolio day rollover: 2025-01-19 -> 2025-01-20 (daily_open_equity=496.9304500110399196334627035 -> 497.0555134608813426871080355)
+2026-03-24 21:43:15,218 [WARNING] simulation.desk: PAPER_DESK_PROBE stage=tick_event instrument=bitget:BTC-USDT:perp event=OrderFilled order_id=paper_v2_146732 reason=
+2026-03-24 21:43:15,220 [WARNING] simulation.desk: PAPER_DESK_PROBE stage=tick_event instrument=bitget:BTC-USDT:perp event=OrderFilled order_id=paper_v2_146743 reason=
+2026-03-24 21:43:15,221 [WARNING] simulation.desk: PAPER_DESK_PROBE stage=tick_event instrument=bitget:BTC-USDT:perp event=OrderFilled order_id=paper_v2_146745 reason=
+2026-03-24 21:43:15,223 [WARNING] simulation.desk: PAPER_DESK_PROBE stage=tick_event instrument=bitget:BTC-USDT:perp event=OrderFilled order_id=paper_v2_146756 reason=
+2026-03-24 21:43:15,232 [WARNING] simulation.desk: PAPER_DESK_PROBE stage=tick_event instrument=bitget:BTC-USDT:perp event=OrderFilled order_id=paper_v2_146836 reason=
+2026-03-24 21:43:15,236 [WARNING] simulation.desk: PAPER_DESK_PROBE stage=tick_event instrument=bitget:BTC-USDT:perp event=OrderFilled order_id=paper_v2_146858 reason=
+2026-03-24 21:43:15,237 [WARNING] simulation.desk: PAPER_DESK_PROBE stage=tick_event instrument=bitget:BTC-USDT:perp event=OrderFilled order_id=paper_v2_146863 reason=
+2026-03-24 21:43:15,264 [WARNING] simulation.desk: PAPER_DESK_PROBE stage=tick_event instrument=bitget:BTC-USDT:perp event=OrderFilled order_id=paper_v2_147157 reason=
+2026-03-24 21:43:15,290 [WARNING] simulation.desk: PAPER_DESK_PROBE stage=tick_event instrument=bitget:BTC-USDT:perp event=OrderFilled order_id=paper_v2_147476 reason=
+2026-03-24 21:43:15,396 [WARNING] simulation.desk: PAPER_DESK_PROBE stage=tick_event instrument=bitget:BTC-USDT:perp event=OrderFilled order_id=paper_v2_148586 reason=
+2026-03-24 21:43:15,411 [WARNING] simulation.desk: PAPER_DESK_PROBE stage=tick_event instrument=bitget:BTC-USDT:perp event=OrderFilled order_id=paper_v2_148795 reason=
+2026-03-24 21:43:15,529 [WARNING] simulation.desk: PAPER_DESK_PROBE stage=tick_event instrument=bitget:BTC-USDT:perp event=OrderFilled order_id=paper_v2_149667 reason=
+2026-03-24 21:43:15,530 [WARNING] simulation.desk: PAPER_DESK_PROBE stage=tick_event instrument=bitget:BTC-USDT:perp event=OrderFilled order_id=paper_v2_149669 reason=
+2026-03-24 21:43:15,541 [WARNING] simulation.desk: PAPER_DESK_PROBE stage=tick_event instrument=bitget:BTC-USDT:perp event=OrderFilled order_id=paper_v2_149734 reason=
+2026-03-24 21:43:15,562 [WARNING] simulation.desk: PAPER_DESK_PROBE stage=tick_event instrument=bitget:BTC-USDT:perp event=OrderFilled order_id=paper_v2_149797 reason=
+2026-03-24 21:43:15,617 [WARNING] simulation.desk: PAPER_DESK_PROBE stage=tick_event instrument=bitget:BTC-USDT:perp event=OrderFilled order_id=paper_v2_150331 reason=
+2026-03-24 21:43:15,623 [WARNING] simulation.desk: PAPER_DESK_PROBE stage=tick_event instrument=bitget:BTC-USDT:perp event=OrderFilled order_id=paper_v2_150340 reason=
+2026-03-24 21:43:15,633 [WARNING] simulation.desk: PAPER_DESK_PROBE stage=tick_event instrument=bitget:BTC-USDT:perp event=OrderFilled order_id=paper_v2_150422 reason=
+2026-03-24 21:43:15,674 [WARNING] simulation.desk: PAPER_DESK_PROBE stage=tick_event instrument=bitget:BTC-USDT:perp event=OrderFilled order_id=paper_v2_150577 reason=
+2026-03-24 21:43:15,701 [WARNING] simulation.desk: PAPER_DESK_PROBE stage=tick_event instrument=bitget:BTC-USDT:perp event=OrderFilled order_id=paper_v2_150760 reason=
+2026-03-24 21:43:15,757 [WARNING] simulation.desk: PAPER_DESK_PROBE stage=tick_event instrument=bitget:BTC-USDT:perp event=OrderFilled order_id=paper_v2_151105 reason=
+2026-03-24 21:43:15,860 [WARNING] simulation.desk: PAPER_DESK_PROBE stage=tick_event instrument=bitget:BTC-USDT:perp event=OrderFilled order_id=paper_v2_151665 reason=
+2026-03-24 21:43:15,862 [INFO] simulation.portfolio: PaperPortfolio day rollover: 2025-01-20 -> 2025-01-21 (daily_open_equity=497.0555134608813426871080355 -> 496.4868539790507301910121844)
+2026-03-24 21:43:15,866 [WARNING] simulation.desk: PAPER_DESK_PROBE stage=tick_event instrument=bitget:BTC-USDT:perp event=OrderFilled order_id=paper_v2_151676 reason=
+2026-03-24 21:43:15,866 [WARNING] simulation.desk: PAPER_DESK_PROBE stage=tick_event instrument=bitget:BTC-USDT:perp event=OrderFilled order_id=paper_v2_151678 reason=
+2026-03-24 21:43:15,875 [WARNING] simulation.desk: PAPER_DESK_PROBE stage=tick_event instrument=bitget:BTC-USDT:perp event=OrderFilled order_id=paper_v2_151717 reason=
+2026-03-24 21:43:15,897 [WARNING] simulation.desk: PAPER_DESK_PROBE stage=tick_event instrument=bitget:BTC-USDT:perp event=OrderFilled order_id=paper_v2_151873 reason=
+2026-03-24 21:43:15,906 [WARNING] simulation.desk: PAPER_DESK_PROBE stage=tick_event instrument=bitget:BTC-USDT:perp event=OrderFilled order_id=paper_v2_151948 reason=
+2026-03-24 21:43:15,913 [WARNING] simulation.desk: PAPER_DESK_PROBE stage=tick_event instrument=bitget:BTC-USDT:perp event=OrderFilled order_id=paper_v2_151982 reason=
+2026-03-24 21:43:15,921 [WARNING] simulation.desk: PAPER_DESK_PROBE stage=tick_event instrument=bitget:BTC-USDT:perp event=OrderFilled order_id=paper_v2_152011 reason=
+2026-03-24 21:43:15,922 [WARNING] simulation.desk: PAPER_DESK_PROBE stage=tick_event instrument=bitget:BTC-USDT:perp event=OrderFilled order_id=paper_v2_152013 reason=
+2026-03-24 21:43:15,924 [WARNING] simulation.desk: PAPER_DESK_PROBE stage=tick_event instrument=bitget:BTC-USDT:perp event=OrderFilled order_id=paper_v2_152024 reason=
+2026-03-24 21:43:15,977 [WARNING] simulation.desk: PAPER_DESK_PROBE stage=tick_event instrument=bitget:BTC-USDT:perp event=OrderFilled order_id=paper_v2_152326 reason=
+2026-03-24 21:43:16,041 [WARNING] simulation.desk: PAPER_DESK_PROBE stage=tick_event instrument=bitget:BTC-USDT:perp event=OrderFilled order_id=paper_v2_152695 reason=
+2026-03-24 21:43:16,082 [WARNING] simulation.desk: PAPER_DESK_PROBE stage=tick_event instrument=bitget:BTC-USDT:perp event=OrderFilled order_id=paper_v2_152858 reason=
+2026-03-24 21:43:16,222 [WARNING] simulation.desk: PAPER_DESK_PROBE stage=tick_event instrument=bitget:BTC-USDT:perp event=OrderFilled order_id=paper_v2_153319 reason=
+2026-03-24 21:43:16,676 [WARNING] simulation.desk: PAPER_DESK_PROBE stage=tick_event instrument=bitget:BTC-USDT:perp event=OrderFilled order_id=paper_v2_155774 reason=
+2026-03-24 21:43:16,676 [WARNING] simulation.desk: PAPER_DESK_PROBE stage=tick_event instrument=bitget:BTC-USDT:perp event=OrderFilled order_id=paper_v2_155776 reason=
+2026-03-24 21:43:16,703 [WARNING] simulation.desk: PAPER_DESK_PROBE stage=tick_event instrument=bitget:BTC-USDT:perp event=OrderFilled order_id=paper_v2_156005 reason=
+2026-03-24 21:43:16,840 [WARNING] simulation.desk: PAPER_DESK_PROBE stage=tick_event instrument=bitget:BTC-USDT:perp event=OrderFilled order_id=paper_v2_157093 reason=
+2026-03-24 21:43:16,997 [INFO] simulation.portfolio: PaperPortfolio day rollover: 2025-01-21 -> 2025-01-22 (daily_open_equity=496.4868539790507301910121844 -> 496.2732445706082859641195712)
+2026-03-24 21:43:17,725 [WARNING] simulation.desk: PAPER_DESK_PROBE stage=tick_event instrument=bitget:BTC-USDT:perp event=OrderFilled order_id=paper_v2_162985 reason=
+2026-03-24 21:43:17,739 [WARNING] simulation.desk: PAPER_DESK_PROBE stage=tick_event instrument=bitget:BTC-USDT:perp event=OrderFilled order_id=paper_v2_163094 reason=
+2026-03-24 21:43:17,740 [WARNING] simulation.desk: PAPER_DESK_PROBE stage=tick_event instrument=bitget:BTC-USDT:perp event=OrderFilled order_id=paper_v2_163100 reason=
+2026-03-24 21:43:17,757 [WARNING] simulation.desk: PAPER_DESK_PROBE stage=tick_event instrument=bitget:BTC-USDT:perp event=OrderFilled order_id=paper_v2_163172 reason=
+2026-03-24 21:43:17,819 [WARNING] simulation.desk: PAPER_DESK_PROBE stage=tick_event instrument=bitget:BTC-USDT:perp event=OrderFilled order_id=paper_v2_163597 reason=
+2026-03-24 21:43:17,893 [WARNING] simulation.desk: PAPER_DESK_PROBE stage=tick_event instrument=bitget:BTC-USDT:perp event=OrderFilled order_id=paper_v2_164329 reason=
+2026-03-24 21:43:18,167 [INFO] simulation.portfolio: PaperPortfolio day rollover: 2025-01-22 -> 2025-01-23 (daily_open_equity=496.2732445706082859641195712 -> 496.3396099441021142465133373)
+2026-03-24 21:43:18,300 [WARNING] simulation.desk: PAPER_DESK_PROBE stage=tick_event instrument=bitget:BTC-USDT:perp event=OrderFilled order_id=paper_v2_167185 reason=
+2026-03-24 21:43:18,649 [WARNING] simulation.desk: PAPER_DESK_PROBE stage=tick_event instrument=bitget:BTC-USDT:perp event=OrderFilled order_id=paper_v2_170432 reason=
+2026-03-24 21:43:18,772 [WARNING] simulation.desk: PAPER_DESK_PROBE stage=tick_event instrument=bitget:BTC-USDT:perp event=OrderFilled order_id=paper_v2_171161 reason=
+2026-03-24 21:43:18,806 [WARNING] simulation.desk: PAPER_DESK_PROBE stage=tick_event instrument=bitget:BTC-USDT:perp event=OrderFilled order_id=paper_v2_171433 reason=
+2026-03-24 21:43:18,851 [INFO] simulation.portfolio: PaperPortfolio day rollover: 2025-01-23 -> 2025-01-24 (daily_open_equity=496.3396099441021142465133373 -> 496.3742924366969063748172794)
+2026-03-24 21:43:18,864 [WARNING] simulation.desk: PAPER_DESK_PROBE stage=tick_event instrument=bitget:BTC-USDT:perp event=OrderFilled order_id=paper_v2_171979 reason=
+2026-03-24 21:43:18,987 [WARNING] simulation.desk: PAPER_DESK_PROBE stage=tick_event instrument=bitget:BTC-USDT:perp event=OrderFilled order_id=paper_v2_173041 reason=
+2026-03-24 21:43:18,991 [WARNING] simulation.desk: PAPER_DESK_PROBE stage=tick_event instrument=bitget:BTC-USDT:perp event=OrderFilled order_id=paper_v2_173060 reason=
+2026-03-24 21:43:18,993 [WARNING] simulation.desk: PAPER_DESK_PROBE stage=tick_event instrument=bitget:BTC-USDT:perp event=OrderFilled order_id=paper_v2_173072 reason=
+2026-03-24 21:43:19,455 [WARNING] simulation.desk: PAPER_DESK_PROBE stage=tick_event instrument=bitget:BTC-USDT:perp event=OrderFilled order_id=paper_v2_176995 reason=
+2026-03-24 21:43:19,939 [INFO] simulation.portfolio: PaperPortfolio day rollover: 2025-01-24 -> 2025-01-25 (daily_open_equity=496.3742924366969063748172794 -> 496.3887877094664029156882979)
+2026-03-24 21:43:21,375 [INFO] simulation.portfolio: PaperPortfolio day rollover: 2025-01-25 -> 2025-01-26 (daily_open_equity=496.3887877094664029156882979 -> 496.3823631911170078198103979)
+2026-03-24 21:43:22,293 [INFO] simulation.portfolio: PaperPortfolio day rollover: 2025-01-26 -> 2025-01-27 (daily_open_equity=496.3823631911170078198103979 -> 496.2646356907867919155878979)
+2026-03-24 21:43:22,295 [WARNING] simulation.desk: PAPER_DESK_PROBE stage=tick_event instrument=bitget:BTC-USDT:perp event=OrderFilled order_id=paper_v2_196552 reason=
+2026-03-24 21:43:22,296 [WARNING] simulation.desk: PAPER_DESK_PROBE stage=tick_event instrument=bitget:BTC-USDT:perp event=OrderFilled order_id=paper_v2_196562 reason=
+2026-03-24 21:43:22,488 [WARNING] simulation.desk: PAPER_DESK_PROBE stage=tick_event instrument=bitget:BTC-USDT:perp event=OrderFilled order_id=paper_v2_198307 reason=
+2026-03-24 21:43:22,503 [WARNING] simulation.desk: PAPER_DESK_PROBE stage=tick_event instrument=bitget:BTC-USDT:perp event=OrderFilled order_id=paper_v2_198463 reason=
+2026-03-24 21:43:22,504 [WARNING] simulation.desk: PAPER_DESK_PROBE stage=tick_event instrument=bitget:BTC-USDT:perp event=OrderFilled order_id=paper_v2_198470 reason=
+2026-03-24 21:43:22,660 [WARNING] simulation.desk: PAPER_DESK_PROBE stage=tick_event instrument=bitget:BTC-USDT:perp event=OrderFilled order_id=paper_v2_200084 reason=
+2026-03-24 21:43:22,661 [WARNING] simulation.desk: PAPER_DESK_PROBE stage=tick_event instrument=bitget:BTC-USDT:perp event=OrderFilled order_id=paper_v2_200090 reason=
+2026-03-24 21:43:22,672 [WARNING] simulation.desk: PAPER_DESK_PROBE stage=tick_event instrument=bitget:BTC-USDT:perp event=OrderFilled order_id=paper_v2_200215 reason=
+2026-03-24 21:43:22,675 [WARNING] simulation.desk: PAPER_DESK_PROBE stage=tick_event instrument=bitget:BTC-USDT:perp event=OrderFilled order_id=paper_v2_200233 reason=
+2026-03-24 21:43:22,711 [WARNING] simulation.desk: PAPER_DESK_PROBE stage=tick_event instrument=bitget:BTC-USDT:perp event=OrderFilled order_id=paper_v2_200595 reason=
+2026-03-24 21:43:22,726 [WARNING] simulation.desk: PAPER_DESK_PROBE stage=tick_event instrument=bitget:BTC-USDT:perp event=OrderFilled order_id=paper_v2_200695 reason=
+2026-03-24 21:43:22,726 [WARNING] simulation.desk: PAPER_DESK_PROBE stage=tick_event instrument=bitget:BTC-USDT:perp event=OrderFilled order_id=paper_v2_200702 reason=
+2026-03-24 21:43:22,734 [WARNING] simulation.desk: PAPER_DESK_PROBE stage=tick_event instrument=bitget:BTC-USDT:perp event=OrderFilled order_id=paper_v2_200803 reason=
+2026-03-24 21:43:22,767 [WARNING] simulation.desk: PAPER_DESK_PROBE stage=tick_event instrument=bitget:BTC-USDT:perp event=OrderFilled order_id=paper_v2_201182 reason=
+2026-03-24 21:43:22,900 [INFO] simulation.portfolio: PaperPortfolio day rollover: 2025-01-27 -> 2025-01-28 (daily_open_equity=496.2646356907867919155878979 -> 496.4559863006900872670957617)
+2026-03-24 21:43:22,970 [WARNING] simulation.desk: PAPER_DESK_PROBE stage=tick_event instrument=bitget:BTC-USDT:perp event=OrderFilled order_id=paper_v2_203011 reason=
+2026-03-24 21:43:23,407 [WARNING] simulation.desk: PAPER_DESK_PROBE stage=tick_event instrument=bitget:BTC-USDT:perp event=OrderFilled order_id=paper_v2_207248 reason=
+2026-03-24 21:43:23,416 [WARNING] simulation.desk: PAPER_DESK_PROBE stage=tick_event instrument=bitget:BTC-USDT:perp event=OrderFilled order_id=paper_v2_207277 reason=
+2026-03-24 21:43:23,416 [WARNING] simulation.desk: PAPER_DESK_PROBE stage=tick_event instrument=bitget:BTC-USDT:perp event=OrderFilled order_id=paper_v2_207281 reason=
+2026-03-24 21:43:23,424 [WARNING] simulation.desk: PAPER_DESK_PROBE stage=tick_event instrument=bitget:BTC-USDT:perp event=OrderFilled order_id=paper_v2_207338 reason=
+2026-03-24 21:43:23,650 [WARNING] simulation.desk: PAPER_DESK_PROBE stage=tick_event instrument=bitget:BTC-USDT:perp event=OrderFilled order_id=paper_v2_209150 reason=
+2026-03-24 21:43:23,674 [WARNING] simulation.desk: PAPER_DESK_PROBE stage=tick_event instrument=bitget:BTC-USDT:perp event=OrderFilled order_id=paper_v2_209395 reason=
+2026-03-24 21:43:23,699 [INFO] simulation.portfolio: PaperPortfolio day rollover: 2025-01-28 -> 2025-01-29 (daily_open_equity=496.4559863006900872670957617 -> 496.3305066801147607205467985)
+2026-03-24 21:43:24,485 [WARNING] simulation.desk: PAPER_DESK_PROBE stage=tick_event instrument=bitget:BTC-USDT:perp event=OrderFilled order_id=paper_v2_216457 reason=
+2026-03-24 21:43:24,492 [WARNING] simulation.desk: PAPER_DESK_PROBE stage=tick_event instrument=bitget:BTC-USDT:perp event=OrderFilled order_id=paper_v2_216524 reason=
+2026-03-24 21:43:24,494 [WARNING] simulation.desk: PAPER_DESK_PROBE stage=tick_event instrument=bitget:BTC-USDT:perp event=OrderFilled order_id=paper_v2_216536 reason=
+2026-03-24 21:43:24,622 [INFO] simulation.portfolio: PaperPortfolio day rollover: 2025-01-29 -> 2025-01-30 (daily_open_equity=496.3305066801147607205467985 -> 496.6932713935753944830764816)
+2026-03-24 21:43:25,348 [INFO] simulation.portfolio: PaperPortfolio day rollover: 2025-01-30 -> 2025-01-31 (daily_open_equity=496.6932713935753944830764816 -> 496.7583072215244369115699816)
+2026-03-24 21:43:25,870 [WARNING] simulation.desk: PAPER_DESK_PROBE stage=tick_event instrument=bitget:BTC-USDT:perp event=OrderFilled order_id=paper_v2_230515 reason=
+2026-03-24 21:43:26,068 [WARNING] simulation.desk: PAPER_DESK_PROBE stage=tick_event instrument=bitget:BTC-USDT:perp event=OrderFilled order_id=paper_v2_232519 reason=
+2026-03-24 21:43:26,187 [INFO] simulation.portfolio: PaperPortfolio day rollover: 2025-01-31 -> 2025-02-01 (daily_open_equity=496.7583072215244369115699816 -> 496.4756028595839418754684781)
+2026-03-24 21:43:27,048 [WARNING] simulation.desk: PAPER_DESK_PROBE stage=tick_event instrument=bitget:BTC-USDT:perp event=OrderFilled order_id=paper_v2_241681 reason=
+2026-03-24 21:43:27,091 [INFO] simulation.portfolio: PaperPortfolio day rollover: 2025-02-01 -> 2025-02-02 (daily_open_equity=496.4756028595839418754684781 -> 496.0862203800662808472542805)
+2026-03-24 21:43:27,172 [WARNING] simulation.desk: PAPER_DESK_PROBE stage=tick_event instrument=bitget:BTC-USDT:perp event=OrderFilled order_id=paper_v2_243253 reason=
+2026-03-24 21:43:27,172 [WARNING] simulation.desk: PAPER_DESK_PROBE stage=tick_event instrument=bitget:BTC-USDT:perp event=OrderFilled order_id=paper_v2_243255 reason=
+2026-03-24 21:43:27,662 [WARNING] simulation.desk: PAPER_DESK_PROBE stage=tick_event instrument=bitget:BTC-USDT:perp event=OrderFilled order_id=paper_v2_247975 reason=
+2026-03-24 21:43:27,662 [WARNING] simulation.desk: PAPER_DESK_PROBE stage=tick_event instrument=bitget:BTC-USDT:perp event=OrderFilled order_id=paper_v2_247977 reason=
+2026-03-24 21:43:27,667 [WARNING] simulation.desk: PAPER_DESK_PROBE stage=tick_event instrument=bitget:BTC-USDT:perp event=OrderFilled order_id=paper_v2_248029 reason=
+2026-03-24 21:43:27,673 [WARNING] simulation.desk: PAPER_DESK_PROBE stage=tick_event instrument=bitget:BTC-USDT:perp event=OrderFilled order_id=paper_v2_248114 reason=
+2026-03-24 21:43:27,730 [WARNING] simulation.desk: PAPER_DESK_PROBE stage=tick_event instrument=bitget:BTC-USDT:perp event=OrderFilled order_id=paper_v2_248594 reason=
+2026-03-24 21:43:27,738 [WARNING] simulation.desk: PAPER_DESK_PROBE stage=tick_event instrument=bitget:BTC-USDT:perp event=OrderFilled order_id=paper_v2_248702 reason=
+2026-03-24 21:43:27,743 [WARNING] simulation.desk: PAPER_DESK_PROBE stage=tick_event instrument=bitget:BTC-USDT:perp event=OrderFilled order_id=paper_v2_248756 reason=
+2026-03-24 21:43:27,746 [WARNING] simulation.desk: PAPER_DESK_PROBE stage=tick_event instrument=bitget:BTC-USDT:perp event=OrderFilled order_id=paper_v2_248773 reason=
+2026-03-24 21:43:27,747 [WARNING] simulation.desk: PAPER_DESK_PROBE stage=tick_event instrument=bitget:BTC-USDT:perp event=OrderFilled order_id=paper_v2_248782 reason=
+2026-03-24 21:43:27,758 [WARNING] simulation.desk: PAPER_DESK_PROBE stage=tick_event instrument=bitget:BTC-USDT:perp event=OrderFilled order_id=paper_v2_248875 reason=
+2026-03-24 21:43:27,768 [INFO] simulation.portfolio: PaperPortfolio day rollover: 2025-02-02 -> 2025-02-03 (daily_open_equity=496.0862203800662808472542805 -> 494.9358830900172789677042235)
+2026-03-24 21:43:27,779 [WARNING] simulation.desk: PAPER_DESK_PROBE stage=tick_event instrument=bitget:BTC-USDT:perp event=OrderFilled order_id=paper_v2_249158 reason=
+2026-03-24 21:43:27,780 [WARNING] simulation.desk: PAPER_DESK_PROBE stage=tick_event instrument=bitget:BTC-USDT:perp event=OrderFilled order_id=paper_v2_249165 reason=
+2026-03-24 21:43:27,781 [WARNING] simulation.desk: PAPER_DESK_PROBE stage=tick_event instrument=bitget:BTC-USDT:perp event=OrderFilled order_id=paper_v2_249170 reason=
+2026-03-24 21:43:27,784 [WARNING] simulation.desk: PAPER_DESK_PROBE stage=tick_event instrument=bitget:BTC-USDT:perp event=OrderFilled order_id=paper_v2_249206 reason=
+2026-03-24 21:43:27,796 [WARNING] simulation.desk: PAPER_DESK_PROBE stage=tick_event instrument=bitget:BTC-USDT:perp event=OrderFilled order_id=paper_v2_249290 reason=
+2026-03-24 21:43:27,822 [WARNING] simulation.desk: PAPER_DESK_PROBE stage=tick_event instrument=bitget:BTC-USDT:perp event=OrderFilled order_id=paper_v2_249458 reason=
+2026-03-24 21:43:27,851 [WARNING] simulation.desk: PAPER_DESK_PROBE stage=tick_event instrument=bitget:BTC-USDT:perp event=OrderFilled order_id=paper_v2_249739 reason=
+2026-03-24 21:43:27,885 [WARNING] simulation.desk: PAPER_DESK_PROBE stage=tick_event instrument=bitget:BTC-USDT:perp event=OrderFilled order_id=paper_v2_250088 reason=
+2026-03-24 21:43:27,932 [WARNING] simulation.desk: PAPER_DESK_PROBE stage=tick_event instrument=bitget:BTC-USDT:perp event=OrderFilled order_id=paper_v2_250573 reason=
+2026-03-24 21:43:27,944 [WARNING] simulation.desk: PAPER_DESK_PROBE stage=tick_event instrument=bitget:BTC-USDT:perp event=OrderFilled order_id=paper_v2_250742 reason=
+2026-03-24 21:43:28,158 [WARNING] simulation.desk: PAPER_DESK_PROBE stage=tick_event instrument=bitget:BTC-USDT:perp event=OrderFilled order_id=paper_v2_252877 reason=
+2026-03-24 21:43:28,194 [WARNING] simulation.desk: PAPER_DESK_PROBE stage=tick_event instrument=bitget:BTC-USDT:perp event=OrderFilled order_id=paper_v2_253165 reason=
+2026-03-24 21:43:28,202 [WARNING] simulation.desk: PAPER_DESK_PROBE stage=tick_event instrument=bitget:BTC-USDT:perp event=OrderFilled order_id=paper_v2_253256 reason=
+2026-03-24 21:43:28,230 [WARNING] simulation.desk: PAPER_DESK_PROBE stage=tick_event instrument=bitget:BTC-USDT:perp event=OrderFilled order_id=paper_v2_253465 reason=
+2026-03-24 21:43:28,300 [INFO] simulation.portfolio: PaperPortfolio day rollover: 2025-02-03 -> 2025-02-04 (daily_open_equity=494.9358830900172789677042235 -> 495.2278341702641991763769471)
+2026-03-24 21:43:28,819 [WARNING] simulation.desk: PAPER_DESK_PROBE stage=tick_event instrument=bitget:BTC-USDT:perp event=OrderFilled order_id=paper_v2_259955 reason=
+2026-03-24 21:43:28,845 [WARNING] simulation.desk: PAPER_DESK_PROBE stage=tick_event instrument=bitget:BTC-USDT:perp event=OrderFilled order_id=paper_v2_260167 reason=
+2026-03-24 21:43:28,871 [INFO] simulation.portfolio: PaperPortfolio day rollover: 2025-02-04 -> 2025-02-05 (daily_open_equity=495.2278341702641991763769471 -> 494.2682219046471467236526989)
+2026-03-24 21:43:29,462 [WARNING] simulation.desk: PAPER_DESK_PROBE stage=tick_event instrument=bitget:BTC-USDT:perp event=OrderFilled order_id=paper_v2_266251 reason=
+2026-03-24 21:43:29,566 [WARNING] simulation.desk: PAPER_DESK_PROBE stage=tick_event instrument=bitget:BTC-USDT:perp event=OrderFilled order_id=paper_v2_267385 reason=
+2026-03-24 21:43:29,607 [INFO] simulation.portfolio: PaperPortfolio day rollover: 2025-02-05 -> 2025-02-06 (daily_open_equity=494.2682219046471467236526989 -> 493.8106805810025812482117545)
+2026-03-24 21:43:30,026 [WARNING] simulation.desk: PAPER_DESK_PROBE stage=tick_event instrument=bitget:BTC-USDT:perp event=OrderFilled order_id=paper_v2_273145 reason=
+2026-03-24 21:43:30,160 [WARNING] simulation.desk: PAPER_DESK_PROBE stage=tick_event instrument=bitget:BTC-USDT:perp event=OrderFilled order_id=paper_v2_274417 reason=
+2026-03-24 21:43:30,270 [INFO] simulation.portfolio: PaperPortfolio day rollover: 2025-02-06 -> 2025-02-07 (daily_open_equity=493.8106805810025812482117545 -> 493.7007386966792381547678668)
+2026-03-24 21:43:30,786 [WARNING] simulation.desk: PAPER_DESK_PROBE stage=tick_event instrument=bitget:BTC-USDT:perp event=OrderFilled order_id=paper_v2_280472 reason=
+2026-03-24 21:43:30,829 [WARNING] simulation.desk: PAPER_DESK_PROBE stage=tick_event instrument=bitget:BTC-USDT:perp event=OrderFilled order_id=paper_v2_280669 reason=
+2026-03-24 21:43:30,829 [WARNING] simulation.desk: PAPER_DESK_PROBE stage=tick_event instrument=bitget:BTC-USDT:perp event=OrderFilled order_id=paper_v2_280671 reason=
+2026-03-24 21:43:30,841 [WARNING] simulation.desk: PAPER_DESK_PROBE stage=tick_event instrument=bitget:BTC-USDT:perp event=OrderFilled order_id=paper_v2_280761 reason=
+2026-03-24 21:43:30,842 [WARNING] simulation.desk: PAPER_DESK_PROBE stage=tick_event instrument=bitget:BTC-USDT:perp event=OrderFilled order_id=paper_v2_280765 reason=
+2026-03-24 21:43:31,028 [WARNING] simulation.desk: PAPER_DESK_PROBE stage=tick_event instrument=bitget:BTC-USDT:perp event=OrderFilled order_id=paper_v2_282361 reason=
+2026-03-24 21:43:31,106 [INFO] simulation.portfolio: PaperPortfolio day rollover: 2025-02-07 -> 2025-02-08 (daily_open_equity=493.7007386966792381547678668 -> 493.1849105635781836150106704)
+2026-03-24 21:43:32,303 [INFO] simulation.portfolio: PaperPortfolio day rollover: 2025-02-08 -> 2025-02-09 (daily_open_equity=493.1849105635781836150106704 -> 493.1493972923530600560242704)
+2026-03-24 21:43:33,421 [WARNING] simulation.desk: PAPER_DESK_PROBE stage=tick_event instrument=bitget:BTC-USDT:perp event=OrderFilled order_id=paper_v2_299545 reason=
+2026-03-24 21:43:33,448 [INFO] simulation.portfolio: PaperPortfolio day rollover: 2025-02-09 -> 2025-02-10 (daily_open_equity=493.1493972923530600560242704 -> 493.1903773832097324407041181)
+2026-03-24 21:43:34,009 [WARNING] simulation.desk: PAPER_DESK_PROBE stage=tick_event instrument=bitget:BTC-USDT:perp event=OrderFilled order_id=paper_v2_304748 reason=
+2026-03-24 21:43:34,472 [INFO] simulation.portfolio: PaperPortfolio day rollover: 2025-02-10 -> 2025-02-11 (daily_open_equity=493.1903773832097324407041181 -> 494.0128122653710810234064325)
+2026-03-24 21:43:35,247 [INFO] simulation.portfolio: PaperPortfolio day rollover: 2025-02-11 -> 2025-02-12 (daily_open_equity=494.0128122653710810234064325 -> 492.6429153842337310420064325)
+2026-03-24 21:43:35,692 [WARNING] simulation.desk: PAPER_DESK_PROBE stage=tick_event instrument=bitget:BTC-USDT:perp event=OrderFilled order_id=paper_v2_320636 reason=
+2026-03-24 21:43:35,712 [WARNING] simulation.desk: PAPER_DESK_PROBE stage=tick_event instrument=bitget:BTC-USDT:perp event=OrderFilled order_id=paper_v2_320894 reason=
+2026-03-24 21:43:35,914 [INFO] simulation.portfolio: PaperPortfolio day rollover: 2025-02-12 -> 2025-02-13 (daily_open_equity=492.6429153842337310420064325 -> 494.1211252562243504501252575)
+2026-03-24 21:43:36,714 [INFO] simulation.portfolio: PaperPortfolio day rollover: 2025-02-13 -> 2025-02-14 (daily_open_equity=494.1211252562243504501252575 -> 493.1905613787967144166852575)
+2026-03-24 21:43:37,219 [WARNING] simulation.desk: PAPER_DESK_PROBE stage=tick_event instrument=bitget:BTC-USDT:perp event=OrderFilled order_id=paper_v2_337418 reason=
+2026-03-24 21:43:37,374 [INFO] simulation.portfolio: PaperPortfolio day rollover: 2025-02-14 -> 2025-02-15 (daily_open_equity=493.1905613787967144166852575 -> 493.8134712125246934695252164)
+2026-03-24 21:43:38,077 [INFO] simulation.portfolio: PaperPortfolio day rollover: 2025-02-15 -> 2025-02-16 (daily_open_equity=493.8134712125246934695252164 -> 493.8758009042765517630692164)
+2026-03-24 21:43:38,880 [WARNING] simulation.desk: PAPER_DESK_PROBE stage=tick_event instrument=bitget:BTC-USDT:perp event=OrderFilled order_id=paper_v2_356257 reason=
+2026-03-24 21:43:38,905 [INFO] simulation.portfolio: PaperPortfolio day rollover: 2025-02-16 -> 2025-02-17 (daily_open_equity=493.8758009042765517630692164 -> 492.8812135202703776847814899)
+2026-03-24 21:43:39,639 [INFO] simulation.portfolio: PaperPortfolio day rollover: 2025-02-17 -> 2025-02-18 (daily_open_equity=492.8812135202703776847814899 -> 492.6529553719809855954490899)
+2026-03-24 21:43:40,364 [INFO] simulation.portfolio: PaperPortfolio day rollover: 2025-02-18 -> 2025-02-19 (daily_open_equity=492.6529553719809855954490899 -> 492.5631296457485297248436899)
+2026-03-24 21:43:41,173 [WARNING] simulation.desk: PAPER_DESK_PROBE stage=tick_event instrument=bitget:BTC-USDT:perp event=OrderFilled order_id=paper_v2_379604 reason=
+2026-03-24 21:43:41,389 [INFO] simulation.portfolio: PaperPortfolio day rollover: 2025-02-19 -> 2025-02-20 (daily_open_equity=492.5631296457485297248436899 -> 493.1852793849474259240208957)
+2026-03-24 21:43:44,386 [INFO] simulation.portfolio: PaperPortfolio day rollover: 2025-02-20 -> 2025-02-21 (daily_open_equity=493.1852793849474259240208957 -> 494.2081659913076255010416957)
+2026-03-24 21:43:45,040 [WARNING] simulation.desk: PAPER_DESK_PROBE stage=tick_event instrument=bitget:BTC-USDT:perp event=OrderFilled order_id=paper_v2_394981 reason=
+2026-03-24 21:43:45,289 [INFO] simulation.portfolio: PaperPortfolio day rollover: 2025-02-21 -> 2025-02-22 (daily_open_equity=494.2081659913076255010416957 -> 492.7439386233478693391138481)
+2026-03-24 21:43:46,154 [INFO] simulation.portfolio: PaperPortfolio day rollover: 2025-02-22 -> 2025-02-23 (daily_open_equity=492.7439386233478693391138481 -> 492.9970694625013220380414481)
+2026-03-24 21:43:47,209 [INFO] simulation.portfolio: PaperPortfolio day rollover: 2025-02-23 -> 2025-02-24 (daily_open_equity=492.9970694625013220380414481 -> 492.8048950108264844802514481)
+2026-03-24 21:43:47,962 [WARNING] simulation.desk: PAPER_DESK_PROBE stage=tick_event instrument=bitget:BTC-USDT:perp event=OrderFilled order_id=paper_v2_421921 reason=
+2026-03-24 21:43:47,970 [WARNING] simulation.desk: PAPER_DESK_PROBE stage=tick_event instrument=bitget:BTC-USDT:perp event=OrderFilled order_id=paper_v2_422006 reason=
+2026-03-24 21:43:47,973 [INFO] simulation.portfolio: PaperPortfolio day rollover: 2025-02-24 -> 2025-02-25 (daily_open_equity=492.8048950108264844802514481 -> 489.5834247028555329702435699)
+2026-03-24 21:43:47,978 [WARNING] simulation.desk: PAPER_DESK_PROBE stage=tick_event instrument=bitget:BTC-USDT:perp event=OrderFilled order_id=paper_v2_422074 reason=
+2026-03-24 21:43:47,984 [WARNING] simulation.desk: PAPER_DESK_PROBE stage=tick_event instrument=bitget:BTC-USDT:perp event=OrderFilled order_id=paper_v2_422126 reason=
+2026-03-24 21:43:48,224 [WARNING] simulation.desk: PAPER_DESK_PROBE stage=tick_event instrument=bitget:BTC-USDT:perp event=OrderFilled order_id=paper_v2_424328 reason=
+2026-03-24 21:43:48,295 [WARNING] simulation.desk: PAPER_DESK_PROBE stage=tick_event instrument=bitget:BTC-USDT:perp event=OrderFilled order_id=paper_v2_425138 reason=
+2026-03-24 21:43:48,360 [WARNING] simulation.desk: PAPER_DESK_PROBE stage=tick_event instrument=bitget:BTC-USDT:perp event=OrderFilled order_id=paper_v2_425876 reason=
+2026-03-24 21:43:48,366 [WARNING] simulation.desk: PAPER_DESK_PROBE stage=tick_event instrument=bitget:BTC-USDT:perp event=OrderFilled order_id=paper_v2_425967 reason=
+2026-03-24 21:43:48,369 [WARNING] simulation.desk: PAPER_DESK_PROBE stage=tick_event instrument=bitget:BTC-USDT:perp event=OrderFilled order_id=paper_v2_426007 reason=
+2026-03-24 21:43:48,375 [WARNING] simulation.desk: PAPER_DESK_PROBE stage=tick_event instrument=bitget:BTC-USDT:perp event=OrderFilled order_id=paper_v2_426038 reason=
+2026-03-24 21:43:48,385 [WARNING] simulation.desk: PAPER_DESK_PROBE stage=tick_event instrument=bitget:BTC-USDT:perp event=OrderFilled order_id=paper_v2_426152 reason=
+2026-03-24 21:43:48,392 [WARNING] simulation.desk: PAPER_DESK_PROBE stage=tick_event instrument=bitget:BTC-USDT:perp event=OrderFilled order_id=paper_v2_426202 reason=
+2026-03-24 21:43:48,405 [WARNING] simulation.desk: PAPER_DESK_PROBE stage=tick_event instrument=bitget:BTC-USDT:perp event=OrderFilled order_id=paper_v2_426344 reason=
+2026-03-24 21:43:48,483 [WARNING] simulation.desk: PAPER_DESK_PROBE stage=tick_event instrument=bitget:BTC-USDT:perp event=OrderFilled order_id=paper_v2_427202 reason=
+2026-03-24 21:43:48,511 [WARNING] simulation.desk: PAPER_DESK_PROBE stage=tick_event instrument=bitget:BTC-USDT:perp event=OrderFilled order_id=paper_v2_427520 reason=
+2026-03-24 21:43:48,555 [INFO] simulation.portfolio: PaperPortfolio day rollover: 2025-02-25 -> 2025-02-26 (daily_open_equity=489.5834247028555329702435699 -> 487.7595928881452386177867556)
+2026-03-24 21:43:48,978 [WARNING] simulation.desk: PAPER_DESK_PROBE stage=tick_event instrument=bitget:BTC-USDT:perp event=OrderFilled order_id=paper_v2_432481 reason=
+2026-03-24 21:43:48,983 [WARNING] simulation.desk: PAPER_DESK_PROBE stage=tick_event instrument=bitget:BTC-USDT:perp event=OrderFilled order_id=paper_v2_432496 reason=
+2026-03-24 21:43:48,984 [WARNING] simulation.desk: PAPER_DESK_PROBE stage=tick_event instrument=bitget:BTC-USDT:perp event=OrderFilled order_id=paper_v2_432500 reason=
+2026-03-24 21:43:49,053 [WARNING] simulation.desk: PAPER_DESK_PROBE stage=tick_event instrument=bitget:BTC-USDT:perp event=OrderFilled order_id=paper_v2_433228 reason=
+2026-03-24 21:43:49,071 [WARNING] simulation.desk: PAPER_DESK_PROBE stage=tick_event instrument=bitget:BTC-USDT:perp event=OrderFilled order_id=paper_v2_433370 reason=
+2026-03-24 21:43:49,073 [WARNING] simulation.desk: PAPER_DESK_PROBE stage=tick_event instrument=bitget:BTC-USDT:perp event=OrderFilled order_id=paper_v2_433393 reason=
+2026-03-24 21:43:49,088 [WARNING] simulation.desk: PAPER_DESK_PROBE stage=tick_event instrument=bitget:BTC-USDT:perp event=OrderFilled order_id=paper_v2_433533 reason=
+2026-03-24 21:43:49,098 [WARNING] simulation.desk: PAPER_DESK_PROBE stage=tick_event instrument=bitget:BTC-USDT:perp event=OrderFilled order_id=paper_v2_433670 reason=
+2026-03-24 21:43:49,103 [WARNING] simulation.desk: PAPER_DESK_PROBE stage=tick_event instrument=bitget:BTC-USDT:perp event=OrderFilled order_id=paper_v2_433711 reason=
+2026-03-24 21:43:49,138 [INFO] simulation.portfolio: PaperPortfolio day rollover: 2025-02-26 -> 2025-02-27 (daily_open_equity=487.7595928881452386177867556 -> 486.6612040984382058766477523)
+2026-03-24 21:43:49,172 [WARNING] simulation.desk: PAPER_DESK_PROBE stage=tick_event instrument=bitget:BTC-USDT:perp event=OrderFilled order_id=paper_v2_434432 reason=
+2026-03-24 21:43:49,550 [WARNING] simulation.desk: PAPER_DESK_PROBE stage=tick_event instrument=bitget:BTC-USDT:perp event=OrderFilled order_id=paper_v2_438361 reason=
+2026-03-24 21:43:49,566 [WARNING] simulation.desk: PAPER_DESK_PROBE stage=tick_event instrument=bitget:BTC-USDT:perp event=OrderFilled order_id=paper_v2_438588 reason=
+2026-03-24 21:43:49,570 [WARNING] simulation.desk: PAPER_DESK_PROBE stage=tick_event instrument=bitget:BTC-USDT:perp event=OrderFilled order_id=paper_v2_438637 reason=
+2026-03-24 21:43:49,574 [WARNING] simulation.desk: PAPER_DESK_PROBE stage=tick_event instrument=bitget:BTC-USDT:perp event=OrderFilled order_id=paper_v2_438673 reason=
+2026-03-24 21:43:49,579 [WARNING] simulation.desk: PAPER_DESK_PROBE stage=tick_event instrument=bitget:BTC-USDT:perp event=OrderFilled order_id=paper_v2_438704 reason=
+2026-03-24 21:43:49,901 [INFO] simulation.portfolio: PaperPortfolio day rollover: 2025-02-27 -> 2025-02-28 (daily_open_equity=486.6612040984382058766477523 -> 486.8191156037333807421812751)
+2026-03-24 21:43:49,963 [WARNING] simulation.desk: PAPER_DESK_PROBE stage=tick_event instrument=bitget:BTC-USDT:perp event=OrderFilled order_id=paper_v2_441392 reason=
+2026-03-24 21:43:50,027 [WARNING] simulation.desk: PAPER_DESK_PROBE stage=tick_event instrument=bitget:BTC-USDT:perp event=OrderFilled order_id=paper_v2_441518 reason=
+2026-03-24 21:43:50,036 [WARNING] simulation.desk: PAPER_DESK_PROBE stage=tick_event instrument=bitget:BTC-USDT:perp event=OrderFilled order_id=paper_v2_441574 reason=
+2026-03-24 21:43:50,047 [WARNING] simulation.desk: PAPER_DESK_PROBE stage=tick_event instrument=bitget:BTC-USDT:perp event=OrderFilled order_id=paper_v2_441637 reason=
+2026-03-24 21:43:50,048 [WARNING] simulation.desk: PAPER_DESK_PROBE stage=tick_event instrument=bitget:BTC-USDT:perp event=OrderFilled order_id=paper_v2_441639 reason=
+2026-03-24 21:43:50,059 [WARNING] simulation.desk: PAPER_DESK_PROBE stage=tick_event instrument=bitget:BTC-USDT:perp event=OrderFilled order_id=paper_v2_441751 reason=
+2026-03-24 21:43:50,067 [WARNING] simulation.desk: PAPER_DESK_PROBE stage=tick_event instrument=bitget:BTC-USDT:perp event=OrderFilled order_id=paper_v2_441812 reason=
+2026-03-24 21:43:50,071 [WARNING] simulation.desk: PAPER_DESK_PROBE stage=tick_event instrument=bitget:BTC-USDT:perp event=OrderFilled order_id=paper_v2_441838 reason=
+2026-03-24 21:43:50,074 [WARNING] simulation.desk: PAPER_DESK_PROBE stage=tick_event instrument=bitget:BTC-USDT:perp event=OrderFilled order_id=paper_v2_441872 reason=
+2026-03-24 21:43:50,079 [WARNING] simulation.desk: PAPER_DESK_PROBE stage=tick_event instrument=bitget:BTC-USDT:perp event=OrderFilled order_id=paper_v2_441932 reason=
+2026-03-24 21:43:50,079 [WARNING] simulation.desk: PAPER_DESK_PROBE stage=tick_event instrument=bitget:BTC-USDT:perp event=OrderFilled order_id=paper_v2_441934 reason=
+2026-03-24 21:43:50,083 [WARNING] simulation.desk: PAPER_DESK_PROBE stage=tick_event instrument=bitget:BTC-USDT:perp event=OrderFilled order_id=paper_v2_441991 reason=
+2026-03-24 21:43:50,087 [WARNING] simulation.desk: PAPER_DESK_PROBE stage=tick_event instrument=bitget:BTC-USDT:perp event=OrderFilled order_id=paper_v2_442046 reason=
+2026-03-24 21:43:50,089 [WARNING] simulation.desk: PAPER_DESK_PROBE stage=tick_event instrument=bitget:BTC-USDT:perp event=OrderFilled order_id=paper_v2_442070 reason=
+2026-03-24 21:43:50,132 [WARNING] simulation.desk: PAPER_DESK_PROBE stage=tick_event instrument=bitget:BTC-USDT:perp event=OrderFilled order_id=paper_v2_442417 reason=
+2026-03-24 21:43:50,132 [WARNING] simulation.desk: PAPER_DESK_PROBE stage=tick_event instrument=bitget:BTC-USDT:perp event=OrderFilled order_id=paper_v2_442419 reason=
+2026-03-24 21:43:50,136 [WARNING] simulation.desk: PAPER_DESK_PROBE stage=tick_event instrument=bitget:BTC-USDT:perp event=OrderFilled order_id=paper_v2_442456 reason=
+2026-03-24 21:43:50,152 [WARNING] simulation.desk: PAPER_DESK_PROBE stage=tick_event instrument=bitget:BTC-USDT:perp event=OrderFilled order_id=paper_v2_442592 reason=
+2026-03-24 21:43:50,154 [WARNING] simulation.desk: PAPER_DESK_PROBE stage=tick_event instrument=bitget:BTC-USDT:perp event=OrderFilled order_id=paper_v2_442616 reason=
+2026-03-24 21:43:50,240 [WARNING] simulation.desk: PAPER_DESK_PROBE stage=tick_event instrument=bitget:BTC-USDT:perp event=OrderFilled order_id=paper_v2_443528 reason=
+2026-03-24 21:43:50,262 [WARNING] simulation.desk: PAPER_DESK_PROBE stage=tick_event instrument=bitget:BTC-USDT:perp event=OrderFilled order_id=paper_v2_443655 reason=
+2026-03-24 21:43:50,266 [WARNING] simulation.desk: PAPER_DESK_PROBE stage=tick_event instrument=bitget:BTC-USDT:perp event=OrderFilled order_id=paper_v2_443690 reason=
+2026-03-24 21:43:50,266 [WARNING] simulation.desk: PAPER_DESK_PROBE stage=tick_event instrument=bitget:BTC-USDT:perp event=OrderFilled order_id=paper_v2_443692 reason=
+2026-03-24 21:43:50,268 [WARNING] simulation.desk: PAPER_DESK_PROBE stage=tick_event instrument=bitget:BTC-USDT:perp event=OrderFilled order_id=paper_v2_443707 reason=
+2026-03-24 21:43:50,270 [WARNING] simulation.desk: PAPER_DESK_PROBE stage=tick_event instrument=bitget:BTC-USDT:perp event=OrderFilled order_id=paper_v2_443713 reason=
+2026-03-24 21:43:50,272 [WARNING] simulation.desk: PAPER_DESK_PROBE stage=tick_event instrument=bitget:BTC-USDT:perp event=OrderFilled order_id=paper_v2_443731 reason=
+2026-03-24 21:43:50,279 [WARNING] simulation.desk: PAPER_DESK_PROBE stage=tick_event instrument=bitget:BTC-USDT:perp event=OrderFilled order_id=paper_v2_443768 reason=
+2026-03-24 21:43:50,310 [WARNING] simulation.desk: PAPER_DESK_PROBE stage=tick_event instrument=bitget:BTC-USDT:perp event=OrderFilled order_id=paper_v2_444098 reason=
+2026-03-24 21:43:50,469 [WARNING] simulation.desk: PAPER_DESK_PROBE stage=tick_event instrument=bitget:BTC-USDT:perp event=OrderFilled order_id=paper_v2_445448 reason=
+2026-03-24 21:43:50,504 [INFO] simulation.portfolio: PaperPortfolio day rollover: 2025-02-28 -> 2025-03-01 (daily_open_equity=486.8191156037333807421812751 -> 485.9108807233702147834013731)
+2026-03-24 21:43:51,231 [INFO] simulation.portfolio: PaperPortfolio day rollover: 2025-03-01 -> 2025-03-02 (daily_open_equity=485.9108807233702147834013731 -> 485.5772457203529993366933731)
+2026-03-24 21:43:51,740 [WARNING] simulation.desk: PAPER_DESK_PROBE stage=tick_event instrument=bitget:BTC-USDT:perp event=OrderFilled order_id=paper_v2_458906 reason=
+2026-03-24 21:43:51,741 [WARNING] simulation.desk: PAPER_DESK_PROBE stage=tick_event instrument=bitget:BTC-USDT:perp event=OrderFilled order_id=paper_v2_458917 reason=
+2026-03-24 21:43:51,984 [INFO] simulation.portfolio: PaperPortfolio day rollover: 2025-03-02 -> 2025-03-03 (daily_open_equity=485.5772457203529993366933731 -> 483.8611598068833956050877768)
+2026-03-24 21:43:52,272 [WARNING] simulation.desk: PAPER_DESK_PROBE stage=tick_event instrument=bitget:BTC-USDT:perp event=OrderFilled order_id=paper_v2_463430 reason=
+2026-03-24 21:43:52,317 [WARNING] simulation.desk: PAPER_DESK_PROBE stage=tick_event instrument=bitget:BTC-USDT:perp event=OrderFilled order_id=paper_v2_464090 reason=
+2026-03-24 21:43:52,374 [WARNING] simulation.desk: PAPER_DESK_PROBE stage=tick_event instrument=bitget:BTC-USDT:perp event=OrderFilled order_id=paper_v2_464744 reason=
+2026-03-24 21:43:52,385 [WARNING] simulation.desk: PAPER_DESK_PROBE stage=tick_event instrument=bitget:BTC-USDT:perp event=OrderFilled order_id=paper_v2_464860 reason=
+2026-03-24 21:43:52,393 [WARNING] simulation.desk: PAPER_DESK_PROBE stage=tick_event instrument=bitget:BTC-USDT:perp event=OrderFilled order_id=paper_v2_464972 reason=
+2026-03-24 21:43:52,409 [WARNING] simulation.desk: PAPER_DESK_PROBE stage=tick_event instrument=bitget:BTC-USDT:perp event=OrderFilled order_id=paper_v2_465206 reason=
+2026-03-24 21:43:52,437 [WARNING] simulation.desk: PAPER_DESK_PROBE stage=tick_event instrument=bitget:BTC-USDT:perp event=OrderFilled order_id=paper_v2_465446 reason=
+2026-03-24 21:43:52,442 [WARNING] simulation.desk: PAPER_DESK_PROBE stage=tick_event instrument=bitget:BTC-USDT:perp event=OrderFilled order_id=paper_v2_465505 reason=
+2026-03-24 21:43:52,448 [WARNING] simulation.desk: PAPER_DESK_PROBE stage=tick_event instrument=bitget:BTC-USDT:perp event=OrderFilled order_id=paper_v2_465518 reason=
+2026-03-24 21:43:52,450 [WARNING] simulation.desk: PAPER_DESK_PROBE stage=tick_event instrument=bitget:BTC-USDT:perp event=OrderFilled order_id=paper_v2_465541 reason=
+2026-03-24 21:43:52,454 [WARNING] simulation.desk: PAPER_DESK_PROBE stage=tick_event instrument=bitget:BTC-USDT:perp event=OrderFilled order_id=paper_v2_465568 reason=
+2026-03-24 21:43:52,458 [WARNING] simulation.desk: PAPER_DESK_PROBE stage=tick_event instrument=bitget:BTC-USDT:perp event=OrderFilled order_id=paper_v2_465619 reason=
+2026-03-24 21:43:52,463 [WARNING] simulation.desk: PAPER_DESK_PROBE stage=tick_event instrument=bitget:BTC-USDT:perp event=OrderFilled order_id=paper_v2_465673 reason=
+2026-03-24 21:43:52,463 [WARNING] simulation.desk: PAPER_DESK_PROBE stage=tick_event instrument=bitget:BTC-USDT:perp event=OrderFilled order_id=paper_v2_465675 reason=
+2026-03-24 21:43:52,475 [WARNING] simulation.desk: PAPER_DESK_PROBE stage=tick_event instrument=bitget:BTC-USDT:perp event=OrderFilled order_id=paper_v2_465769 reason=
+2026-03-24 21:43:52,476 [WARNING] simulation.desk: PAPER_DESK_PROBE stage=tick_event instrument=bitget:BTC-USDT:perp event=OrderFilled order_id=paper_v2_465783 reason=
+2026-03-24 21:43:52,479 [WARNING] simulation.desk: PAPER_DESK_PROBE stage=tick_event instrument=bitget:BTC-USDT:perp event=OrderFilled order_id=paper_v2_465806 reason=
+2026-03-24 21:43:52,515 [WARNING] simulation.desk: PAPER_DESK_PROBE stage=tick_event instrument=bitget:BTC-USDT:perp event=OrderFilled order_id=paper_v2_466307 reason=
+2026-03-24 21:43:52,539 [INFO] simulation.portfolio: PaperPortfolio day rollover: 2025-03-03 -> 2025-03-04 (daily_open_equity=483.8611598068833956050877768 -> 486.9513432758754286669433575)
+2026-03-24 21:43:52,576 [WARNING] simulation.desk: PAPER_DESK_PROBE stage=tick_event instrument=bitget:BTC-USDT:perp event=OrderFilled order_id=paper_v2_467024 reason=
+2026-03-24 21:43:52,582 [WARNING] simulation.desk: PAPER_DESK_PROBE stage=tick_event instrument=bitget:BTC-USDT:perp event=OrderFilled order_id=paper_v2_467064 reason=
+2026-03-24 21:43:52,584 [WARNING] simulation.desk: PAPER_DESK_PROBE stage=tick_event instrument=bitget:BTC-USDT:perp event=OrderFilled order_id=paper_v2_467071 reason=
+2026-03-24 21:43:52,584 [WARNING] simulation.desk: PAPER_DESK_PROBE stage=tick_event instrument=bitget:BTC-USDT:perp event=OrderFilled order_id=paper_v2_467073 reason=
+2026-03-24 21:43:52,585 [WARNING] simulation.desk: PAPER_DESK_PROBE stage=tick_event instrument=bitget:BTC-USDT:perp event=OrderFilled order_id=paper_v2_467083 reason=
+2026-03-24 21:43:52,587 [WARNING] simulation.desk: PAPER_DESK_PROBE stage=tick_event instrument=bitget:BTC-USDT:perp event=OrderFilled order_id=paper_v2_467107 reason=
+2026-03-24 21:43:52,641 [WARNING] simulation.desk: PAPER_DESK_PROBE stage=tick_event instrument=bitget:BTC-USDT:perp event=OrderFilled order_id=paper_v2_467846 reason=
+2026-03-24 21:43:52,849 [WARNING] simulation.desk: PAPER_DESK_PROBE stage=tick_event instrument=bitget:BTC-USDT:perp event=OrderFilled order_id=paper_v2_470569 reason=
+2026-03-24 21:43:52,853 [WARNING] simulation.desk: PAPER_DESK_PROBE stage=tick_event instrument=bitget:BTC-USDT:perp event=OrderFilled order_id=paper_v2_470611 reason=
+2026-03-24 21:43:52,855 [WARNING] simulation.desk: PAPER_DESK_PROBE stage=tick_event instrument=bitget:BTC-USDT:perp event=OrderFilled order_id=paper_v2_470642 reason=
+2026-03-24 21:43:52,859 [WARNING] simulation.desk: PAPER_DESK_PROBE stage=tick_event instrument=bitget:BTC-USDT:perp event=OrderFilled order_id=paper_v2_470690 reason=
+2026-03-24 21:43:52,863 [WARNING] simulation.desk: PAPER_DESK_PROBE stage=tick_event instrument=bitget:BTC-USDT:perp event=OrderFilled order_id=paper_v2_470711 reason=
+2026-03-24 21:43:52,864 [WARNING] simulation.desk: PAPER_DESK_PROBE stage=tick_event instrument=bitget:BTC-USDT:perp event=OrderFilled order_id=paper_v2_470713 reason=
+2026-03-24 21:43:52,864 [WARNING] simulation.desk: PAPER_DESK_PROBE stage=tick_event instrument=bitget:BTC-USDT:perp event=OrderFilled order_id=paper_v2_470715 reason=
+2026-03-24 21:43:52,864 [WARNING] simulation.desk: PAPER_DESK_PROBE stage=tick_event instrument=bitget:BTC-USDT:perp event=OrderFilled order_id=paper_v2_470717 reason=
+2026-03-24 21:43:52,872 [WARNING] simulation.desk: PAPER_DESK_PROBE stage=tick_event instrument=bitget:BTC-USDT:perp event=OrderFilled order_id=paper_v2_470788 reason=
+2026-03-24 21:43:52,873 [WARNING] simulation.desk: PAPER_DESK_PROBE stage=tick_event instrument=bitget:BTC-USDT:perp event=OrderFilled order_id=paper_v2_470791 reason=
+2026-03-24 21:43:52,873 [WARNING] simulation.desk: PAPER_DESK_PROBE stage=tick_event instrument=bitget:BTC-USDT:perp event=OrderFilled order_id=paper_v2_470795 reason=
+2026-03-24 21:43:52,874 [WARNING] simulation.desk: PAPER_DESK_PROBE stage=tick_event instrument=bitget:BTC-USDT:perp event=OrderFilled order_id=paper_v2_470797 reason=
+2026-03-24 21:43:52,880 [WARNING] simulation.desk: PAPER_DESK_PROBE stage=tick_event instrument=bitget:BTC-USDT:perp event=OrderFilled order_id=paper_v2_470821 reason=
+2026-03-24 21:43:52,880 [WARNING] simulation.desk: PAPER_DESK_PROBE stage=tick_event instrument=bitget:BTC-USDT:perp event=OrderFilled order_id=paper_v2_470823 reason=
+2026-03-24 21:43:52,883 [WARNING] simulation.desk: PAPER_DESK_PROBE stage=tick_event instrument=bitget:BTC-USDT:perp event=OrderFilled order_id=paper_v2_470863 reason=
+2026-03-24 21:43:52,884 [WARNING] simulation.desk: PAPER_DESK_PROBE stage=tick_event instrument=bitget:BTC-USDT:perp event=OrderFilled order_id=paper_v2_470876 reason=
+2026-03-24 21:43:52,901 [WARNING] simulation.desk: PAPER_DESK_PROBE stage=tick_event instrument=bitget:BTC-USDT:perp event=OrderFilled order_id=paper_v2_471080 reason=
+2026-03-24 21:43:52,902 [WARNING] simulation.desk: PAPER_DESK_PROBE stage=tick_event instrument=bitget:BTC-USDT:perp event=OrderFilled order_id=paper_v2_471082 reason=
+2026-03-24 21:43:52,950 [WARNING] simulation.desk: PAPER_DESK_PROBE stage=tick_event instrument=bitget:BTC-USDT:perp event=OrderFilled order_id=paper_v2_471320 reason=
+2026-03-24 21:43:52,961 [WARNING] simulation.desk: PAPER_DESK_PROBE stage=tick_event instrument=bitget:BTC-USDT:perp event=OrderFilled order_id=paper_v2_471451 reason=
+2026-03-24 21:43:52,973 [WARNING] simulation.desk: PAPER_DESK_PROBE stage=tick_event instrument=bitget:BTC-USDT:perp event=OrderFilled order_id=paper_v2_471589 reason=
+2026-03-24 21:43:52,973 [WARNING] simulation.desk: PAPER_DESK_PROBE stage=tick_event instrument=bitget:BTC-USDT:perp event=OrderFilled order_id=paper_v2_471591 reason=
+2026-03-24 21:43:53,057 [INFO] simulation.portfolio: PaperPortfolio day rollover: 2025-03-04 -> 2025-03-05 (daily_open_equity=486.9513432758754286669433575 -> 488.4418872222520552556794825)
+2026-03-24 21:43:53,107 [WARNING] simulation.desk: PAPER_DESK_PROBE stage=tick_event instrument=bitget:BTC-USDT:perp event=OrderFilled order_id=paper_v2_473030 reason=
+2026-03-24 21:43:53,128 [WARNING] simulation.desk: PAPER_DESK_PROBE stage=tick_event instrument=bitget:BTC-USDT:perp event=OrderFilled order_id=paper_v2_473204 reason=
+2026-03-24 21:43:53,368 [WARNING] simulation.desk: PAPER_DESK_PROBE stage=tick_event instrument=bitget:BTC-USDT:perp event=OrderFilled order_id=paper_v2_476329 reason=
+2026-03-24 21:43:53,372 [WARNING] simulation.desk: PAPER_DESK_PROBE stage=tick_event instrument=bitget:BTC-USDT:perp event=OrderFilled order_id=paper_v2_476372 reason=
+2026-03-24 21:43:53,394 [WARNING] simulation.desk: PAPER_DESK_PROBE stage=tick_event instrument=bitget:BTC-USDT:perp event=OrderFilled order_id=paper_v2_476671 reason=
+2026-03-24 21:43:53,397 [WARNING] simulation.desk: PAPER_DESK_PROBE stage=tick_event instrument=bitget:BTC-USDT:perp event=OrderFilled order_id=paper_v2_476708 reason=
+2026-03-24 21:43:53,400 [WARNING] simulation.desk: PAPER_DESK_PROBE stage=tick_event instrument=bitget:BTC-USDT:perp event=OrderFilled order_id=paper_v2_476732 reason=
+2026-03-24 21:43:53,400 [WARNING] simulation.desk: PAPER_DESK_PROBE stage=tick_event instrument=bitget:BTC-USDT:perp event=OrderFilled order_id=paper_v2_476738 reason=
+2026-03-24 21:43:53,402 [WARNING] simulation.desk: PAPER_DESK_PROBE stage=tick_event instrument=bitget:BTC-USDT:perp event=OrderFilled order_id=paper_v2_476752 reason=
+2026-03-24 21:43:53,402 [WARNING] simulation.desk: PAPER_DESK_PROBE stage=tick_event instrument=bitget:BTC-USDT:perp event=OrderFilled order_id=paper_v2_476754 reason=
+2026-03-24 21:43:53,403 [WARNING] simulation.desk: PAPER_DESK_PROBE stage=tick_event instrument=bitget:BTC-USDT:perp event=OrderFilled order_id=paper_v2_476755 reason=
+2026-03-24 21:43:53,411 [WARNING] simulation.desk: PAPER_DESK_PROBE stage=tick_event instrument=bitget:BTC-USDT:perp event=OrderFilled order_id=paper_v2_476827 reason=
+2026-03-24 21:43:53,453 [WARNING] simulation.desk: PAPER_DESK_PROBE stage=tick_event instrument=bitget:BTC-USDT:perp event=OrderFilled order_id=paper_v2_477230 reason=
+2026-03-24 21:43:53,458 [WARNING] simulation.desk: PAPER_DESK_PROBE stage=tick_event instrument=bitget:BTC-USDT:perp event=OrderFilled order_id=paper_v2_477285 reason=
+2026-03-24 21:43:53,596 [INFO] simulation.portfolio: PaperPortfolio day rollover: 2025-03-05 -> 2025-03-06 (daily_open_equity=488.4418872222520552556794825 -> 488.7257768203751318377800718)
+2026-03-24 21:43:53,705 [WARNING] simulation.desk: PAPER_DESK_PROBE stage=tick_event instrument=bitget:BTC-USDT:perp event=OrderFilled order_id=paper_v2_480410 reason=
+2026-03-24 21:43:53,937 [WARNING] simulation.desk: PAPER_DESK_PROBE stage=tick_event instrument=bitget:BTC-USDT:perp event=OrderFilled order_id=paper_v2_482984 reason=
+2026-03-24 21:43:53,965 [WARNING] simulation.desk: PAPER_DESK_PROBE stage=tick_event instrument=bitget:BTC-USDT:perp event=OrderFilled order_id=paper_v2_483269 reason=
+2026-03-24 21:43:53,966 [WARNING] simulation.desk: PAPER_DESK_PROBE stage=tick_event instrument=bitget:BTC-USDT:perp event=OrderFilled order_id=paper_v2_483271 reason=
+2026-03-24 21:43:53,969 [WARNING] simulation.desk: PAPER_DESK_PROBE stage=tick_event instrument=bitget:BTC-USDT:perp event=OrderFilled order_id=paper_v2_483308 reason=
+2026-03-24 21:43:53,969 [WARNING] simulation.desk: PAPER_DESK_PROBE stage=tick_event instrument=bitget:BTC-USDT:perp event=OrderFilled order_id=paper_v2_483310 reason=
+2026-03-24 21:43:53,973 [WARNING] simulation.desk: PAPER_DESK_PROBE stage=tick_event instrument=bitget:BTC-USDT:perp event=OrderFilled order_id=paper_v2_483368 reason=
+2026-03-24 21:43:53,974 [WARNING] simulation.desk: PAPER_DESK_PROBE stage=tick_event instrument=bitget:BTC-USDT:perp event=OrderFilled order_id=paper_v2_483374 reason=
+2026-03-24 21:43:53,974 [WARNING] simulation.desk: PAPER_DESK_PROBE stage=tick_event instrument=bitget:BTC-USDT:perp event=OrderFilled order_id=paper_v2_483376 reason=
+2026-03-24 21:43:54,013 [WARNING] simulation.desk: PAPER_DESK_PROBE stage=tick_event instrument=bitget:BTC-USDT:perp event=OrderFilled order_id=paper_v2_483789 reason=
+2026-03-24 21:43:54,027 [WARNING] simulation.desk: PAPER_DESK_PROBE stage=tick_event instrument=bitget:BTC-USDT:perp event=OrderFilled order_id=paper_v2_483872 reason=
+2026-03-24 21:43:54,032 [WARNING] simulation.desk: PAPER_DESK_PROBE stage=tick_event instrument=bitget:BTC-USDT:perp event=OrderFilled order_id=paper_v2_483937 reason=
+2026-03-24 21:43:54,087 [WARNING] simulation.desk: PAPER_DESK_PROBE stage=tick_event instrument=bitget:BTC-USDT:perp event=OrderFilled order_id=paper_v2_484567 reason=
+2026-03-24 21:43:54,129 [WARNING] simulation.desk: PAPER_DESK_PROBE stage=tick_event instrument=bitget:BTC-USDT:perp event=OrderFilled order_id=paper_v2_485077 reason=
+2026-03-24 21:43:54,153 [INFO] simulation.portfolio: PaperPortfolio day rollover: 2025-03-06 -> 2025-03-07 (daily_open_equity=488.7257768203751318377800718 -> 488.9620678557225655051477284)
+2026-03-24 21:43:54,157 [WARNING] simulation.desk: PAPER_DESK_PROBE stage=tick_event instrument=bitget:BTC-USDT:perp event=OrderFilled order_id=paper_v2_485400 reason=
+2026-03-24 21:43:54,158 [WARNING] simulation.desk: PAPER_DESK_PROBE stage=tick_event instrument=bitget:BTC-USDT:perp event=OrderFilled order_id=paper_v2_485401 reason=
+2026-03-24 21:43:54,158 [WARNING] simulation.desk: PAPER_DESK_PROBE stage=tick_event instrument=bitget:BTC-USDT:perp event=OrderFilled order_id=paper_v2_485403 reason=
+2026-03-24 21:43:54,166 [WARNING] simulation.desk: PAPER_DESK_PROBE stage=tick_event instrument=bitget:BTC-USDT:perp event=OrderFilled order_id=paper_v2_485444 reason=
+2026-03-24 21:43:54,176 [WARNING] simulation.desk: PAPER_DESK_PROBE stage=tick_event instrument=bitget:BTC-USDT:perp event=OrderFilled order_id=paper_v2_485504 reason=
+2026-03-24 21:43:54,179 [WARNING] simulation.desk: PAPER_DESK_PROBE stage=tick_event instrument=bitget:BTC-USDT:perp event=OrderFilled order_id=paper_v2_485540 reason=
+2026-03-24 21:43:54,504 [WARNING] simulation.desk: PAPER_DESK_PROBE stage=tick_event instrument=bitget:BTC-USDT:perp event=OrderFilled order_id=paper_v2_488707 reason=
+2026-03-24 21:43:54,529 [WARNING] simulation.desk: PAPER_DESK_PROBE stage=tick_event instrument=bitget:BTC-USDT:perp event=OrderFilled order_id=paper_v2_488954 reason=
+2026-03-24 21:43:54,545 [WARNING] simulation.desk: PAPER_DESK_PROBE stage=tick_event instrument=bitget:BTC-USDT:perp event=OrderFilled order_id=paper_v2_489025 reason=
+2026-03-24 21:43:54,547 [WARNING] simulation.desk: PAPER_DESK_PROBE stage=tick_event instrument=bitget:BTC-USDT:perp event=OrderFilled order_id=paper_v2_489037 reason=
+2026-03-24 21:43:54,549 [WARNING] simulation.desk: PAPER_DESK_PROBE stage=tick_event instrument=bitget:BTC-USDT:perp event=OrderFilled order_id=paper_v2_489044 reason=
+2026-03-24 21:43:54,552 [WARNING] simulation.desk: PAPER_DESK_PROBE stage=tick_event instrument=bitget:BTC-USDT:perp event=OrderFilled order_id=paper_v2_489049 reason=
+2026-03-24 21:43:54,559 [WARNING] simulation.desk: PAPER_DESK_PROBE stage=tick_event instrument=bitget:BTC-USDT:perp event=OrderFilled order_id=paper_v2_489092 reason=
+2026-03-24 21:43:54,567 [WARNING] simulation.desk: PAPER_DESK_PROBE stage=tick_event instrument=bitget:BTC-USDT:perp event=OrderFilled order_id=paper_v2_489153 reason=
+2026-03-24 21:43:54,568 [WARNING] simulation.desk: PAPER_DESK_PROBE stage=tick_event instrument=bitget:BTC-USDT:perp event=OrderFilled order_id=paper_v2_489158 reason=
+2026-03-24 21:43:54,577 [WARNING] simulation.desk: PAPER_DESK_PROBE stage=tick_event instrument=bitget:BTC-USDT:perp event=OrderFilled order_id=paper_v2_489290 reason=
+2026-03-24 21:43:54,594 [WARNING] simulation.desk: PAPER_DESK_PROBE stage=tick_event instrument=bitget:BTC-USDT:perp event=OrderFilled order_id=paper_v2_489446 reason=
+2026-03-24 21:43:54,603 [WARNING] simulation.desk: PAPER_DESK_PROBE stage=tick_event instrument=bitget:BTC-USDT:perp event=OrderFilled order_id=paper_v2_489547 reason=
+2026-03-24 21:43:54,603 [WARNING] simulation.desk: PAPER_DESK_PROBE stage=tick_event instrument=bitget:BTC-USDT:perp event=OrderFilled order_id=paper_v2_489549 reason=
+2026-03-24 21:43:54,611 [WARNING] simulation.desk: PAPER_DESK_PROBE stage=tick_event instrument=bitget:BTC-USDT:perp event=OrderFilled order_id=paper_v2_489650 reason=
+2026-03-24 21:43:54,612 [WARNING] simulation.desk: PAPER_DESK_PROBE stage=tick_event instrument=bitget:BTC-USDT:perp event=OrderFilled order_id=paper_v2_489655 reason=
+2026-03-24 21:43:54,626 [WARNING] simulation.desk: PAPER_DESK_PROBE stage=tick_event instrument=bitget:BTC-USDT:perp event=OrderFilled order_id=paper_v2_489829 reason=
+2026-03-24 21:43:54,632 [WARNING] simulation.desk: PAPER_DESK_PROBE stage=tick_event instrument=bitget:BTC-USDT:perp event=OrderFilled order_id=paper_v2_489889 reason=
+2026-03-24 21:43:54,642 [WARNING] simulation.desk: PAPER_DESK_PROBE stage=tick_event instrument=bitget:BTC-USDT:perp event=OrderFilled order_id=paper_v2_490009 reason=
+2026-03-24 21:43:54,642 [WARNING] simulation.desk: PAPER_DESK_PROBE stage=tick_event instrument=bitget:BTC-USDT:perp event=OrderFilled order_id=paper_v2_490011 reason=
+2026-03-24 21:43:54,666 [WARNING] simulation.desk: PAPER_DESK_PROBE stage=tick_event instrument=bitget:BTC-USDT:perp event=OrderFilled order_id=paper_v2_490213 reason=
+2026-03-24 21:43:54,721 [INFO] simulation.portfolio: PaperPortfolio day rollover: 2025-03-07 -> 2025-03-08 (daily_open_equity=488.9620678557225655051477284 -> 488.7875157644208138657459209)
+2026-03-24 21:43:55,403 [INFO] simulation.portfolio: PaperPortfolio day rollover: 2025-03-08 -> 2025-03-09 (daily_open_equity=488.7875157644208138657459209 -> 488.7596352011743416009132209)
+2026-03-24 21:43:55,937 [WARNING] simulation.desk: PAPER_DESK_PROBE stage=tick_event instrument=bitget:BTC-USDT:perp event=OrderFilled order_id=paper_v2_502843 reason=
+2026-03-24 21:43:56,072 [WARNING] simulation.desk: PAPER_DESK_PROBE stage=tick_event instrument=bitget:BTC-USDT:perp event=OrderFilled order_id=paper_v2_504037 reason=
+2026-03-24 21:43:56,241 [WARNING] simulation.desk: PAPER_DESK_PROBE stage=tick_event instrument=bitget:BTC-USDT:perp event=OrderFilled order_id=paper_v2_505372 reason=
+2026-03-24 21:43:56,265 [WARNING] simulation.desk: PAPER_DESK_PROBE stage=tick_event instrument=bitget:BTC-USDT:perp event=OrderFilled order_id=paper_v2_505516 reason=
+2026-03-24 21:43:56,269 [INFO] simulation.portfolio: PaperPortfolio day rollover: 2025-03-09 -> 2025-03-10 (daily_open_equity=488.7596352011743416009132209 -> 488.1827598692275273589778921)
+2026-03-24 21:43:56,271 [WARNING] simulation.desk: PAPER_DESK_PROBE stage=tick_event instrument=bitget:BTC-USDT:perp event=OrderFilled order_id=paper_v2_505582 reason=
+2026-03-24 21:43:56,275 [WARNING] simulation.desk: PAPER_DESK_PROBE stage=tick_event instrument=bitget:BTC-USDT:perp event=OrderFilled order_id=paper_v2_505633 reason=
+2026-03-24 21:43:56,284 [WARNING] simulation.desk: PAPER_DESK_PROBE stage=tick_event instrument=bitget:BTC-USDT:perp event=OrderFilled order_id=paper_v2_505730 reason=
+2026-03-24 21:43:56,291 [WARNING] simulation.desk: PAPER_DESK_PROBE stage=tick_event instrument=bitget:BTC-USDT:perp event=OrderFilled order_id=paper_v2_505777 reason=
+2026-03-24 21:43:56,762 [WARNING] simulation.desk: PAPER_DESK_PROBE stage=tick_event instrument=bitget:BTC-USDT:perp event=OrderFilled order_id=paper_v2_508213 reason=
+2026-03-24 21:43:56,877 [WARNING] simulation.desk: PAPER_DESK_PROBE stage=tick_event instrument=bitget:BTC-USDT:perp event=OrderFilled order_id=paper_v2_508880 reason=
+2026-03-24 21:43:56,893 [WARNING] simulation.desk: PAPER_DESK_PROBE stage=tick_event instrument=bitget:BTC-USDT:perp event=OrderFilled order_id=paper_v2_508964 reason=
+2026-03-24 21:43:56,963 [WARNING] simulation.desk: PAPER_DESK_PROBE stage=tick_event instrument=bitget:BTC-USDT:perp event=OrderFilled order_id=paper_v2_509192 reason=
+2026-03-24 21:43:57,023 [WARNING] simulation.desk: PAPER_DESK_PROBE stage=tick_event instrument=bitget:BTC-USDT:perp event=OrderFilled order_id=paper_v2_509522 reason=
+2026-03-24 21:43:57,024 [WARNING] simulation.desk: PAPER_DESK_PROBE stage=tick_event instrument=bitget:BTC-USDT:perp event=OrderFilled order_id=paper_v2_509531 reason=
+2026-03-24 21:43:57,044 [WARNING] simulation.desk: PAPER_DESK_PROBE stage=tick_event instrument=bitget:BTC-USDT:perp event=OrderFilled order_id=paper_v2_509641 reason=
+2026-03-24 21:43:57,094 [WARNING] simulation.desk: PAPER_DESK_PROBE stage=tick_event instrument=bitget:BTC-USDT:perp event=OrderFilled order_id=paper_v2_509858 reason=
+2026-03-24 21:43:57,094 [WARNING] simulation.desk: PAPER_DESK_PROBE stage=tick_event instrument=bitget:BTC-USDT:perp event=OrderFilled order_id=paper_v2_509860 reason=
+2026-03-24 21:43:57,114 [WARNING] simulation.desk: PAPER_DESK_PROBE stage=tick_event instrument=bitget:BTC-USDT:perp event=OrderFilled order_id=paper_v2_510109 reason=
+2026-03-24 21:43:57,114 [WARNING] simulation.desk: PAPER_DESK_PROBE stage=tick_event instrument=bitget:BTC-USDT:perp event=OrderFilled order_id=paper_v2_510111 reason=
+2026-03-24 21:43:57,178 [WARNING] simulation.desk: PAPER_DESK_PROBE stage=tick_event instrument=bitget:BTC-USDT:perp event=OrderFilled order_id=paper_v2_510758 reason=
+2026-03-24 21:43:57,195 [WARNING] simulation.desk: PAPER_DESK_PROBE stage=tick_event instrument=bitget:BTC-USDT:perp event=OrderFilled order_id=paper_v2_510955 reason=
+2026-03-24 21:43:57,198 [INFO] simulation.portfolio: PaperPortfolio day rollover: 2025-03-10 -> 2025-03-11 (daily_open_equity=488.1827598692275273589778921 -> 488.2673587697818458249398648)
+2026-03-24 21:43:57,207 [WARNING] simulation.desk: PAPER_DESK_PROBE stage=tick_event instrument=bitget:BTC-USDT:perp event=OrderFilled order_id=paper_v2_511052 reason=
+2026-03-24 21:43:57,209 [WARNING] simulation.desk: PAPER_DESK_PROBE stage=tick_event instrument=bitget:BTC-USDT:perp event=OrderFilled order_id=paper_v2_511071 reason=
+2026-03-24 21:43:57,745 [WARNING] simulation.desk: PAPER_DESK_PROBE stage=tick_event instrument=bitget:BTC-USDT:perp event=OrderFilled order_id=paper_v2_514675 reason=
+2026-03-24 21:43:57,746 [WARNING] simulation.desk: PAPER_DESK_PROBE stage=tick_event instrument=bitget:BTC-USDT:perp event=OrderFilled order_id=paper_v2_514677 reason=
+2026-03-24 21:43:57,750 [WARNING] simulation.desk: PAPER_DESK_PROBE stage=tick_event instrument=bitget:BTC-USDT:perp event=OrderFilled order_id=paper_v2_514689 reason=
+2026-03-24 21:43:57,751 [WARNING] simulation.desk: PAPER_DESK_PROBE stage=tick_event instrument=bitget:BTC-USDT:perp event=OrderFilled order_id=paper_v2_514691 reason=
+2026-03-24 21:43:57,758 [WARNING] simulation.desk: PAPER_DESK_PROBE stage=tick_event instrument=bitget:BTC-USDT:perp event=OrderFilled order_id=paper_v2_514718 reason=
+2026-03-24 21:43:57,760 [WARNING] simulation.desk: PAPER_DESK_PROBE stage=tick_event instrument=bitget:BTC-USDT:perp event=OrderFilled order_id=paper_v2_514723 reason=
+2026-03-24 21:43:57,763 [WARNING] simulation.desk: PAPER_DESK_PROBE stage=tick_event instrument=bitget:BTC-USDT:perp event=OrderFilled order_id=paper_v2_514741 reason=
+2026-03-24 21:43:57,775 [WARNING] simulation.desk: PAPER_DESK_PROBE stage=tick_event instrument=bitget:BTC-USDT:perp event=OrderFilled order_id=paper_v2_514808 reason=
+2026-03-24 21:43:57,776 [WARNING] simulation.desk: PAPER_DESK_PROBE stage=tick_event instrument=bitget:BTC-USDT:perp event=OrderFilled order_id=paper_v2_514813 reason=
+2026-03-24 21:43:57,801 [WARNING] simulation.desk: PAPER_DESK_PROBE stage=tick_event instrument=bitget:BTC-USDT:perp event=OrderFilled order_id=paper_v2_514886 reason=
+2026-03-24 21:43:57,889 [WARNING] simulation.desk: PAPER_DESK_PROBE stage=tick_event instrument=bitget:BTC-USDT:perp event=OrderFilled order_id=paper_v2_515407 reason=
+2026-03-24 21:43:58,095 [INFO] simulation.portfolio: PaperPortfolio day rollover: 2025-03-11 -> 2025-03-12 (daily_open_equity=488.2673587697818458249398648 -> 488.0377431546044699544348787)
+2026-03-24 21:43:58,503 [WARNING] simulation.desk: PAPER_DESK_PROBE stage=tick_event instrument=bitget:BTC-USDT:perp event=OrderFilled order_id=paper_v2_521437 reason=
+2026-03-24 21:43:58,559 [WARNING] simulation.desk: PAPER_DESK_PROBE stage=tick_event instrument=bitget:BTC-USDT:perp event=OrderFilled order_id=paper_v2_521785 reason=
+2026-03-24 21:43:58,793 [INFO] simulation.portfolio: PaperPortfolio day rollover: 2025-03-12 -> 2025-03-13 (daily_open_equity=488.0377431546044699544348787 -> 488.2138758191913524329012149)
+2026-03-24 21:43:59,353 [WARNING] simulation.desk: PAPER_DESK_PROBE stage=tick_event instrument=bitget:BTC-USDT:perp event=OrderFilled order_id=paper_v2_528200 reason=
+2026-03-24 21:43:59,398 [WARNING] simulation.desk: PAPER_DESK_PROBE stage=tick_event instrument=bitget:BTC-USDT:perp event=OrderFilled order_id=paper_v2_528368 reason=
+2026-03-24 21:43:59,439 [WARNING] simulation.desk: PAPER_DESK_PROBE stage=tick_event instrument=bitget:BTC-USDT:perp event=OrderFilled order_id=paper_v2_528524 reason=
+2026-03-24 21:43:59,469 [WARNING] simulation.desk: PAPER_DESK_PROBE stage=tick_event instrument=bitget:BTC-USDT:perp event=OrderFilled order_id=paper_v2_528751 reason=
+2026-03-24 21:43:59,470 [WARNING] simulation.desk: PAPER_DESK_PROBE stage=tick_event instrument=bitget:BTC-USDT:perp event=OrderFilled order_id=paper_v2_528753 reason=
+2026-03-24 21:43:59,482 [WARNING] simulation.desk: PAPER_DESK_PROBE stage=tick_event instrument=bitget:BTC-USDT:perp event=OrderFilled order_id=paper_v2_528848 reason=
+2026-03-24 21:43:59,830 [INFO] simulation.portfolio: PaperPortfolio day rollover: 2025-03-13 -> 2025-03-14 (daily_open_equity=488.2138758191913524329012149 -> 487.6922568931783360807121981)
+2026-03-24 21:44:00,383 [WARNING] simulation.desk: PAPER_DESK_PROBE stage=tick_event instrument=bitget:BTC-USDT:perp event=OrderFilled order_id=paper_v2_536144 reason=
+2026-03-24 21:44:00,385 [WARNING] simulation.desk: PAPER_DESK_PROBE stage=tick_event instrument=bitget:BTC-USDT:perp event=OrderFilled order_id=paper_v2_536174 reason=
+2026-03-24 21:44:00,386 [WARNING] simulation.desk: PAPER_DESK_PROBE stage=tick_event instrument=bitget:BTC-USDT:perp event=OrderFilled order_id=paper_v2_536176 reason=
+2026-03-24 21:44:00,390 [WARNING] simulation.desk: PAPER_DESK_PROBE stage=tick_event instrument=bitget:BTC-USDT:perp event=OrderFilled order_id=paper_v2_536228 reason=
+2026-03-24 21:44:00,408 [WARNING] simulation.desk: PAPER_DESK_PROBE stage=tick_event instrument=bitget:BTC-USDT:perp event=OrderFilled order_id=paper_v2_536402 reason=
+2026-03-24 21:44:00,728 [INFO] simulation.portfolio: PaperPortfolio day rollover: 2025-03-14 -> 2025-03-15 (daily_open_equity=487.6922568931783360807121981 -> 488.1658613010595782453519093)
+2026-03-24 21:44:01,698 [INFO] simulation.portfolio: PaperPortfolio day rollover: 2025-03-15 -> 2025-03-16 (daily_open_equity=488.1658613010595782453519093 -> 488.1270117755093361809235093)
+2026-03-24 21:44:02,494 [WARNING] simulation.desk: PAPER_DESK_PROBE stage=tick_event instrument=bitget:BTC-USDT:perp event=OrderFilled order_id=paper_v2_555392 reason=
+2026-03-24 21:44:02,512 [INFO] simulation.portfolio: PaperPortfolio day rollover: 2025-03-16 -> 2025-03-17 (daily_open_equity=488.1270117755093361809235093 -> 488.2906265593832240442556859)
+2026-03-24 21:44:02,968 [WARNING] simulation.desk: PAPER_DESK_PROBE stage=tick_event instrument=bitget:BTC-USDT:perp event=OrderFilled order_id=paper_v2_560006 reason=
+2026-03-24 21:44:03,000 [WARNING] simulation.desk: PAPER_DESK_PROBE stage=tick_event instrument=bitget:BTC-USDT:perp event=OrderFilled order_id=paper_v2_560389 reason=
+2026-03-24 21:44:03,134 [WARNING] simulation.desk: PAPER_DESK_PROBE stage=tick_event instrument=bitget:BTC-USDT:perp event=OrderFilled order_id=paper_v2_561733 reason=
+2026-03-24 21:44:03,288 [INFO] simulation.portfolio: PaperPortfolio day rollover: 2025-03-17 -> 2025-03-18 (daily_open_equity=488.2906265593832240442556859 -> 487.9918036024456462572412856)
+2026-03-24 21:44:03,563 [WARNING] simulation.desk: PAPER_DESK_PROBE stage=tick_event instrument=bitget:BTC-USDT:perp event=OrderFilled order_id=paper_v2_565906 reason=
+2026-03-24 21:44:03,772 [WARNING] simulation.desk: PAPER_DESK_PROBE stage=tick_event instrument=bitget:BTC-USDT:perp event=OrderFilled order_id=paper_v2_568075 reason=
+2026-03-24 21:44:04,213 [INFO] simulation.portfolio: PaperPortfolio day rollover: 2025-03-18 -> 2025-03-19 (daily_open_equity=487.9918036024456462572412856 -> 488.1910782493603040012929758)
+2026-03-24 21:44:04,764 [WARNING] simulation.desk: PAPER_DESK_PROBE stage=tick_event instrument=bitget:BTC-USDT:perp event=OrderFilled order_id=paper_v2_577550 reason=
+2026-03-24 21:44:04,764 [WARNING] simulation.desk: PAPER_DESK_PROBE stage=tick_event instrument=bitget:BTC-USDT:perp event=OrderFilled order_id=paper_v2_577552 reason=
+2026-03-24 21:44:04,768 [WARNING] simulation.desk: PAPER_DESK_PROBE stage=tick_event instrument=bitget:BTC-USDT:perp event=OrderFilled order_id=paper_v2_577604 reason=
+2026-03-24 21:44:04,897 [INFO] simulation.portfolio: PaperPortfolio day rollover: 2025-03-19 -> 2025-03-20 (daily_open_equity=488.1910782493603040012929758 -> 487.3380869193088591787070570)
+2026-03-24 21:44:04,898 [WARNING] simulation.desk: PAPER_DESK_PROBE stage=tick_event instrument=bitget:BTC-USDT:perp event=OrderFilled order_id=paper_v2_579002 reason=
+2026-03-24 21:44:05,734 [INFO] simulation.portfolio: PaperPortfolio day rollover: 2025-03-20 -> 2025-03-21 (daily_open_equity=487.3380869193088591787070570 -> 488.1474129738070863706146592)
+2026-03-24 21:44:06,851 [INFO] simulation.portfolio: PaperPortfolio day rollover: 2025-03-21 -> 2025-03-22 (daily_open_equity=488.1474129738070863706146592 -> 488.1882493611542717056743592)
+2026-03-24 21:44:07,700 [INFO] simulation.portfolio: PaperPortfolio day rollover: 2025-03-22 -> 2025-03-23 (daily_open_equity=488.1882493611542717056743592 -> 488.2654933578640934800692592)
+2026-03-24 21:44:08,563 [INFO] simulation.portfolio: PaperPortfolio day rollover: 2025-03-23 -> 2025-03-24 (daily_open_equity=488.2654933578640934800692592 -> 487.5791854867412404667622592)
+2026-03-24 21:44:09,380 [WARNING] simulation.desk: PAPER_DESK_PROBE stage=tick_event instrument=bitget:BTC-USDT:perp event=OrderFilled order_id=paper_v2_618224 reason=
+2026-03-24 21:44:09,541 [INFO] simulation.portfolio: PaperPortfolio day rollover: 2025-03-24 -> 2025-03-25 (daily_open_equity=487.5791854867412404667622592 -> 487.1720550177725198200429762)
+2026-03-24 21:44:10,031 [WARNING] simulation.desk: PAPER_DESK_PROBE stage=tick_event instrument=bitget:BTC-USDT:perp event=OrderFilled order_id=paper_v2_624613 reason=
+2026-03-24 21:44:10,381 [INFO] simulation.portfolio: PaperPortfolio day rollover: 2025-03-25 -> 2025-03-26 (daily_open_equity=487.1720550177725198200429762 -> 487.2140509620281138548834470)
+2026-03-24 21:44:11,292 [INFO] simulation.portfolio: PaperPortfolio day rollover: 2025-03-26 -> 2025-03-27 (daily_open_equity=487.2140509620281138548834470 -> 487.3390291704784586680330470)
+2026-03-24 21:44:12,266 [WARNING] simulation.desk: PAPER_DESK_PROBE stage=tick_event instrument=bitget:BTC-USDT:perp event=OrderFilled order_id=paper_v2_643472 reason=
+2026-03-24 21:44:12,374 [INFO] simulation.portfolio: PaperPortfolio day rollover: 2025-03-27 -> 2025-03-28 (daily_open_equity=487.3390291704784586680330470 -> 487.2645436746721937038321688)
+2026-03-24 21:44:13,002 [WARNING] simulation.desk: PAPER_DESK_PROBE stage=tick_event instrument=bitget:BTC-USDT:perp event=OrderFilled order_id=paper_v2_648613 reason=
+2026-03-24 21:44:13,402 [INFO] simulation.portfolio: PaperPortfolio day rollover: 2025-03-28 -> 2025-03-29 (daily_open_equity=487.2645436746721937038321688 -> 487.9935866304994927665153939)
+2026-03-24 21:44:16,096 [INFO] simulation.portfolio: PaperPortfolio day rollover: 2025-03-29 -> 2025-03-30 (daily_open_equity=487.9935866304994927665153939 -> 488.3872247685396076258368939)
+2026-03-24 21:44:17,952 [INFO] simulation.portfolio: PaperPortfolio day rollover: 2025-03-30 -> 2025-03-31 (daily_open_equity=488.3872247685396076258368939 -> 488.4454758540044098022148939)
+2026-03-24 21:44:18,519 [WARNING] simulation.desk: PAPER_DESK_PROBE stage=tick_event instrument=bitget:BTC-USDT:perp event=OrderFilled order_id=paper_v2_673168 reason=
+2026-03-24 21:44:18,530 [WARNING] simulation.desk: PAPER_DESK_PROBE stage=tick_event instrument=bitget:BTC-USDT:perp event=OrderFilled order_id=paper_v2_673232 reason=
+2026-03-24 21:44:18,834 [INFO] simulation.portfolio: PaperPortfolio day rollover: 2025-03-31 -> 2025-04-01 (daily_open_equity=488.4454758540044098022148939 -> 488.4376719678585440454283025)
+2026-03-24 21:44:19,939 [INFO] simulation.portfolio: PaperPortfolio day rollover: 2025-04-01 -> 2025-04-02 (daily_open_equity=488.4376719678585440454283025 -> 487.6179358740502511901723025)
+2026-03-24 21:44:20,306 [WARNING] simulation.desk: PAPER_DESK_PROBE stage=tick_event instrument=bitget:BTC-USDT:perp event=OrderFilled order_id=paper_v2_686702 reason=
+2026-03-24 21:44:20,704 [WARNING] simulation.desk: PAPER_DESK_PROBE stage=tick_event instrument=bitget:BTC-USDT:perp event=OrderFilled order_id=paper_v2_689161 reason=
+2026-03-24 21:44:20,825 [WARNING] simulation.desk: PAPER_DESK_PROBE stage=tick_event instrument=bitget:BTC-USDT:perp event=OrderFilled order_id=paper_v2_690482 reason=
+2026-03-24 21:44:20,830 [WARNING] simulation.desk: PAPER_DESK_PROBE stage=tick_event instrument=bitget:BTC-USDT:perp event=OrderFilled order_id=paper_v2_690547 reason=
+2026-03-24 21:44:20,833 [WARNING] simulation.desk: PAPER_DESK_PROBE stage=tick_event instrument=bitget:BTC-USDT:perp event=OrderFilled order_id=paper_v2_690565 reason=
+2026-03-24 21:44:20,841 [WARNING] simulation.desk: PAPER_DESK_PROBE stage=tick_event instrument=bitget:BTC-USDT:perp event=OrderFilled order_id=paper_v2_690601 reason=
+2026-03-24 21:44:20,915 [INFO] simulation.portfolio: PaperPortfolio day rollover: 2025-04-02 -> 2025-04-03 (daily_open_equity=487.6179358740502511901723025 -> 488.1634502299328518530549516)
+2026-03-24 21:44:20,919 [WARNING] simulation.desk: PAPER_DESK_PROBE stage=tick_event instrument=bitget:BTC-USDT:perp event=OrderFilled order_id=paper_v2_691111 reason=
+2026-03-24 21:44:21,391 [WARNING] simulation.desk: PAPER_DESK_PROBE stage=tick_event instrument=bitget:BTC-USDT:perp event=OrderFilled order_id=paper_v2_695354 reason=
+2026-03-24 21:44:21,400 [WARNING] simulation.desk: PAPER_DESK_PROBE stage=tick_event instrument=bitget:BTC-USDT:perp event=OrderFilled order_id=paper_v2_695395 reason=
+2026-03-24 21:44:21,734 [INFO] simulation.portfolio: PaperPortfolio day rollover: 2025-04-03 -> 2025-04-04 (daily_open_equity=488.1634502299328518530549516 -> 488.0386678102756037600501254)
+2026-03-24 21:44:22,174 [WARNING] simulation.desk: PAPER_DESK_PROBE stage=tick_event instrument=bitget:BTC-USDT:perp event=OrderFilled order_id=paper_v2_702074 reason=
+2026-03-24 21:44:22,215 [WARNING] simulation.desk: PAPER_DESK_PROBE stage=tick_event instrument=bitget:BTC-USDT:perp event=OrderFilled order_id=paper_v2_702379 reason=
+2026-03-24 21:44:22,216 [WARNING] simulation.desk: PAPER_DESK_PROBE stage=tick_event instrument=bitget:BTC-USDT:perp event=OrderFilled order_id=paper_v2_702386 reason=
+2026-03-24 21:44:22,222 [WARNING] simulation.desk: PAPER_DESK_PROBE stage=tick_event instrument=bitget:BTC-USDT:perp event=OrderFilled order_id=paper_v2_702417 reason=
+2026-03-24 21:44:22,224 [WARNING] simulation.desk: PAPER_DESK_PROBE stage=tick_event instrument=bitget:BTC-USDT:perp event=OrderFilled order_id=paper_v2_702422 reason=
+2026-03-24 21:44:22,226 [WARNING] simulation.desk: PAPER_DESK_PROBE stage=tick_event instrument=bitget:BTC-USDT:perp event=OrderFilled order_id=paper_v2_702440 reason=
+2026-03-24 21:44:22,243 [WARNING] simulation.desk: PAPER_DESK_PROBE stage=tick_event instrument=bitget:BTC-USDT:perp event=OrderFilled order_id=paper_v2_702608 reason=
+2026-03-24 21:44:22,275 [WARNING] simulation.desk: PAPER_DESK_PROBE stage=tick_event instrument=bitget:BTC-USDT:perp event=OrderFilled order_id=paper_v2_702645 reason=
+2026-03-24 21:44:22,283 [WARNING] simulation.desk: PAPER_DESK_PROBE stage=tick_event instrument=bitget:BTC-USDT:perp event=OrderFilled order_id=paper_v2_702752 reason=
+2026-03-24 21:44:22,324 [WARNING] simulation.desk: PAPER_DESK_PROBE stage=tick_event instrument=bitget:BTC-USDT:perp event=OrderFilled order_id=paper_v2_703198 reason=
+2026-03-24 21:44:22,545 [INFO] simulation.portfolio: PaperPortfolio day rollover: 2025-04-04 -> 2025-04-05 (daily_open_equity=488.0386678102756037600501254 -> 487.7718128908588368158811613)
+2026-03-24 21:44:23,345 [INFO] simulation.portfolio: PaperPortfolio day rollover: 2025-04-05 -> 2025-04-06 (daily_open_equity=487.7718128908588368158811613 -> 487.8760570458278349362536613)
+2026-03-24 21:44:24,024 [WARNING] simulation.desk: PAPER_DESK_PROBE stage=tick_event instrument=bitget:BTC-USDT:perp event=OrderFilled order_id=paper_v2_720108 reason=
+2026-03-24 21:44:24,025 [WARNING] simulation.desk: PAPER_DESK_PROBE stage=tick_event instrument=bitget:BTC-USDT:perp event=OrderFilled order_id=paper_v2_720109 reason=
+2026-03-24 21:44:24,042 [WARNING] simulation.desk: PAPER_DESK_PROBE stage=tick_event instrument=bitget:BTC-USDT:perp event=OrderFilled order_id=paper_v2_720224 reason=
+2026-03-24 21:44:24,071 [WARNING] simulation.desk: PAPER_DESK_PROBE stage=tick_event instrument=bitget:BTC-USDT:perp event=OrderFilled order_id=paper_v2_720446 reason=
+2026-03-24 21:44:24,071 [WARNING] simulation.desk: PAPER_DESK_PROBE stage=tick_event instrument=bitget:BTC-USDT:perp event=OrderFilled order_id=paper_v2_720451 reason=
+2026-03-24 21:44:24,076 [WARNING] simulation.desk: PAPER_DESK_PROBE stage=tick_event instrument=bitget:BTC-USDT:perp event=OrderFilled order_id=paper_v2_720505 reason=
+2026-03-24 21:44:24,080 [WARNING] simulation.desk: PAPER_DESK_PROBE stage=tick_event instrument=bitget:BTC-USDT:perp event=OrderFilled order_id=paper_v2_720541 reason=
+2026-03-24 21:44:24,098 [INFO] simulation.portfolio: PaperPortfolio day rollover: 2025-04-06 -> 2025-04-07 (daily_open_equity=487.8760570458278349362536613 -> 489.4108023416618099012065625)
+2026-03-24 21:44:24,099 [WARNING] simulation.desk: PAPER_DESK_PROBE stage=tick_event instrument=bitget:BTC-USDT:perp event=OrderFilled order_id=paper_v2_720661 reason=
+2026-03-24 21:44:24,100 [WARNING] simulation.desk: PAPER_DESK_PROBE stage=tick_event instrument=bitget:BTC-USDT:perp event=OrderFilled order_id=paper_v2_720663 reason=
+2026-03-24 21:44:24,100 [WARNING] simulation.desk: PAPER_DESK_PROBE stage=tick_event instrument=bitget:BTC-USDT:perp event=OrderFilled order_id=paper_v2_720665 reason=
+2026-03-24 21:44:24,101 [WARNING] simulation.desk: PAPER_DESK_PROBE stage=tick_event instrument=bitget:BTC-USDT:perp event=OrderFilled order_id=paper_v2_720668 reason=
+2026-03-24 21:44:24,107 [WARNING] simulation.desk: PAPER_DESK_PROBE stage=tick_event instrument=bitget:BTC-USDT:perp event=OrderFilled order_id=paper_v2_720734 reason=
+2026-03-24 21:44:24,209 [WARNING] simulation.desk: PAPER_DESK_PROBE stage=tick_event instrument=bitget:BTC-USDT:perp event=OrderFilled order_id=paper_v2_721730 reason=
+2026-03-24 21:44:24,215 [WARNING] simulation.desk: PAPER_DESK_PROBE stage=tick_event instrument=bitget:BTC-USDT:perp event=OrderFilled order_id=paper_v2_721754 reason=
+2026-03-24 21:44:24,221 [WARNING] simulation.desk: PAPER_DESK_PROBE stage=tick_event instrument=bitget:BTC-USDT:perp event=OrderFilled order_id=paper_v2_721814 reason=
+2026-03-24 21:44:24,356 [WARNING] simulation.desk: PAPER_DESK_PROBE stage=tick_event instrument=bitget:BTC-USDT:perp event=OrderFilled order_id=paper_v2_723140 reason=
+2026-03-24 21:44:24,360 [WARNING] simulation.desk: PAPER_DESK_PROBE stage=tick_event instrument=bitget:BTC-USDT:perp event=OrderFilled order_id=paper_v2_723169 reason=
+2026-03-24 21:44:24,388 [WARNING] simulation.desk: PAPER_DESK_PROBE stage=tick_event instrument=bitget:BTC-USDT:perp event=OrderFilled order_id=paper_v2_723332 reason=
+2026-03-24 21:44:24,425 [WARNING] simulation.desk: PAPER_DESK_PROBE stage=tick_event instrument=bitget:BTC-USDT:perp event=OrderFilled order_id=paper_v2_723526 reason=
+2026-03-24 21:44:24,436 [WARNING] simulation.desk: PAPER_DESK_PROBE stage=tick_event instrument=bitget:BTC-USDT:perp event=OrderFilled order_id=paper_v2_723535 reason=
+2026-03-24 21:44:24,436 [WARNING] simulation.desk: PAPER_DESK_PROBE stage=tick_event instrument=bitget:BTC-USDT:perp event=OrderFilled order_id=paper_v2_723537 reason=
+2026-03-24 21:44:24,438 [WARNING] simulation.desk: PAPER_DESK_PROBE stage=tick_event instrument=bitget:BTC-USDT:perp event=OrderFilled order_id=paper_v2_723541 reason=
+2026-03-24 21:44:24,442 [WARNING] simulation.desk: PAPER_DESK_PROBE stage=tick_event instrument=bitget:BTC-USDT:perp event=OrderFilled order_id=paper_v2_723555 reason=
+2026-03-24 21:44:24,460 [WARNING] simulation.desk: PAPER_DESK_PROBE stage=tick_event instrument=bitget:BTC-USDT:perp event=OrderFilled order_id=paper_v2_723615 reason=
+2026-03-24 21:44:24,460 [WARNING] simulation.desk: PAPER_DESK_PROBE stage=tick_event instrument=bitget:BTC-USDT:perp event=OrderFilled order_id=paper_v2_723617 reason=
+2026-03-24 21:44:24,483 [WARNING] simulation.desk: PAPER_DESK_PROBE stage=tick_event instrument=bitget:BTC-USDT:perp event=OrderFilled order_id=paper_v2_723691 reason=
+2026-03-24 21:44:24,485 [WARNING] simulation.desk: PAPER_DESK_PROBE stage=tick_event instrument=bitget:BTC-USDT:perp event=OrderFilled order_id=paper_v2_723698 reason=
+2026-03-24 21:44:24,517 [WARNING] simulation.desk: PAPER_DESK_PROBE stage=tick_event instrument=bitget:BTC-USDT:perp event=OrderFilled order_id=paper_v2_723817 reason=
+2026-03-24 21:44:24,586 [WARNING] simulation.desk: PAPER_DESK_PROBE stage=tick_event instrument=bitget:BTC-USDT:perp event=OrderFilled order_id=paper_v2_724009 reason=
+2026-03-24 21:44:24,602 [WARNING] simulation.desk: PAPER_DESK_PROBE stage=tick_event instrument=bitget:BTC-USDT:perp event=OrderFilled order_id=paper_v2_724052 reason=
+2026-03-24 21:44:24,647 [WARNING] simulation.desk: PAPER_DESK_PROBE stage=tick_event instrument=bitget:BTC-USDT:perp event=OrderFilled order_id=paper_v2_724244 reason=
+2026-03-24 21:44:24,677 [WARNING] simulation.desk: PAPER_DESK_PROBE stage=tick_event instrument=bitget:BTC-USDT:perp event=OrderFilled order_id=paper_v2_724478 reason=
+2026-03-24 21:44:24,786 [INFO] simulation.portfolio: PaperPortfolio day rollover: 2025-04-07 -> 2025-04-08 (daily_open_equity=489.4108023416618099012065625 -> 488.9370436748197928456163413)
+2026-03-24 21:44:25,383 [WARNING] simulation.desk: PAPER_DESK_PROBE stage=tick_event instrument=bitget:BTC-USDT:perp event=OrderFilled order_id=paper_v2_729415 reason=
+2026-03-24 21:44:25,389 [WARNING] simulation.desk: PAPER_DESK_PROBE stage=tick_event instrument=bitget:BTC-USDT:perp event=OrderFilled order_id=paper_v2_729493 reason=
+2026-03-24 21:44:25,522 [WARNING] simulation.desk: PAPER_DESK_PROBE stage=tick_event instrument=bitget:BTC-USDT:perp event=OrderFilled order_id=paper_v2_730513 reason=
+2026-03-24 21:44:25,529 [WARNING] simulation.desk: PAPER_DESK_PROBE stage=tick_event instrument=bitget:BTC-USDT:perp event=OrderFilled order_id=paper_v2_730564 reason=
+2026-03-24 21:44:25,632 [WARNING] simulation.desk: PAPER_DESK_PROBE stage=tick_event instrument=bitget:BTC-USDT:perp event=OrderFilled order_id=paper_v2_731443 reason=
+2026-03-24 21:44:25,687 [INFO] simulation.portfolio: PaperPortfolio day rollover: 2025-04-08 -> 2025-04-09 (daily_open_equity=488.9370436748197928456163413 -> 489.2834398406221248529508712)
+2026-03-24 21:44:25,690 [WARNING] simulation.desk: PAPER_DESK_PROBE stage=tick_event instrument=bitget:BTC-USDT:perp event=OrderFilled order_id=paper_v2_731925 reason=
+2026-03-24 21:44:25,698 [WARNING] simulation.desk: PAPER_DESK_PROBE stage=tick_event instrument=bitget:BTC-USDT:perp event=OrderFilled order_id=paper_v2_731995 reason=
+2026-03-24 21:44:25,715 [WARNING] simulation.desk: PAPER_DESK_PROBE stage=tick_event instrument=bitget:BTC-USDT:perp event=OrderFilled order_id=paper_v2_732121 reason=
+2026-03-24 21:44:25,744 [WARNING] simulation.desk: PAPER_DESK_PROBE stage=tick_event instrument=bitget:BTC-USDT:perp event=OrderFilled order_id=paper_v2_732356 reason=
+2026-03-24 21:44:25,870 [WARNING] simulation.desk: PAPER_DESK_PROBE stage=tick_event instrument=bitget:BTC-USDT:perp event=OrderFilled order_id=paper_v2_732872 reason=
+2026-03-24 21:44:26,162 [WARNING] simulation.desk: PAPER_DESK_PROBE stage=tick_event instrument=bitget:BTC-USDT:perp event=OrderFilled order_id=paper_v2_734589 reason=
+2026-03-24 21:44:26,163 [WARNING] simulation.desk: PAPER_DESK_PROBE stage=tick_event instrument=bitget:BTC-USDT:perp event=OrderFilled order_id=paper_v2_734593 reason=
+2026-03-24 21:44:26,186 [WARNING] simulation.desk: PAPER_DESK_PROBE stage=tick_event instrument=bitget:BTC-USDT:perp event=OrderFilled order_id=paper_v2_734738 reason=
+2026-03-24 21:44:26,246 [WARNING] simulation.desk: PAPER_DESK_PROBE stage=tick_event instrument=bitget:BTC-USDT:perp event=OrderFilled order_id=paper_v2_735067 reason=
+2026-03-24 21:44:26,249 [WARNING] simulation.desk: PAPER_DESK_PROBE stage=tick_event instrument=bitget:BTC-USDT:perp event=OrderFilled order_id=paper_v2_735085 reason=
+2026-03-24 21:44:26,265 [WARNING] simulation.desk: PAPER_DESK_PROBE stage=tick_event instrument=bitget:BTC-USDT:perp event=OrderFilled order_id=paper_v2_735157 reason=
+2026-03-24 21:44:26,543 [WARNING] simulation.desk: PAPER_DESK_PROBE stage=tick_event instrument=bitget:BTC-USDT:perp event=OrderFilled order_id=paper_v2_735885 reason=
+2026-03-24 21:44:26,544 [WARNING] simulation.desk: PAPER_DESK_PROBE stage=tick_event instrument=bitget:BTC-USDT:perp event=OrderFilled order_id=paper_v2_735887 reason=
+2026-03-24 21:44:26,586 [WARNING] simulation.desk: PAPER_DESK_PROBE stage=tick_event instrument=bitget:BTC-USDT:perp event=OrderFilled order_id=paper_v2_735927 reason=
+2026-03-24 21:44:26,740 [WARNING] simulation.desk: PAPER_DESK_PROBE stage=tick_event instrument=bitget:BTC-USDT:perp event=OrderFilled order_id=paper_v2_736400 reason=
+2026-03-24 21:44:26,880 [INFO] simulation.portfolio: PaperPortfolio day rollover: 2025-04-09 -> 2025-04-10 (daily_open_equity=489.2834398406221248529508712 -> 489.8498279610645800443155230)
+2026-03-24 21:44:27,422 [WARNING] simulation.desk: PAPER_DESK_PROBE stage=tick_event instrument=bitget:BTC-USDT:perp event=OrderFilled order_id=paper_v2_741445 reason=
+2026-03-24 21:44:27,449 [WARNING] simulation.desk: PAPER_DESK_PROBE stage=tick_event instrument=bitget:BTC-USDT:perp event=OrderFilled order_id=paper_v2_741781 reason=
+2026-03-24 21:44:27,449 [WARNING] simulation.desk: PAPER_DESK_PROBE stage=tick_event instrument=bitget:BTC-USDT:perp event=OrderFilled order_id=paper_v2_741783 reason=
+2026-03-24 21:44:27,450 [WARNING] simulation.desk: PAPER_DESK_PROBE stage=tick_event instrument=bitget:BTC-USDT:perp event=OrderFilled order_id=paper_v2_741785 reason=
+2026-03-24 21:44:27,473 [WARNING] simulation.desk: PAPER_DESK_PROBE stage=tick_event instrument=bitget:BTC-USDT:perp event=OrderFilled order_id=paper_v2_741878 reason=
+2026-03-24 21:44:27,495 [WARNING] simulation.desk: PAPER_DESK_PROBE stage=tick_event instrument=bitget:BTC-USDT:perp event=OrderFilled order_id=paper_v2_742052 reason=
+2026-03-24 21:44:27,576 [WARNING] simulation.desk: PAPER_DESK_PROBE stage=tick_event instrument=bitget:BTC-USDT:perp event=OrderFilled order_id=paper_v2_742646 reason=
+2026-03-24 21:44:27,618 [WARNING] simulation.desk: PAPER_DESK_PROBE stage=tick_event instrument=bitget:BTC-USDT:perp event=OrderFilled order_id=paper_v2_743084 reason=
+2026-03-24 21:44:27,815 [INFO] simulation.portfolio: PaperPortfolio day rollover: 2025-04-10 -> 2025-04-11 (daily_open_equity=489.8498279610645800443155230 -> 489.1597994354947458896322436)
+2026-03-24 21:44:28,045 [WARNING] simulation.desk: PAPER_DESK_PROBE stage=tick_event instrument=bitget:BTC-USDT:perp event=OrderFilled order_id=paper_v2_747031 reason=
+2026-03-24 21:44:28,213 [WARNING] simulation.desk: PAPER_DESK_PROBE stage=tick_event instrument=bitget:BTC-USDT:perp event=OrderFilled order_id=paper_v2_748700 reason=
+2026-03-24 21:44:28,267 [WARNING] simulation.desk: PAPER_DESK_PROBE stage=tick_event instrument=bitget:BTC-USDT:perp event=OrderFilled order_id=paper_v2_749216 reason=
+2026-03-24 21:44:28,550 [INFO] simulation.portfolio: PaperPortfolio day rollover: 2025-04-11 -> 2025-04-12 (daily_open_equity=489.1597994354947458896322436 -> 489.6537503930982444691883838)
+2026-03-24 21:44:28,723 [WARNING] simulation.desk: PAPER_DESK_PROBE stage=tick_event instrument=bitget:BTC-USDT:perp event=OrderFilled order_id=paper_v2_753235 reason=
+2026-03-24 21:44:29,029 [WARNING] simulation.desk: PAPER_DESK_PROBE stage=tick_event instrument=bitget:BTC-USDT:perp event=OrderFilled order_id=paper_v2_756614 reason=
+2026-03-24 21:44:29,500 [INFO] simulation.portfolio: PaperPortfolio day rollover: 2025-04-12 -> 2025-04-13 (daily_open_equity=489.6537503930982444691883838 -> 489.9916336322289148917936686)
+2026-03-24 21:44:29,545 [WARNING] simulation.desk: PAPER_DESK_PROBE stage=tick_event instrument=bitget:BTC-USDT:perp event=OrderFilled order_id=paper_v2_760273 reason=
+2026-03-24 21:44:30,088 [WARNING] simulation.desk: PAPER_DESK_PROBE stage=tick_event instrument=bitget:BTC-USDT:perp event=OrderFilled order_id=paper_v2_766209 reason=
+2026-03-24 21:44:30,121 [WARNING] simulation.desk: PAPER_DESK_PROBE stage=tick_event instrument=bitget:BTC-USDT:perp event=OrderFilled order_id=paper_v2_766501 reason=
+2026-03-24 21:44:30,121 [WARNING] simulation.desk: PAPER_DESK_PROBE stage=tick_event instrument=bitget:BTC-USDT:perp event=OrderFilled order_id=paper_v2_766505 reason=
+2026-03-24 21:44:30,122 [WARNING] simulation.desk: PAPER_DESK_PROBE stage=tick_event instrument=bitget:BTC-USDT:perp event=OrderFilled order_id=paper_v2_766508 reason=
+2026-03-24 21:44:30,182 [INFO] simulation.portfolio: PaperPortfolio day rollover: 2025-04-13 -> 2025-04-14 (daily_open_equity=489.9916336322289148917936686 -> 489.7267791896043404203241576)
+2026-03-24 21:44:30,209 [WARNING] simulation.desk: PAPER_DESK_PROBE stage=tick_event instrument=bitget:BTC-USDT:perp event=OrderFilled order_id=paper_v2_767492 reason=
+2026-03-24 21:44:30,240 [WARNING] simulation.desk: PAPER_DESK_PROBE stage=tick_event instrument=bitget:BTC-USDT:perp event=OrderFilled order_id=paper_v2_767755 reason=
+2026-03-24 21:44:30,337 [WARNING] simulation.desk: PAPER_DESK_PROBE stage=tick_event instrument=bitget:BTC-USDT:perp event=OrderFilled order_id=paper_v2_768559 reason=
+2026-03-24 21:44:30,405 [WARNING] simulation.desk: PAPER_DESK_PROBE stage=tick_event instrument=bitget:BTC-USDT:perp event=OrderFilled order_id=paper_v2_769323 reason=
+2026-03-24 21:44:30,488 [WARNING] simulation.desk: PAPER_DESK_PROBE stage=tick_event instrument=bitget:BTC-USDT:perp event=OrderFilled order_id=paper_v2_770312 reason=
+2026-03-24 21:44:30,840 [INFO] simulation.portfolio: PaperPortfolio day rollover: 2025-04-14 -> 2025-04-15 (daily_open_equity=489.7267791896043404203241576 -> 489.9582437488821274481531243)
+2026-03-24 21:44:31,772 [INFO] simulation.portfolio: PaperPortfolio day rollover: 2025-04-15 -> 2025-04-16 (daily_open_equity=489.9582437488821274481531243 -> 489.6638456801652302315387243)
+2026-03-24 21:44:32,036 [WARNING] simulation.desk: PAPER_DESK_PROBE stage=tick_event instrument=bitget:BTC-USDT:perp event=OrderFilled order_id=paper_v2_785896 reason=
+2026-03-24 21:44:32,448 [INFO] simulation.portfolio: PaperPortfolio day rollover: 2025-04-16 -> 2025-04-17 (daily_open_equity=489.6638456801652302315387243 -> 489.7486826706437629747492001)
+2026-03-24 21:44:33,176 [INFO] simulation.portfolio: PaperPortfolio day rollover: 2025-04-17 -> 2025-04-18 (daily_open_equity=489.7486826706437629747492001 -> 489.9702655438485000410596001)
+2026-03-24 21:44:33,951 [INFO] simulation.portfolio: PaperPortfolio day rollover: 2025-04-18 -> 2025-04-19 (daily_open_equity=489.9702655438485000410596001 -> 489.8519266802284528556674001)
+2026-03-24 21:44:34,812 [INFO] simulation.portfolio: PaperPortfolio day rollover: 2025-04-19 -> 2025-04-20 (daily_open_equity=489.8519266802284528556674001 -> 490.0019168171512095636154001)
+2026-03-24 21:44:35,661 [WARNING] simulation.desk: PAPER_DESK_PROBE stage=tick_event instrument=bitget:BTC-USDT:perp event=OrderFilled order_id=paper_v2_823628 reason=
+2026-03-24 21:44:35,776 [INFO] simulation.portfolio: PaperPortfolio day rollover: 2025-04-20 -> 2025-04-21 (daily_open_equity=490.0019168171512095636154001 -> 490.0057529454941747630863583)
+2026-03-24 21:44:35,792 [WARNING] simulation.desk: PAPER_DESK_PROBE stage=tick_event instrument=bitget:BTC-USDT:perp event=OrderFilled order_id=paper_v2_825100 reason=
+2026-03-24 21:44:36,534 [INFO] simulation.portfolio: PaperPortfolio day rollover: 2025-04-21 -> 2025-04-22 (daily_open_equity=490.0057529454941747630863583 -> 490.3818915229138985957554638)
+2026-03-24 21:44:37,242 [WARNING] simulation.desk: PAPER_DESK_PROBE stage=tick_event instrument=bitget:BTC-USDT:perp event=OrderFilled order_id=paper_v2_838285 reason=
+2026-03-24 21:44:37,396 [INFO] simulation.portfolio: PaperPortfolio day rollover: 2025-04-22 -> 2025-04-23 (daily_open_equity=490.3818915229138985957554638 -> 491.2439490238088615471933810)
+2026-03-24 21:44:37,418 [WARNING] simulation.desk: PAPER_DESK_PROBE stage=tick_event instrument=bitget:BTC-USDT:perp event=OrderFilled order_id=paper_v2_840139 reason=
+2026-03-24 21:44:37,772 [WARNING] simulation.desk: PAPER_DESK_PROBE stage=tick_event instrument=bitget:BTC-USDT:perp event=OrderFilled order_id=paper_v2_844543 reason=
+2026-03-24 21:44:37,773 [WARNING] simulation.desk: PAPER_DESK_PROBE stage=tick_event instrument=bitget:BTC-USDT:perp event=OrderFilled order_id=paper_v2_844557 reason=
+2026-03-24 21:44:37,774 [WARNING] simulation.desk: PAPER_DESK_PROBE stage=tick_event instrument=bitget:BTC-USDT:perp event=OrderFilled order_id=paper_v2_844561 reason=
+2026-03-24 21:44:37,779 [WARNING] simulation.desk: PAPER_DESK_PROBE stage=tick_event instrument=bitget:BTC-USDT:perp event=OrderFilled order_id=paper_v2_844633 reason=
+2026-03-24 21:44:38,059 [INFO] simulation.portfolio: PaperPortfolio day rollover: 2025-04-23 -> 2025-04-24 (daily_open_equity=491.2439490238088615471933810 -> 491.2396217140176607461910498)
+2026-03-24 21:44:38,828 [INFO] simulation.portfolio: PaperPortfolio day rollover: 2025-04-24 -> 2025-04-25 (daily_open_equity=491.2396217140176607461910498 -> 491.3735292598981778546986498)
+2026-03-24 21:44:39,477 [WARNING] simulation.desk: PAPER_DESK_PROBE stage=tick_event instrument=bitget:BTC-USDT:perp event=OrderFilled order_id=paper_v2_860527 reason=
+2026-03-24 21:44:39,544 [WARNING] simulation.desk: PAPER_DESK_PROBE stage=tick_event instrument=bitget:BTC-USDT:perp event=OrderFilled order_id=paper_v2_861104 reason=
+2026-03-24 21:44:39,545 [WARNING] simulation.desk: PAPER_DESK_PROBE stage=tick_event instrument=bitget:BTC-USDT:perp event=OrderFilled order_id=paper_v2_861116 reason=
+2026-03-24 21:44:39,946 [INFO] simulation.portfolio: PaperPortfolio day rollover: 2025-04-25 -> 2025-04-26 (daily_open_equity=491.3735292598981778546986498 -> 491.7088590917281283964605514)
+2026-03-24 21:44:41,383 [INFO] simulation.portfolio: PaperPortfolio day rollover: 2025-04-26 -> 2025-04-27 (daily_open_equity=491.7088590917281283964605514 -> 491.7053301172152738907805514)
+2026-03-24 21:44:42,308 [INFO] simulation.portfolio: PaperPortfolio day rollover: 2025-04-27 -> 2025-04-28 (daily_open_equity=491.7053301172152738907805514 -> 491.3403926352389079504605514)
+2026-03-24 21:44:43,039 [INFO] simulation.portfolio: PaperPortfolio day rollover: 2025-04-28 -> 2025-04-29 (daily_open_equity=491.3403926352389079504605514 -> 491.8691575693061430603485514)
+2026-03-24 21:44:43,957 [INFO] simulation.portfolio: PaperPortfolio day rollover: 2025-04-29 -> 2025-04-30 (daily_open_equity=491.8691575693061430603485514 -> 491.5499306866080454818365514)
+2026-03-24 21:44:44,422 [WARNING] simulation.desk: PAPER_DESK_PROBE stage=tick_event instrument=bitget:BTC-USDT:perp event=OrderFilled order_id=paper_v2_902557 reason=
+2026-03-24 21:44:44,428 [WARNING] simulation.desk: PAPER_DESK_PROBE stage=tick_event instrument=bitget:BTC-USDT:perp event=OrderFilled order_id=paper_v2_902618 reason=
+2026-03-24 21:44:44,708 [INFO] simulation.portfolio: PaperPortfolio day rollover: 2025-04-30 -> 2025-05-01 (daily_open_equity=491.5499306866080454818365514 -> 491.5322214406957991388361627)
+2026-03-24 21:44:46,159 [INFO] simulation.portfolio: PaperPortfolio day rollover: 2025-05-01 -> 2025-05-02 (daily_open_equity=491.5322214406957991388361627 -> 492.5125121070803086375531627)
+2026-03-24 21:44:47,353 [WARNING] simulation.desk: PAPER_DESK_PROBE stage=tick_event instrument=bitget:BTC-USDT:perp event=OrderFilled order_id=paper_v2_918542 reason=
+2026-03-24 21:44:47,353 [WARNING] simulation.desk: PAPER_DESK_PROBE stage=tick_event instrument=bitget:BTC-USDT:perp event=OrderFilled order_id=paper_v2_918544 reason=
+2026-03-24 21:44:47,762 [INFO] simulation.portfolio: PaperPortfolio day rollover: 2025-05-02 -> 2025-05-03 (daily_open_equity=492.5125121070803086375531627 -> 492.6979780043770762723628976)
+2026-03-24 21:44:48,995 [INFO] simulation.portfolio: PaperPortfolio day rollover: 2025-05-03 -> 2025-05-04 (daily_open_equity=492.6979780043770762723628976 -> 492.3475728390704416076000976)
+2026-03-24 21:44:49,886 [INFO] simulation.portfolio: PaperPortfolio day rollover: 2025-05-04 -> 2025-05-05 (daily_open_equity=492.3475728390704416076000976 -> 491.8134924861229821302144976)
+2026-03-24 21:44:50,485 [WARNING] simulation.desk: PAPER_DESK_PROBE stage=tick_event instrument=bitget:BTC-USDT:perp event=OrderFilled order_id=paper_v2_944366 reason=
+2026-03-24 21:44:51,037 [INFO] simulation.portfolio: PaperPortfolio day rollover: 2025-05-05 -> 2025-05-06 (daily_open_equity=491.8134924861229821302144976 -> 491.9526139772471073382144592)
+2026-03-24 21:44:51,811 [INFO] simulation.portfolio: PaperPortfolio day rollover: 2025-05-06 -> 2025-05-07 (daily_open_equity=491.9526139772471073382144592 -> 492.6087752609844348612854592)
+2026-03-24 21:44:52,908 [INFO] simulation.portfolio: PaperPortfolio day rollover: 2025-05-07 -> 2025-05-08 (daily_open_equity=492.6087752609844348612854592 -> 492.6699653383320534940124592)
+2026-03-24 21:44:53,393 [WARNING] simulation.desk: PAPER_DESK_PROBE stage=tick_event instrument=bitget:BTC-USDT:perp event=OrderFilled order_id=paper_v2_969428 reason=
+2026-03-24 21:44:53,631 [INFO] simulation.portfolio: PaperPortfolio day rollover: 2025-05-08 -> 2025-05-09 (daily_open_equity=492.6699653383320534940124592 -> 494.5211452898591600451133579)
+2026-03-24 21:44:53,919 [WARNING] simulation.desk: PAPER_DESK_PROBE stage=tick_event instrument=bitget:BTC-USDT:perp event=OrderFilled order_id=paper_v2_974839 reason=
+2026-03-24 21:44:54,098 [WARNING] simulation.desk: PAPER_DESK_PROBE stage=tick_event instrument=bitget:BTC-USDT:perp event=OrderFilled order_id=paper_v2_976711 reason=
+2026-03-24 21:44:54,402 [INFO] simulation.portfolio: PaperPortfolio day rollover: 2025-05-09 -> 2025-05-10 (daily_open_equity=494.5211452898591600451133579 -> 494.3878126252890409316175014)
+2026-03-24 21:44:55,484 [INFO] simulation.portfolio: PaperPortfolio day rollover: 2025-05-10 -> 2025-05-11 (daily_open_equity=494.3878126252890409316175014 -> 495.1057611184035865364807014)
+2026-03-24 21:44:55,663 [WARNING] simulation.desk: PAPER_DESK_PROBE stage=tick_event instrument=bitget:BTC-USDT:perp event=OrderFilled order_id=paper_v2_989792 reason=
+2026-03-24 21:44:56,925 [WARNING] simulation.desk: PAPER_DESK_PROBE stage=tick_event instrument=bitget:BTC-USDT:perp event=OrderFilled order_id=paper_v2_996043 reason=
+2026-03-24 21:44:56,997 [INFO] simulation.portfolio: PaperPortfolio day rollover: 2025-05-11 -> 2025-05-12 (daily_open_equity=495.1057611184035865364807014 -> 494.8351514356195699494073330)
+2026-03-24 21:44:57,695 [INFO] simulation.portfolio: PaperPortfolio day rollover: 2025-05-12 -> 2025-05-13 (daily_open_equity=494.8351514356195699494073330 -> 494.3146573745256153528879330)
+2026-03-24 21:44:58,094 [WARNING] simulation.desk: PAPER_DESK_PROBE stage=tick_event instrument=bitget:BTC-USDT:perp event=OrderFilled order_id=paper_v2_1008362 reason=
+2026-03-24 21:44:58,426 [INFO] simulation.portfolio: PaperPortfolio day rollover: 2025-05-13 -> 2025-05-14 (daily_open_equity=494.3146573745256153528879330 -> 494.8217767978069083160173335)
+2026-03-24 21:44:58,837 [WARNING] simulation.desk: PAPER_DESK_PROBE stage=tick_event instrument=bitget:BTC-USDT:perp event=OrderFilled order_id=paper_v2_1017109 reason=
+2026-03-24 21:44:58,970 [WARNING] simulation.desk: PAPER_DESK_PROBE stage=tick_event instrument=bitget:BTC-USDT:perp event=OrderFilled order_id=paper_v2_1018604 reason=
+2026-03-24 21:44:59,133 [INFO] simulation.portfolio: PaperPortfolio day rollover: 2025-05-14 -> 2025-05-15 (daily_open_equity=494.8217767978069083160173335 -> 494.5952090303797965933209666)
+2026-03-24 21:45:00,036 [INFO] simulation.portfolio: PaperPortfolio day rollover: 2025-05-15 -> 2025-05-16 (daily_open_equity=494.5952090303797965933209666 -> 494.6811285005883571784027666)
+2026-03-24 21:45:00,102 [WARNING] simulation.desk: PAPER_DESK_PROBE stage=tick_event instrument=bitget:BTC-USDT:perp event=OrderFilled order_id=paper_v2_1029229 reason=
+2026-03-24 21:45:01,093 [INFO] simulation.portfolio: PaperPortfolio day rollover: 2025-05-16 -> 2025-05-17 (daily_open_equity=494.6811285005883571784027666 -> 494.5519034907717984038717425)
+2026-03-24 21:45:01,980 [INFO] simulation.portfolio: PaperPortfolio day rollover: 2025-05-17 -> 2025-05-18 (daily_open_equity=494.5519034907717984038717425 -> 494.4295866683507513116235425)
+2026-03-24 21:45:02,536 [WARNING] simulation.desk: PAPER_DESK_PROBE stage=tick_event instrument=bitget:BTC-USDT:perp event=OrderFilled order_id=paper_v2_1051712 reason=
+2026-03-24 21:45:02,675 [INFO] simulation.portfolio: PaperPortfolio day rollover: 2025-05-18 -> 2025-05-19 (daily_open_equity=494.4295866683507513116235425 -> 495.6360449051002343570025884)
+2026-03-24 21:45:03,277 [INFO] simulation.portfolio: PaperPortfolio day rollover: 2025-05-19 -> 2025-05-20 (daily_open_equity=495.6360449051002343570025884 -> 495.3378480547998603917391884)
+2026-03-24 21:45:03,285 [WARNING] simulation.desk: PAPER_DESK_PROBE stage=tick_event instrument=bitget:BTC-USDT:perp event=OrderFilled order_id=paper_v2_1060807 reason=
+2026-03-24 21:45:03,318 [WARNING] simulation.desk: PAPER_DESK_PROBE stage=tick_event instrument=bitget:BTC-USDT:perp event=OrderFilled order_id=paper_v2_1061221 reason=
+2026-03-24 21:45:03,384 [WARNING] simulation.desk: PAPER_DESK_PROBE stage=tick_event instrument=bitget:BTC-USDT:perp event=OrderFilled order_id=paper_v2_1061827 reason=
+2026-03-24 21:45:03,974 [INFO] simulation.portfolio: PaperPortfolio day rollover: 2025-05-20 -> 2025-05-21 (daily_open_equity=495.3378480547998603917391884 -> 495.9073691937167142241827890)
+2026-03-24 21:45:04,766 [WARNING] simulation.desk: PAPER_DESK_PROBE stage=tick_event instrument=bitget:BTC-USDT:perp event=OrderFilled order_id=paper_v2_1073929 reason=
+2026-03-24 21:45:04,766 [WARNING] simulation.desk: PAPER_DESK_PROBE stage=tick_event instrument=bitget:BTC-USDT:perp event=OrderFilled order_id=paper_v2_1073931 reason=
+2026-03-24 21:45:04,776 [WARNING] simulation.desk: PAPER_DESK_PROBE stage=tick_event instrument=bitget:BTC-USDT:perp event=OrderFilled order_id=paper_v2_1074037 reason=
+2026-03-24 21:45:04,930 [INFO] simulation.portfolio: PaperPortfolio day rollover: 2025-05-21 -> 2025-05-22 (daily_open_equity=495.9073691937167142241827890 -> 497.7495432202720381413685457)
+2026-03-24 21:45:04,988 [WARNING] simulation.desk: PAPER_DESK_PROBE stage=tick_event instrument=bitget:BTC-USDT:perp event=OrderFilled order_id=paper_v2_1075915 reason=
+2026-03-24 21:45:05,378 [WARNING] simulation.desk: PAPER_DESK_PROBE stage=tick_event instrument=bitget:BTC-USDT:perp event=OrderFilled order_id=paper_v2_1079336 reason=
+2026-03-24 21:45:05,429 [WARNING] simulation.desk: PAPER_DESK_PROBE stage=tick_event instrument=bitget:BTC-USDT:perp event=OrderFilled order_id=paper_v2_1079773 reason=
+2026-03-24 21:45:05,450 [WARNING] simulation.desk: PAPER_DESK_PROBE stage=tick_event instrument=bitget:BTC-USDT:perp event=OrderFilled order_id=paper_v2_1079893 reason=
+2026-03-24 21:45:05,495 [WARNING] simulation.desk: PAPER_DESK_PROBE stage=tick_event instrument=bitget:BTC-USDT:perp event=OrderFilled order_id=paper_v2_1080097 reason=
+2026-03-24 21:45:05,837 [INFO] simulation.portfolio: PaperPortfolio day rollover: 2025-05-22 -> 2025-05-23 (daily_open_equity=497.7495432202720381413685457 -> 499.3572824193751747892751582)
+2026-03-24 21:45:06,260 [WARNING] simulation.desk: PAPER_DESK_PROBE stage=tick_event instrument=bitget:BTC-USDT:perp event=OrderFilled order_id=paper_v2_1087748 reason=
+2026-03-24 21:45:06,371 [WARNING] simulation.desk: PAPER_DESK_PROBE stage=tick_event instrument=bitget:BTC-USDT:perp event=OrderFilled order_id=paper_v2_1088558 reason=
+2026-03-24 21:45:06,625 [WARNING] simulation.desk: PAPER_DESK_PROBE stage=tick_event instrument=bitget:BTC-USDT:perp event=OrderFilled order_id=paper_v2_1090904 reason=
+2026-03-24 21:45:06,625 [WARNING] simulation.desk: PAPER_DESK_PROBE stage=tick_event instrument=bitget:BTC-USDT:perp event=OrderFilled order_id=paper_v2_1090906 reason=
+2026-03-24 21:45:06,634 [INFO] simulation.portfolio: PaperPortfolio day rollover: 2025-05-23 -> 2025-05-24 (daily_open_equity=499.3572824193751747892751582 -> 495.5912530542884368200573313)
+2026-03-24 21:45:07,550 [WARNING] simulation.desk: PAPER_DESK_PROBE stage=tick_event instrument=bitget:BTC-USDT:perp event=OrderFilled order_id=paper_v2_1098907 reason=
+2026-03-24 21:45:07,588 [WARNING] simulation.desk: PAPER_DESK_PROBE stage=tick_event instrument=bitget:BTC-USDT:perp event=OrderFilled order_id=paper_v2_1099099 reason=
+2026-03-24 21:45:07,665 [INFO] simulation.portfolio: PaperPortfolio day rollover: 2025-05-24 -> 2025-05-25 (daily_open_equity=495.5912530542884368200573313 -> 495.8344326918087940537678258)
+2026-03-24 21:45:08,746 [INFO] simulation.portfolio: PaperPortfolio day rollover: 2025-05-25 -> 2025-05-26 (daily_open_equity=495.8344326918087940537678258 -> 496.8544700562038886784210258)
+2026-03-24 21:45:08,773 [WARNING] simulation.desk: PAPER_DESK_PROBE stage=tick_event instrument=bitget:BTC-USDT:perp event=OrderFilled order_id=paper_v2_1107872 reason=
+2026-03-24 21:45:09,682 [INFO] simulation.portfolio: PaperPortfolio day rollover: 2025-05-26 -> 2025-05-27 (daily_open_equity=496.8544700562038886784210258 -> 497.2051414932335574106753427)
+2026-03-24 21:45:10,093 [WARNING] simulation.desk: PAPER_DESK_PROBE stage=tick_event instrument=bitget:BTC-USDT:perp event=OrderFilled order_id=paper_v2_1120430 reason=
+2026-03-24 21:45:10,409 [INFO] simulation.portfolio: PaperPortfolio day rollover: 2025-05-27 -> 2025-05-28 (daily_open_equity=497.2051414932335574106753427 -> 496.8740893551684802260643070)
+2026-03-24 21:45:11,282 [INFO] simulation.portfolio: PaperPortfolio day rollover: 2025-05-28 -> 2025-05-29 (daily_open_equity=496.8740893551684802260643070 -> 496.0361052524970559234780070)
+2026-03-24 21:45:11,990 [INFO] simulation.portfolio: PaperPortfolio day rollover: 2025-05-29 -> 2025-05-30 (daily_open_equity=496.0361052524970559234780070 -> 494.4792688743514372676230070)
+2026-03-24 21:45:12,196 [WARNING] simulation.desk: PAPER_DESK_PROBE stage=tick_event instrument=bitget:BTC-USDT:perp event=OrderFilled order_id=paper_v2_1142959 reason=
+2026-03-24 21:45:12,673 [WARNING] simulation.desk: PAPER_DESK_PROBE stage=tick_event instrument=bitget:BTC-USDT:perp event=OrderFilled order_id=paper_v2_1148329 reason=
+2026-03-24 21:45:12,697 [INFO] simulation.portfolio: PaperPortfolio day rollover: 2025-05-30 -> 2025-05-31 (daily_open_equity=494.4792688743514372676230070 -> 493.2845118882587395017548979)
+2026-03-24 21:45:12,762 [WARNING] simulation.desk: PAPER_DESK_PROBE stage=tick_event instrument=bitget:BTC-USDT:perp event=OrderFilled order_id=paper_v2_1149145 reason=
+2026-03-24 21:45:12,762 [WARNING] simulation.desk: PAPER_DESK_PROBE stage=tick_event instrument=bitget:BTC-USDT:perp event=OrderFilled order_id=paper_v2_1149147 reason=
+2026-03-24 21:45:13,459 [INFO] simulation.portfolio: PaperPortfolio day rollover: 2025-05-31 -> 2025-06-01 (daily_open_equity=493.2845118882587395017548979 -> 493.8543699272155792592135080)
+2026-03-24 21:45:14,281 [INFO] simulation.portfolio: PaperPortfolio day rollover: 2025-06-01 -> 2025-06-02 (daily_open_equity=493.8543699272155792592135080 -> 494.7930481376935242349115080)
+2026-03-24 21:45:14,939 [INFO] simulation.portfolio: PaperPortfolio day rollover: 2025-06-02 -> 2025-06-03 (daily_open_equity=494.7930481376935242349115080 -> 494.9832976956086620066479080)
+2026-03-24 21:45:15,992 [INFO] simulation.portfolio: PaperPortfolio day rollover: 2025-06-03 -> 2025-06-04 (daily_open_equity=494.9832976956086620066479080 -> 494.5621270131264008989483080)
+2026-03-24 21:45:16,846 [INFO] simulation.portfolio: PaperPortfolio day rollover: 2025-06-04 -> 2025-06-05 (daily_open_equity=494.5621270131264008989483080 -> 493.9445117658879711057559080)
+2026-03-24 21:45:18,634 [WARNING] simulation.desk: PAPER_DESK_PROBE stage=tick_event instrument=bitget:BTC-USDT:perp event=OrderFilled order_id=paper_v2_1195729 reason=
+2026-03-24 21:45:18,730 [WARNING] simulation.desk: PAPER_DESK_PROBE stage=tick_event instrument=bitget:BTC-USDT:perp event=OrderFilled order_id=paper_v2_1196894 reason=
+2026-03-24 21:45:18,796 [WARNING] simulation.desk: PAPER_DESK_PROBE stage=tick_event instrument=bitget:BTC-USDT:perp event=OrderFilled order_id=paper_v2_1197511 reason=
+2026-03-24 21:45:18,801 [WARNING] simulation.desk: PAPER_DESK_PROBE stage=tick_event instrument=bitget:BTC-USDT:perp event=OrderFilled order_id=paper_v2_1197554 reason=
+2026-03-24 21:45:18,802 [WARNING] simulation.desk: PAPER_DESK_PROBE stage=tick_event instrument=bitget:BTC-USDT:perp event=OrderFilled order_id=paper_v2_1197571 reason=
+2026-03-24 21:45:18,803 [WARNING] simulation.desk: PAPER_DESK_PROBE stage=tick_event instrument=bitget:BTC-USDT:perp event=OrderFilled order_id=paper_v2_1197583 reason=
+2026-03-24 21:45:18,820 [WARNING] simulation.desk: PAPER_DESK_PROBE stage=tick_event instrument=bitget:BTC-USDT:perp event=OrderFilled order_id=paper_v2_1197817 reason=
+2026-03-24 21:45:18,865 [INFO] simulation.portfolio: PaperPortfolio day rollover: 2025-06-05 -> 2025-06-06 (daily_open_equity=493.9445117658879711057559080 -> 490.9935552694406209901463098)
+2026-03-24 21:45:19,300 [WARNING] simulation.desk: PAPER_DESK_PROBE stage=tick_event instrument=bitget:BTC-USDT:perp event=OrderFilled order_id=paper_v2_1202930 reason=
+2026-03-24 21:45:19,609 [INFO] simulation.portfolio: PaperPortfolio day rollover: 2025-06-06 -> 2025-06-07 (daily_open_equity=490.9935552694406209901463098 -> 493.9529265706734585357014132)
+2026-03-24 21:45:20,704 [INFO] simulation.portfolio: PaperPortfolio day rollover: 2025-06-07 -> 2025-06-08 (daily_open_equity=493.9529265706734585357014132 -> 495.2636971722480003708927132)
+2026-03-24 21:45:21,656 [INFO] simulation.portfolio: PaperPortfolio day rollover: 2025-06-08 -> 2025-06-09 (daily_open_equity=495.2636971722480003708927132 -> 495.4561190844936975666623132)
+2026-03-24 21:45:22,437 [INFO] simulation.portfolio: PaperPortfolio day rollover: 2025-06-09 -> 2025-06-10 (daily_open_equity=495.4561190844936975666623132 -> 500.1608141037811399410312132)
+2026-03-24 21:45:23,120 [WARNING] simulation.desk: PAPER_DESK_PROBE stage=tick_event instrument=bitget:BTC-USDT:perp event=OrderFilled order_id=paper_v2_1237981 reason=
+2026-03-24 21:45:23,302 [WARNING] simulation.desk: PAPER_DESK_PROBE stage=tick_event instrument=bitget:BTC-USDT:perp event=OrderFilled order_id=paper_v2_1239775 reason=
+2026-03-24 21:45:23,396 [INFO] simulation.portfolio: PaperPortfolio day rollover: 2025-06-10 -> 2025-06-11 (daily_open_equity=500.1608141037811399410312132 -> 500.2301079027636277688481407)
+2026-03-24 21:45:23,751 [WARNING] simulation.desk: PAPER_DESK_PROBE stage=tick_event instrument=bitget:BTC-USDT:perp event=OrderFilled order_id=paper_v2_1245248 reason=
+2026-03-24 21:45:23,751 [WARNING] simulation.desk: PAPER_DESK_PROBE stage=tick_event instrument=bitget:BTC-USDT:perp event=OrderFilled order_id=paper_v2_1245250 reason=
+2026-03-24 21:45:23,752 [WARNING] simulation.desk: PAPER_DESK_PROBE stage=tick_event instrument=bitget:BTC-USDT:perp event=OrderFilled order_id=paper_v2_1245252 reason=
+2026-03-24 21:45:24,111 [INFO] simulation.portfolio: PaperPortfolio day rollover: 2025-06-11 -> 2025-06-12 (daily_open_equity=500.2301079027636277688481407 -> 498.6019404682069411851796651)
+2026-03-24 21:45:24,612 [WARNING] simulation.desk: PAPER_DESK_PROBE stage=tick_event instrument=bitget:BTC-USDT:perp event=OrderFilled order_id=paper_v2_1253990 reason=
+2026-03-24 21:45:24,954 [INFO] simulation.portfolio: PaperPortfolio day rollover: 2025-06-12 -> 2025-06-13 (daily_open_equity=498.6019404682069411851796651 -> 495.7933904581947965139982862)
+2026-03-24 21:45:25,037 [WARNING] simulation.desk: PAPER_DESK_PROBE stage=tick_event instrument=bitget:BTC-USDT:perp event=OrderFilled order_id=paper_v2_1258214 reason=
+2026-03-24 21:45:25,649 [INFO] simulation.portfolio: PaperPortfolio day rollover: 2025-06-13 -> 2025-06-14 (daily_open_equity=495.7933904581947965139982862 -> 496.1070140677843948207498897)
+2026-03-24 21:45:26,623 [INFO] simulation.portfolio: PaperPortfolio day rollover: 2025-06-14 -> 2025-06-15 (daily_open_equity=496.1070140677843948207498897 -> 495.5125776690175470298928897)
+2026-03-24 21:45:27,954 [WARNING] simulation.desk: PAPER_DESK_PROBE stage=tick_event instrument=bitget:BTC-USDT:perp event=OrderFilled order_id=paper_v2_1280425 reason=
+2026-03-24 21:45:28,052 [WARNING] simulation.desk: PAPER_DESK_PROBE stage=tick_event instrument=bitget:BTC-USDT:perp event=OrderFilled order_id=paper_v2_1281278 reason=
+2026-03-24 21:45:28,130 [INFO] simulation.portfolio: PaperPortfolio day rollover: 2025-06-15 -> 2025-06-16 (daily_open_equity=495.5125776690175470298928897 -> 495.6702269747986752901389750)
+2026-03-24 21:45:28,361 [WARNING] simulation.desk: PAPER_DESK_PROBE stage=tick_event instrument=bitget:BTC-USDT:perp event=OrderFilled order_id=paper_v2_1284554 reason=
+2026-03-24 21:45:28,854 [INFO] simulation.portfolio: PaperPortfolio day rollover: 2025-06-16 -> 2025-06-17 (daily_open_equity=495.6702269747986752901389750 -> 496.7633531045475454261217696)
+2026-03-24 21:45:29,312 [WARNING] simulation.desk: PAPER_DESK_PROBE stage=tick_event instrument=bitget:BTC-USDT:perp event=OrderFilled order_id=paper_v2_1295114 reason=
+2026-03-24 21:45:29,560 [INFO] simulation.portfolio: PaperPortfolio day rollover: 2025-06-17 -> 2025-06-18 (daily_open_equity=496.7633531045475454261217696 -> 494.7968313112002831704024636)
+2026-03-24 21:45:30,028 [WARNING] simulation.desk: PAPER_DESK_PROBE stage=tick_event instrument=bitget:BTC-USDT:perp event=OrderFilled order_id=paper_v2_1302781 reason=
+2026-03-24 21:45:30,111 [WARNING] simulation.desk: PAPER_DESK_PROBE stage=tick_event instrument=bitget:BTC-USDT:perp event=OrderFilled order_id=paper_v2_1303851 reason=
+2026-03-24 21:45:30,124 [WARNING] simulation.desk: PAPER_DESK_PROBE stage=tick_event instrument=bitget:BTC-USDT:perp event=OrderFilled order_id=paper_v2_1304041 reason=
+2026-03-24 21:45:30,133 [WARNING] simulation.desk: PAPER_DESK_PROBE stage=tick_event instrument=bitget:BTC-USDT:perp event=OrderFilled order_id=paper_v2_1304174 reason=
+2026-03-24 21:45:30,256 [INFO] simulation.portfolio: PaperPortfolio day rollover: 2025-06-18 -> 2025-06-19 (daily_open_equity=494.7968313112002831704024636 -> 495.0987445915330514893464775)
+2026-03-24 21:45:30,934 [INFO] simulation.portfolio: PaperPortfolio day rollover: 2025-06-19 -> 2025-06-20 (daily_open_equity=495.0987445915330514893464775 -> 494.8848583053580783579097775)
+2026-03-24 21:45:31,561 [INFO] simulation.portfolio: PaperPortfolio day rollover: 2025-06-20 -> 2025-06-21 (daily_open_equity=494.8848583053580783579097775 -> 493.5662974099689226166288775)
+2026-03-24 21:45:32,278 [WARNING] simulation.desk: PAPER_DESK_PROBE stage=tick_event instrument=bitget:BTC-USDT:perp event=OrderFilled order_id=paper_v2_1330262 reason=
+2026-03-24 21:45:32,295 [WARNING] simulation.desk: PAPER_DESK_PROBE stage=tick_event instrument=bitget:BTC-USDT:perp event=OrderFilled order_id=paper_v2_1330346 reason=
+2026-03-24 21:45:32,300 [WARNING] simulation.desk: PAPER_DESK_PROBE stage=tick_event instrument=bitget:BTC-USDT:perp event=OrderFilled order_id=paper_v2_1330376 reason=
+2026-03-24 21:45:32,301 [INFO] simulation.portfolio: PaperPortfolio day rollover: 2025-06-21 -> 2025-06-22 (daily_open_equity=493.5662974099689226166288775 -> 492.2910445476046008447936516)
+2026-03-24 21:45:32,737 [WARNING] simulation.desk: PAPER_DESK_PROBE stage=tick_event instrument=bitget:BTC-USDT:perp event=OrderFilled order_id=paper_v2_1335091 reason=
+2026-03-24 21:45:32,931 [WARNING] simulation.desk: PAPER_DESK_PROBE stage=tick_event instrument=bitget:BTC-USDT:perp event=OrderFilled order_id=paper_v2_1337108 reason=
+2026-03-24 21:45:32,965 [INFO] simulation.portfolio: PaperPortfolio day rollover: 2025-06-22 -> 2025-06-23 (daily_open_equity=492.2910445476046008447936516 -> 491.3472884440715967792165712)
+2026-03-24 21:45:33,406 [WARNING] simulation.desk: PAPER_DESK_PROBE stage=tick_event instrument=bitget:BTC-USDT:perp event=OrderFilled order_id=paper_v2_1342333 reason=
+2026-03-24 21:45:33,410 [WARNING] simulation.desk: PAPER_DESK_PROBE stage=tick_event instrument=bitget:BTC-USDT:perp event=OrderFilled order_id=paper_v2_1342376 reason=
+2026-03-24 21:45:33,738 [INFO] simulation.portfolio: PaperPortfolio day rollover: 2025-06-23 -> 2025-06-24 (daily_open_equity=491.3472884440715967792165712 -> 494.6135695845758166635293923)
+2026-03-24 21:45:34,440 [WARNING] simulation.desk: PAPER_DESK_PROBE stage=tick_event instrument=bitget:BTC-USDT:perp event=OrderFilled order_id=paper_v2_1349588 reason=
+2026-03-24 21:45:34,816 [INFO] simulation.portfolio: PaperPortfolio day rollover: 2025-06-24 -> 2025-06-25 (daily_open_equity=494.6135695845758166635293923 -> 495.1053865686017406764601165)
+2026-03-24 21:45:34,845 [WARNING] simulation.desk: PAPER_DESK_PROBE stage=tick_event instrument=bitget:BTC-USDT:perp event=OrderFilled order_id=paper_v2_1353548 reason=
+2026-03-24 21:45:34,855 [WARNING] simulation.desk: PAPER_DESK_PROBE stage=tick_event instrument=bitget:BTC-USDT:perp event=OrderFilled order_id=paper_v2_1353679 reason=
+2026-03-24 21:45:35,413 [WARNING] simulation.desk: PAPER_DESK_PROBE stage=tick_event instrument=bitget:BTC-USDT:perp event=OrderFilled order_id=paper_v2_1359379 reason=
+2026-03-24 21:45:35,702 [INFO] simulation.portfolio: PaperPortfolio day rollover: 2025-06-25 -> 2025-06-26 (daily_open_equity=495.1053865686017406764601165 -> 495.9888406568560791240225615)
+2026-03-24 21:45:35,930 [WARNING] simulation.desk: PAPER_DESK_PROBE stage=tick_event instrument=bitget:BTC-USDT:perp event=OrderFilled order_id=paper_v2_1364629 reason=
+2026-03-24 21:45:36,419 [INFO] simulation.portfolio: PaperPortfolio day rollover: 2025-06-26 -> 2025-06-27 (daily_open_equity=495.9888406568560791240225615 -> 495.6500552003347530671381602)
+2026-03-24 21:45:36,870 [WARNING] simulation.desk: PAPER_DESK_PROBE stage=tick_event instrument=bitget:BTC-USDT:perp event=OrderFilled order_id=paper_v2_1374451 reason=
+2026-03-24 21:45:37,244 [INFO] simulation.portfolio: PaperPortfolio day rollover: 2025-06-27 -> 2025-06-28 (daily_open_equity=495.6500552003347530671381602 -> 495.7143006371818757866855641)
+2026-03-24 21:45:38,030 [INFO] simulation.portfolio: PaperPortfolio day rollover: 2025-06-28 -> 2025-06-29 (daily_open_equity=495.7143006371818757866855641 -> 495.9417523089612172179742641)
+2026-03-24 21:45:38,697 [INFO] simulation.portfolio: PaperPortfolio day rollover: 2025-06-29 -> 2025-06-30 (daily_open_equity=495.9417523089612172179742641 -> 496.8462031268608392406072641)
+2026-03-24 21:45:39,551 [INFO] simulation.portfolio: PaperPortfolio day rollover: 2025-06-30 -> 2025-07-01 (daily_open_equity=496.8462031268608392406072641 -> 495.8167532322180698381509641)
+2026-03-24 21:45:39,985 [WARNING] simulation.desk: PAPER_DESK_PROBE stage=tick_event instrument=bitget:BTC-USDT:perp event=OrderFilled order_id=paper_v2_1409089 reason=
+2026-03-24 21:45:40,311 [INFO] simulation.portfolio: PaperPortfolio day rollover: 2025-07-01 -> 2025-07-02 (daily_open_equity=495.8167532322180698381509641 -> 494.4921047645903805244321942)
+2026-03-24 21:45:40,346 [WARNING] simulation.desk: PAPER_DESK_PROBE stage=tick_event instrument=bitget:BTC-USDT:perp event=OrderFilled order_id=paper_v2_1413092 reason=
+2026-03-24 21:45:40,830 [WARNING] simulation.desk: PAPER_DESK_PROBE stage=tick_event instrument=bitget:BTC-USDT:perp event=OrderFilled order_id=paper_v2_1417903 reason=
+2026-03-24 21:45:41,075 [INFO] simulation.portfolio: PaperPortfolio day rollover: 2025-07-02 -> 2025-07-03 (daily_open_equity=494.4921047645903805244321942 -> 497.2656755041992695978818428)
+2026-03-24 21:45:42,225 [INFO] simulation.portfolio: PaperPortfolio day rollover: 2025-07-03 -> 2025-07-04 (daily_open_equity=497.2656755041992695978818428 -> 497.9382579923793760445993428)
+2026-03-24 21:45:43,065 [INFO] simulation.portfolio: PaperPortfolio day rollover: 2025-07-04 -> 2025-07-05 (daily_open_equity=497.9382579923793760445993428 -> 496.4623411439142523552427428)
+2026-03-24 21:45:43,958 [INFO] simulation.portfolio: PaperPortfolio day rollover: 2025-07-05 -> 2025-07-06 (daily_open_equity=496.4623411439142523552427428 -> 496.6587444124763339510828428)
+2026-03-24 21:45:44,747 [INFO] simulation.portfolio: PaperPortfolio day rollover: 2025-07-06 -> 2025-07-07 (daily_open_equity=496.6587444124763339510828428 -> 497.5716201937031760389006428)
+2026-03-24 21:45:45,359 [WARNING] simulation.desk: PAPER_DESK_PROBE stage=tick_event instrument=bitget:BTC-USDT:perp event=OrderFilled order_id=paper_v2_1460863 reason=
+2026-03-24 21:45:45,625 [INFO] simulation.portfolio: PaperPortfolio day rollover: 2025-07-07 -> 2025-07-08 (daily_open_equity=497.5716201937031760389006428 -> 496.7189841149177569553235226)
+2026-03-24 21:45:46,455 [INFO] simulation.portfolio: PaperPortfolio day rollover: 2025-07-08 -> 2025-07-09 (daily_open_equity=496.7189841149177569553235226 -> 497.3628843169380252703537226)
+2026-03-24 21:45:46,885 [WARNING] simulation.desk: PAPER_DESK_PROBE stage=tick_event instrument=bitget:BTC-USDT:perp event=OrderFilled order_id=paper_v2_1477399 reason=
+2026-03-24 21:45:47,216 [INFO] simulation.portfolio: PaperPortfolio day rollover: 2025-07-09 -> 2025-07-10 (daily_open_equity=497.3628843169380252703537226 -> 499.8179877216060874844026995)
+2026-03-24 21:45:47,811 [WARNING] simulation.desk: PAPER_DESK_PROBE stage=tick_event instrument=bitget:BTC-USDT:perp event=OrderFilled order_id=paper_v2_1487600 reason=
+2026-03-24 21:45:47,814 [WARNING] simulation.desk: PAPER_DESK_PROBE stage=tick_event instrument=bitget:BTC-USDT:perp event=OrderFilled order_id=paper_v2_1487606 reason=
+2026-03-24 21:45:47,866 [INFO] simulation.portfolio: PaperPortfolio day rollover: 2025-07-10 -> 2025-07-11 (daily_open_equity=499.8179877216060874844026995 -> 504.8111786711239460204093064)
+2026-03-24 21:45:48,151 [WARNING] simulation.desk: PAPER_DESK_PROBE stage=tick_event instrument=bitget:BTC-USDT:perp event=OrderFilled order_id=paper_v2_1491529 reason=
+2026-03-24 21:45:49,972 [INFO] simulation.portfolio: PaperPortfolio day rollover: 2025-07-11 -> 2025-07-12 (daily_open_equity=504.8111786711239460204093064 -> 506.2449865067890460322977965)
+2026-03-24 21:45:50,406 [WARNING] simulation.desk: PAPER_DESK_PROBE stage=tick_event instrument=bitget:BTC-USDT:perp event=OrderFilled order_id=paper_v2_1500709 reason=
+2026-03-24 21:45:50,877 [INFO] simulation.portfolio: PaperPortfolio day rollover: 2025-07-12 -> 2025-07-13 (daily_open_equity=506.2449865067890460322977965 -> 506.1076723624900274076897908)
+2026-03-24 21:45:51,746 [INFO] simulation.portfolio: PaperPortfolio day rollover: 2025-07-13 -> 2025-07-14 (daily_open_equity=506.1076723624900274076897908 -> 507.8124458130232858854854908)
+2026-03-24 21:45:51,822 [WARNING] simulation.desk: PAPER_DESK_PROBE stage=tick_event instrument=bitget:BTC-USDT:perp event=OrderFilled order_id=paper_v2_1514606 reason=
+2026-03-24 21:45:52,128 [WARNING] simulation.desk: PAPER_DESK_PROBE stage=tick_event instrument=bitget:BTC-USDT:perp event=OrderFilled order_id=paper_v2_1518140 reason=
+2026-03-24 21:45:52,189 [WARNING] simulation.desk: PAPER_DESK_PROBE stage=tick_event instrument=bitget:BTC-USDT:perp event=OrderFilled order_id=paper_v2_1518458 reason=
+2026-03-24 21:45:53,177 [INFO] simulation.portfolio: PaperPortfolio day rollover: 2025-07-14 -> 2025-07-15 (daily_open_equity=507.8124458130232858854854908 -> 508.7782682309830959187439387)
+2026-03-24 21:45:53,814 [WARNING] simulation.desk: PAPER_DESK_PROBE stage=tick_event instrument=bitget:BTC-USDT:perp event=OrderFilled order_id=paper_v2_1525526 reason=
+2026-03-24 21:45:53,836 [WARNING] simulation.desk: PAPER_DESK_PROBE stage=tick_event instrument=bitget:BTC-USDT:perp event=OrderFilled order_id=paper_v2_1525796 reason=
+2026-03-24 21:45:53,847 [WARNING] simulation.desk: PAPER_DESK_PROBE stage=tick_event instrument=bitget:BTC-USDT:perp event=OrderFilled order_id=paper_v2_1525886 reason=
+2026-03-24 21:45:53,871 [WARNING] simulation.desk: PAPER_DESK_PROBE stage=tick_event instrument=bitget:BTC-USDT:perp event=OrderFilled order_id=paper_v2_1526047 reason=
+2026-03-24 21:45:54,024 [WARNING] simulation.desk: PAPER_DESK_PROBE stage=tick_event instrument=bitget:BTC-USDT:perp event=OrderFilled order_id=paper_v2_1527673 reason=
+2026-03-24 21:45:54,182 [INFO] simulation.portfolio: PaperPortfolio day rollover: 2025-07-15 -> 2025-07-16 (daily_open_equity=508.7782682309830959187439387 -> 506.9124111101191851535868953)
+2026-03-24 21:45:54,495 [WARNING] simulation.desk: PAPER_DESK_PROBE stage=tick_event instrument=bitget:BTC-USDT:perp event=OrderFilled order_id=paper_v2_1531988 reason=
+2026-03-24 21:45:55,121 [INFO] simulation.portfolio: PaperPortfolio day rollover: 2025-07-16 -> 2025-07-17 (daily_open_equity=506.9124111101191851535868953 -> 507.5676779309603873940189571)
+2026-03-24 21:45:56,132 [INFO] simulation.portfolio: PaperPortfolio day rollover: 2025-07-17 -> 2025-07-18 (daily_open_equity=507.5676779309603873940189571 -> 507.9750953014436587586561571)
+2026-03-24 21:45:56,692 [WARNING] simulation.desk: PAPER_DESK_PROBE stage=tick_event instrument=bitget:BTC-USDT:perp event=OrderFilled order_id=paper_v2_1549969 reason=
+2026-03-24 21:45:57,395 [INFO] simulation.portfolio: PaperPortfolio day rollover: 2025-07-18 -> 2025-07-19 (daily_open_equity=507.9750953014436587586561571 -> 507.0453102015299444564089261)
+2026-03-24 21:45:58,330 [INFO] simulation.portfolio: PaperPortfolio day rollover: 2025-07-19 -> 2025-07-20 (daily_open_equity=507.0453102015299444564089261 -> 506.9731389585477559714076261)
+2026-03-24 21:45:59,173 [INFO] simulation.portfolio: PaperPortfolio day rollover: 2025-07-20 -> 2025-07-21 (daily_open_equity=506.9731389585477559714076261 -> 506.5061115257709768329150261)
+2026-03-24 21:46:00,912 [INFO] simulation.portfolio: PaperPortfolio day rollover: 2025-07-21 -> 2025-07-22 (daily_open_equity=506.5061115257709768329150261 -> 506.5922920176635574120605261)
+2026-03-24 21:46:01,005 [WARNING] simulation.desk: PAPER_DESK_PROBE stage=tick_event instrument=bitget:BTC-USDT:perp event=OrderFilled order_id=paper_v2_1578740 reason=
+2026-03-24 21:46:01,153 [WARNING] simulation.desk: PAPER_DESK_PROBE stage=tick_event instrument=bitget:BTC-USDT:perp event=OrderFilled order_id=paper_v2_1579417 reason=
+2026-03-24 21:46:01,832 [WARNING] simulation.desk: PAPER_DESK_PROBE stage=tick_event instrument=bitget:BTC-USDT:perp event=OrderFilled order_id=paper_v2_1584493 reason=
+2026-03-24 21:46:02,063 [INFO] simulation.portfolio: PaperPortfolio day rollover: 2025-07-22 -> 2025-07-23 (daily_open_equity=506.5922920176635574120605261 -> 508.7728006215810067446197068)
+2026-03-24 21:46:02,553 [WARNING] simulation.desk: PAPER_DESK_PROBE stage=tick_event instrument=bitget:BTC-USDT:perp event=OrderFilled order_id=paper_v2_1591886 reason=
+2026-03-24 21:46:02,800 [INFO] simulation.portfolio: PaperPortfolio day rollover: 2025-07-23 -> 2025-07-24 (daily_open_equity=508.7728006215810067446197068 -> 507.6065172207978244855932398)
+2026-03-24 21:46:03,626 [INFO] simulation.portfolio: PaperPortfolio day rollover: 2025-07-24 -> 2025-07-25 (daily_open_equity=507.6065172207978244855932398 -> 507.2464066818409063066188398)
+2026-03-24 21:46:03,986 [WARNING] simulation.desk: PAPER_DESK_PROBE stage=tick_event instrument=bitget:BTC-USDT:perp event=OrderFilled order_id=paper_v2_1605500 reason=
+2026-03-24 21:46:04,148 [WARNING] simulation.desk: PAPER_DESK_PROBE stage=tick_event instrument=bitget:BTC-USDT:perp event=OrderFilled order_id=paper_v2_1607090 reason=
+2026-03-24 21:46:04,576 [INFO] simulation.portfolio: PaperPortfolio day rollover: 2025-07-25 -> 2025-07-26 (daily_open_equity=507.2464066818409063066188398 -> 506.3958783607426176881790539)
+2026-03-24 21:46:05,282 [INFO] simulation.portfolio: PaperPortfolio day rollover: 2025-07-26 -> 2025-07-27 (daily_open_equity=506.3958783607426176881790539 -> 506.6193694098544257452118539)
+2026-03-24 21:46:06,089 [INFO] simulation.portfolio: PaperPortfolio day rollover: 2025-07-27 -> 2025-07-28 (daily_open_equity=506.6193694098544257452118539 -> 507.7149489269220984253068539)
+2026-03-24 21:46:06,998 [INFO] simulation.portfolio: PaperPortfolio day rollover: 2025-07-28 -> 2025-07-29 (daily_open_equity=507.7149489269220984253068539 -> 506.7336969876093108680970539)
+2026-03-24 21:46:07,012 [WARNING] simulation.desk: PAPER_DESK_PROBE stage=tick_event instrument=bitget:BTC-USDT:perp event=OrderFilled order_id=paper_v2_1636537 reason=
+2026-03-24 21:46:07,912 [WARNING] simulation.desk: PAPER_DESK_PROBE stage=tick_event instrument=bitget:BTC-USDT:perp event=OrderFilled order_id=paper_v2_1643522 reason=
+2026-03-24 21:46:08,065 [INFO] simulation.portfolio: PaperPortfolio day rollover: 2025-07-29 -> 2025-07-30 (daily_open_equity=506.7336969876093108680970539 -> 506.6058297926959344405670753)
+2026-03-24 21:46:08,897 [WARNING] simulation.desk: PAPER_DESK_PROBE stage=tick_event instrument=bitget:BTC-USDT:perp event=OrderFilled order_id=paper_v2_1651237 reason=
+2026-03-24 21:46:09,086 [INFO] simulation.portfolio: PaperPortfolio day rollover: 2025-07-30 -> 2025-07-31 (daily_open_equity=506.6058297926959344405670753 -> 506.5209947420627702296556600)
+2026-03-24 21:46:10,046 [INFO] simulation.portfolio: PaperPortfolio day rollover: 2025-07-31 -> 2025-08-01 (daily_open_equity=506.5209947420627702296556600 -> 505.0572090519599558066538600)
+2026-03-24 21:46:10,417 [WARNING] simulation.desk: PAPER_DESK_PROBE stage=tick_event instrument=bitget:BTC-USDT:perp event=OrderFilled order_id=paper_v2_1664293 reason=
+2026-03-24 21:46:10,780 [WARNING] simulation.desk: PAPER_DESK_PROBE stage=tick_event instrument=bitget:BTC-USDT:perp event=OrderFilled order_id=paper_v2_1667053 reason=
+2026-03-24 21:46:10,796 [WARNING] simulation.desk: PAPER_DESK_PROBE stage=tick_event instrument=bitget:BTC-USDT:perp event=OrderFilled order_id=paper_v2_1667276 reason=
+2026-03-24 21:46:10,814 [WARNING] simulation.desk: PAPER_DESK_PROBE stage=tick_event instrument=bitget:BTC-USDT:perp event=OrderFilled order_id=paper_v2_1667449 reason=
+2026-03-24 21:46:10,966 [INFO] simulation.portfolio: PaperPortfolio day rollover: 2025-08-01 -> 2025-08-02 (daily_open_equity=505.0572090519599558066538600 -> 503.2472982484723177755603792)

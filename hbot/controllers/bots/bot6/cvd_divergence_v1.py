@@ -417,14 +417,14 @@ class Bot6CvdDivergenceV1Controller(DirectionalStrategyRuntimeV24Controller):
         gate = self._bot6_gate_metrics()
 
         if gate["fail_closed"]:
-            self._pending_stale_cancel_actions.extend(self._cancel_active_quote_executors())
+            self.enqueue_stale_cancels(self._cancel_active_quote_executors())
             self._cancel_alpha_no_trade_orders()
             self._quote_side_mode = "off"
             self._quote_side_reason = f"bot6_{gate['reason']}"
             return "off"
 
         if not bool(signal_state.get("directional_allowed", False)):
-            self._pending_stale_cancel_actions.extend(self._cancel_active_quote_executors())
+            self.enqueue_stale_cancels(self._cancel_active_quote_executors())
             self._cancel_alpha_no_trade_orders()
             self._quote_side_mode = "off"
             self._quote_side_reason = "bot6_no_signal"
@@ -432,7 +432,7 @@ class Bot6CvdDivergenceV1Controller(DirectionalStrategyRuntimeV24Controller):
         desired_mode = "buy_only" if str(signal_state.get("direction")) == "buy" else "sell_only"
         previous_mode = str(getattr(self, "_quote_side_mode", "off") or "off")
         if previous_mode != desired_mode:
-            self._pending_stale_cancel_actions.extend(
+            self.enqueue_stale_cancels(
                 self._cancel_stale_side_executors(previous_mode, desired_mode)
             )
         self._quote_side_mode = desired_mode

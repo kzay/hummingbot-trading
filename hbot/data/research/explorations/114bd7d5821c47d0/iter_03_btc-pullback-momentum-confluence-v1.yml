@@ -1,0 +1,58 @@
+name: btc-pullback-momentum-confluence-v1
+hypothesis: 'BTC-USDT perpetual exhibits reliable directional momentum after pullbacks
+  when multiple timeframes align: HTF trend continuation + LTF oversold RSI bounce
+  creates high-probability long entries with 2-4 hour hold times. Strategy achieves
+  >1.3 profit factor with <20% drawdown across parameter sweep.'
+adapter_mode: pullback_v2
+parameter_space:
+  htf_trend_period:
+  - 50
+  - 100
+  - 200
+  ltf_entry_rsi:
+  - 25
+  - 30
+  - 35
+  confirmation_bars:
+  - 1
+  - 2
+  - 3
+  stop_atr_mult:
+  - 1.5
+  - 2.0
+  - 2.5
+entry_logic: Enter long when HTF EMA(htf_trend_period) shows uptrend AND price pulls
+  back below recent swing high AND LTF RSI(14) drops below ltf_entry_rsi threshold
+  AND price recovers above pullback low for confirmation_bars consecutive bars. Only
+  take trades aligned with HTF trend direction.
+exit_logic: Exit on stop loss at entry - (stop_atr_mult * ATR(14)) OR take profit
+  at entry + (2 * stop_atr_mult * ATR(14)) OR maximum hold time of 8 hours. Trail
+  stop to breakeven after 1:1 risk-reward achieved.
+base_config:
+  strategy_class: pullback_v2
+  strategy_config:
+    htf_trend_period: 100
+    ltf_entry_rsi: 30
+    confirmation_bars: 2
+    stop_atr_mult: 2.0
+    tp_ratio: 2.0
+    max_hold_hours: 8
+    trail_to_be: true
+    risk_pct: '0.08'
+  data_source:
+    exchange: bitget
+    pair: BTC-USDT
+    resolution: 15m
+    instrument_type: perp
+  initial_equity: '500'
+  leverage: 1
+  seed: 42
+  step_interval_s: 900
+  warmup_bars: 60
+required_tests:
+- test_adapter_compiles
+- test_no_lookahead_in_entry
+metadata:
+  author: llm_exploration
+  version: '1.0'
+lifecycle: candidate

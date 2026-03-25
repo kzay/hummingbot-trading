@@ -1,0 +1,61 @@
+name: btc-bollinger-squeeze-breakout-v1
+hypothesis: BTC-USDT 15m bars exhibit momentum breakouts after Bollinger Band squeeze
+  periods. When BB width contracts below 20th percentile (low volatility regime) followed
+  by a breakout above/below the bands with volume confirmation, price continues in
+  the breakout direction for 3-8 bars before mean-reverting. Momentum scalping with
+  tight stops captures this edge while avoiding false breakouts.
+adapter_mode: momentum_scalper
+parameter_space:
+  burst_threshold:
+  - 1.5
+  - 2.0
+  - 2.5
+  hold_bars:
+  - 3
+  - 5
+  - 8
+  trail_atr:
+  - 1.0
+  - 1.5
+  - 2.0
+  volume_multiplier:
+  - 1.2
+  - 1.5
+  - 2.0
+entry_logic: 'Enter long when: (1) Bollinger Band width in bottom 20th percentile
+  over past 20 bars, (2) close breaks above upper BB by burst_threshold * ATR(14),
+  (3) current bar volume exceeds volume_multiplier * SMA(volume, 10). Enter short
+  on opposite conditions with lower BB break. Only one position at a time.'
+exit_logic: Exit after hold_bars completed bars OR when price reverses trail_atr *
+  ATR(14) against position OR when stop loss hit at 3 * ATR(14) from entry. Close
+  all positions at session end.
+base_config:
+  strategy_class: momentum_scalper
+  strategy_config:
+    burst_threshold: 2.0
+    hold_bars: 5
+    trail_atr: 1.5
+    volume_multiplier: 1.5
+    bb_period: 20
+    bb_std: 2.0
+    atr_period: 14
+    max_position_pct: 0.8
+    stop_atr_mult: 3.0
+  data_source:
+    exchange: bitget
+    pair: BTC-USDT
+    resolution: 15m
+    instrument_type: perp
+  initial_equity: '500'
+  leverage: 1
+  seed: 42
+  step_interval_s: 900
+  warmup_bars: 60
+required_tests:
+- test_adapter_compiles
+- test_no_lookahead_in_entry
+metadata:
+  author: llm_exploration
+  version: '1.0'
+  notes: Tests Bollinger squeeze -> momentum breakout hypothesis with volume filter
+lifecycle: candidate

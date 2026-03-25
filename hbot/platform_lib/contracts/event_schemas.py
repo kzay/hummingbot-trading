@@ -139,9 +139,24 @@ class MlFeatureEvent(EventEnvelope):
     event_type: Literal["ml_features"] = "ml_features"
     exchange: str
     trading_pair: str
+    resolution: str = Field(default="1m", description="Bar resolution this event was computed at")
     features: dict[str, float] = Field(default_factory=dict)
     predictions: dict[str, dict] = Field(default_factory=dict)
     model_versions: dict[str, str] = Field(default_factory=dict)
+
+
+class MlShadowComparisonEvent(EventEnvelope):
+    """Shadow model comparison log entry emitted during ML_SHADOW_MODE."""
+    event_type: Literal["ml_shadow_comparison"] = "ml_shadow_comparison"
+    exchange: str
+    trading_pair: str
+    model_type: str
+    active_pred: int | float
+    shadow_pred: int | float
+    agreement: bool
+    active_confidence: float = 0.0
+    shadow_confidence: float = 0.0
+    confidence_delta: float = 0.0
 
 
 class MlSignalEvent(EventEnvelope):

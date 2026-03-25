@@ -1,0 +1,46 @@
+
+============================================================
+Strategy Research Lab — LLM Exploration Agent
+============================================================
+  Provider:       anthropic
+  Iterations:     5
+  Temperature:    0.7
+  Instrument:     BTC-USDT
+  Exchange:       bitget
+  Adapters:       atr_mm, atr_mm_v2, smc_mm, combo_mm, pullback, pullback_v2, momentum_scalper, directional_mm, simple, candle
+  Auto lifecycle: True
+============================================================
+
+2026-03-24 17:37:15,161 [INFO] controllers.research.exploration_session: === Exploration iteration 1/5 ===
+2026-03-24 17:37:29,801 [INFO] httpx: HTTP Request: POST https://api.anthropic.com/v1/messages "HTTP/1.1 200 OK"
+2026-03-24 17:37:29,834 [INFO] controllers.research.exploration_session: New adapter blueprint 'btc-volume-surge-breakout-v1' (adapter_mode=volume_breakout) — saved, skipping backtest.
+2026-03-24 17:37:29,834 [INFO] controllers.research.exploration_session: === Exploration iteration 2/5 ===
+2026-03-24 17:37:43,394 [INFO] httpx: HTTP Request: POST https://api.anthropic.com/v1/messages "HTTP/1.1 200 OK"
+2026-03-24 17:37:43,401 [INFO] controllers.research.exploration_session: New adapter blueprint 'btc-gap-fill-reversion-v1' (adapter_mode=gap_reversion) — saved, skipping backtest.
+2026-03-24 17:37:43,401 [INFO] controllers.research.exploration_session: === Exploration iteration 3/5 ===
+2026-03-24 17:37:58,756 [INFO] httpx: HTTP Request: POST https://api.anthropic.com/v1/messages "HTTP/1.1 200 OK"
+2026-03-24 17:37:58,764 [INFO] controllers.research.exploration_session: New adapter blueprint 'btc-session-transition-momentum-v1' (adapter_mode=session_momentum) — saved, skipping backtest.
+2026-03-24 17:37:58,764 [INFO] controllers.research.exploration_session: === Exploration iteration 4/5 ===
+2026-03-24 17:38:16,504 [INFO] httpx: HTTP Request: POST https://api.anthropic.com/v1/messages "HTTP/1.1 200 OK"
+2026-03-24 17:38:16,511 [INFO] controllers.research.exploration_session: New adapter blueprint 'btc-microstructure-imbalance-v1' (adapter_mode=flow_imbalance_mm) — saved, skipping backtest.
+2026-03-24 17:38:16,511 [INFO] controllers.research.exploration_session: === Exploration iteration 5/5 ===
+2026-03-24 17:38:32,639 [INFO] httpx: HTTP Request: POST https://api.anthropic.com/v1/messages "HTTP/1.1 200 OK"
+2026-03-24 17:38:32,647 [INFO] controllers.research.exploration_session: New adapter blueprint 'btc-volatility-regime-mm-v1' (adapter_mode=volatility_regime_mm) — saved, skipping backtest.
+2026-03-24 17:38:32,647 [INFO] controllers.research.exploration_session: Session complete: 5 iterations, best=0.000 (), tokens=13173
+
+============================================================
+SESSION RESULTS
+============================================================
+  Total iterations:   5
+  Best score:         0.000
+  Best candidate:     
+  Best recommendation:
+  Total tokens:       13173
+
+  [1] generate btc-volume-surge-breakout-v1    ERROR: None
+  [2] generate btc-gap-fill-reversion-v1       ERROR: None
+  [3] generate btc-session-transition-momentum-v1  ERROR: None
+  [4] generate btc-microstructure-imbalance-v1  ERROR: None
+  [5] generate btc-volatility-regime-mm-v1     ERROR: None
+
+  Session summary → data/research/explorations/c2f3c1e5e7e64ce6/session_summary.json

@@ -116,12 +116,12 @@ class ServiceSettings:
     pair_snapshot_flush_interval_ms: int = 1_000
     latency_report_path: str = "reports/verification/paper_exchange_hot_path_latest.json"
     pending_reclaim_enabled: bool = True
-    pending_reclaim_idle_ms: int = 30_000
-    pending_reclaim_interval_ms: int = 5_000
+    pending_reclaim_idle_ms: int = 120_000
+    pending_reclaim_interval_ms: int = 15_000
     pending_reclaim_count: int = 100
     market_pending_reclaim_enabled: bool = True
-    market_pending_reclaim_idle_ms: int = 30_000
-    market_pending_reclaim_interval_ms: int = 5_000
+    market_pending_reclaim_idle_ms: int = 120_000
+    market_pending_reclaim_interval_ms: int = 15_000
     market_pending_reclaim_count: int = 100
     # -- Desk engine defaults (per-tenant PaperDesk) --
     initial_equity_quote: Decimal = Decimal("500")

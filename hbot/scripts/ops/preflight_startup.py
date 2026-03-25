@@ -202,7 +202,7 @@ def _check_recon_exchange_ready(root: Path) -> tuple[bool, str, dict]:
                 if key in env_vals:
                     env_vals[key] = v.strip().strip('"').strip("'")
         except Exception:
-            pass
+            pass  # Justification: best-effort I/O — .env may be unreadable or malformed
 
     has_global_keys = all(bool(env_vals[k]) for k in ("BITGET_API_KEY", "BITGET_SECRET", "BITGET_PASSPHRASE"))
     has_bot1_keys = all(bool(env_vals[k]) for k in ("BOT1_BITGET_API_KEY", "BOT1_BITGET_API_SECRET", "BOT1_BITGET_PASSPHRASE"))

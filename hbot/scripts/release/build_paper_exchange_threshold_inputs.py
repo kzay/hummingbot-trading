@@ -314,7 +314,7 @@ def _ordering_value(record: dict[str, object], fallback: int) -> int:
         try:
             return int(sequence)
         except Exception:
-            pass
+            pass  # Justification: script CLI — non-critical diagnostic / best-effort cleanup (fallback ordering)
     return int(fallback)
 
 

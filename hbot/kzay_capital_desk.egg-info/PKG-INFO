@@ -1,0 +1,27 @@
+Metadata-Version: 2.4
+Name: kzay-capital-desk
+Version: 0.1.0
+Summary: Semi-pro crypto trading desk automation built on Hummingbot
+Requires-Python: >=3.12
+Requires-Dist: redis>=7.2
+Requires-Dist: orjson>=3.10
+Requires-Dist: pydantic>=2.12
+Requires-Dist: joblib>=1.5
+Requires-Dist: scikit-learn>=1.8
+Requires-Dist: requests>=2.32
+Requires-Dist: boto3>=1.42
+Requires-Dist: ccxt>=4.5
+Requires-Dist: psycopg[binary]>=3.2
+Requires-Dist: pyarrow>=18.0
+Requires-Dist: pandas>=2.2
+Provides-Extra: dev
+Requires-Dist: pytest>=8.4; extra == "dev"
+Requires-Dist: pytest-cov>=7.0; extra == "dev"
+Requires-Dist: pytest-forked>=1.6; extra == "dev"
+Requires-Dist: pytest-xdist>=3.5; extra == "dev"
+Requires-Dist: hypothesis>=6.100; extra == "dev"
+Requires-Dist: mypy>=1.11; extra == "dev"
+Requires-Dist: ruff>=0.5; extra == "dev"
+Provides-Extra: llm
+Requires-Dist: anthropic; extra == "llm"
+Requires-Dist: openai; extra == "llm"

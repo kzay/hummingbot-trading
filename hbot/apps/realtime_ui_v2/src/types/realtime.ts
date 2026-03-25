@@ -153,6 +153,7 @@ export interface StreamStatePayload {
   open_orders?: UiOrder[];
   fills?: UiFill[];
   fills_total?: number;
+  ml_features?: Record<string, unknown>;
   key?: {
     instance_name?: string;
     controller_id?: string;

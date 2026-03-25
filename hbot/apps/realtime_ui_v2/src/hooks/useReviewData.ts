@@ -5,7 +5,7 @@ import type { DailyReviewPayload, JournalReviewPayload, JournalTrade, WeeklyRevi
 import { readLocalStorage, writeLocalStorage } from "../utils/browserStorage";
 import { parseDailyReviewResponse, parseJournalReviewResponse, parseWeeklyReviewResponse } from "../utils/realtimeParsers";
 
-export type ActiveView = "realtime" | "history" | "service" | "daily" | "weekly" | "journal" | "backtest" | "research";
+export type ActiveView = "realtime" | "history" | "service" | "daily" | "weekly" | "journal" | "backtest" | "research" | "ml";
 
 interface ReviewState<TPayload> {
   source: string;
@@ -55,7 +55,7 @@ export function useReviewData(): UseReviewDataResult {
 
   const [activeView, setActiveViewState] = useState<ActiveView>(() => {
     const raw = readLocalStorage("hbV2ActiveView", "realtime");
-    return ["realtime", "history", "service", "daily", "weekly", "journal", "backtest", "research"].includes(raw) ? (raw as ActiveView) : "realtime";
+    return ["realtime", "history", "service", "daily", "weekly", "journal", "backtest", "research", "ml"].includes(raw) ? (raw as ActiveView) : "realtime";
   });
   const [dailyDay, setDailyDayState] = useState<string>(() => readLocalStorage("hbV2DailyDay", todayUtc()));
   const [journalStartDay, setJournalStartDayState] = useState<string>(() => readLocalStorage("hbV2JournalStartDay", ""));

@@ -35,15 +35,14 @@ describe("TopBar", () => {
 
   it("stores API tokens in session storage only after apply", async () => {
     render(<TopBar activeView="realtime" onActiveViewChange={vi.fn()} />);
-    fireEvent.click(screen.getByText("Connection settings"));
+    fireEvent.click(screen.getByRole("button", { name: /Idle/i }));
     fireEvent.change(screen.getByLabelText("Token"), {
       target: { value: "session-secret" },
     });
-    fireEvent.click(screen.getByRole("button", { name: "Apply connection settings" }));
+    fireEvent.click(screen.getByRole("button", { name: /Apply Connection/i }));
 
     expect(sessionStorage.getItem("hbV2ApiToken")).toBe("session-secret");
     expect(localStorage.getItem("hbV2ApiToken")).toBeNull();
-    expect(screen.getByText(/session-only/i)).toBeInTheDocument();
   });
 
   it("prefers health stream age over summary age", () => {

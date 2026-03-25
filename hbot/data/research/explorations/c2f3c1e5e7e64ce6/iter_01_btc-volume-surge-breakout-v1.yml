@@ -1,0 +1,66 @@
+name: btc-volume-surge-breakout-v1
+hypothesis: BTC-USDT 1m bars exhibit directional momentum following volume surges
+  that exceed  3x the 20-period rolling average, particularly when accompanied by
+  price breakouts  above/below the 50-period EMA. The combination of abnormal volume
+  and EMA breakout  creates short-term directional edge lasting 5-15 minutes before
+  mean reversion.
+adapter_mode: volume_breakout
+parameter_space:
+  volume_surge_multiplier:
+  - 2.5
+  - 3.0
+  - 3.5
+  - 4.0
+  ema_period:
+  - 30
+  - 50
+  - 80
+  max_holding_minutes:
+  - 5
+  - 10
+  - 15
+  - 20
+  profit_target_pct:
+  - 0.3
+  - 0.5
+  - 0.8
+  - 1.2
+entry_logic: 'Enter long when: (1) current bar volume > volume_surge_multiplier *
+  SMA(volume, 20),  (2) close > EMA(close, ema_period), (3) close > open (bullish
+  bar), (4) no existing position. Enter short when: (1) current bar volume > volume_surge_multiplier
+  * SMA(volume, 20),  (2) close < EMA(close, ema_period), (3) close < open (bearish
+  bar), (4) no existing position.'
+exit_logic: 'Close position when: (1) profit target of profit_target_pct% reached,  (2)
+  max_holding_minutes elapsed since entry, (3) volume drops below 0.5x the  20-period
+  average (volume exhaustion), or (4) adverse move exceeds 1.5% from entry.'
+base_config:
+  strategy_class: volume_breakout
+  strategy_config:
+    volume_lookback: 20
+    stop_loss_pct: 1.5
+  data_source:
+    exchange: bitget
+    pair: BTC-USDT
+    resolution: 1m
+    instrument_type: perp
+  initial_equity: '500'
+  leverage: 2
+  seed: 42
+  step_interval_s: 60
+  warmup_bars: 80
+required_tests:
+- test_adapter_compiles
+- test_no_lookahead_in_entry
+- test_volume_data_available
+metadata:
+  author: llm_exploration
+  version: '1.0'
+  notes: Volume-based breakout strategy exploiting surge + directional confirmation
+lifecycle: candidate
+new_adapter_description: 'This adapter monitors real-time volume and price action
+  to detect volume surge +  breakout combinations. On each 1m bar completion, it:
+  (a) calculates rolling 20-period  volume average and current volume ratio, (b) checks
+  if price has broken above/below  the 50-EMA with sufficient volume confirmation,
+  (c) enters directional positions with  volume-weighted position sizing, (d) manages
+  exits via time decay, profit targets,  or volume exhaustion signals. Config parameters:
+  volume_surge_multiplier, ema_period,  max_holding_minutes, profit_target_pct, volume_exhaustion_threshold.'

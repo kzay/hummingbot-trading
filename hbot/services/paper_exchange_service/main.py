@@ -613,12 +613,12 @@ class ServiceSettings:
     market_fill_journal_path: str = "reports/verification/paper_exchange_market_fill_journal_latest.json"
     market_fill_journal_max_entries: int = 200_000
     pending_reclaim_enabled: bool = True
-    pending_reclaim_idle_ms: int = 30_000
-    pending_reclaim_interval_ms: int = 5_000
+    pending_reclaim_idle_ms: int = 120_000
+    pending_reclaim_interval_ms: int = 15_000
     pending_reclaim_count: int = 100
     market_pending_reclaim_enabled: bool = True
-    market_pending_reclaim_idle_ms: int = 30_000
-    market_pending_reclaim_interval_ms: int = 5_000
+    market_pending_reclaim_idle_ms: int = 120_000
+    market_pending_reclaim_interval_ms: int = 15_000
     market_pending_reclaim_count: int = 100
     terminal_order_ttl_ms: int = 86_400_000
     max_orders_tracked: int = 200_000

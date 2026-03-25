@@ -79,3 +79,76 @@ class TestRobustnessScorer:
         }
         bd = scorer.score(metrics)
         assert bd.total_score <= 1.0
+
+    def test_missing_fee_stress_renormalises_remaining_weights(self):
+        scorer = RobustnessScorer()
+        metrics = {
+            "mean_oos_sharpe": 1.5,
+            "oos_degradation_ratio": 0.8,
+            "oos_threshold": 0.5,
+            "param_cv": {"spread": 0.1},
+            "fee_stress_sharpes": None,
+            "regime_oos_degradation": {"trending": 1.2},
+            "deflated_sharpe": 0.2,
+        }
+
+        bd = scorer.score(metrics)
+
+        assert bd.components["fee_stress"].weight == pytest.approx(0.15)
+        assert bd.components["fee_stress"].weighted_contribution == 0.0
+        assert sum(
+            component.weight
+            for name, component in bd.components.items()
+            if name != "fee_stress"
+        ) == pytest.approx(1.0)
+
+    def test_oos_degradation_at_threshold_gets_full_component_score(self):
+        scorer = RobustnessScorer()
+        metrics = {
+            "mean_oos_sharpe": 1.0,
+            "oos_degradation_ratio": 0.55,
+            "oos_threshold": 0.55,
+            "param_cv": {"spread": 0.2},
+            "fee_stress_sharpes": [0.7],
+            "base_sharpe": 1.0,
+            "regime_oos_degradation": {"trending": 0.8},
+            "deflated_sharpe": 0.01,
+        }
+
+        bd = scorer.score(metrics)
+
+        assert bd.components["oos_degradation"].normalised == 1.0
+        assert bd.components["oos_degradation"].weighted_contribution == pytest.approx(
+            bd.components["oos_degradation"].weight
+        )
+
+    def test_negative_performance_inputs_clamp_to_zeroish_score(self):
+        scorer = RobustnessScorer()
+        metrics = {
+            "mean_oos_sharpe": -1.0,
+            "oos_degradation_ratio": -0.2,
+            "oos_threshold": 0.5,
+            "param_cv": {"spread": 1.5},
+            "fee_stress_sharpes": [-2.0, -1.0],
+            "base_sharpe": -1.0,
+            "regime_oos_degradation": {"trending": -0.5, "ranging": -0.3},
+            "deflated_sharpe": -0.1,
+        }
+
+        bd = scorer.score(metrics)
+
+        assert bd.total_score == pytest.approx(0.0)
+        assert bd.recommendation == "reject"
+
+    def test_partial_weight_config_keeps_total_score_bounded(self):
+        scorer = RobustnessScorer({"oos_sharpe": 2.0, "dsr_pass": 1.0})
+        metrics = {
+            "mean_oos_sharpe": 3.0,
+            "deflated_sharpe": 1.0,
+        }
+
+        bd = scorer.score(metrics)
+
+        assert bd.components["oos_sharpe"].weight == pytest.approx(2.0 / 3.0)
+        assert bd.components["dsr_pass"].weight == pytest.approx(1.0 / 3.0)
+        assert 0.0 <= bd.total_score <= 1.0

@@ -51,11 +51,11 @@ class AutoCalibrationMixin:
         try:
             paths.append(Path(self.config.log_dir) / "auto_tune_latest.json")
         except Exception:
-            pass
+            pass  # Justification: fallback path resolution — config attributes may be absent
         try:
             paths.append(Path(self._daily_state_path()).parent / "auto_tune_latest.json")
         except Exception:
-            pass
+            pass  # Justification: fallback path resolution — config attributes may be absent
         dedup: list[Path] = []
         seen: set[str] = set()
         for p in paths:

@@ -1,0 +1,59 @@
+name: btc-volatility-regime-momentum-v1
+hypothesis: BTC-USDT exhibits distinct momentum persistence patterns during different
+  volatility regimes. During high volatility periods (ATR > 20-period MA), momentum
+  bursts lasting 2-6 bars show continuation with 60%+ win rate. Strategy enters on
+  initial momentum spike, holds for fixed duration with trailing stop, then exits.
+  Higher volatility requires tighter trail stops to capture quick reversals.
+adapter_mode: momentum_scalper
+parameter_space:
+  burst_threshold:
+  - 1.5
+  - 2.0
+  - 2.5
+  - 3.0
+  hold_bars:
+  - 2
+  - 4
+  - 6
+  - 8
+  trail_atr:
+  - 0.8
+  - 1.2
+  - 1.6
+  vol_filter_mult:
+  - 1.0
+  - 1.3
+  - 1.6
+entry_logic: Enter long when current bar's range exceeds burst_threshold * ATR(14)
+  AND ATR(14) > vol_filter_mult * SMA(ATR(14), 20) indicating high volatility regime.
+  Enter short on same conditions but negative price movement. Only one position at
+  a time.
+exit_logic: Exit after hold_bars completed bars OR when price trails back trail_atr
+  * ATR(14) from the most favorable level reached. Force exit if volatility regime
+  ends (ATR drops below vol_filter_mult threshold).
+base_config:
+  strategy_class: momentum_scalper
+  strategy_config:
+    burst_threshold: 2.0
+    hold_bars: 4
+    trail_atr: 1.2
+    vol_filter_mult: 1.3
+    max_position_pct: '0.15'
+    risk_per_trade_pct: '0.02'
+  data_source:
+    exchange: bitget
+    pair: BTC-USDT
+    resolution: 15m
+    instrument_type: perp
+  initial_equity: '500'
+  leverage: 1
+  seed: 42
+  step_interval_s: 900
+  warmup_bars: 60
+required_tests:
+- test_adapter_compiles
+- test_no_lookahead_in_entry
+metadata:
+  author: llm_exploration
+  version: '1.0'
+lifecycle: candidate

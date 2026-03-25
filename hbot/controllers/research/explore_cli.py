@@ -40,8 +40,10 @@ def main() -> None:
         help="Target exchange. Default: bitget",
     )
     parser.add_argument(
-        "--adapters", default="atr_mm,simple,candle",
-        help="Comma-separated adapter modes. Default: atr_mm,simple,candle",
+        "--adapters",
+        default="atr_mm,atr_mm_v2,smc_mm,combo_mm,pullback,pullback_v2,"
+                "momentum_scalper,directional_mm,simple",
+        help="Comma-separated adapter modes (LLM may also propose new ones)",
     )
     parser.add_argument(
         "--extra-context", default="",

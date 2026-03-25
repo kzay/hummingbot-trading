@@ -1,0 +1,39 @@
+consumers:
+  ml_feature_service:
+    required_lookback_bars: 20160
+    bootstrap_from: "90d"
+    canonical_datasets: ["1m"]
+    live_streams:
+      - hb.market_trade.v1
+      - hb.data_catalog.v1
+    optional_inputs:
+      - mark_candles_1m
+      - index_candles_1m
+    pairs: ["BTC-USDT"]
+    exchange: bitget
+    derived_from: "feature_pipeline atr_pctl_7d = rolling(10080) * 2x buffer"
+
+  backtesting:
+    required_lookback_bars: 60
+    retention_policy: "full_history"
+    canonical_datasets: ["1m"]
+    materialized_datasets: ["5m", "15m", "1h"]
+    pairs: ["BTC-USDT", "ETH-USDT"]
+    exchange: bitget
+    warmup_bars: 60
+
+  ml_training:
+    required_lookback_bars: 1000
+    retention_policy: "full_history"
+    canonical_datasets: ["1m", "mark_1m", "index_1m", "funding", "ls_ratio"]
+    materialized_datasets: ["5m", "15m", "1h"]
+    pairs: ["BTC-USDT", "ETH-USDT"]
+    exchange: bitget
+    min_rows: 1000
+
+  strategy_controller:
+    required_lookback_bars: 60
+    canonical_datasets: ["1m"]
+    pairs: ["BTC-USDT"]
+    exchange: bitget
+    source: "live_stream"

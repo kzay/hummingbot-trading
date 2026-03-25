@@ -75,7 +75,7 @@ def _installed_versions(packages: list[str]) -> dict[str, str]:
             elif line.startswith("Version:") and current_name:
                 result[current_name] = line.split(":", 1)[1].strip()
     except Exception:
-        pass
+        pass  # Justification: script CLI — non-critical diagnostic / best-effort cleanup (pip show may fail)
     return result
 
 

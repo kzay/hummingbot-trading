@@ -10,7 +10,7 @@ try:
 except Exception:  # pragma: no cover - optional in lightweight test environments.
     psycopg = None  # type: ignore[assignment]
 
-from .parsers import _env_bool, _env_int
+from services.ops_db_writer.parsers import _env_bool, _env_int
 
 logger = logging.getLogger(__name__)
 
@@ -177,7 +177,7 @@ def _apply_timescale(conn: psycopg.Connection) -> dict[str, object]:
         try:
             conn.rollback()
         except Exception:
-            pass
+            pass  # Justification: best-effort rollback after DB error — connection may be aborted
         if required:
             raise RuntimeError(f"timescaledb_required_but_unavailable: {exc}") from exc
         meta["warnings"].append(f"timescaledb_extension_unavailable: {exc}")
@@ -189,7 +189,7 @@ def _apply_timescale(conn: psycopg.Connection) -> dict[str, object]:
         try:
             conn.rollback()
         except Exception:
-            pass
+            pass  # Justification: best-effort rollback after DB error — connection may be aborted
         if required:
             raise RuntimeError(f"timescaledb_extension_probe_failed: {exc}") from exc
         meta["warnings"].append(f"timescaledb_extension_probe_failed: {exc}")
@@ -213,7 +213,7 @@ def _apply_timescale(conn: psycopg.Connection) -> dict[str, object]:
             try:
                 conn.rollback()
             except Exception:
-                pass
+                pass  # Justification: best-effort rollback after DB error — connection may be aborted
             if required:
                 raise RuntimeError(
                     f"timescale_constraint_probe_failed:{table_name}:{time_col}: {exc}"
@@ -251,7 +251,7 @@ def _apply_timescale(conn: psycopg.Connection) -> dict[str, object]:
             try:
                 conn.rollback()
             except Exception:
-                pass
+                pass  # Justification: best-effort rollback after DB error — connection may be aborted
             if required:
                 raise RuntimeError(f"create_hypertable_failed:{table_name}: {exc}") from exc
             meta["warnings"].append(f"create_hypertable_failed:{table_name}: {exc}")
@@ -276,7 +276,7 @@ def _apply_timescale(conn: psycopg.Connection) -> dict[str, object]:
             try:
                 conn.rollback()
             except Exception:
-                pass
+                pass  # Justification: best-effort rollback after DB error — connection may be aborted
             if required:
                 raise RuntimeError(f"add_retention_policy_failed:{table_name}: {exc}") from exc
             meta["warnings"].append(f"add_retention_policy_failed:{table_name}: {exc}")
@@ -306,7 +306,7 @@ def _apply_timescale(conn: psycopg.Connection) -> dict[str, object]:
                 try:
                     conn.rollback()
                 except Exception:
-                    pass
+                    pass  # Justification: best-effort rollback after DB error — connection may be aborted
                 if required:
                     raise RuntimeError(f"add_compression_policy_failed:{table_name}: {exc}") from exc
                 meta["warnings"].append(f"add_compression_policy_failed:{table_name}: {exc}")

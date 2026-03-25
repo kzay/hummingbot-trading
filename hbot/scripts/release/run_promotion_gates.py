@@ -662,7 +662,7 @@ def _file_ref(path: Path) -> dict[str, object]:
             ref["sha256"] = _sha256_file(path)
             ref["size_bytes"] = int(path.stat().st_size)
         except Exception:
-            pass
+            pass  # Justification: best-effort I/O — file may be removed or unreadable during gate
     return ref
 
 

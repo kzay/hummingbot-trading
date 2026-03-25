@@ -101,6 +101,9 @@ _ZERO = Decimal("0")
 _ONE = Decimal("1")
 
 
+_RESOLUTION_TO_MINUTES: dict[str, int] = {"1m": 1, "5m": 5, "15m": 15, "1h": 60}
+
+
 @dataclass
 class PullbackAdapterConfig:
     """All tunable parameters matching PullbackV1Config defaults."""
@@ -111,6 +114,7 @@ class PullbackAdapterConfig:
     rsi_period: int = 14
     adx_period: int = 14
     atr_period: int = 14
+    indicator_resolution: str = "1m"
 
     # RSI entry windows
     rsi_long_min: Decimal = Decimal("35")
@@ -272,7 +276,12 @@ class BacktestPullbackAdapter:
         if self._cfg.ict_shadow_enabled:
             self._ict = ICTState(ICTConfig(atr_period=self._cfg.atr_period))
 
-        self._price_buffer = PriceBuffer(sample_interval_sec=60, max_minutes=2880)
+        _res_min = _RESOLUTION_TO_MINUTES.get(self._cfg.indicator_resolution, 1)
+        self._price_buffer = PriceBuffer(
+            sample_interval_sec=60,
+            max_minutes=2880,
+            resolution_minutes=_res_min,
+        )
         self._regime_detector = RegimeDetector(
             specs=_default_regime_specs(),
             high_vol_band_pct=self._cfg.high_vol_band_pct,
@@ -333,7 +342,7 @@ class BacktestPullbackAdapter:
     def warmup(self, candles: list[CandleRow]) -> int:
         bars = [
             MinuteBar(
-                ts_minute=int(c.timestamp_ms // 1000),
+                ts_minute=int(c.timestamp_ms // 1000 // 60) * 60,
                 open=c.open,
                 high=c.high,
                 low=c.low,
@@ -822,7 +831,7 @@ class BacktestPullbackAdapter:
         try:
             self._desk.cancel_all(self._instrument_id)
         except Exception:
-            pass
+            pass  # Justification: best-effort teardown during simulation — desk may already be closed
 
     def _cooldown_active(self, side: str, now_s: float) -> bool:
         cooldown_s = self._cfg.signal_cooldown_s

@@ -355,9 +355,9 @@ def _install_bitget_ws_stability_patch():
                     if mid is not None:
                         return mid
                 except Exception:
-                    pass
+                    pass  # Justification: best-effort connector introspection — no-arg get_mid_price may raise
             except Exception:
-                pass
+                pass  # Justification: best-effort connector introspection — get_mid_price(pair) may raise
         get_price_by_type_fn = getattr(connector_obj, "get_price_by_type", None)
         if callable(get_price_by_type_fn):
             try:
@@ -366,7 +366,7 @@ def _install_bitget_ws_stability_patch():
                 if mid is not None:
                     return mid
             except Exception:
-                pass
+                pass  # Justification: best-effort connector introspection — get_price_by_type may raise
         get_order_book_fn = getattr(connector_obj, "get_order_book", None)
         if callable(get_order_book_fn):
             try:
@@ -378,7 +378,7 @@ def _install_bitget_ws_stability_patch():
                 if bid is not None and ask is not None:
                     return (bid + ask) / Decimal("2")
             except Exception:
-                pass
+                pass  # Justification: best-effort connector introspection — order book mid may raise
         return None
 
     def _extract_depth_level(entry: Any) -> dict[str, float] | None:
@@ -653,7 +653,7 @@ def _install_bitget_ws_stability_patch():
                     try:
                         await self._send_ping(websocket_assistant)
                     except Exception:
-                        pass
+                        pass  # Justification: best-effort WS keepalive — ping must not abort timeout retry loop
                     if timeout_retry_sleep_s > 0:
                         await asyncio.sleep(timeout_retry_sleep_s)
                     continue
@@ -677,7 +677,7 @@ def _install_bitget_ws_stability_patch():
                     try:
                         await self._send_ping(websocket_assistant)
                     except Exception:
-                        pass
+                        pass  # Justification: best-effort WS keepalive — ping must not abort timeout retry loop
                     if timeout_retry_sleep_s > 0:
                         await asyncio.sleep(timeout_retry_sleep_s)
                     continue
@@ -694,7 +694,7 @@ def _install_bitget_ws_stability_patch():
         BitgetPerpetualAPIOrderBookDataSource._process_websocket_messages = _resilient_orderbook_process_messages
         patched_classes.append("BitgetPerpetualAPIOrderBookDataSource")
     except Exception:
-        pass
+        pass  # Justification: optional hummingbot shim — perpetual order book data source may be absent or incompatible
     try:
         from hummingbot.connector.derivative.bitget_perpetual.bitget_perpetual_api_user_stream_data_source import (
             BitgetPerpetualUserStreamDataSource,
@@ -703,14 +703,14 @@ def _install_bitget_ws_stability_patch():
         BitgetPerpetualUserStreamDataSource._process_websocket_messages = _resilient_user_stream_process_messages
         patched_classes.append("BitgetPerpetualUserStreamDataSource")
     except Exception:
-        pass
+        pass  # Justification: optional hummingbot shim — user stream data source may be absent or incompatible
     try:
         from hummingbot.connector.exchange.bitget.bitget_api_order_book_data_source import BitgetAPIOrderBookDataSource
         BitgetAPIOrderBookDataSource.send_interval_ping = _resilient_interval_ping
         BitgetAPIOrderBookDataSource._process_websocket_messages = _resilient_orderbook_process_messages
         patched_classes.append("BitgetAPIOrderBookDataSource")
     except Exception:
-        pass
+        pass  # Justification: optional hummingbot shim — spot order book data source may be absent or incompatible
     try:
         from hummingbot.connector.derivative.bitget_perpetual.bitget_perpetual_derivative import (
             BitgetPerpetualDerivative,
@@ -718,13 +718,13 @@ def _install_bitget_ws_stability_patch():
         if _patch_safe_last_traded_prices(BitgetPerpetualDerivative):
             patched_last_trade_classes.append("BitgetPerpetualDerivative")
     except Exception:
-        pass
+        pass  # Justification: optional hummingbot shim — derivative last-trade patch may fail
     try:
         from hummingbot.connector.exchange.bitget.bitget_exchange import BitgetExchange
         if _patch_safe_last_traded_prices(BitgetExchange):
             patched_last_trade_classes.append("BitgetExchange")
     except Exception:
-        pass
+        pass  # Justification: optional hummingbot shim — exchange last-trade patch may fail
     patched_provider_fallback = _patch_market_data_provider_last_trade_fallback()
 
     logging.getLogger(__name__).warning(
@@ -1301,7 +1301,7 @@ class V2WithControllers(StrategyV2Base):
                                             desk_last_reason = str(getattr(events[-1], "reason", "") or "")
                                             desk_last_order_id = str(getattr(events[-1], "order_id", "") or "")
                                     except Exception:
-                                        pass
+                                        pass  # Justification: diagnostic trace — desk event_log probe is best-effort
                                     try:
                                         bridges = getattr(strategy_obj, "_paper_desk_v2_bridges", {}) or {}
                                         bridge = bridges.get(connector_name) or {}
@@ -1348,9 +1348,9 @@ class V2WithControllers(StrategyV2Base):
                                                         probe_eval_qty = str(getattr(decision, "fill_quantity", ""))
                                                         probe_eval_price = str(getattr(decision, "fill_price", ""))
                                                 except Exception:
-                                                    pass
+                                                    pass  # Justification: diagnostic trace — fill_model.evaluate probe is best-effort
                                     except Exception:
-                                        pass
+                                        pass  # Justification: diagnostic trace — paper desk bridge/engine probe is best-effort
                                 executor_self.logger().warning(
                                     "ORDER_EXEC_TRACE stage=place_order_done level_id=%s order_id=%s "
                                     "desk_events_before=%d desk_events_after=%d desk_last_event=%s desk_last_reason=%s "
@@ -1484,7 +1484,7 @@ class V2WithControllers(StrategyV2Base):
                                                     probe_order_price = str(getattr(probe, "price", ""))
                                                     probe_fill_count = str(getattr(probe, "fill_count", ""))
                                     except Exception:
-                                        pass
+                                        pass  # Justification: diagnostic trace — position desk engine probe is best-effort
                                     executor_self.logger().warning(
                                         "POS_EXEC_TRACE stage=place_order_done level_id=%s order_id=%s connector=%s pair=%s "
                                         "engine_open=%d engine_inflight=%d probe_id=%s probe_status=%s probe_remaining=%s "
@@ -1635,7 +1635,7 @@ class V2WithControllers(StrategyV2Base):
                     if age > 0:
                         self._latency_tracker.observe("order_book_age_ms", age * 1000.0)
                 except Exception:
-                    pass
+                    pass  # Justification: best-effort telemetry — stale-age observation must not break tick
 
     def _observe_hb_framework_overhead(self, super_on_tick_ms: float) -> None:
         """HB framework overhead = super().on_tick() minus sum of controller tick durations."""
@@ -1649,7 +1649,7 @@ class V2WithControllers(StrategyV2Base):
                     try:
                         total_controller_ms += float(val)
                     except Exception:
-                        pass
+                        pass  # Justification: best-effort telemetry — tick duration field may be non-numeric
         overhead = max(0.0, super_on_tick_ms - total_controller_ms)
         self._latency_tracker.observe("hb_framework_overhead_ms", overhead)
 
@@ -2737,7 +2737,7 @@ class V2WithControllers(StrategyV2Base):
                     self._hard_stop_kill_switch_latched_by_controller[controller_id] = True
                     self.logger().error(f"HARD_STOP kill_switch published for {controller_id}: {risk_reasons}")
                 except Exception:
-                    pass
+                    pass  # Justification: best-effort bus publish — duplicate or transport errors must not stall risk loop
                 continue
 
             # Recovery policy: if controller still reports HARD_STOP but hard risk triggers
@@ -2781,7 +2781,7 @@ class V2WithControllers(StrategyV2Base):
                     risk_reasons or "none",
                 )
             except Exception:
-                pass
+                pass  # Justification: best-effort bus publish — resume intent failure must not crash controller
 
     def _handle_bus_outage_soft_pause(self):
         if not self.config.external_signal_risk_enabled or not self.config.bus_soft_pause_on_outage:
@@ -2881,7 +2881,7 @@ class V2WithControllers(StrategyV2Base):
                                 {"controller_id": controller_id, "connector": connector_name, "pair": trading_pair, "count": str(orphans_canceled)},
                             )
                         except Exception:
-                            pass
+                            pass  # Justification: best-effort audit — orphan cancel already applied; audit failure is non-blocking
             except Exception:
                 summary["errors"] = int(summary["errors"]) + 1
                 self.logger().warning(f"Orphan order scan failed for {controller_id}", exc_info=True)

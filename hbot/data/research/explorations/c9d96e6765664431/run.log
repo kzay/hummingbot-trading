@@ -1,0 +1,152 @@
+
+============================================================
+Strategy Research Lab — LLM Exploration Agent
+============================================================
+  Provider:       anthropic
+  Iterations:     5
+  Temperature:    0.7
+  Instrument:     BTC-USDT
+  Exchange:       bitget
+  Adapters:       atr_mm, atr_mm_v2, smc_mm, combo_mm, pullback, pullback_v2, momentum_scalper, directional_mm, simple
+  Auto lifecycle: True
+============================================================
+
+2026-03-25 00:27:51,592 [INFO] controllers.research.exploration_session: === Exploration iteration 1/5 [explore] (T=0.70) ===
+2026-03-25 00:28:02,129 [INFO] httpx: HTTP Request: POST https://api.anthropic.com/v1/messages "HTTP/1.1 200 OK"
+2026-03-25 00:28:02,219 [INFO] controllers.research.experiment_orchestrator: Step 1/6: Verification backtest for btc-volatility-regime-mm-v1
+2026-03-25 00:28:03,968 [ERROR] controllers.research.exploration_session: Evaluation failed for 'btc-volatility-regime-mm-v1': Candle Parquet file not found: hbot\data\historical\bitget\BTC-USDT\15m\data.parquet
+2026-03-25 00:28:03,998 [INFO] controllers.research.exploration_session: === Exploration iteration 2/5 [explore] (T=0.70) ===
+2026-03-25 00:28:13,337 [INFO] httpx: HTTP Request: POST https://api.anthropic.com/v1/messages "HTTP/1.1 200 OK"
+2026-03-25 00:28:13,352 [INFO] controllers.research.experiment_orchestrator: Step 1/6: Verification backtest for btc-momentum-burst-scalper-v1
+2026-03-25 00:28:13,356 [ERROR] controllers.research.exploration_session: Evaluation failed for 'btc-momentum-burst-scalper-v1': Candle Parquet file not found: hbot\data\historical\bitget\BTC-USDT\15m\data.parquet
+2026-03-25 00:28:13,361 [INFO] controllers.research.exploration_session: === Exploration iteration 3/5 [explore] (T=0.70) ===
+2026-03-25 00:28:25,163 [INFO] httpx: HTTP Request: POST https://api.anthropic.com/v1/messages "HTTP/1.1 200 OK"
+2026-03-25 00:28:25,174 [INFO] controllers.research.experiment_orchestrator: Step 1/6: Verification backtest for btc-trend-pullback-continuation-v1
+2026-03-25 00:28:25,178 [ERROR] controllers.research.exploration_session: Evaluation failed for 'btc-trend-pullback-continuation-v1': Candle Parquet file not found: hbot\data\historical\bitget\BTC-USDT\15m\data.parquet
+2026-03-25 00:28:25,184 [INFO] controllers.research.exploration_session: === Exploration iteration 4/5 [exploit] (T=0.65) ===
+2026-03-25 00:28:35,935 [INFO] httpx: HTTP Request: POST https://api.anthropic.com/v1/messages "HTTP/1.1 200 OK"
+2026-03-25 00:28:35,946 [INFO] controllers.research.experiment_orchestrator: Step 1/6: Verification backtest for btc-inventory-skew-directional-v1
+2026-03-25 00:28:35,950 [ERROR] controllers.research.exploration_session: Evaluation failed for 'btc-inventory-skew-directional-v1': Candle Parquet file not found: hbot\data\historical\bitget\BTC-USDT\15m\data.parquet
+2026-03-25 00:28:35,954 [INFO] controllers.research.exploration_session: === Exploration iteration 5/5 [exploit] (T=0.60) ===
+2026-03-25 00:28:45,633 [INFO] httpx: HTTP Request: POST https://api.anthropic.com/v1/messages "HTTP/1.1 200 OK"
+2026-03-25 00:28:45,643 [INFO] controllers.research.experiment_orchestrator: Step 1/6: Verification backtest for btc-volume-spike-reversion-v1
+2026-03-25 00:28:45,646 [ERROR] controllers.research.exploration_session: Evaluation failed for 'btc-volume-spike-reversion-v1': Candle Parquet file not found: hbot\data\historical\bitget\BTC-USDT\15m\data.parquet
+2026-03-25 00:28:45,651 [INFO] controllers.research.exploration_session: Session complete: 5 iterations (54s), best=0.000 (), adapters=['smc_mm', 'momentum_scalper', 'pullback', 'directional_mm', 'simple'], tokens=16495
+2026-03-25 00:28:45,653 [INFO] controllers.research.exploration_session: Session summary saved to /workspace/hbot/data/research/explorations/c9d96e6765664431/session_summary.json
+
+============================================================
+SESSION RESULTS
+============================================================
+  Total iterations:   5
+  Best score:         0.000
+  Best candidate:     
+  Best recommendation:
+  Total tokens:       16495
+
+  [1] generate btc-volatility-regime-mm-v1     ERROR: Evaluation error: Candle Parquet file not found: hbot\data\historical\bitget\BTC-USDT\15m\data.parquet
+Traceback (most recent call last):
+  File "/workspace/hbot/controllers/research/exploration_session.py", line 520, in _run_iteration
+    eval_result = orchestrator.evaluate(candidate)
+                  ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/workspace/hbot/controllers/research/experiment_orchestrator.py", line 107, in evaluate
+    result.backtest_result = harness.run()
+                             ^^^^^^^^^^^^^
+  File "/workspace/hbot/controllers/backtesting/harness.py", line 208, in run
+    return self._run_impl()
+           ^^^^^^^^^^^^^^^^
+  File "/workspace/hbot/controllers/backtesting/harness.py", line 218, in _run_impl
+    candles = self._load_candles()
+              ^^^^^^^^^^^^^^^^^^^^
+  File "/workspace/hbot/controllers/backtesting/harness.py", line 595, in _load_candles
+    candles = load_candles(Path(entry["file_path"]))
+              ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/workspace/hbot/controllers/backtesting/data_store.py", line 107, in load_candles
+    raise FileNotFoundError(f"Candle Parquet file not found: {path}")
+FileNotFoundError: Candle Parquet file not found: hbot\data\historical\bitget\BTC-USDT\15m\data.parquet
+
+  [2] generate btc-momentum-burst-scalper-v1   ERROR: Evaluation error: Candle Parquet file not found: hbot\data\historical\bitget\BTC-USDT\15m\data.parquet
+Traceback (most recent call last):
+  File "/workspace/hbot/controllers/research/exploration_session.py", line 520, in _run_iteration
+    eval_result = orchestrator.evaluate(candidate)
+                  ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/workspace/hbot/controllers/research/experiment_orchestrator.py", line 107, in evaluate
+    result.backtest_result = harness.run()
+                             ^^^^^^^^^^^^^
+  File "/workspace/hbot/controllers/backtesting/harness.py", line 208, in run
+    return self._run_impl()
+           ^^^^^^^^^^^^^^^^
+  File "/workspace/hbot/controllers/backtesting/harness.py", line 218, in _run_impl
+    candles = self._load_candles()
+              ^^^^^^^^^^^^^^^^^^^^
+  File "/workspace/hbot/controllers/backtesting/harness.py", line 595, in _load_candles
+    candles = load_candles(Path(entry["file_path"]))
+              ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/workspace/hbot/controllers/backtesting/data_store.py", line 107, in load_candles
+    raise FileNotFoundError(f"Candle Parquet file not found: {path}")
+FileNotFoundError: Candle Parquet file not found: hbot\data\historical\bitget\BTC-USDT\15m\data.parquet
+
+  [3] generate btc-trend-pullback-continuation-v1  ERROR: Evaluation error: Candle Parquet file not found: hbot\data\historical\bitget\BTC-USDT\15m\data.parquet
+Traceback (most recent call last):
+  File "/workspace/hbot/controllers/research/exploration_session.py", line 520, in _run_iteration
+    eval_result = orchestrator.evaluate(candidate)
+                  ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/workspace/hbot/controllers/research/experiment_orchestrator.py", line 107, in evaluate
+    result.backtest_result = harness.run()
+                             ^^^^^^^^^^^^^
+  File "/workspace/hbot/controllers/backtesting/harness.py", line 208, in run
+    return self._run_impl()
+           ^^^^^^^^^^^^^^^^
+  File "/workspace/hbot/controllers/backtesting/harness.py", line 218, in _run_impl
+    candles = self._load_candles()
+              ^^^^^^^^^^^^^^^^^^^^
+  File "/workspace/hbot/controllers/backtesting/harness.py", line 595, in _load_candles
+    candles = load_candles(Path(entry["file_path"]))
+              ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/workspace/hbot/controllers/backtesting/data_store.py", line 107, in load_candles
+    raise FileNotFoundError(f"Candle Parquet file not found: {path}")
+FileNotFoundError: Candle Parquet file not found: hbot\data\historical\bitget\BTC-USDT\15m\data.parquet
+
+  [4] generate btc-inventory-skew-directional-v1  ERROR: Evaluation error: Candle Parquet file not found: hbot\data\historical\bitget\BTC-USDT\15m\data.parquet
+Traceback (most recent call last):
+  File "/workspace/hbot/controllers/research/exploration_session.py", line 520, in _run_iteration
+    eval_result = orchestrator.evaluate(candidate)
+                  ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/workspace/hbot/controllers/research/experiment_orchestrator.py", line 107, in evaluate
+    result.backtest_result = harness.run()
+                             ^^^^^^^^^^^^^
+  File "/workspace/hbot/controllers/backtesting/harness.py", line 208, in run
+    return self._run_impl()
+           ^^^^^^^^^^^^^^^^
+  File "/workspace/hbot/controllers/backtesting/harness.py", line 218, in _run_impl
+    candles = self._load_candles()
+              ^^^^^^^^^^^^^^^^^^^^
+  File "/workspace/hbot/controllers/backtesting/harness.py", line 595, in _load_candles
+    candles = load_candles(Path(entry["file_path"]))
+              ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/workspace/hbot/controllers/backtesting/data_store.py", line 107, in load_candles
+    raise FileNotFoundError(f"Candle Parquet file not found: {path}")
+FileNotFoundError: Candle Parquet file not found: hbot\data\historical\bitget\BTC-USDT\15m\data.parquet
+
+  [5] generate btc-volume-spike-reversion-v1   ERROR: Evaluation error: Candle Parquet file not found: hbot\data\historical\bitget\BTC-USDT\15m\data.parquet
+Traceback (most recent call last):
+  File "/workspace/hbot/controllers/research/exploration_session.py", line 520, in _run_iteration
+    eval_result = orchestrator.evaluate(candidate)
+                  ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/workspace/hbot/controllers/research/experiment_orchestrator.py", line 107, in evaluate
+    result.backtest_result = harness.run()
+                             ^^^^^^^^^^^^^
+  File "/workspace/hbot/controllers/backtesting/harness.py", line 208, in run
+    return self._run_impl()
+           ^^^^^^^^^^^^^^^^
+  File "/workspace/hbot/controllers/backtesting/harness.py", line 218, in _run_impl
+    candles = self._load_candles()
+              ^^^^^^^^^^^^^^^^^^^^
+  File "/workspace/hbot/controllers/backtesting/harness.py", line 595, in _load_candles
+    candles = load_candles(Path(entry["file_path"]))
+              ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/workspace/hbot/controllers/backtesting/data_store.py", line 107, in load_candles
+    raise FileNotFoundError(f"Candle Parquet file not found: {path}")
+FileNotFoundError: Candle Parquet file not found: hbot\data\historical\bitget\BTC-USDT\15m\data.parquet
+
+
+  Session summary → /workspace/hbot/data/research/explorations/c9d96e6765664431/session_summary.json

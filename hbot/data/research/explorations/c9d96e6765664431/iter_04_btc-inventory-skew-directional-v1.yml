@@ -1,0 +1,56 @@
+name: btc-inventory-skew-directional-v1
+hypothesis: BTC-USDT perpetual exhibits directional persistence on 15m bars when EMA(21)  slope
+  is strong (>0.1% per bar). Market-making with directional bias skews  quotes toward
+  the trend direction, capturing both spread and directional edge. Stronger bias parameters
+  yield higher Sharpe during trending periods while  maintaining mean-reversion profits
+  during consolidation.
+adapter_mode: directional_mm
+parameter_space:
+  bias_strength:
+  - 0.3
+  - 0.6
+  - 0.9
+  trend_lookback:
+  - 14
+  - 21
+  - 34
+  skew_factor:
+  - 1.2
+  - 1.8
+  - 2.5
+  spread_base:
+  - 0.05
+  - 0.08
+  - 0.12
+entry_logic: Calculate EMA(trend_lookback) slope over last 3 bars. If slope > 0.1%,  apply
+  bullish bias by skewing bid closer to mid (bid = mid - spread/skew_factor,  ask
+  = mid + spread). If slope < -0.1%, apply bearish bias (ask closer to mid). When
+  |slope| < 0.1%, quote symmetrically. Position size scales with  bias_strength *
+  |slope|.
+exit_logic: Close positions when inventory exceeds 70% of max_position or when trend
+  reverses (slope changes sign and |new_slope| > 0.05%). Apply profit-taking at 1.5x
+  spread capture on individual fills.
+base_config:
+  strategy_class: directional_mm
+  strategy_config:
+    bias_strength: 0.6
+    trend_lookback: 21
+    skew_factor: 1.8
+    spread_base: 0.08
+  data_source:
+    exchange: bitget
+    pair: BTC-USDT
+    resolution: 15m
+    instrument_type: perp
+  initial_equity: '500'
+  leverage: 1
+  seed: 42
+  step_interval_s: 900
+  warmup_bars: 60
+required_tests:
+- test_adapter_compiles
+- test_no_lookahead_in_entry
+metadata:
+  author: llm_exploration
+  version: '1.0'
+lifecycle: candidate

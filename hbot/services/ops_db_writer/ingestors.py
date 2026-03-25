@@ -21,7 +21,7 @@ from platform_lib.core.utils import (
 from platform_lib.contracts.stream_names import MARKET_DEPTH_STREAM, MARKET_QUOTE_STREAM
 from platform_lib.logging.log_namespace import iter_bot_log_files
 
-from .parsers import (
+from services.ops_db_writer.parsers import (
     SCHEMA_VERSION,
     _EPOCH_TS_UTC,
     _canonical_ts_utc,

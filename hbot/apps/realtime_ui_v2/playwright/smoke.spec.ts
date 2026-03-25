@@ -294,11 +294,10 @@ test("loads the operator shell, checks service health, and switches instances", 
   await page.goto("/");
 
   await expect(page.getByText("Kzay Capital")).toBeVisible();
-  await expect(page.getByText("API ok")).toBeVisible();
+  await expect(page.getByText("API status")).toBeVisible();
   await expect(page.getByRole("heading", { name: "Price Chart" })).toBeVisible();
 
-  await page.locator("summary").filter({ hasText: "Pages:" }).click();
-  await page.getByRole("button", { name: "Service" }).click();
+  await page.getByRole("button", { name: "Service Monitor" }).click();
   await expect(page.getByRole("heading", { name: "Live Data Service" })).toBeVisible();
 
   await page.keyboard.press("1");
@@ -307,6 +306,6 @@ test("loads the operator shell, checks service health, and switches instances", 
     (element as HTMLButtonElement).click();
   });
 
-  await expect(page.getByText("Instance bot2")).toBeVisible();
+  await expect(page.locator('.instance-preview-card.active').getByText('bot2')).toBeVisible();
   await expect(page.getByRole("heading", { name: "Price Chart" })).toBeVisible();
 });

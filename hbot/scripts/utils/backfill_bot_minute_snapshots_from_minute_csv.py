@@ -197,7 +197,7 @@ def backfill(
             try:
                 handle.close()
             except Exception:
-                pass
+                pass  # Justification: best-effort I/O — handle may already be closed
 
     return total_rows, appended
 

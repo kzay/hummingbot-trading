@@ -5,8 +5,10 @@ orchestrator so no real API calls or backtests are executed.
 """
 from __future__ import annotations
 
+import json
 import os
 from pathlib import Path
+from types import SimpleNamespace
 from unittest.mock import MagicMock, patch
 
 import pytest
@@ -40,14 +42,14 @@ SAMPLE_YAML = """\
 name: test-hypothesis-v1
 hypothesis: >-
   BTC-USDT shows reversion after spikes.
-adapter_mode: candle
+adapter_mode: simple
 parameter_space:
   atr_mult: [1.5, 2.0, 2.5]
   tp_atr: [0.3, 0.5]
 entry_logic: Enter long on dip.
 exit_logic: Exit on profit target.
 base_config:
-  strategy_class: candle
+  strategy_class: simple
   strategy_config:
     atr_period: 14
   data_source:
@@ -71,10 +73,12 @@ class FakeLlmClient:
         self.tokens_used: int = 0
         self._yaml = yaml_content
         self.call_count: int = 0
+        self.temperatures: list[float] = []
 
     def chat(self, messages: list[dict[str, str]], temperature: float = 0.7) -> str:
         self.call_count += 1
         self.tokens_used += 100
+        self.temperatures.append(temperature)
         return f"Here is a strategy:\n\n```yaml\n{self._yaml}\n```\n"
 
     def count_tokens(self, text: str) -> int:
@@ -99,7 +103,7 @@ class TestParseCandidateYaml:
     def test_valid_yaml(self) -> None:
         candidate = _parse_candidate_yaml(SAMPLE_YAML)
         assert candidate.name == "test-hypothesis-v1"
-        assert candidate.adapter_mode == "candle"
+        assert candidate.adapter_mode == "simple"
         assert len(candidate.parameter_space) == 2
 
     def test_missing_required_field(self) -> None:
@@ -152,6 +156,8 @@ class TestPromptTemplates:
         rendered = SYSTEM_PROMPT.format(yaml_schema_reference=YAML_SCHEMA_REFERENCE)
         assert "StrategyCandidate YAML Schema" in rendered
         assert "{yaml_schema_reference}" not in rendered
+        assert "resolution: 15m" in rendered
+        assert "step_interval_s: 900" in rendered
 
     def test_generate_prompt_renders(self) -> None:
         rendered = GENERATE_PROMPT.format(
@@ -161,6 +167,7 @@ class TestPromptTemplates:
         )
         assert "BTC-USDT perp" in rendered
         assert "atr_mm" in rendered
+        assert "15m" in rendered
 
     def test_revise_prompt_renders(self) -> None:
         rendered = REVISE_PROMPT.format(
@@ -169,10 +176,22 @@ class TestPromptTemplates:
             recommendation="revise",
             weakest_components="fee_stress (0.10)",
             score_breakdown="oos_sharpe: 0.5",
+            backtest_metrics="Total return: +5.00%",
+            top_candidates="1. test (score=0.420)",
             report_excerpt="# Report",
         )
         assert "0.420" in rendered
         assert "fee_stress" in rendered
+        assert "Total return" in rendered
+        assert "iterate or pivot" in rendered.lower()
+        assert "15m" in rendered
+
+
+def test_session_config_defaults_to_15m_resolution() -> None:
+    config = SessionConfig()
+
+    assert config.resolution == "15m"
+    assert config.step_interval_s == 900
 
 
 class TestExplorationSession:
@@ -196,6 +215,19 @@ class TestExplorationSession:
         mock.report_path = ""
         mock.candidate_name = name
         mock.run_id = "abc123"
+        mock.backtest_result = SimpleNamespace(
+            total_return_pct=5.0,
+            sharpe_ratio=1.1,
+            max_drawdown_pct=2.0,
+            win_rate=0.5,
+            closed_trade_count=10,
+            winning_trade_count=5,
+            losing_trade_count=5,
+            profit_factor=1.2,
+            expectancy_quote=1.0,
+            realized_net_pnl_quote=10.0,
+            total_fees=1.0,
+        )
         return mock
 
     @patch("controllers.research.exploration_session.ExperimentOrchestrator")
@@ -348,3 +380,112 @@ class TestExplorationSession:
             yamls = list((tmp_path / "explorations").glob("*.yml"))
             assert len(yamls) == 1
             assert "test-hypothesis-v1" in yamls[0].name
+
+    @patch("controllers.research.exploration_session.ExperimentOrchestrator")
+    @patch("controllers.research.exploration_session.LifecycleManager")
+    def test_session_saves_summary_json(
+        self, mock_lm_cls: MagicMock, mock_orch_cls: MagicMock, tmp_path: Path
+    ) -> None:
+        mock_orch = mock_orch_cls.return_value
+        mock_orch.evaluate.return_value = self._make_eval_result(
+            "test-hypothesis-v1", 0.6, "pass"
+        )
+
+        client = FakeLlmClient()
+        config = SessionConfig(
+            max_iterations=2,
+            output_dir=str(tmp_path / "explorations"),
+            reports_dir=str(tmp_path / "reports"),
+            experiments_dir=str(tmp_path / "experiments"),
+            lifecycle_dir=str(tmp_path / "lifecycle"),
+            auto_lifecycle=False,
+        )
+        session = ExplorationSession(client, config)
+        session.run()
+
+        summary_path = tmp_path / "explorations" / "session_summary.json"
+        assert summary_path.exists()
+        summary = json.loads(summary_path.read_text())
+        assert summary["best_score"] == 0.6
+        assert summary["best_candidate"] == "test-hypothesis-v1"
+        assert "iteration_details" in summary
+        assert summary["unique_hypotheses"] >= 1
+
+    @patch("controllers.research.exploration_session.ExperimentOrchestrator")
+    @patch("controllers.research.exploration_session.LifecycleManager")
+    def test_temperature_decays_in_exploit_phase(
+        self, mock_lm_cls: MagicMock, mock_orch_cls: MagicMock, tmp_path: Path
+    ) -> None:
+        mock_orch = mock_orch_cls.return_value
+        mock_orch.evaluate.return_value = self._make_eval_result(
+            "test-hypothesis-v1", 0.30, "reject"
+        )
+
+        client = FakeLlmClient()
+        config = SessionConfig(
+            max_iterations=4,
+            temperature=0.7,
+            temperature_decay=0.1,
+            explore_ratio=0.5,
+            output_dir=str(tmp_path / "explorations"),
+            reports_dir=str(tmp_path / "reports"),
+            experiments_dir=str(tmp_path / "experiments"),
+            lifecycle_dir=str(tmp_path / "lifecycle"),
+            auto_lifecycle=False,
+        )
+        session = ExplorationSession(client, config)
+        session.run()
+
+        temps = client.temperatures
+        assert len(temps) >= 3
+        assert temps[0] == 0.7
+        assert temps[-1] < temps[0]
+
+    @patch("controllers.research.exploration_session.ExperimentOrchestrator")
+    @patch("controllers.research.exploration_session.LifecycleManager")
+    def test_adapter_diversity_tracked(
+        self, mock_lm_cls: MagicMock, mock_orch_cls: MagicMock, tmp_path: Path
+    ) -> None:
+        mock_orch = mock_orch_cls.return_value
+        mock_orch.evaluate.return_value = self._make_eval_result(
+            "test-hypothesis-v1", 0.30, "reject"
+        )
+
+        client = FakeLlmClient()
+        config = SessionConfig(
+            max_iterations=2,
+            output_dir=str(tmp_path / "explorations"),
+            reports_dir=str(tmp_path / "reports"),
+            experiments_dir=str(tmp_path / "experiments"),
+            lifecycle_dir=str(tmp_path / "lifecycle"),
+            auto_lifecycle=False,
+        )
+        session = ExplorationSession(client, config)
+        result = session.run()
+
+        assert isinstance(result.adapters_explored, list)
+        assert len(result.adapters_explored) >= 1
+
+    @patch("controllers.research.exploration_session.ExperimentOrchestrator")
+    @patch("controllers.research.exploration_session.LifecycleManager")
+    def test_iteration_records_have_duration(
+        self, mock_lm_cls: MagicMock, mock_orch_cls: MagicMock, tmp_path: Path
+    ) -> None:
+        mock_orch = mock_orch_cls.return_value
+        mock_orch.evaluate.return_value = self._make_eval_result(
+            "test-hypothesis-v1", 0.6, "pass"
+        )
+
+        client = FakeLlmClient()
+        config = SessionConfig(
+            max_iterations=1,
+            output_dir=str(tmp_path / "explorations"),
+            reports_dir=str(tmp_path / "reports"),
+            experiments_dir=str(tmp_path / "experiments"),
+            lifecycle_dir=str(tmp_path / "lifecycle"),
+            auto_lifecycle=False,
+        )
+        session = ExplorationSession(client, config)
+        result = session.run()
+
+        assert result.iterations[0].duration_s >= 0.0

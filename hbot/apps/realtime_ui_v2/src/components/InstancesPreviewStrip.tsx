@@ -130,10 +130,25 @@ export function InstancesPreviewStrip({ embedded = false }: InstancesPreviewStri
                   <span className="instance-preview-label">Equity</span>
                   <div className="instance-preview-value">{formatNumber(row.equity_quote, 2)}</div>
                 </div>
+                {row.equity_delta_open_quote !== undefined ? (
+                  <div className="instance-preview-row">
+                    <span className="instance-preview-label">Vs Open</span>
+                    <div className={`instance-preview-value ${signedClass(row.equity_delta_open_quote)}`}>
+                      {formatSigned(row.equity_delta_open_quote, 2)}
+                    </div>
+                  </div>
+                ) : (
+                  <div className="instance-preview-row">
+                    <span className="instance-preview-label">Realized</span>
+                    <div className={`instance-preview-value ${signedClass(row.realized_pnl_quote)}`}>
+                      {formatSigned(row.realized_pnl_quote, 2)}
+                    </div>
+                  </div>
+                )}
                 <div className="instance-preview-row">
-                  <span className="instance-preview-label">Unrealized PNL</span>
+                  <span className="instance-preview-label">Unrealized</span>
                   <div className={`instance-preview-value ${signedClass(row.unrealized_pnl_quote)}`}>
-                    {formatSigned(row.unrealized_pnl_quote, 2)}
+                    {row.unrealized_pnl_quote != null ? formatSigned(row.unrealized_pnl_quote, 2) : "n/a"}
                   </div>
                 </div>
               </div>

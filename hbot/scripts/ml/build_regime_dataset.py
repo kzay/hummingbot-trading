@@ -1,14 +1,17 @@
 """Build training dataset for the ML regime classifier (ROAD-10).
 
-Reads minute.csv from bot1 paper logs, extracts feature columns + regime label,
-adds lag features, and outputs a Parquet file ready for train_regime_classifier.py.
+Reads minute.csv (and legacy files) from bot log dirs, extracts feature columns
++ regime label, adds lag features, and outputs a Parquet file ready for
+train_regime_classifier.py.
+
+Supports combining multiple bots via ``--roots`` for larger datasets.
 
 Requirements:
     pip install pandas pyarrow
 
 Usage:
-    PYTHONPATH=hbot python -m scripts.ml.build_regime_dataset
-    PYTHONPATH=hbot python -m scripts.ml.build_regime_dataset --root data/bot1/logs/epp_v24/bot1_a --output data/ml
+    PYTHONPATH=hbot python -m scripts.ml.build_regime_dataset --root data/bot1/logs/epp_v24/bot1_a
+    PYTHONPATH=hbot python -m scripts.ml.build_regime_dataset --roots data/bot5/logs/epp_v24/bot5_a,data/bot6/logs/epp_v24/bot6_a,data/bot7/logs/epp_v24/bot7_a
 
 Gate: Run after collecting >= 10,000 minute.csv rows (~7 days of 1-minute bars).
 """
@@ -118,19 +121,34 @@ def add_lag_features(rows: list[dict], feature_rows: list[dict[str, float]]) -> 
     return result
 
 
-def build_dataset(minute_path: Path, output_dir: Path) -> Path:
+def _collect_minute_csvs(root: Path) -> list[Path]:
+    """Find all minute.csv and minute.legacy_*.csv files under *root*."""
+    found: list[Path] = []
+    for p in sorted(root.rglob("minute*.csv")):
+        if p.name == "minute.csv" or p.name.startswith("minute.legacy_"):
+            found.append(p)
+    return found
+
+
+def build_dataset(minute_paths: list[Path], output_dir: Path) -> Path:
     try:
         import pandas as pd  # type: ignore
     except ImportError:
         print("ERROR: pandas and pyarrow required. Run: pip install pandas pyarrow", file=sys.stderr)
         sys.exit(1)
 
-    rows = load_minute_csv(minute_path)
+    rows: list[dict] = []
+    for mp in minute_paths:
+        chunk = load_minute_csv(mp)
+        print(f"  {mp}: {len(chunk)} rows", file=sys.stderr)
+        rows.extend(chunk)
+
     if not rows:
-        print("ERROR: No valid rows found in minute.csv", file=sys.stderr)
+        print("ERROR: No valid rows found in any minute.csv", file=sys.stderr)
         sys.exit(1)
 
-    print(f"Loaded {len(rows)} rows from {minute_path}", file=sys.stderr)
+    rows.sort(key=lambda r: r["_ts"])
+    print(f"Total rows after merge: {len(rows)}", file=sys.stderr)
 
     feature_rows = [build_features_from_row(r) for r in rows]
     feature_rows_with_lags = add_lag_features(rows, feature_rows)
@@ -144,8 +162,19 @@ def build_dataset(minute_path: Path, output_dir: Path) -> Path:
     df["regime_str"] = regime_strs
     df["ts"] = timestamps
 
+    pre_dedup = len(df)
+    df.drop_duplicates(subset=["ts"], keep="first", inplace=True)
+    dropped = pre_dedup - len(df)
+    print(f"After dedup: {len(df)} rows (dropped {dropped} duplicate timestamps)", file=sys.stderr)
+    if dropped > pre_dedup * 0.3:
+        print(
+            f"WARNING: {dropped}/{pre_dedup} rows dropped — bots have overlapping timestamps. "
+            "Use --roots with bots that have non-overlapping time coverage for maximum data.",
+            file=sys.stderr,
+        )
+
     print(f"Feature columns: {list(df.columns)}", file=sys.stderr)
-    print(f"Regime distribution:\n{pd.Series(regime_strs).value_counts().to_string()}", file=sys.stderr)
+    print(f"Regime distribution:\n{pd.Series(df['regime_str']).value_counts().to_string()}", file=sys.stderr)
 
     output_dir.mkdir(parents=True, exist_ok=True)
     from datetime import date
@@ -163,11 +192,33 @@ def build_dataset(minute_path: Path, output_dir: Path) -> Path:
 
 if __name__ == "__main__":
     ap = argparse.ArgumentParser(description="Build ML regime classification dataset from minute.csv")
-    ap.add_argument("--root", default="data/bot1/logs/epp_v24/bot1_a")
+    ap.add_argument("--root", default=None, help="Single bot log dir (legacy)")
+    ap.add_argument("--roots", default=None, help="Comma-separated bot log dirs for combined training")
     ap.add_argument("--output", default="data/ml")
     args = ap.parse_args()
 
-    minute_path = Path(args.root) / "minute.csv"
+    minute_paths: list[Path] = []
+    if args.roots:
+        for root_str in args.roots.split(","):
+            root = Path(root_str.strip())
+            found = _collect_minute_csvs(root)
+            if found:
+                minute_paths.extend(found)
+            else:
+                mp = root / "minute.csv"
+                if mp.exists():
+                    minute_paths.append(mp)
+    elif args.root:
+        root = Path(args.root)
+        found = _collect_minute_csvs(root)
+        if found:
+            minute_paths.extend(found)
+        else:
+            minute_paths.append(root / "minute.csv")
+    else:
+        minute_paths.append(Path("data/bot1/logs/epp_v24/bot1_a/minute.csv"))
+
+    print(f"Loading from {len(minute_paths)} files:", file=sys.stderr)
     output_dir = Path(args.output)
-    out_path = build_dataset(minute_path, output_dir)
+    out_path = build_dataset(minute_paths, output_dir)
     print(str(out_path))

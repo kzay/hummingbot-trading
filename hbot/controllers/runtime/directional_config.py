@@ -71,5 +71,16 @@ class DirectionalRuntimeConfig(EppV24Config):
     # ── OB imbalance skew (MM-only, directional uses its own signal) ──
     ob_imbalance_skew_weight: Decimal = Field(default=_ZERO)
 
+    # ── Centralized entry timeout for limit orders ─────────────────────
+    # When > 0, the shared runtime adapter cancels acknowledged-but-unfilled
+    # executors after this many seconds.  Set from strategy-specific configs
+    # (e.g. pb_entry_timeout_s) to centralise lifecycle management.
+    open_order_timeout_s: int = Field(
+        default=0,
+        ge=0,
+        le=600,
+        description="Seconds before an acknowledged open entry order is canceled (0=disabled)",
+    )
+
 
 __all__ = ["DirectionalRuntimeConfig"]

@@ -606,7 +606,7 @@ def run(once: bool = False) -> None:
                             if not approved:
                                 row["risk_denied_total"] = int(row.get("risk_denied_total", 0)) + 1
             except Exception:
-                pass
+                pass  # Justification: best-effort event aggregation — skip bot row on parse/processing error
 
         # Add equity path from minute.csv for realized PnL proxy.
         now_ms = int(time.time() * 1000)

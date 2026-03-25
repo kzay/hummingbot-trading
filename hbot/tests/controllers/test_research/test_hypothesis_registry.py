@@ -38,13 +38,17 @@ class TestHypothesisRegistry:
         all_b = reg.list_experiments("strat_b")
         assert len(all_b) == 1
 
-    def test_list_all_experiments(self, tmp_path: Path):
+    def test_experiments_are_isolated_per_candidate_file(self, tmp_path: Path):
         reg = HypothesisRegistry(tmp_path / "experiments")
         reg.record_experiment("x", {}, ("2025-01-01", "2025-02-01"), 1, "simple", "x.json")
         reg.record_experiment("y", {}, ("2025-01-01", "2025-02-01"), 2, "simple", "y.json")
 
-        all_exp = reg.list_experiments()
-        assert len(all_exp) == 2
+        x_exp = reg.list_experiments("x")
+        y_exp = reg.list_experiments("y")
+        assert len(x_exp) == 1
+        assert len(y_exp) == 1
+        assert x_exp[0]["candidate_name"] == "x"
+        assert y_exp[0]["candidate_name"] == "y"
 
     def test_config_hash_deterministic(self, tmp_path: Path):
         reg = HypothesisRegistry(tmp_path / "experiments")
@@ -57,7 +61,7 @@ class TestHypothesisRegistry:
         reg.record_experiment("x", {}, ("", ""), 1, "simple", "r.json")
         reg.record_experiment("x", {}, ("", ""), 2, "simple", "r2.json")
 
-        manifest_path = tmp_path / "experiments" / "manifest.jsonl"
+        manifest_path = tmp_path / "experiments" / "x.jsonl"
         lines = manifest_path.read_text().strip().split("\n")
         assert len(lines) == 2
         for line in lines:

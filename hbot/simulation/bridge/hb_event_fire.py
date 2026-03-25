@@ -15,6 +15,7 @@ from typing import Any, Protocol
 
 from simulation.types import (
     EngineEvent,
+    OrderAccepted,
     OrderCanceled,
     OrderFilled,
     OrderRejected,
@@ -199,7 +200,9 @@ def _fire_hb_events(strategy: Any, connector_name: str, event: Any, bridge_state
     _dispatch_to_subscribers(event, connector_name)
 
     try:
-        if isinstance(event, OrderFilled):
+        if isinstance(event, OrderAccepted):
+            _fire_accept_event(strategy, connector_name, event, bridge_state)
+        elif isinstance(event, OrderFilled):
             _fire_fill_event(strategy, connector_name, event, bridge_state)
         elif isinstance(event, OrderCanceled):
             _fire_cancel_event(strategy, connector_name, event)
@@ -427,6 +430,114 @@ def _fire_fill_event(strategy: Any, connector_name: str, fill_event: OrderFilled
 
     except Exception as exc:
         logger.warning("Fill event fire failed: %s", exc, exc_info=True)
+
+
+_SEEN_ORDER_ACCEPTED: set[str] = set()
+_SEEN_ORDER_ACCEPTED_MAX = 4096
+
+
+def _fire_accept_event(
+    strategy: Any,
+    connector_name: str,
+    accept_event: OrderAccepted,
+    bridge_state: Any,
+) -> None:
+    """Translate OrderAccepted into BuyOrderCreatedEvent / SellOrderCreatedEvent.
+
+    Without this, PositionExecutor never transitions ``is_trading`` to True
+    and the stale-executor reconciler kills the order prematurely.
+    """
+    oid = str(getattr(accept_event, "order_id", "") or "")
+    if not oid:
+        return
+
+    if oid in _SEEN_ORDER_ACCEPTED:
+        logger.debug("Dropping duplicate OrderAccepted for order_id=%s", oid)
+        return
+    _SEEN_ORDER_ACCEPTED.add(oid)
+    if len(_SEEN_ORDER_ACCEPTED) > _SEEN_ORDER_ACCEPTED_MAX:
+        to_drop = len(_SEEN_ORDER_ACCEPTED) - (_SEEN_ORDER_ACCEPTED_MAX // 2)
+        for _ in range(to_drop):
+            _SEEN_ORDER_ACCEPTED.pop()
+
+    try:
+        from hummingbot.core.data_type.common import OrderType, TradeType
+        from hummingbot.core.event.events import (
+            BuyOrderCreatedEvent,
+            SellOrderCreatedEvent,
+        )
+
+        side = str(getattr(accept_event, "side", "") or "").lower()
+        trade_type = TradeType.BUY if side == "buy" else TradeType.SELL
+
+        trading_pair = ""
+        runtime_orders = getattr(strategy, "_paper_exchange_runtime_orders", None)
+        if isinstance(runtime_orders, dict):
+            for bucket in runtime_orders.values():
+                if not isinstance(bucket, dict):
+                    continue
+                rt_order = bucket.get(oid)
+                if rt_order is not None:
+                    trading_pair = str(getattr(rt_order, "trading_pair", "") or "")
+                    break
+
+        if not trading_pair:
+            controller = _resolve_controller_for_event(strategy, connector_name, accept_event)
+            if controller is not None:
+                trading_pair = str(getattr(getattr(controller, "config", None), "trading_pair", "") or "")
+
+        order_type_str = str(getattr(accept_event, "order_type", "") or "").upper()
+        hb_order_type = OrderType.LIMIT if "LIMIT" in order_type_str else OrderType.MARKET
+
+        now = time.time()
+        price = Decimal(str(getattr(accept_event, "price", 0)))
+        amount = Decimal(str(getattr(accept_event, "quantity", 0)))
+
+        if trade_type == TradeType.BUY:
+            hb_event = BuyOrderCreatedEvent(
+                timestamp=now,
+                type=hb_order_type,
+                trading_pair=trading_pair,
+                amount=amount,
+                price=price,
+                order_id=oid,
+            )
+        else:
+            hb_event = SellOrderCreatedEvent(
+                timestamp=now,
+                type=hb_order_type,
+                trading_pair=trading_pair,
+                amount=amount,
+                price=price,
+                order_id=oid,
+            )
+
+        controller = _resolve_controller_for_event(strategy, connector_name, accept_event)
+        if controller and hasattr(controller, "did_create_order"):
+            try:
+                controller.did_create_order(hb_event)
+            except Exception as exc:
+                logger.debug("Controller did_create_order failed: %s", exc)
+
+        if isinstance(runtime_orders, dict):
+            bucket = runtime_orders.get(connector_name)
+            if isinstance(bucket, dict) and oid not in bucket:
+                bucket[oid] = SimpleNamespace(
+                    order_id=oid,
+                    trading_pair=trading_pair,
+                    trade_type=side,
+                    price=price,
+                    amount=amount,
+                    timestamp=now,
+                )
+                logger.debug("Upserted runtime order from OrderAccepted order_id=%s", oid)
+
+        logger.info(
+            "PAPER_ENGINE_PROBE accept_event_fired order_id=%s side=%s pair=%s price=%s qty=%s",
+            oid, side, trading_pair, price, amount,
+        )
+    except Exception as exc:
+        logger.warning("Accept event fire failed for order_id=%s: %s", oid, exc, exc_info=True)
 
 
 def _fire_cancel_event(strategy: Any, connector_name: str, cancel_event: OrderCanceled) -> None:

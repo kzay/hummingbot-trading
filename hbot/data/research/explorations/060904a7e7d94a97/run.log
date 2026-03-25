@@ -1,0 +1,14 @@
+Traceback (most recent call last):
+  File "<frozen runpy>", line 198, in _run_module_as_main
+  File "<frozen runpy>", line 88, in _run_code
+  File "/workspace/hbot/controllers/research/explore_cli.py", line 175, in <module>
+    main()
+  File "/workspace/hbot/controllers/research/explore_cli.py", line 97, in main
+    client = build_client(args.provider)
+             ^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/workspace/hbot/controllers/research/llm_client.py", line 133, in build_client
+    return cls()
+           ^^^^^
+  File "/workspace/hbot/controllers/research/llm_client.py", line 55, in __init__
+    import anthropic
+ModuleNotFoundError: No module named 'anthropic'

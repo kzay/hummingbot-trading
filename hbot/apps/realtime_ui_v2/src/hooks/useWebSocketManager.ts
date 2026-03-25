@@ -218,6 +218,9 @@ export function createWsManager(
       try { ws.close(); } catch { /* no-op */ }
     }
     ws = null;
+    if (isManualClose) {
+      reconnectDelayMs = 1_500;
+    }
   };
 
   const scheduleReconnect = () => {
@@ -321,6 +324,7 @@ export function createWsManager(
       if (sessionId !== activeStore.connection.wsSessionId) {
         return;
       }
+      ws = null; // Clear stale ref in case onclose doesn't fire (some environments)
       activeStore.setConnectionStatus("error");
       activeStore.appendEventLine("[ws] error");
     };
@@ -333,6 +337,9 @@ export function createWsManager(
       if (sessionId !== activeStore.connection.wsSessionId) {
         return;
       }
+      
+      ws = null; // Clear the old socket reference so reconnect can succeed
+
       activeStore.setConnectionStatus(manualClose ? "closed" : "reconnecting");
       if (!manualClose) {
         activeStore.appendEventLine("[ws] disconnected; reconnecting");

@@ -1283,7 +1283,7 @@ def create_app(
     from services.realtime_ui_api.backtest_api import create_backtest_routes
     backtest_routes = create_backtest_routes(auth_check=_check_auth)
 
-    from services.realtime_ui_api.research_api import create_research_routes
+    from services.common.research_api import create_research_routes
     research_routes = create_research_routes(auth_check=_check_auth)
 
     routes = [

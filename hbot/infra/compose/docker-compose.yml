@@ -531,8 +531,6 @@ services:
   redis:
     image: redis:latest
     container_name: redis
-    profiles:
-      - external
     restart: unless-stopped
     logging: *default-logging
     command:
@@ -662,8 +660,6 @@ services:
   signal-service:
     <<: *control-plane-image
     container_name: signal-service
-    profiles:
-      - external
     restart: on-failure
     logging: *default-logging
     command: >
@@ -720,8 +716,6 @@ services:
   risk-service:
     <<: *control-plane-image
     container_name: risk-service
-    profiles:
-      - external
     restart: on-failure
     logging: *default-logging
     command: >
@@ -771,8 +765,6 @@ services:
   coordination-service:
     <<: *control-plane-image
     container_name: coordination-service
-    profiles:
-      - external
     restart: on-failure
     logging: *default-logging
     command: >
@@ -824,8 +816,6 @@ services:
   event-store-service:
     <<: *control-plane-image
     container_name: event-store-service
-    profiles:
-      - external
     restart: on-failure
     logging: *default-logging
     command: >
@@ -887,8 +877,6 @@ services:
   ops-scheduler:
     <<: *control-plane-image
     container_name: ops-scheduler
-    profiles:
-      - external
     restart: unless-stopped
     logging: *default-logging
     command: >
@@ -933,6 +921,13 @@ services:
       - BOT3_BITGET_PASSPHRASE=${BOT3_BITGET_PASSPHRASE:-}
       # Artifact retention
       - ARTIFACT_RETENTION_APPLY=${ARTIFACT_RETENTION_APPLY:-true}
+      # Data refresh pipeline
+      - DATA_REFRESH_EXCHANGE=${DATA_REFRESH_EXCHANGE:-bitget}
+      - DATA_REFRESH_PAIRS=${DATA_REFRESH_PAIRS:-BTC-USDT,ETH-USDT}
+      - DATA_REFRESH_DATASETS=${DATA_REFRESH_DATASETS:-1m,mark_1m,index_1m,funding,ls_ratio}
+      - DATA_REFRESH_INTERVAL_SEC=${DATA_REFRESH_INTERVAL_SEC:-21600}
+      - BACKTEST_CATALOG_DIR=${BACKTEST_CATALOG_DIR:-/workspace/hbot/data/historical}
+      - REDIS_URL=redis://:${REDIS_PASSWORD:-kzay_redis_paper_2026}@redis:${REDIS_PORT:-6379}/${REDIS_DB:-0}
     volumes:
       - ../..:/workspace/hbot
       - ../../reports:/workspace/hbot/reports
@@ -956,17 +951,15 @@ services:
     deploy:
       resources:
         limits:
-          memory: 256M
-          cpus: "0.5"
+          memory: 1024M
+          cpus: "1.0"
         reservations:
-          memory: 64M
+          memory: 128M
           cpus: "0.1"
 
   market-data-service:
     <<: *control-plane-image
     container_name: market-data-service
-    profiles:
-      - external
     restart: on-failure
     logging: *default-logging
     command: >
@@ -1033,13 +1026,19 @@ services:
     environment:
       - ML_PAIRS=${ML_PAIRS:-BTC-USDT}
       - ML_EXCHANGE=${ML_EXCHANGE:-bitget}
-      - ML_TIMEFRAMES=${ML_TIMEFRAMES:-5m,15m,1h}
+      - ML_TIMEFRAMES=${ML_TIMEFRAMES:-1m,5m,15m,1h}
       - ML_MODEL_DIR=${ML_MODEL_DIR:-/workspace/hbot/data/ml/models}
       - ML_REFRESH_INTERVAL_S=${ML_REFRESH_INTERVAL_S:-3600}
-      - ML_WARMUP_BARS=${ML_WARMUP_BARS:-1440}
+      - ML_WARMUP_BARS=${ML_WARMUP_BARS:-20160}
+      - ML_ROLLING_WINDOW=${ML_ROLLING_WINDOW:-20160}
+      - HISTORICAL_DATA_DIR=${HISTORICAL_DATA_DIR:-/workspace/hbot/data/historical}
       - ML_POLL_INTERVAL_S=${ML_POLL_INTERVAL_S:-60}
       - ML_SENTIMENT_POLL_S=${ML_SENTIMENT_POLL_S:-300}
       - ML_TRADE_TIMEOUT_S=${ML_TRADE_TIMEOUT_S:-120}
+      - ML_PUBLISH_RESOLUTIONS=${ML_PUBLISH_RESOLUTIONS:-1m,15m}
+      - ML_TRADE_BUFFER_SIZE=${ML_TRADE_BUFFER_SIZE:-5000}
+      - ML_MARK_INDEX_REFRESH_S=${ML_MARK_INDEX_REFRESH_S:-60}
+      - ML_SHADOW_MODE=${ML_SHADOW_MODE:-false}
       - REDIS_HOST=${REDIS_HOST:-redis}
       - REDIS_PORT=${REDIS_PORT:-6379}
       - REDIS_DB=${REDIS_DB:-0}
@@ -1056,30 +1055,74 @@ services:
     deploy:
       resources:
         limits:
-          memory: 1024M
+          memory: 1536M
           cpus: "1.0"
         reservations:
-          memory: 256M
+          memory: 512M
+          cpus: "0.25"
+
+  research-worker:
+    <<: *control-plane-image
+    container_name: research-worker
+    restart: unless-stopped
+    logging: *default-logging
+    command: >
+      /bin/sh -lc "python /workspace/hbot/services/research_worker/main.py"
+    env_file:
+      - ../env/.env
+    environment:
+      - REALTIME_UI_API_AUTH_ENABLED=${REALTIME_UI_API_AUTH_ENABLED:-false}
+      - REALTIME_UI_API_AUTH_TOKEN=${REALTIME_UI_API_AUTH_TOKEN:-}
+      - REALTIME_UI_API_ALLOW_QUERY_TOKEN=${REALTIME_UI_API_ALLOW_QUERY_TOKEN:-false}
+      - REALTIME_UI_API_CORS_ALLOW_ORIGIN=${REALTIME_UI_API_CORS_ALLOW_ORIGIN:-*}
+      - REALTIME_UI_API_ALLOWED_ORIGINS=${REALTIME_UI_API_ALLOWED_ORIGINS:-}
+      - RESEARCH_WORKER_BIND_HOST=0.0.0.0
+      - RESEARCH_WORKER_PORT=${RESEARCH_WORKER_PORT:-9920}
+      - RESEARCH_DATA_DIR=/workspace/hbot/data/research
+      - PYTHONPATH=/workspace/hbot
+      - PYTHONPYCACHEPREFIX=/tmp/pycache
+    volumes:
+      - ../..:/workspace/hbot
+      - ../../reports:/workspace/hbot/reports
+    networks:
+      - trading
+    healthcheck:
+      test:
+        [
+          "CMD-SHELL",
+          'python -c "import json,urllib.request; d=json.loads(urllib.request.urlopen(''http://localhost:9920/health'', timeout=3).read().decode(''utf-8'')); import sys; sys.exit(0 if d.get(''status'') == ''ok'' else 1)"',
+        ]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 20s
+    deploy:
+      resources:
+        limits:
+          memory: 6144M
+          cpus: "8.0"
+        reservations:
+          memory: 512M
           cpus: "0.25"
 
   realtime-ui-api:
     <<: *control-plane-image
     container_name: realtime-ui-api
-    profiles:
-      - external
     restart: unless-stopped
     logging: *default-logging
     command: >
       /bin/sh -lc "python /workspace/hbot/services/realtime_ui_api/main.py"
     ports:
       - "${REALTIME_UI_API_BIND_IP:-127.0.0.1}:${REALTIME_UI_API_PORT:-9910}:9910"
+    env_file:
+      - ../env/.env
     environment:
       - EXT_SIGNAL_RISK_ENABLED=${EXT_SIGNAL_RISK_ENABLED:-true}
       - REDIS_HOST=${REDIS_HOST:-redis}
       - REDIS_PORT=${REDIS_PORT:-6379}
       - REDIS_DB=${REDIS_DB:-0}
       - REDIS_PASSWORD=${REDIS_PASSWORD:-kzay_redis_paper_2026}
-      - REALTIME_UI_API_MODE=${REALTIME_UI_API_MODE:-disabled}
+      - REALTIME_UI_API_MODE=${REALTIME_UI_API_MODE:-active}
       - REALTIME_UI_API_BIND_HOST=0.0.0.0
       - REALTIME_UI_API_PORT=${REALTIME_UI_API_PORT:-9910}
       - REALTIME_UI_API_CORS_ALLOW_ORIGIN=${REALTIME_UI_API_CORS_ALLOW_ORIGIN:-*}
@@ -1106,6 +1149,7 @@ services:
       - REALTIME_UI_API_DB_STATEMENT_TIMEOUT_MS=${REALTIME_UI_API_DB_STATEMENT_TIMEOUT_MS:-1500}
       - REALTIME_UI_API_DB_LOCK_TIMEOUT_MS=${REALTIME_UI_API_DB_LOCK_TIMEOUT_MS:-750}
       - REALTIME_UI_API_SSE_ENABLED=${REALTIME_UI_API_SSE_ENABLED:-false}
+      # LLM keys loaded from env_file (../env/.env); do not override here
       - OPS_DB_HOST=${OPS_DB_HOST:-postgres}
       - OPS_DB_PORT=${OPS_DB_PORT:-5432}
       - OPS_DB_NAME=${OPS_DB_NAME:-kzay_capital_ops}
@@ -1145,16 +1189,14 @@ services:
       resources:
         limits:
           memory: ${REALTIME_UI_API_MEM_LIMIT:-1536M}
-          cpus: "1.0"
+          cpus: "${REALTIME_UI_API_CPU_LIMIT:-1.0}"
         reservations:
-          memory: 256M
-          cpus: "0.1"
+          memory: 512M
+          cpus: "0.25"
 
   realtime-ui-web:
     image: ${REALTIME_UI_WEB_IMAGE:-kzay-capital-realtime-ui-web-v2:latest}
     container_name: realtime-ui-web
-    profiles:
-      - external
     restart: unless-stopped
     logging: *default-logging
     build:
@@ -1164,6 +1206,8 @@ services:
       - "${REALTIME_UI_WEB_BIND_IP:-127.0.0.1}:${REALTIME_UI_WEB_PORT:-8088}:80"
     depends_on:
       realtime-ui-api:
+        condition: service_started
+      research-worker:
         condition: service_started
     networks:
       - trading
@@ -1186,23 +1230,22 @@ services:
   reconciliation-service:
     <<: *control-plane-image
     container_name: reconciliation-service
-    profiles:
-      - external
     restart: on-failure
     logging: *default-logging
     command: >
       /bin/sh -lc "python /workspace/hbot/services/reconciliation_service/main.py"
     environment:
-      - HB_DATA_ROOT=/workspace/hbot/data
-      - RECON_INTERVAL_SEC=${RECON_INTERVAL_SEC:-300}
-      - RECON_INVENTORY_DRIFT_WARN=${RECON_INVENTORY_DRIFT_WARN:-0.25}
-      - RECON_INVENTORY_DRIFT_CRITICAL=${RECON_INVENTORY_DRIFT_CRITICAL:-0.45}
-      - RECON_ALERT_WEBHOOK_URL=${RECON_ALERT_WEBHOOK_URL:-http://alert-webhook-sink:19093/alert}
-      - RECON_ALERT_MIN_SEVERITY=${RECON_ALERT_MIN_SEVERITY:-critical}
-      - RECON_EXCHANGE_SOURCE_ENABLED=${RECON_EXCHANGE_SOURCE_ENABLED:-true}
-      - RECON_EXCHANGE_SNAPSHOT_PATH=${RECON_EXCHANGE_SNAPSHOT_PATH:-/workspace/hbot/reports/exchange_snapshots/latest.json}
-      - RECON_THRESHOLDS_PATH=${RECON_THRESHOLDS_PATH:-/workspace/hbot/config/reconciliation_thresholds.json}
-      - RECON_HEALTH_MAX_SEC=${RECON_HEALTH_MAX_SEC:-900}
+      <<: *kzay-env
+      HB_DATA_ROOT: /workspace/hbot/data
+      RECON_INTERVAL_SEC: ${RECON_INTERVAL_SEC:-300}
+      RECON_INVENTORY_DRIFT_WARN: ${RECON_INVENTORY_DRIFT_WARN:-0.25}
+      RECON_INVENTORY_DRIFT_CRITICAL: ${RECON_INVENTORY_DRIFT_CRITICAL:-0.45}
+      RECON_ALERT_WEBHOOK_URL: ${RECON_ALERT_WEBHOOK_URL:-http://alert-webhook-sink:19093/alert}
+      RECON_ALERT_MIN_SEVERITY: ${RECON_ALERT_MIN_SEVERITY:-critical}
+      RECON_EXCHANGE_SOURCE_ENABLED: ${RECON_EXCHANGE_SOURCE_ENABLED:-true}
+      RECON_EXCHANGE_SNAPSHOT_PATH: ${RECON_EXCHANGE_SNAPSHOT_PATH:-/workspace/hbot/reports/exchange_snapshots/latest.json}
+      RECON_THRESHOLDS_PATH: ${RECON_THRESHOLDS_PATH:-/workspace/hbot/config/reconciliation_thresholds.json}
+      RECON_HEALTH_MAX_SEC: ${RECON_HEALTH_MAX_SEC:-900}
     volumes:
       - ../..:/workspace/hbot
     depends_on:
@@ -1210,6 +1253,8 @@ services:
         condition: service_started
       ops-scheduler:
         condition: service_started
+      redis:
+        condition: service_healthy
     networks:
       - trading
     healthcheck:
@@ -1234,8 +1279,6 @@ services:
   shadow-parity-service:
     <<: *control-plane-image
     container_name: shadow-parity-service
-    profiles:
-      - external
     restart: on-failure
     logging: *default-logging
     command: >
@@ -1277,8 +1320,6 @@ services:
   portfolio-risk-service:
     <<: *control-plane-image
     container_name: portfolio-risk-service
-    profiles:
-      - external
     restart: on-failure
     logging: *default-logging
     command: >
@@ -1328,8 +1369,6 @@ services:
   portfolio-allocator-service:
     <<: *control-plane-image
     container_name: portfolio-allocator-service
-    profiles:
-      - external
     restart: on-failure
     logging: *default-logging
     command: >
@@ -1376,17 +1415,15 @@ services:
   telegram-bot:
     <<: *control-plane-image
     container_name: telegram-bot
-    profiles:
-      - external
     restart: on-failure
     logging: *default-logging
     command: >
       /bin/sh -lc "python /workspace/hbot/services/telegram_bot/main.py"
+    env_file:
+      - ../env/.env
     environment:
       - PYTHONPATH=/workspace/hbot
       - PYTHONPYCACHEPREFIX=/tmp/pycache
-      - TELEGRAM_BOT_TOKEN=${TELEGRAM_BOT_TOKEN}
-      - TELEGRAM_CHAT_ID=${TELEGRAM_CHAT_ID}
       - HB_DATA_ROOT=/workspace/hbot/data
     volumes:
       - ../..:/workspace/hbot:ro
@@ -1409,8 +1446,6 @@ services:
   kill-switch:
     <<: *control-plane-image
     container_name: kill-switch
-    profiles:
-      - external
     restart: unless-stopped
     logging: *default-logging
     command: >
@@ -1614,8 +1649,6 @@ services:
   prometheus:
     image: prom/prometheus:v2.51.2
     container_name: prometheus
-    profiles:
-      - monitoring
     restart: unless-stopped
     logging: *default-logging
     command:
@@ -1658,8 +1691,6 @@ services:
   grafana:
     image: grafana/grafana-oss:latest
     container_name: grafana
-    profiles:
-      - monitoring
     restart: unless-stopped
     logging: *default-logging
     environment:
@@ -1702,8 +1733,6 @@ services:
   node-exporter:
     image: prom/node-exporter:latest
     container_name: node-exporter
-    profiles:
-      - monitoring
     restart: on-failure
     logging: *default-logging
     command:
@@ -1745,10 +1774,12 @@ services:
   cadvisor:
     image: gcr.io/cadvisor/cadvisor:latest
     container_name: cadvisor
-    profiles:
-      - monitoring
     restart: on-failure
     logging: *default-logging
+    command:
+      - --housekeeping_interval=30s
+      - --docker_only=true
+      - --disable_metrics=percpu,sched,tcp,udp,disk,diskIO,hugetlb,referenced_memory,resctrl
     volumes:
       - /:/rootfs:ro
       - /var/run:/var/run:ro
@@ -1778,7 +1809,7 @@ services:
     deploy:
       resources:
         limits:
-          memory: 128M
+          memory: 256M
           cpus: "0.5"
         reservations:
           memory: 32M
@@ -1902,6 +1933,8 @@ services:
     container_name: bot-watchdog
     restart: on-failure
     logging: *default-logging
+    env_file:
+      - ../env/.env
     volumes:
       - /var/run/docker.sock:/var/run/docker.sock
       - ../..:/workspace/hbot:ro
@@ -1910,7 +1943,7 @@ services:
       - PYTHONPATH=/workspace/hbot
       - PYTHONPYCACHEPREFIX=/tmp/pycache
       - HB_DATA_ROOT=/workspace/hbot/data
-      - WATCHDOG_BOTS=bot1,bot2,bot3,bot4,bot5,bot6,bot7
+      - WATCHDOG_BOTS=bot1,bot7
       - WATCHDOG_STALE_THRESHOLD_S=300
       - WATCHDOG_CHECK_INTERVAL_S=60
       - WATCHDOG_PAUSE_BEFORE_RESTART_S=120
@@ -1924,8 +1957,6 @@ services:
       - EXT_SIGNAL_RISK_ENABLED=${EXT_SIGNAL_RISK_ENABLED:-false}
       - WATCHDOG_CONTAINER_PREFIX=${WATCHDOG_CONTAINER_PREFIX:-}
       - WATCHDOG_STATE_FILE=/tmp/watchdog_state.json
-      - TELEGRAM_BOT_TOKEN=${TELEGRAM_BOT_TOKEN:-}
-      - TELEGRAM_CHAT_ID=${TELEGRAM_CHAT_ID:-}
     networks:
       - trading
     healthcheck:
@@ -1941,4 +1972,25 @@ services:
           cpus: "0.1"
         reservations:
           memory: 64M
+
+  test-runner:
+    <<: *control-plane-image
+    container_name: test-runner
+    profiles:
+      - test
+    volumes:
+      - ../..:/workspace/hbot
+    environment:
+      PYTHONPATH: /workspace/hbot
+      PYTHONPYCACHEPREFIX: /tmp/pycache
+    command: >
+      /bin/sh -lc "python -m pytest /workspace/hbot/hbot/tests/ -x -q
+      --ignore=/workspace/hbot/hbot/tests/integration"
+    networks:
+      - trading
+    deploy:
+      resources:
+        limits:
+          memory: 512M
+          cpus: "1.0"
 

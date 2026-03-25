@@ -148,9 +148,12 @@ class MarketMakingRuntimeAdapter:
         reconnect_refresh_suppressed = controller._in_reconnect_refresh_suppression_window(now)
         stale_age_s = refresh_s
 
+        open_order_timeout_s = int(getattr(controller.config, "open_order_timeout_s", 0) or 0)
+
         if reconnect_refresh_suppressed:
             stale_executors = []
             stuck_executors = []
+            entry_timeout_executors = []
             controller._consecutive_stuck_ticks = 0
         else:
 
@@ -165,9 +168,22 @@ class MarketMakingRuntimeAdapter:
                         return False
                 return True
 
+            def _is_acked_executor(executor: Any) -> bool:
+                return not _is_unacked_executor(executor)
+
+            def _stale_filter(x: Any) -> bool:
+                if x.is_trading or not x.is_active:
+                    return False
+                age = now - x.timestamp
+                if age <= stale_age_s:
+                    return False
+                if open_order_timeout_s > 0 and _is_acked_executor(x):
+                    return age > open_order_timeout_s
+                return True
+
             stale_executors = controller.filter_executors(
                 executors=controller.executors_info,
-                filter_func=lambda x: not x.is_trading and x.is_active and now - x.timestamp > stale_age_s,
+                filter_func=_stale_filter,
             )
             stuck_executors = controller.filter_executors(
                 executors=controller.executors_info,
@@ -179,6 +195,26 @@ class MarketMakingRuntimeAdapter:
                     and now - x.timestamp <= refresh_s
                 ),
             )
+
+            if open_order_timeout_s > 0:
+                entry_timeout_executors = controller.filter_executors(
+                    executors=controller.executors_info,
+                    filter_func=lambda x: (
+                        not x.is_trading
+                        and x.is_active
+                        and _is_acked_executor(x)
+                        and now - x.timestamp > open_order_timeout_s
+                    ),
+                )
+                if entry_timeout_executors:
+                    logger.info(
+                        "Entry timeout: %d executor(s) unfilled after %ds, canceling",
+                        len(entry_timeout_executors),
+                        open_order_timeout_s,
+                    )
+            else:
+                entry_timeout_executors = []
+
             if stuck_executors:
                 logger.warning(
                     "Order ack timeout: %d executor(s) stuck in placing state for >%ds",
@@ -192,20 +228,33 @@ class MarketMakingRuntimeAdapter:
         if not reconnect_refresh_suppressed:
             cancel_stale_fn = getattr(controller, "_cancel_stale_orders", None)
             if callable(cancel_stale_fn):
-                canceled = cancel_stale_fn(stale_age_s=stale_age_s, now_ts=now)
+                effective_stale_age = max(stale_age_s, open_order_timeout_s) if open_order_timeout_s > 0 else stale_age_s
+                canceled = cancel_stale_fn(stale_age_s=effective_stale_age, now_ts=now)
                 if canceled > 0:
                     logger.info(
                         "Canceled %d stale order(s) older than %.1fs for %s during refresh reconciliation",
                         canceled,
-                        stale_age_s,
+                        effective_stale_age,
                         controller.config.trading_pair,
                     )
 
         from hummingbot.strategy_v2.models.executor_actions import StopExecutorAction
 
-        actions = [StopExecutorAction(controller_id=controller.config.id, executor_id=executor.id) for executor in stale_executors + stuck_executors]
+        all_executors = stale_executors + stuck_executors + entry_timeout_executors
+        seen_ids: set[str] = set()
+        actions: list[Any] = []
+        for executor in all_executors:
+            eid = str(getattr(executor, "id", ""))
+            if eid and eid not in seen_ids:
+                seen_ids.add(eid)
+                actions.append(StopExecutorAction(controller_id=controller.config.id, executor_id=eid))
+
         if controller._pending_stale_cancel_actions:
-            actions.extend(controller._pending_stale_cancel_actions)
+            for action in controller._pending_stale_cancel_actions:
+                aeid = str(getattr(action, "executor_id", ""))
+                if aeid and aeid not in seen_ids:
+                    seen_ids.add(aeid)
+                    actions.append(action)
             controller._pending_stale_cancel_actions = []
         return actions
 

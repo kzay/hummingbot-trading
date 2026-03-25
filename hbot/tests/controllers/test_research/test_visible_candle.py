@@ -11,7 +11,7 @@ from controllers.backtesting.types import CandleRow, VisibleCandleRow
 
 def _make_candle() -> CandleRow:
     return CandleRow(
-        timestamp_ns=1_000_000_000,
+        timestamp_ms=1_000,
         open=Decimal("100.0"),
         high=Decimal("105.0"),
         low=Decimal("95.0"),
@@ -28,20 +28,19 @@ class TestVisibleCandleRow:
         assert math.isnan(float(v.low))
         assert math.isnan(float(v.close))
 
-    def test_open_always_visible(self):
+    @pytest.mark.parametrize(
+        "field, expected",
+        [
+            ("open", Decimal("100.0")),
+            ("volume", Decimal("500.0")),
+            ("timestamp_ns", 1_000_000_000),
+        ],
+        ids=["open", "volume", "timestamp"],
+    )
+    def test_always_visible_fields(self, field, expected):
         candle = _make_candle()
         v = VisibleCandleRow(candle, step_index=0, max_step=4)
-        assert v.open == Decimal("100.0")
-
-    def test_volume_always_visible(self):
-        candle = _make_candle()
-        v = VisibleCandleRow(candle, step_index=0, max_step=4)
-        assert v.volume == Decimal("500.0")
-
-    def test_timestamp_always_visible(self):
-        candle = _make_candle()
-        v = VisibleCandleRow(candle, step_index=0, max_step=4)
-        assert v.timestamp_ns == 1_000_000_000
+        assert getattr(v, field) == expected
 
     def test_final_step_reveals_all_fields(self):
         candle = _make_candle()

@@ -19,11 +19,19 @@ export const WS_PENDING_MESSAGES_CAP = 500;
 /** Fallback when `window` is unavailable (tests, SSR). Prefer `getDefaultApiBase()` in the browser. */
 export const DEFAULT_API_BASE = "http://localhost:9910";
 
-/** Realtime API on same host as the UI, port 9910 — avoids `localhost` vs `127.0.0.1` browser CORS mismatches. */
+/**
+ * When served by the nginx reverse-proxy the API is available on the same
+ * origin (nginx proxies /api/ and /health to realtime-ui-api:9910).
+ * Only fall back to the explicit :9910 port during local dev (Vite on :5173).
+ */
 export function getDefaultApiBase(): string {
   if (typeof window === "undefined" || !window.location?.hostname) {
     return DEFAULT_API_BASE;
   }
-  const { protocol, hostname } = window.location;
-  return `${protocol}//${hostname}:9910`;
+  const { protocol, hostname, port } = window.location;
+  const isDevServer = port === "5173" || port === "5174";
+  if (isDevServer) {
+    return `${protocol}//${hostname}:9910`;
+  }
+  return `${protocol}//${hostname}${port ? `:${port}` : ""}`;
 }

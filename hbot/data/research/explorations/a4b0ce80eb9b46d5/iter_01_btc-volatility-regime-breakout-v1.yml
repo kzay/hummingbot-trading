@@ -1,0 +1,56 @@
+name: btc-volatility-regime-breakout-v1
+hypothesis: BTC-USDT perpetual exhibits distinct volatility regimes where low-volatility  periods
+  (Bollinger Band width compression) precede explosive breakouts.  The smc_mm adapter's
+  regime detection can identify these compression phases  and bias quotes toward the
+  breakout direction using Fair Value Gap analysis,  capturing early momentum while
+  maintaining market-making risk controls.
+adapter_mode: smc_mm
+parameter_space:
+  bb_period:
+  - 20
+  - 30
+  - 50
+  regime_threshold:
+  - 0.8
+  - 1.2
+  - 1.8
+  fvg_lookback:
+  - 5
+  - 10
+  - 15
+  spread_base:
+  - 0.002
+  - 0.004
+  - 0.008
+entry_logic: Detect volatility compression when Bollinger Band width falls below  regime_threshold
+  percentile of recent history. Identify Fair Value Gaps  in the fvg_lookback period
+  to determine directional bias. Place asymmetric  quotes favoring the FVG direction
+  with tighter spreads on the bias side  and wider spreads against it using spread_base
+  as the baseline.
+exit_logic: Revert to symmetric quoting when volatility expands above regime_threshold  or
+  when inventory exceeds risk limits. Close directional exposure when  Bollinger Bands
+  return to normal width and no fresh FVGs appear in the  lookback window.
+base_config:
+  strategy_class: smc_mm
+  strategy_config:
+    bb_period: 30
+    regime_threshold: 1.2
+    fvg_lookback: 10
+    spread_base: 0.004
+  data_source:
+    exchange: bitget
+    pair: BTC-USDT
+    resolution: 15m
+    instrument_type: perp
+  initial_equity: '500'
+  leverage: 1
+  seed: 42
+  step_interval_s: 900
+  warmup_bars: 60
+required_tests:
+- test_adapter_compiles
+- test_no_lookahead_in_entry
+metadata:
+  author: llm_exploration
+  version: '1.0'
+lifecycle: candidate

@@ -34,31 +34,29 @@ class RegimeMixin:
         return regime_name, regime_spec, target_base_pct, target_net_base_pct, band_pct
 
     def _get_ohlcv_ema_and_atr(self) -> tuple[Decimal | None, Decimal | None]:
-        """Fetch 1m OHLCV candles and compute EMA/band_pct. Returns (None, None) on failure."""
+        """Fetch OHLCV candles at indicator_resolution and compute EMA/band_pct."""
         connector = self.config.candles_connector
         if not connector:
             return None, None
         pair = self.config.candles_trading_pair or self.config.trading_pair
+        resolution = getattr(self.config, "indicator_resolution", "1m")
+        resolution_sec = getattr(self, "_resolution_minutes", 1) * 60
         needed = self.config.ema_period + 5
         try:
-            df = self.market_data_provider.get_candles_df(connector, pair, "1m", needed)
+            df = self.market_data_provider.get_candles_df(connector, pair, resolution, needed)
         except Exception:
             return None, None
         if df is None or df.empty or len(df) < self.config.ema_period:
             return None, None
-        # Drop the last (still-forming) candle to prevent lookahead/repaint bias.
-        # HB candles DataFrames carry 'timestamp' in milliseconds (epoch ms).
-        # If the last bar opened within the last 60 s it is not yet closed.
         try:
             if "timestamp" in df.columns:
                 now_s = float(self.market_data_provider.time())
                 last_ts = float(df["timestamp"].iloc[-1])
-                # Convert ms → s when the value looks like a millisecond timestamp.
                 last_ts_s = last_ts / 1000.0 if last_ts > 1e10 else last_ts
-                if now_s - last_ts_s < 60.0:
+                if now_s - last_ts_s < float(resolution_sec):
                     df = df.iloc[:-1]
         except Exception:
-            pass  # partial-candle trim failed — proceed with full df
+            pass  # Justification: timestamp trim is best-effort — keep dataframe if time parsing fails
         if df.empty or len(df) < self.config.ema_period:
             return None, None
         try:
@@ -124,9 +122,9 @@ class RegimeMixin:
         self._regime_source = self._regime_detector._regime_source
 
         if self._regime_detector.changed_one_sided is not None:
-            self._pending_stale_cancel_actions = self._cancel_stale_side_executors(
+            self.replace_stale_cancels(self._cancel_stale_side_executors(
                 self._regime_detector.changed_one_sided, regime_spec.one_sided,
-            )
+            ))
 
         return regime_name, regime_spec, band_pct
 

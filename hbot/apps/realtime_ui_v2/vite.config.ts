@@ -17,6 +17,15 @@ export default defineConfig({
           if (id.includes("@tanstack/react-table")) {
             return "vendor-table";
           }
+          if (id.includes("react-grid-layout") || id.includes("react-draggable") || id.includes("react-resizable")) {
+            return "vendor-grid";
+          }
+          if (id.includes("react-dom") || id.includes("/react/") || id.includes("zustand")) {
+            return "vendor-react";
+          }
+          if (id.includes("/zod/") || id.includes("/zod@")) {
+            return "vendor-zod";
+          }
           return undefined;
         },
       },

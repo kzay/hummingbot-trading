@@ -793,7 +793,7 @@ class DeskSnapshotFallback:
                     if (entry / "latest.json").exists():
                         instances.add(entry.name)
             except Exception:
-                pass
+                pass  # Justification: best-effort I/O — desk snapshot dir may be unreadable; non-critical
         if self._data_root.exists():
             try:
                 for entry in self._data_root.iterdir():
@@ -815,7 +815,7 @@ class DeskSnapshotFallback:
                     if any((entry / child).exists() for child in ("conf", "logs", "data", "scripts")):
                         instances.add(entry.name)
             except Exception:
-                pass
+                pass  # Justification: best-effort I/O — data root scan may fail; non-critical
         resolved = sorted(instances, key=lambda value: value.lower())
         self._available_instances_cache = (now_ms, resolved)
         return list(resolved)

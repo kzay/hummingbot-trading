@@ -1,0 +1,41 @@
+{
+  "started": "2026-03-25T13:21:36.695152+00:00",
+  "event-store-snapshot": {
+    "last_run": "2026-03-25T18:37:09.400984+00:00",
+    "exit_code": 0,
+    "elapsed_s": 2.0
+  },
+  "soak-snapshot": {
+    "last_run": "2026-03-25T18:37:08.303990+00:00",
+    "exit_code": 0,
+    "elapsed_s": 0.7
+  },
+  "daily-ops-report": {
+    "last_run": "2026-03-25T18:37:05.476850+00:00",
+    "exit_code": 0,
+    "elapsed_s": 1.4
+  },
+  "alive_threads": 7,
+  "total_threads": 7,
+  "heartbeat": "2026-03-25T18:37:51.620959+00:00",
+  "exchange-snapshot": {
+    "last_run": "2026-03-25T18:38:43.208557+00:00",
+    "exit_code": 0,
+    "elapsed_s": 8.6
+  },
+  "day2-gate-eval": {
+    "last_run": "2026-03-25T18:37:33.678324+00:00",
+    "exit_code": 0,
+    "elapsed_s": 33.9
+  },
+  "data-refresh": {
+    "last_run": "2026-03-25T13:23:38.400893+00:00",
+    "exit_code": -9,
+    "elapsed_s": 109.7
+  },
+  "artifact-retention": {
+    "last_run": "2026-03-25T13:32:08.415152+00:00",
+    "exit_code": 0,
+    "elapsed_s": 623.7
+  }
+}

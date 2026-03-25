@@ -1,0 +1,1 @@
+2026-03-24 17:22:45,053 [ERROR] __main__: Failed to initialise LLM client: No Anthropic API key found. Set one of: ANTHROPIC_API_KEY, RESEARCH_LLM_API_KEY, LLM_API_KEY

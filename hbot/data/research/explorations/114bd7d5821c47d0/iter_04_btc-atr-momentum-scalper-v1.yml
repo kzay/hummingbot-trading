@@ -1,0 +1,56 @@
+name: btc-atr-momentum-scalper-v1
+hypothesis: BTC-USDT perpetual exhibits short-lived momentum bursts on 15m bars when
+  price breaks above/below recent high/low by >1.5 ATR. These bursts sustain for 2-4
+  bars before mean-reverting, creating scalping opportunities with tight stops and
+  quick exits.
+adapter_mode: momentum_scalper
+parameter_space:
+  burst_threshold:
+  - 1.2
+  - 1.8
+  - 2.5
+  hold_bars:
+  - 2
+  - 4
+  - 6
+  trail_atr:
+  - 0.8
+  - 1.2
+  - 1.8
+  lookback_bars:
+  - 8
+  - 12
+  - 20
+entry_logic: Enter long when current bar's high exceeds the highest high of the last
+  lookback_bars by at least burst_threshold * ATR(14). Enter short when current bar's
+  low breaks below the lowest low of lookback_bars by burst_threshold * ATR(14). Only
+  one position at a time.
+exit_logic: Exit after hold_bars completed bars OR when price moves against position
+  by trail_atr * ATR(14) from the best level achieved since entry. Hard stop at 3
+  * ATR(14) adverse move from entry price.
+base_config:
+  strategy_class: momentum_scalper
+  strategy_config:
+    burst_threshold: 1.8
+    hold_bars: 4
+    trail_atr: 1.2
+    lookback_bars: 12
+    position_size_pct: 0.15
+    max_hold_minutes: 120
+  data_source:
+    exchange: bitget
+    pair: BTC-USDT
+    resolution: 15m
+    instrument_type: perp
+  initial_equity: '500'
+  leverage: 1
+  seed: 42
+  step_interval_s: 900
+  warmup_bars: 60
+required_tests:
+- test_adapter_compiles
+- test_no_lookahead_in_entry
+metadata:
+  author: llm_exploration
+  version: '1.0'
+lifecycle: candidate

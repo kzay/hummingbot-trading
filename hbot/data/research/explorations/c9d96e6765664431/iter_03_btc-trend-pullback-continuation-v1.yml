@@ -1,0 +1,57 @@
+name: btc-trend-pullback-continuation-v1
+hypothesis: BTC-USDT perpetual exhibits reliable trend continuation patterns where
+  pullbacks of 0.8-1.5 ATR against a strong 50-period EMA trend provide low-risk entry
+  points. The strategy captures 2-4 bar momentum bursts following pullback completions,
+  with trailing stops to lock in gains during extended moves.
+adapter_mode: pullback
+parameter_space:
+  pullback_depth_atr:
+  - 0.8
+  - 1.2
+  - 1.5
+  trend_ema_period:
+  - 34
+  - 50
+  - 89
+  stop_atr_multiplier:
+  - 1.5
+  - 2.0
+  - 2.5
+  min_trend_strength:
+  - 0.5
+  - 1.0
+  - 1.5
+entry_logic: Enter long when price pulls back pullback_depth_atr * ATR(14) below the  trend_ema_period
+  EMA while EMA slope indicates uptrend strength above  min_trend_strength ATR per
+  bar. Enter short on pullbacks above EMA during  downtrends. Require pullback to
+  reverse within 3 bars to avoid dead-cat bounces.
+exit_logic: Exit via trailing stop at stop_atr_multiplier * ATR(14) from highest favorable  price
+  since entry. Hard stop at 3 * ATR(14) adverse move. Take profit if  position moves
+  2 * ATR(14) favorably and momentum weakens (RSI divergence).
+base_config:
+  strategy_class: pullback
+  strategy_config:
+    pullback_depth_atr: 1.2
+    trend_ema_period: 50
+    stop_atr_multiplier: 2.0
+    min_trend_strength: 1.0
+    max_position_pct: 0.8
+    atr_period: 14
+  data_source:
+    exchange: bitget
+    pair: BTC-USDT
+    resolution: 15m
+    instrument_type: perp
+  initial_equity: '500'
+  leverage: 1
+  seed: 42
+  step_interval_s: 900
+  warmup_bars: 100
+required_tests:
+- test_adapter_compiles
+- test_no_lookahead_in_entry
+metadata:
+  author: llm_exploration
+  version: '1.0'
+  notes: Trend-following pullback strategy targeting 2-4 bar momentum continuation
+lifecycle: candidate

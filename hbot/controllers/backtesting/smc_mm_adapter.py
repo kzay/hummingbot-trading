@@ -439,4 +439,4 @@ class SmcMMAdapter:
         try:
             self._desk.cancel_all(self._instrument_id)
         except Exception:
-            pass
+            pass  # Justification: best-effort teardown during simulation — desk may already be closed

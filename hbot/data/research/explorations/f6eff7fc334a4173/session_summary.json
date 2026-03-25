@@ -1,0 +1,18 @@
+{
+  "total_iterations": 1,
+  "best_observed_score": 0.0,
+  "best_observed_candidate": "",
+  "best_recommendation": "",
+  "total_tokens_used": 3067,
+  "iterations": [
+    {
+      "iteration": 1,
+      "action": "generate",
+      "candidate_name": "btc-ema-crossover-momentum-v1",
+      "score": null,
+      "recommendation": null,
+      "report_path": "",
+      "error": "Evaluation error: Candle Parquet file not found: hbot\\data\\historical\\bitget\\BTC-USDT\\15m\\data.parquet\nTraceback (most recent call last):\n  File \"/workspace/hbot/controllers/research/exploration_session.py\", line 520, in _run_iteration\n    eval_result = orchestrator.evaluate(candidate)\n                  ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n  File \"/workspace/hbot/controllers/research/experiment_orchestrator.py\", line 107, in evaluate\n    result.backtest_result = harness.run()\n                             ^^^^^^^^^^^^^\n  File \"/workspace/hbot/controllers/backtesting/harness.py\", line 208, in run\n    return self._run_impl()\n           ^^^^^^^^^^^^^^^^\n  File \"/workspace/hbot/controllers/backtesting/harness.py\", line 218, in _run_impl\n    candles = self._load_candles()\n              ^^^^^^^^^^^^^^^^^^^^\n  File \"/workspace/hbot/controllers/backtesting/harness.py\", line 595, in _load_candles\n    candles = load_candles(Path(entry[\"file_path\"]))\n              ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n  File \"/workspace/hbot/controllers/backtesting/data_store.py\", line 107, in load_candles\n    raise FileNotFoundError(f\"Candle Parquet file not found: {path}\")\nFileNotFoundError: Candle Parquet file not found: hbot\\data\\historical\\bitget\\BTC-USDT\\15m\\data.parquet\n"
+    }
+  ]
+}

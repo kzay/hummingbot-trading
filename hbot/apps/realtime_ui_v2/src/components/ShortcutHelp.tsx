@@ -6,7 +6,7 @@ interface ShortcutHelpProps {
 }
 
 const SHORTCUTS: Array<{ key: string; desc: string }> = [
-  { key: "1–6", desc: "Switch view (Realtime, History, Service, Daily, Weekly, Journal)" },
+  { key: "1–9", desc: "Switch view (Realtime, History, Service, Daily, Weekly, Journal, Backtest, Research, ML)" },
   { key: "T", desc: "Cycle candle timeframe" },
   { key: "[ / ]", desc: "Previous / next instance" },
   { key: "/", desc: "Focus search / filter input" },

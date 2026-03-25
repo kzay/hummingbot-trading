@@ -3,7 +3,7 @@ from __future__ import annotations
 import logging
 import os
 from decimal import Decimal
-from typing import Any
+from typing import Any, Literal
 
 from hummingbot.strategy_v2.controllers.market_making_controller_base import (
     MarketMakingControllerConfigBase,
@@ -22,6 +22,8 @@ from platform_lib.contracts.stream_names import PORTFOLIO_RISK_STREAM
 logger = logging.getLogger(__name__)
 
 _clip = clip
+
+_RESOLUTION_TO_MINUTES: dict[str, int] = {"1m": 1, "5m": 5, "15m": 15, "1h": 60}
 
 _ZERO = Decimal("0")
 _ONE = Decimal("1")
@@ -186,6 +188,15 @@ class EppV24Config(MarketMakingControllerConfigBase):
             "'mid' = order-book mid price (default, suits spot/MM). "
             "'mark' = exchange mark price / spot index (best for perp directional bots). "
             "'last_trade' = last executed trade price."
+        ),
+    )
+    indicator_resolution: Literal["1m", "5m", "15m", "1h"] = Field(
+        default="1m",
+        description=(
+            "Bar resolution for indicator computation (BB, RSI, ADX, ATR, EMA). "
+            "PriceBuffer always stores 1m bars internally; at higher resolutions, "
+            "indicators operate on resampled bars automatically. "
+            "Default '1m' preserves existing behavior for all bots."
         ),
     )
     spread_floor_recalc_s: int = Field(

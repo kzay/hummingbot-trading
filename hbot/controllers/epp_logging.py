@@ -231,7 +231,26 @@ class _FillWal:
             import orjson as _orjson
         except ImportError:
             import json as _orjson  # type: ignore[assignment]
+
+        # Build a set of order_ids already committed to the CSV so WAL
+        # replay after a crash-before-truncate does not produce duplicates.
+        existing_keys: set[str] = set()
+        csv_path = self._csv_buffer._path
+        try:
+            if csv_path.exists() and csv_path.stat().st_size > 0:
+                import csv as _csv
+                with csv_path.open("r", encoding="utf-8", newline="") as cf:
+                    reader = _csv.DictReader(cf)
+                    for csv_row in reader:
+                        order_id = str(csv_row.get("order_id", "") or "").strip()
+                        ts = str(csv_row.get("ts", "") or "").strip()
+                        if order_id:
+                            existing_keys.add(f"{order_id}|{ts}")
+        except Exception:
+            logger.warning("Fill WAL: could not read existing CSV for dedup — replaying all WAL entries", exc_info=True)
+
         replayed = 0
+        skipped = 0
         try:
             with self._path.open("r", encoding="utf-8") as f:
                 for line in f:
@@ -239,12 +258,19 @@ class _FillWal:
                     if not line:
                         continue
                     row = _orjson.loads(line)
+                    order_id = str(row.get("order_id", "") or "").strip()
+                    ts = str(row.get("ts", "") or "").strip()
+                    key = f"{order_id}|{ts}"
+                    if key in existing_keys:
+                        skipped += 1
+                        continue
                     self._csv_buffer.write(row, self._fields)
+                    existing_keys.add(key)
                     replayed += 1
             self._csv_buffer.flush()
             self._path.write_text("", encoding="utf-8")
-            if replayed:
-                logger.info("Fill WAL replayed %d entries into CSV", replayed)
+            if replayed or skipped:
+                logger.info("Fill WAL replayed %d entries into CSV (%d duplicates skipped)", replayed, skipped)
         except Exception:
             logger.warning("Fill WAL replay failed", exc_info=True)
 

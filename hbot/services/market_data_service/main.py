@@ -175,7 +175,7 @@ def _canonical_connector_name(value: str) -> str:
             if required_exchange:
                 return required_exchange
     except Exception:
-        pass
+        pass  # Justification: optional feature detection — gracefully degrade if profile resolver unavailable
     return raw[:-12]
 
 

@@ -1,3 +1,4 @@
+anthropic>=0.39.0
 redis==7.0.1
 orjson==3.11.6
 pydantic==2.12.5

@@ -136,11 +136,11 @@ class QuotingMixin:
 
         previous_mode = str(getattr(self, "_quote_side_mode", "off") or "off")
         if previous_mode != one_sided:
-            self._pending_stale_cancel_actions.extend(
+            self.enqueue_stale_cancels(
                 self._cancel_stale_side_executors(previous_mode, one_sided)
             )
         if alpha_state == "no_trade":
-            self._pending_stale_cancel_actions.extend(
+            self.enqueue_stale_cancels(
                 self._cancel_active_quote_executors()
             )
             self._cancel_alpha_no_trade_orders()
@@ -306,120 +306,158 @@ class QuotingMixin:
                 "aggressive_score": _ZERO,
                 "cross_allowed": False,
             }
+            self._inventory_urgency_score = _ZERO
         else:
-            inv_error = target_net_base_pct - base_pct_net
-            max_base = max(
-                Decimal("0.05"),
-                to_decimal(getattr(self.config, "max_base_pct", Decimal("0.45"))),
+            scores = self._compute_alpha_scores(
+                spread_state=spread_state,
+                target_net_base_pct=target_net_base_pct,
+                base_pct_net=base_pct_net,
             )
-            inventory_urgency = _clip(abs(inv_error) / max_base, _ZERO, _ONE)
-            self._inventory_urgency_score = inventory_urgency
-
-            edge_buffer = max(_ZERO, spread_state.net_edge - spread_state.min_edge_threshold)
-            edge_buffer_score = _clip(
-                edge_buffer / max(Decimal("0.0001"), spread_state.min_edge_threshold),
-                _ZERO,
-                _ONE,
+            metrics = self._resolve_alpha_state(
+                regime_name=regime_name,
+                spread_state=spread_state,
+                market=market,
+                scores=scores,
             )
-            drift_penalty = _clip(
-                max(_ZERO, spread_state.adverse_drift - spread_state.smooth_drift) * Decimal("4000"),
-                _ZERO,
-                _ONE,
-            )
-            market_health = _ONE - drift_penalty
-            imbalance_abs = _clip(abs(getattr(self, "_ob_imbalance", _ZERO)), _ZERO, _ONE)
-            imbalance_alignment = _ZERO
-            if inv_error > _ZERO:
-                imbalance_alignment = _clip(max(_ZERO, to_decimal(getattr(self, "_ob_imbalance", _ZERO))), _ZERO, _ONE)
-            elif inv_error < _ZERO:
-                imbalance_alignment = _clip(max(_ZERO, -to_decimal(getattr(self, "_ob_imbalance", _ZERO))), _ZERO, _ONE)
-
-            selective_penalty = _clip(to_decimal(getattr(self, "_selective_quote_score", _ZERO)), _ZERO, _ONE)
-            maker_score = _clip(
-                edge_buffer_score * Decimal("0.45")
-                + market_health * Decimal("0.25")
-                + imbalance_abs * Decimal("0.10")
-                + imbalance_alignment * Decimal("0.10")
-                + inventory_urgency * Decimal("0.10")
-                - selective_penalty * Decimal("0.25"),
-                _ZERO,
-                _ONE,
-            )
-            aggressive_score = _clip(
-                maker_score * Decimal("0.55")
-                + imbalance_alignment * Decimal("0.20")
-                + inventory_urgency * Decimal("0.25"),
-                _ZERO,
-                _ONE,
-            )
-
-            state = "maker_two_sided"
-            reason = "maker_baseline"
-            cross_allowed = False
-            urgency_threshold = _clip(
-                to_decimal(getattr(self.config, "alpha_policy_inventory_relief_threshold", Decimal("0.55"))),
-                _ZERO,
-                _ONE,
-            )
-            no_trade_threshold = _clip(
-                to_decimal(getattr(self.config, "alpha_policy_no_trade_threshold", Decimal("0.35"))),
-                _ZERO,
-                _ONE,
-            )
-            aggressive_threshold = _clip(
-                to_decimal(getattr(self.config, "alpha_policy_aggressive_threshold", Decimal("0.78"))),
-                no_trade_threshold,
-                _ONE,
-            )
-            bias_state = ""
-            if inv_error > _ZERO and inventory_urgency >= urgency_threshold:
-                bias_state = "buy"
-            elif inv_error < _ZERO and inventory_urgency >= urgency_threshold:
-                bias_state = "sell"
-            else:
-                imbalance = to_decimal(getattr(self, "_ob_imbalance", _ZERO))
-                if imbalance >= Decimal("0.25"):
-                    bias_state = "buy"
-                elif imbalance <= Decimal("-0.25"):
-                    bias_state = "sell"
-
-            if market.order_book_stale:
-                state = "no_trade"
-                reason = "order_book_stale"
-            elif market.market_spread_too_small:
-                state = "no_trade"
-                reason = "market_spread_too_small"
-            elif (
-                regime_name == "neutral_low_vol"
-                and maker_score < no_trade_threshold
-                and spread_state.net_edge < spread_state.edge_resume_threshold
-            ):
-                state = "no_trade"
-                reason = "neutral_low_edge"
-            elif aggressive_score >= aggressive_threshold and bias_state:
-                state = f"aggressive_{bias_state}"
-                reason = "inventory_relief" if inventory_urgency >= urgency_threshold else "imbalance_alignment"
-                cross_allowed = True
-            elif bias_state:
-                state = f"maker_bias_{bias_state}"
-                reason = "inventory_relief" if inventory_urgency >= urgency_threshold else "imbalance_alignment"
-
-            metrics = {
-                "state": state,
-                "reason": reason,
-                "maker_score": maker_score,
-                "aggressive_score": aggressive_score,
-                "cross_allowed": cross_allowed,
-            }
 
         self._alpha_policy_state = str(metrics["state"])
         self._alpha_policy_reason = str(metrics["reason"])
         self._alpha_maker_score = to_decimal(metrics["maker_score"])
         self._alpha_aggressive_score = to_decimal(metrics["aggressive_score"])
         self._alpha_cross_allowed = bool(metrics["cross_allowed"])
-        if "inventory_urgency" not in locals():
-            self._inventory_urgency_score = _ZERO
         return metrics
+
+    def _compute_alpha_scores(
+        self,
+        *,
+        spread_state: SpreadEdgeState,
+        target_net_base_pct: Decimal,
+        base_pct_net: Decimal,
+    ) -> dict:
+        """Compute inventory urgency, maker score, aggressive score and sub-signals."""
+        inv_error = target_net_base_pct - base_pct_net
+        max_base = max(
+            Decimal("0.05"),
+            to_decimal(getattr(self.config, "max_base_pct", Decimal("0.45"))),
+        )
+        inventory_urgency = _clip(abs(inv_error) / max_base, _ZERO, _ONE)
+        self._inventory_urgency_score = inventory_urgency
+
+        edge_buffer = max(_ZERO, spread_state.net_edge - spread_state.min_edge_threshold)
+        edge_buffer_score = _clip(
+            edge_buffer / max(Decimal("0.0001"), spread_state.min_edge_threshold),
+            _ZERO,
+            _ONE,
+        )
+        drift_penalty = _clip(
+            max(_ZERO, spread_state.adverse_drift - spread_state.smooth_drift) * Decimal("4000"),
+            _ZERO,
+            _ONE,
+        )
+        market_health = _ONE - drift_penalty
+        imbalance_abs = _clip(abs(getattr(self, "_ob_imbalance", _ZERO)), _ZERO, _ONE)
+        imbalance_alignment = _ZERO
+        if inv_error > _ZERO:
+            imbalance_alignment = _clip(max(_ZERO, to_decimal(getattr(self, "_ob_imbalance", _ZERO))), _ZERO, _ONE)
+        elif inv_error < _ZERO:
+            imbalance_alignment = _clip(max(_ZERO, -to_decimal(getattr(self, "_ob_imbalance", _ZERO))), _ZERO, _ONE)
+
+        selective_penalty = _clip(to_decimal(getattr(self, "_selective_quote_score", _ZERO)), _ZERO, _ONE)
+        maker_score = _clip(
+            edge_buffer_score * Decimal("0.45")
+            + market_health * Decimal("0.25")
+            + imbalance_abs * Decimal("0.10")
+            + imbalance_alignment * Decimal("0.10")
+            + inventory_urgency * Decimal("0.10")
+            - selective_penalty * Decimal("0.25"),
+            _ZERO,
+            _ONE,
+        )
+        aggressive_score = _clip(
+            maker_score * Decimal("0.55")
+            + imbalance_alignment * Decimal("0.20")
+            + inventory_urgency * Decimal("0.25"),
+            _ZERO,
+            _ONE,
+        )
+        return {
+            "inv_error": inv_error,
+            "inventory_urgency": inventory_urgency,
+            "maker_score": maker_score,
+            "aggressive_score": aggressive_score,
+            "imbalance_alignment": imbalance_alignment,
+        }
+
+    def _resolve_alpha_state(
+        self,
+        *,
+        regime_name: str,
+        spread_state: SpreadEdgeState,
+        market: MarketConditions,
+        scores: dict,
+    ) -> dict[str, Decimal | str | bool]:
+        """Determine final alpha policy state based on scores, thresholds, and market."""
+        inv_error = scores["inv_error"]
+        inventory_urgency = scores["inventory_urgency"]
+        maker_score = scores["maker_score"]
+        aggressive_score = scores["aggressive_score"]
+        imbalance_alignment = scores["imbalance_alignment"]
+
+        state = "maker_two_sided"
+        reason = "maker_baseline"
+        cross_allowed = False
+        urgency_threshold = _clip(
+            to_decimal(getattr(self.config, "alpha_policy_inventory_relief_threshold", Decimal("0.55"))),
+            _ZERO, _ONE,
+        )
+        no_trade_threshold = _clip(
+            to_decimal(getattr(self.config, "alpha_policy_no_trade_threshold", Decimal("0.35"))),
+            _ZERO, _ONE,
+        )
+        aggressive_threshold = _clip(
+            to_decimal(getattr(self.config, "alpha_policy_aggressive_threshold", Decimal("0.78"))),
+            no_trade_threshold, _ONE,
+        )
+        bias_state = ""
+        if inv_error > _ZERO and inventory_urgency >= urgency_threshold:
+            bias_state = "buy"
+        elif inv_error < _ZERO and inventory_urgency >= urgency_threshold:
+            bias_state = "sell"
+        else:
+            imbalance = to_decimal(getattr(self, "_ob_imbalance", _ZERO))
+            if imbalance >= Decimal("0.25"):
+                bias_state = "buy"
+            elif imbalance <= Decimal("-0.25"):
+                bias_state = "sell"
+
+        if market.order_book_stale:
+            state = "no_trade"
+            reason = "order_book_stale"
+        elif market.market_spread_too_small:
+            state = "no_trade"
+            reason = "market_spread_too_small"
+        elif (
+            regime_name == "neutral_low_vol"
+            and maker_score < no_trade_threshold
+            and spread_state.net_edge < spread_state.edge_resume_threshold
+        ):
+            state = "no_trade"
+            reason = "neutral_low_edge"
+        elif aggressive_score >= aggressive_threshold and bias_state:
+            state = f"aggressive_{bias_state}"
+            reason = "inventory_relief" if inventory_urgency >= urgency_threshold else "imbalance_alignment"
+            cross_allowed = True
+        elif bias_state:
+            state = f"maker_bias_{bias_state}"
+            reason = "inventory_relief" if inventory_urgency >= urgency_threshold else "imbalance_alignment"
+
+        return {
+            "state": state,
+            "reason": reason,
+            "maker_score": maker_score,
+            "aggressive_score": aggressive_score,
+            "cross_allowed": cross_allowed,
+        }
 
     # ------------------------------------------------------------------
     # Processed-data extension hooks

@@ -69,7 +69,7 @@ def _entry_ts_ms(entry_id: str, payload: dict[str, Any]) -> int:
         if payload_ts is not None:
             return int(payload_ts)
     except Exception:
-        pass
+        pass  # Justification: script CLI — non-critical diagnostic / best-effort cleanup (timestamp_ms not int-coercible)
     try:
         return int(str(entry_id).split("-", maxsplit=1)[0])
     except Exception:

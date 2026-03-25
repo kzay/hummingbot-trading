@@ -34,6 +34,9 @@ _ONE = Decimal("1")
 _TWO = Decimal("2")
 
 
+_RESOLUTION_TO_MINUTES: dict[str, int] = {"1m": 1, "5m": 5, "15m": 15, "1h": 60}
+
+
 @dataclass
 class PullbackV2Config:
     # Indicator periods
@@ -44,6 +47,7 @@ class PullbackV2Config:
     atr_period: int = 14
     sma_fast: int = 20
     sma_slow: int = 50
+    indicator_resolution: str = "1m"
 
     # Composite scoring — entry fires when score >= threshold
     entry_score_threshold: Decimal = Decimal("0.55")
@@ -177,7 +181,12 @@ class BacktestPullbackAdapterV2:
         self._instrument_spec = instrument_spec
         self._cfg = config or PullbackV2Config()
 
-        self._price_buffer = PriceBuffer(sample_interval_sec=60, max_minutes=2880)
+        _res_min = _RESOLUTION_TO_MINUTES.get(self._cfg.indicator_resolution, 1)
+        self._price_buffer = PriceBuffer(
+            sample_interval_sec=60,
+            max_minutes=2880,
+            resolution_minutes=_res_min,
+        )
         self._regime_detector = RegimeDetector(
             specs=_default_regime_specs(),
             high_vol_band_pct=Decimal("0.0080"),
@@ -212,7 +221,7 @@ class BacktestPullbackAdapterV2:
     def warmup(self, candles: list[CandleRow]) -> int:
         bars = [
             MinuteBar(
-                ts_minute=int(c.timestamp_ms // 1000),
+                ts_minute=int(c.timestamp_ms // 1000 // 60) * 60,
                 open=c.open, high=c.high, low=c.low, close=c.close,
             )
             for c in candles
@@ -690,7 +699,7 @@ class BacktestPullbackAdapterV2:
         try:
             self._desk.cancel_all(self._instrument_id)
         except Exception:
-            pass
+            pass  # Justification: best-effort teardown during simulation — desk may already be closed
 
     def _vol_scale(self, atr: Decimal, mid: Decimal) -> Decimal:
         """Inverse volatility scaling: trade smaller when vol is high."""

@@ -11,6 +11,12 @@ backtest this reduces runtime from ~60 minutes to ~2 minutes.
 Stateless indicator logic lives in ``controllers.common.indicators`` and is
 used as the cold-start reference.  ``PriceBuffer`` maintains incremental
 state so that subsequent calls are O(1).
+
+Resolution support: PriceBuffer accepts ``resolution_minutes`` at construction.
+Internally it always stores 1-minute bars in ``_1m_store``.  When
+``resolution_minutes > 1``, the ``_indicator_bars`` property returns cached
+resampled bars aligned to wall-clock boundaries.  All indicator methods read
+from ``_indicator_bars`` — no per-call resolution parameter needed.
 """
 from __future__ import annotations
 
@@ -23,6 +29,8 @@ from math import sqrt
 _ZERO = Decimal("0")
 _ONE = Decimal("1")
 _TWO = Decimal("2")
+
+SUPPORTED_RESOLUTIONS = {1, 5, 15, 60}
 
 
 @dataclass
@@ -40,12 +48,27 @@ class PriceBuffer:
     Samples are expected every ~10s; missing minute gaps are forward-filled.
     EMA, ATR, RSI, and ADX are updated incrementally when a new bar completes.
     The price source (mid, mark, or last-trade) is determined by the caller.
+
+    When ``resolution_minutes > 1``, indicator methods automatically operate
+    on resampled bars (e.g. 15-minute bars) while the underlying storage
+    remains at 1-minute granularity.
     """
 
-    def __init__(self, sample_interval_sec: int = 10, max_minutes: int = 2880):
+    def __init__(
+        self,
+        sample_interval_sec: int = 10,
+        max_minutes: int = 2880,
+        resolution_minutes: int = 1,
+    ):
+        if resolution_minutes not in SUPPORTED_RESOLUTIONS:
+            raise ValueError(
+                f"resolution_minutes={resolution_minutes} not in "
+                f"{sorted(SUPPORTED_RESOLUTIONS)}"
+            )
         self.sample_interval_sec = sample_interval_sec
         self.max_minutes = max_minutes
-        self._bars: deque[MinuteBar] = deque(maxlen=max_minutes)
+        self._resolution_minutes = resolution_minutes
+        self._1m_store: deque[MinuteBar] = deque(maxlen=max_minutes)
         self._samples: deque[tuple[float, Decimal]] = deque(maxlen=720)
 
         self._ema_values: dict[int, Decimal] = {}
@@ -54,6 +77,10 @@ class PriceBuffer:
         self._bar_count: int = 0
         self._drift_ewma: Decimal | None = None
 
+        # Resampled bars cache (used only when resolution > 1)
+        self._res_cache: list[MinuteBar] = []
+        self._res_cache_version: int = -1
+
         # Per-bar caches: store (bar_count_at_computation, result).
         # Invalidated automatically when _bar_count advances.
         self._rsi_cache: dict[int, tuple[int, Decimal | None]] = {}
@@ -61,55 +88,103 @@ class PriceBuffer:
         self._sma_cache: dict[int, tuple[int, Decimal | None]] = {}
         self._stddev_cache: dict[int, tuple[int, Decimal | None]] = {}
         self._closes_cache: tuple[int, list[Decimal]] = (0, [])
+        self._macd_cache: dict[tuple[int, int, int], tuple[int, tuple[Decimal, Decimal, Decimal] | None]] = {}
+        self._stoch_rsi_cache: dict[tuple[int, int, int, int], tuple[int, tuple[Decimal, Decimal] | None]] = {}
+
+    @property
+    def resolution_minutes(self) -> int:
+        """Configured bar resolution in minutes (read-only)."""
+        return self._resolution_minutes
+
+    @property
+    def _indicator_bars(self) -> deque[MinuteBar] | list[MinuteBar]:
+        """Return bars at the configured resolution for indicator computation.
+
+        At resolution=1 this returns ``_1m_store`` directly (zero overhead).
+        At resolution>1 this returns a cached list of resampled bars,
+        invalidated whenever a new 1m bar is added.
+        """
+        if self._resolution_minutes == 1:
+            return self._1m_store
+        if self._res_cache_version == self._bar_count:
+            return self._res_cache
+        self._res_cache = self._resample()
+        self._res_cache_version = self._bar_count
+        return self._res_cache
+
+    def _resample(self) -> list[MinuteBar]:
+        """Aggregate 1m bars into higher-TF bars aligned to wall-clock boundaries."""
+        bucket_sec = self._resolution_minutes * 60
+        result: list[MinuteBar] = []
+        current: MinuteBar | None = None
+        current_ts: int = 0
+        for bar in self._1m_store:
+            bucket_ts = (int(bar.ts_minute) // bucket_sec) * bucket_sec
+            if current is None or bucket_ts != current_ts:
+                if current is not None:
+                    result.append(current)
+                current = MinuteBar(
+                    ts_minute=bucket_ts,
+                    open=bar.open,
+                    high=bar.high,
+                    low=bar.low,
+                    close=bar.close,
+                )
+                current_ts = bucket_ts
+            else:
+                current.high = max(current.high, bar.high)
+                current.low = min(current.low, bar.low)
+                current.close = bar.close
+        if current is not None:
+            result.append(current)
+        return result
 
     @property
     def bars(self) -> list[MinuteBar]:
-        return list(self._bars)
+        """Return bars at the configured resolution."""
+        result = self._indicator_bars
+        if isinstance(result, list):
+            return result
+        return list(result)
+
+    @property
+    def bars_1m(self) -> list[MinuteBar]:
+        """Return raw 1-minute bars regardless of resolution."""
+        return list(self._1m_store)
 
     @property
     def closes(self) -> list[Decimal]:
-        """Return close prices as a list, cached per bar count.
-
-        Uses incremental append when possible — avoids rebuilding the full
-        list on every bar completion (important for backtesting where a new
-        bar completes every tick).
-        """
+        """Return close prices at the configured resolution, cached per bar count."""
         cached_count, cached_list = self._closes_cache
         if cached_count == self._bar_count and cached_count > 0:
             return cached_list
-        n = len(self._bars)
-        if cached_count > 0 and cached_list and len(cached_list) <= n:
-            diff = n - len(cached_list)
-            if diff <= 10:
-                for i in range(len(cached_list), n):
-                    cached_list.append(self._bars[i].close)
-                if len(cached_list) > n:
-                    cached_list[:] = cached_list[-n:]
-                self._closes_cache = (self._bar_count, cached_list)
-                return cached_list
-        result = [bar.close for bar in self._bars]
+        result = [bar.close for bar in self._indicator_bars]
         self._closes_cache = (self._bar_count, result)
         return result
 
     def _reset_state(self) -> None:
-        self._bars.clear()
+        self._1m_store.clear()
         self._samples.clear()
         self._ema_values.clear()
         self._atr_values.clear()
         self._prev_close = None
         self._bar_count = 0
         self._drift_ewma = None
+        self._res_cache.clear()
+        self._res_cache_version = -1
         self._rsi_cache.clear()
         self._adx_cache.clear()
         self._sma_cache.clear()
         self._stddev_cache.clear()
         self._closes_cache = (0, [])
+        self._macd_cache.clear()
+        self._stoch_rsi_cache.clear()
 
     def seed_bars(self, bars: list[MinuteBar], reset: bool = False) -> int:
         """Bulk-load closed bars into the buffer before live samples begin."""
         if reset:
             self._reset_state()
-        elif len(self._bars) > 0:
+        elif len(self._1m_store) > 0:
             raise ValueError("cannot seed a non-empty PriceBuffer without reset=True")
         if not bars:
             return 0
@@ -130,7 +205,7 @@ class PriceBuffer:
                         low=last_bar.close,
                         close=last_bar.close,
                     )
-                    self._bars.append(gap_bar)
+                    self._1m_store.append(gap_bar)
                     self._bar_count += 1
                     self._on_bar_complete(gap_bar)
                     seeded += 1
@@ -143,7 +218,7 @@ class PriceBuffer:
                 low=Decimal(bar.low),
                 close=Decimal(bar.close),
             )
-            self._bars.append(seeded_bar)
+            self._1m_store.append(seeded_bar)
             self._bar_count += 1
             self._on_bar_complete(seeded_bar)
             seeded += 1
@@ -182,17 +257,17 @@ class PriceBuffer:
         if any(v.is_nan() or v.is_infinite() or v <= 0 for v in ohlc):
             return
         bar_ts = int(bar.ts_minute)
-        if self._bars and bar_ts <= int(self._bars[-1].ts_minute):
+        if self._1m_store and bar_ts <= int(self._1m_store[-1].ts_minute):
             return
-        if self._bars:
-            cursor = int(self._bars[-1].ts_minute) + 60
+        if self._1m_store:
+            cursor = int(self._1m_store[-1].ts_minute) + 60
             while cursor < bar_ts:
                 gap_bar = MinuteBar(
                     ts_minute=cursor,
-                    open=self._bars[-1].close, high=self._bars[-1].close,
-                    low=self._bars[-1].close, close=self._bars[-1].close,
+                    open=self._1m_store[-1].close, high=self._1m_store[-1].close,
+                    low=self._1m_store[-1].close, close=self._1m_store[-1].close,
                 )
-                self._bars.append(gap_bar)
+                self._1m_store.append(gap_bar)
                 self._bar_count += 1
                 self._on_bar_complete(gap_bar)
                 cursor += 60
@@ -201,7 +276,7 @@ class PriceBuffer:
             open=Decimal(bar.open), high=Decimal(bar.high),
             low=Decimal(bar.low), close=Decimal(bar.close),
         )
-        self._bars.append(appended)
+        self._1m_store.append(appended)
         self._bar_count += 1
         self._on_bar_complete(appended)
 
@@ -210,15 +285,15 @@ class PriceBuffer:
             return
         self._samples.append((timestamp_s, price))
         minute_ts = int(timestamp_s // 60) * 60
-        if len(self._bars) == 0:
-            self._bars.append(
+        if len(self._1m_store) == 0:
+            self._1m_store.append(
                 MinuteBar(ts_minute=minute_ts, open=price, high=price, low=price, close=price)
             )
             self._bar_count = 1
             self._prev_close = price
             return
 
-        last = self._bars[-1]
+        last = self._1m_store[-1]
         if minute_ts == last.ts_minute:
             last.high = max(last.high, price)
             last.low = min(last.low, price)
@@ -235,12 +310,12 @@ class PriceBuffer:
                     ts_minute=cursor, open=last.close, high=last.close,
                     low=last.close, close=last.close,
                 )
-                self._bars.append(gap_bar)
-                last = self._bars[-1]
+                self._1m_store.append(gap_bar)
+                last = self._1m_store[-1]
                 self._bar_count += 1
                 self._on_bar_complete(gap_bar)
                 cursor += 60
-            self._bars.append(
+            self._1m_store.append(
                 MinuteBar(ts_minute=minute_ts, open=price, high=price, low=price, close=price)
             )
             self._bar_count += 1
@@ -249,46 +324,54 @@ class PriceBuffer:
         """Update running indicators when a bar finalizes."""
         close = bar.close
 
-        for period in list(self._ema_values.keys()):
-            alpha = _TWO / Decimal(period + 1)
-            self._ema_values[period] = alpha * close + (_ONE - alpha) * self._ema_values[period]
+        if self._resolution_minutes == 1:
+            # Unchanged: incremental EMA/ATR at 1m resolution
+            for period in list(self._ema_values.keys()):
+                alpha = _TWO / Decimal(period + 1)
+                self._ema_values[period] = alpha * close + (_ONE - alpha) * self._ema_values[period]
 
-        if self._prev_close is not None:
-            tr = max(
-                bar.high - bar.low,
-                abs(bar.high - self._prev_close),
-                abs(bar.low - self._prev_close),
-            )
-            for period in list(self._atr_values.keys()):
-                p = Decimal(period)
-                self._atr_values[period] = (self._atr_values[period] * (p - _ONE) + tr) / p
+            if self._prev_close is not None:
+                tr = max(
+                    bar.high - bar.low,
+                    abs(bar.high - self._prev_close),
+                    abs(bar.low - self._prev_close),
+                )
+                for period in list(self._atr_values.keys()):
+                    p = Decimal(period)
+                    self._atr_values[period] = (self._atr_values[period] * (p - _ONE) + tr) / p
 
-        self._prev_close = close
+            self._prev_close = close
+        else:
+            # At higher resolution: clear EMA/ATR caches only when a
+            # resolution-level bar boundary is crossed.  This avoids
+            # wasteful full-recompute on every 1m bar.
+            bucket_sec = self._resolution_minutes * 60
+            if int(bar.ts_minute) % bucket_sec == 0:
+                self._ema_values.clear()
+                self._atr_values.clear()
+                self._prev_close = None
 
     def ready(self, min_bars: int) -> bool:
-        return len(self._bars) >= min_bars
+        return len(self._indicator_bars) >= min_bars
 
     def latest_close(self) -> Decimal | None:
-        if not self._bars:
+        bars = self._indicator_bars
+        if not bars:
             return None
-        return self._bars[-1].close
+        return bars[-1].close
 
     def ema(self, period: int) -> Decimal | None:
-        """Return the running EMA for *period*. O(1) after warm-up.
+        """Return the running EMA for *period*. O(1) after warm-up at resolution=1.
 
-        Cold-start note: on first call the EMA is computed from the full bar
-        history seeded at ``closes[0]`` (oldest bar), which introduces a small
-        initialization bias that decays within approximately 3×period bars.
-        Subsequent calls use the incrementally-updated cached value.  For
-        strategy use cases where the buffer is pre-seeded with historical data
-        this bias is immaterial; use :func:`controllers.common.indicators.ema`
-        for a correctly SMA-seeded cold-start.
+        At resolution>1, recomputed from resampled bars on each bar change
+        (trivial cost at typical bar counts).
         """
-        if period <= 0 or len(self._bars) < period:
+        bars = self._indicator_bars
+        if period <= 0 or len(bars) < period:
             return None
         if period in self._ema_values:
             return self._ema_values[period]
-        closes = [bar.close for bar in self._bars]
+        closes = [bar.close for bar in bars]
         alpha = _TWO / Decimal(period + 1)
         one_minus_alpha = _ONE - alpha
         ema_value = closes[0]
@@ -298,25 +381,21 @@ class PriceBuffer:
         return ema_value
 
     def atr(self, period: int) -> Decimal | None:
-        """Return the running ATR for *period*. O(1) after warm-up.
+        """Return the running ATR for *period*. O(1) after warm-up at resolution=1.
 
-        Cold-start note: on first call the ATR is seeded from the simple mean
-        of the most recent ``period`` True Ranges, then subsequent incremental
-        updates from ``_on_bar_complete`` apply Wilder's recursive smooth
-        ``(prev * (N-1) + TR) / N``.  This hybrid converges to the Wilder SMMA
-        within a few bars.  Use :func:`controllers.common.indicators.atr` for a
-        fully consistent Wilder computation from a cold list of bars.
+        At resolution>1, recomputed from resampled bars on each bar change.
         """
-        if period <= 0 or len(self._bars) < period + 1:
+        bars = self._indicator_bars
+        if period <= 0 or len(bars) < period + 1:
             return None
         if period in self._atr_values:
             return self._atr_values[period]
-        bars = list(self._bars)
+        bars_list = list(bars) if not isinstance(bars, list) else bars
         trs: list[Decimal] = []
-        for i in range(1, len(bars)):
-            prev_close = bars[i - 1].close
-            high = bars[i].high
-            low = bars[i].low
+        for i in range(1, len(bars_list)):
+            prev_close = bars_list[i - 1].close
+            high = bars_list[i].high
+            low = bars_list[i].low
             tr = max(high - low, abs(high - prev_close), abs(low - prev_close))
             trs.append(tr)
         recent = trs[-period:]
@@ -332,18 +411,13 @@ class PriceBuffer:
         return atr_val / price
 
     def sma(self, period: int) -> Decimal | None:
-        """Return simple moving average of close prices. Cached per bar.
-
-        Uses float arithmetic internally for speed; converts back to Decimal
-        at the boundary.  The precision difference vs pure-Decimal is
-        negligible for trading signals (<1e-12 relative error on typical prices).
-        """
-        if period <= 0 or len(self._bars) < period:
+        """Return simple moving average of close prices. Cached per bar."""
+        bars = self._indicator_bars
+        if period <= 0 or len(bars) < period:
             return None
         cached = self._sma_cache.get(period)
         if cached is not None and cached[0] == self._bar_count:
             return cached[1]
-        bars = self._bars
         n = len(bars)
         total = 0.0
         for i in range(n - period, n):
@@ -353,16 +427,13 @@ class PriceBuffer:
         return result
 
     def stddev(self, period: int) -> Decimal | None:
-        """Return population standard deviation of close prices. Cached per bar.
-
-        Uses float arithmetic internally for speed.
-        """
-        if period <= 0 or len(self._bars) < period:
+        """Return population standard deviation of close prices. Cached per bar."""
+        bars = self._indicator_bars
+        if period <= 0 or len(bars) < period:
             return None
         cached = self._stddev_cache.get(period)
         if cached is not None and cached[0] == self._bar_count:
             return cached[1]
-        bars = self._bars
         n = len(bars)
         total = 0.0
         for i in range(n - period, n):
@@ -386,21 +457,64 @@ class PriceBuffer:
         width = stdev * stddev_mult
         return basis - width, basis, basis + width
 
-    def rsi(self, period: int = 14) -> Decimal | None:
-        """Return Cutler's RSI (SMA-based) on close prices. Cached per bar.
+    def macd(
+        self,
+        fast: int = 12,
+        slow: int = 26,
+        signal: int = 9,
+    ) -> tuple[Decimal, Decimal, Decimal] | None:
+        """Return (macd_line, signal_line, histogram) computed from closes.
 
-        Uses float arithmetic on the last ``period + 1`` closes (O(period)
-        per bar, not O(N) over all bars).  Identical algorithm to
-        :func:`controllers.common.indicators.rsi` (Cutler's RSI).
+        Returns None when fewer than ``max(fast, slow) + signal`` completed
+        bars are available.  Results are cached per ``_bar_count`` and
+        parameter tuple.
         """
+        key = (fast, slow, signal)
+        cached = self._macd_cache.get(key)
+        if cached is not None and cached[0] == self._bar_count:
+            return cached[1]
+
+        closes = self.closes
+        min_bars = max(fast, slow) + signal
+        if fast <= 0 or slow <= 0 or signal <= 0 or len(closes) < min_bars:
+            self._macd_cache[key] = (self._bar_count, None)
+            return None
+
+        fast_alpha = 2.0 / (fast + 1)
+        slow_alpha = 2.0 / (slow + 1)
+
+        fast_ema = float(closes[0])
+        slow_ema = float(closes[0])
+        macd_series: list[float] = []
+
+        for c in closes:
+            cf = float(c)
+            fast_ema = fast_alpha * cf + (1.0 - fast_alpha) * fast_ema
+            slow_ema = slow_alpha * cf + (1.0 - slow_alpha) * slow_ema
+            macd_series.append(fast_ema - slow_ema)
+
+        sig_alpha = 2.0 / (signal + 1)
+        sig_ema = macd_series[0]
+        for v in macd_series[1:]:
+            sig_ema = sig_alpha * v + (1.0 - sig_alpha) * sig_ema
+
+        macd_line = Decimal(str(macd_series[-1]))
+        signal_line = Decimal(str(sig_ema))
+        histogram = macd_line - signal_line
+        result = (macd_line, signal_line, histogram)
+        self._macd_cache[key] = (self._bar_count, result)
+        return result
+
+    def rsi(self, period: int = 14) -> Decimal | None:
+        """Return Cutler's RSI (SMA-based) on close prices. Cached per bar."""
         cached = self._rsi_cache.get(period)
         if cached is not None and cached[0] == self._bar_count:
             return cached[1]
-        n = len(self._bars)
+        bars = self._indicator_bars
+        n = len(bars)
         if period <= 0 or n < period + 1:
             self._rsi_cache[period] = (self._bar_count, None)
             return None
-        bars = self._bars
         gains = 0.0
         losses = 0.0
         start = n - period - 1
@@ -420,32 +534,109 @@ class PriceBuffer:
         self._rsi_cache[period] = (self._bar_count, result)
         return result
 
-    def adx(self, period: int = 14) -> Decimal | None:
-        """Return ADX using Wilder-style directional movement smoothing.
+    def stoch_rsi(
+        self,
+        rsi_period: int = 14,
+        stoch_period: int = 14,
+        k_smooth: int = 3,
+        d_smooth: int = 3,
+    ) -> tuple[Decimal, Decimal] | None:
+        """Return (K, D) of Stochastic RSI, each in [0, 100].
 
-        Uses only the most recent ``period * 6`` bars (Wilder smoothing
-        converges within ~3× period), keeping computation O(period) rather
-        than O(N) over the full bar history.  Float arithmetic internally;
-        Decimal only at the API boundary.
+        Derives a full RSI series from close history, then applies a rolling
+        stochastic oscillator over that series.  Returns None when insufficient
+        bars exist to compute the full pipeline.
 
-        Requires at least ``period * 2 + 1`` bars; returns ``None`` when
-        data is insufficient.
+        Flat-price guard: if RSI is constant (no range) in the stochastic
+        window, returns (50, 50) instead of a division-by-zero.
         """
+        key = (rsi_period, stoch_period, k_smooth, d_smooth)
+        cached = self._stoch_rsi_cache.get(key)
+        if cached is not None and cached[0] == self._bar_count:
+            return cached[1]
+
+        closes = self.closes
+        min_bars = rsi_period + 1 + stoch_period + k_smooth + d_smooth - 2
+        if (
+            rsi_period <= 0
+            or stoch_period <= 0
+            or k_smooth <= 0
+            or d_smooth <= 0
+            or len(closes) < min_bars
+        ):
+            self._stoch_rsi_cache[key] = (self._bar_count, None)
+            return None
+
+        rsi_series: list[float] = []
+        for end in range(rsi_period + 1, len(closes) + 1):
+            gains = 0.0
+            losses = 0.0
+            for i in range(end - rsi_period - 1, end - 1):
+                delta = float(closes[i + 1]) - float(closes[i])
+                if delta > 0.0:
+                    gains += delta
+                elif delta < 0.0:
+                    losses -= delta
+            avg_gain = gains / rsi_period
+            avg_loss = losses / rsi_period
+            if avg_loss <= 0.0:
+                rsi_series.append(100.0)
+            else:
+                rs = avg_gain / avg_loss
+                rsi_series.append(100.0 - 100.0 / (1.0 + rs))
+
+        if len(rsi_series) < stoch_period:
+            self._stoch_rsi_cache[key] = (self._bar_count, None)
+            return None
+
+        raw_k: list[float] = []
+        for i in range(stoch_period - 1, len(rsi_series)):
+            window = rsi_series[i - stoch_period + 1: i + 1]
+            hi = max(window)
+            lo = min(window)
+            rng = hi - lo
+            if rng < 1e-12:
+                raw_k.append(50.0)
+            else:
+                raw_k.append((rsi_series[i] - lo) / rng * 100.0)
+
+        if len(raw_k) < k_smooth:
+            self._stoch_rsi_cache[key] = (self._bar_count, None)
+            return None
+
+        k_line: list[float] = []
+        for i in range(k_smooth - 1, len(raw_k)):
+            k_line.append(sum(raw_k[i - k_smooth + 1: i + 1]) / k_smooth)
+
+        if len(k_line) < d_smooth:
+            self._stoch_rsi_cache[key] = (self._bar_count, None)
+            return None
+
+        d_values: list[float] = []
+        for i in range(d_smooth - 1, len(k_line)):
+            d_values.append(sum(k_line[i - d_smooth + 1: i + 1]) / d_smooth)
+
+        k_val = Decimal(str(k_line[-1]))
+        d_val = Decimal(str(d_values[-1]))
+        result = (k_val, d_val)
+        self._stoch_rsi_cache[key] = (self._bar_count, result)
+        return result
+
+    def adx(self, period: int = 14) -> Decimal | None:
+        """Return ADX using Wilder-style directional movement smoothing."""
         cached = self._adx_cache.get(period)
         if cached is not None and cached[0] == self._bar_count:
             return cached[1]
 
-        n = len(self._bars)
+        bars = self._indicator_bars
+        n = len(bars)
         min_bars = period * 2 + 1
         if n < min_bars:
             self._adx_cache[period] = (self._bar_count, None)
             return None
 
-        # Limit window: Wilder smooth converges in ~3×period bars.
-        # Using 6×period gives a fully stable result while keeping N small.
         window = min(n, max(min_bars, period * 6))
         offset = n - window
-        bars = self._bars
         p = period
         trs: list[float] = []
         pdm: list[float] = []
@@ -494,8 +685,7 @@ class PriceBuffer:
     def adverse_drift_30s(self, now_ts: float) -> Decimal:
         """Raw 30-second adverse drift (absolute price change / older price).
 
-        Used for regime detection and diagnostics. Use :meth:`adverse_drift_smooth`
-        for cost-model inputs to avoid edge-gate flapping from single-tick spikes.
+        Uses raw price samples, independent of bar resolution.
         """
         if len(self._samples) < 2:
             return _ZERO
@@ -513,9 +703,7 @@ class PriceBuffer:
     def adverse_drift_smooth(self, now_ts: float, alpha: Decimal) -> Decimal:
         """EWMA-smoothed adverse drift for stable cost modeling.
 
-        Applies exponential smoothing to the raw 30s drift so that transient
-        microstructure spikes do not immediately suppress net edge and trigger
-        edge-gate pauses. ``alpha`` controls responsiveness (0.05=slow, 0.5=fast).
+        Uses raw price samples, independent of bar resolution.
         """
         raw = self.adverse_drift_30s(now_ts)
         if self._drift_ewma is None:
@@ -523,6 +711,11 @@ class PriceBuffer:
         else:
             self._drift_ewma = alpha * raw + (_ONE - alpha) * self._drift_ewma
         return self._drift_ewma
+
+    @staticmethod
+    def min_bars_for_resolution(period: int, resolution_minutes: int) -> int:
+        """Minimum number of 1m bars needed for an indicator at a given resolution."""
+        return period * resolution_minutes
 
     @staticmethod
     def minute_iso(minute_ts: int) -> str:

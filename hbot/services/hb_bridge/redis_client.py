@@ -538,7 +538,7 @@ class RedisStreamClient:
         group: str,
         consumer: str,
         *,
-        min_idle_ms: int = 30_000,
+        min_idle_ms: int = 120_000,
         count: int = 100,
         start_id: str = "0-0",
     ) -> list[tuple[str, dict[str, object]]]:

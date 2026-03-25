@@ -177,13 +177,14 @@ groups:
 
       - alert: BotDailyPnlDrawdown
         expr: |
-          hbot_bot_daily_pnl_quote < -50
+          (hbot_bot_daily_pnl_quote / hbot_bot_equity_quote) < -0.05
+          and hbot_bot_equity_quote > 0
         for: 5m
         labels:
           severity: critical
         annotations:
-          summary: "Daily PnL drawdown threshold breached on {{ $labels.bot }}"
-          description: "Bot {{ $labels.bot }} daily PnL is below -50 quote units."
+          summary: "Daily PnL drawdown >5% of equity on {{ $labels.bot }}"
+          description: "Bot {{ $labels.bot }} daily PnL is {{ $value | humanizePercentage }} of equity."
 
       - alert: BotLogErrorSpike
         expr: |
@@ -353,13 +354,14 @@ groups:
 
       - alert: RealizedPnlNegative
         expr: |
-          hbot_bot_net_realized_pnl_today_quote < -20
+          (hbot_bot_net_realized_pnl_today_quote / hbot_bot_equity_quote) < -0.02
+          and hbot_bot_equity_quote > 0
         for: 10m
         labels:
           severity: warning
         annotations:
-          summary: "Realized PnL negative on {{ $labels.bot }}"
-          description: "Bot {{ $labels.bot }} realized PnL is {{ $value }} quote today."
+          summary: "Realized PnL >2% negative of equity on {{ $labels.bot }}"
+          description: "Bot {{ $labels.bot }} realized PnL is {{ $value | humanizePercentage }} of equity today."
 
       - alert: IndicatorComputeSlow
         expr: |
@@ -560,3 +562,36 @@ groups:
         annotations:
           summary: "Redis client disconnected on {{ $labels.service }}"
           description: "Service {{ $labels.service }} Redis client has been disconnected for over 3 minutes."
+
+  # ---- Infrastructure Health Alerts ----
+  - name: infrastructure_health
+    rules:
+      - alert: PrometheusTargetDown
+        expr: up == 0
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Scrape target down: {{ $labels.job }} / {{ $labels.instance }}"
+          description: "Prometheus target {{ $labels.instance }} in job {{ $labels.job }} has been unreachable for over 5 minutes."
+
+      - alert: PostgresDown
+        expr: |
+          absent(container_memory_usage_bytes{name="postgres"})
+        for: 2m
+        labels:
+          severity: critical
+        annotations:
+          summary: "Postgres container is down"
+          description: "No cAdvisor metrics for the postgres container — database may be unavailable."
+
+      - alert: MetricsExporterScrapeFailed
+        expr: |
+          scrape_duration_seconds{job=~".*metrics_exporter.*"} == 0
+          or absent(scrape_duration_seconds{job=~".*metrics_exporter.*"})
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Metrics exporter scrape failed: {{ $labels.job }}"
+          description: "Scrape of {{ $labels.job }} produced zero duration or is absent for over 5 minutes."

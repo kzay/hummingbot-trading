@@ -1,0 +1,54 @@
+{
+  "total_iterations": 5,
+  "best_observed_score": 0.0,
+  "best_observed_candidate": "",
+  "best_recommendation": "",
+  "total_tokens_used": 7852,
+  "iterations": [
+    {
+      "iteration": 1,
+      "action": "generate",
+      "candidate_name": "btc-volatility-regime-mm-v1",
+      "score": null,
+      "recommendation": null,
+      "report_path": "",
+      "error": "Evaluation error: 'BacktestResult' object has no attribute 'total_trades'\nTraceback (most recent call last):\n  File \"/workspace/hbot/controllers/research/exploration_session.py\", line 520, in _run_iteration\n    eval_result = orchestrator.evaluate(candidate)\n                  ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n  File \"/workspace/hbot/controllers/research/experiment_orchestrator.py\", line 156, in evaluate\n    self._reporter.generate(\n  File \"/workspace/hbot/controllers/research/report_generator.py\", line 55, in generate\n    lines.append(f\"| Total Trades | {bt.total_trades} |\")\n                                     ^^^^^^^^^^^^^^^\nAttributeError: 'BacktestResult' object has no attribute 'total_trades'. Did you mean: 'total_fees'?\n"
+    },
+    {
+      "iteration": 2,
+      "action": "generate",
+      "candidate_name": "btc-pullback-momentum-v1",
+      "score": null,
+      "recommendation": null,
+      "report_path": "",
+      "error": "Evaluation error: 'BacktestResult' object has no attribute 'total_trades'\nTraceback (most recent call last):\n  File \"/workspace/hbot/controllers/research/exploration_session.py\", line 520, in _run_iteration\n    eval_result = orchestrator.evaluate(candidate)\n                  ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n  File \"/workspace/hbot/controllers/research/experiment_orchestrator.py\", line 156, in evaluate\n    self._reporter.generate(\n  File \"/workspace/hbot/controllers/research/report_generator.py\", line 55, in generate\n    lines.append(f\"| Total Trades | {bt.total_trades} |\")\n                                     ^^^^^^^^^^^^^^^\nAttributeError: 'BacktestResult' object has no attribute 'total_trades'. Did you mean: 'total_fees'?\n"
+    },
+    {
+      "iteration": 3,
+      "action": "generate",
+      "candidate_name": "<llm_error>",
+      "score": null,
+      "recommendation": null,
+      "report_path": "",
+      "error": "Error code: 529 - {'type': 'error', 'error': {'type': 'overloaded_error', 'message': 'Overloaded'}, 'request_id': 'req_011CZQ2v65puu36v6eDNVpQN'}"
+    },
+    {
+      "iteration": 4,
+      "action": "generate",
+      "candidate_name": "<llm_error>",
+      "score": null,
+      "recommendation": null,
+      "report_path": "",
+      "error": "Error code: 529 - {'type': 'error', 'error': {'type': 'overloaded_error', 'message': 'Overloaded'}, 'request_id': 'req_011CZQ2vrjfpByWTqfzxpt7X'}"
+    },
+    {
+      "iteration": 5,
+      "action": "generate",
+      "candidate_name": "<llm_error>",
+      "score": null,
+      "recommendation": null,
+      "report_path": "",
+      "error": "Error code: 529 - {'type': 'error', 'error': {'type': 'overloaded_error', 'message': 'Overloaded'}, 'request_id': 'req_011CZQ2w5D24h1qZNyJD7Qah'}"
+    }
+  ]
+}

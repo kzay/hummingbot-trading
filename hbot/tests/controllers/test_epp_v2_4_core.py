@@ -262,12 +262,18 @@ def _bind_polymorphic_methods(ctrl):
         "_cancel_orphan_orders_on_startup",
         "_update_adaptive_history",
         "_compute_adaptive_spread_knobs",
+        "_compute_adaptive_edge_bps",
+        "_compute_pnl_governor",
         "_compute_selective_quote_quality",
         "_compute_alpha_policy",
+        "_compute_alpha_scores",
+        "_resolve_alpha_state",
         "_pick_spread_pct",
         "_risk_loss_metrics",
         "_risk_policy_checks",
         "_edge_gate_update",
+        "enqueue_stale_cancels",
+        "replace_stale_cancels",
     ]
     for name in _methods:
         if not hasattr(ctrl, name):
@@ -783,6 +789,9 @@ class TestQuoteSideMode:
         ctrl._cancel_alpha_no_trade_orders = _types_mod.MethodType(
             EppV24Controller._cancel_alpha_no_trade_orders, ctrl,
         )
+        ctrl.enqueue_stale_cancels = _types_mod.MethodType(
+            EppV24Controller.enqueue_stale_cancels, ctrl,
+        )
 
         mode = EppV24Controller._resolve_quote_side_mode(
             ctrl,
@@ -824,6 +833,9 @@ class TestQuoteSideMode:
         )
         ctrl._cancel_alpha_no_trade_orders = _types_mod.MethodType(
             EppV24Controller._cancel_alpha_no_trade_orders, ctrl,
+        )
+        ctrl.enqueue_stale_cancels = _types_mod.MethodType(
+            EppV24Controller.enqueue_stale_cancels, ctrl,
         )
 
         mode = EppV24Controller._resolve_quote_side_mode(
@@ -944,6 +956,9 @@ class TestQuoteSideMode:
         ctrl._cancel_stale_side_executors = _types_mod.MethodType(
             EppV24Controller._cancel_stale_side_executors, ctrl,
         )
+        ctrl.enqueue_stale_cancels = _types_mod.MethodType(
+            EppV24Controller.enqueue_stale_cancels, ctrl,
+        )
 
         mode = EppV24Controller._resolve_quote_side_mode(
             ctrl,
@@ -996,6 +1011,9 @@ class TestQuoteSideMode:
         ctrl._cancel_stale_side_executors = _types_mod.MethodType(
             EppV24Controller._cancel_stale_side_executors, ctrl,
         )
+        ctrl.enqueue_stale_cancels = _types_mod.MethodType(
+            EppV24Controller.enqueue_stale_cancels, ctrl,
+        )
 
         mode = EppV24Controller._resolve_quote_side_mode(
             ctrl,
@@ -1020,6 +1038,9 @@ class TestQuoteSideMode:
         )
         ctrl._cancel_stale_side_executors = _types_mod.MethodType(
             EppV24Controller._cancel_stale_side_executors, ctrl,
+        )
+        ctrl.enqueue_stale_cancels = _types_mod.MethodType(
+            EppV24Controller.enqueue_stale_cancels, ctrl,
         )
 
         mode = EppV24Controller._resolve_quote_side_mode(

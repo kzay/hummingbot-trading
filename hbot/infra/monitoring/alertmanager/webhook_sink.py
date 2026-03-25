@@ -44,7 +44,7 @@ def _telegram_push(text: str) -> None:
         )
         urllib.request.urlopen(req, timeout=5)
     except Exception:
-        pass  # Never let Telegram errors break the sink
+        pass  # Justification: notification is non-critical — must not crash (Telegram send failures)
 
 
 def _format_telegram(alert: dict) -> str | None:
@@ -83,7 +83,7 @@ class Handler(BaseHTTPRequestHandler):
                 if msg:
                     _telegram_push(msg)
         except Exception:
-            pass
+            pass  # Justification: notification is non-critical — must not crash (malformed alert JSON or forward path)
 
         self.send_response(200)
         self.end_headers()

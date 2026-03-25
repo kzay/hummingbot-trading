@@ -1,0 +1,57 @@
+name: btc-pullback-momentum-v1
+hypothesis: BTC-USDT perpetual exhibits strong momentum continuation after pullbacks
+  from established trends. When price pulls back 1.5-3.0 ATR from a 50-period EMA
+  trend but remains above the EMA, subsequent momentum bursts in the trend direction
+  yield positive Sharpe ratios over 30-day rolling windows.
+adapter_mode: pullback
+parameter_space:
+  pullback_depth_atr:
+  - 1.5
+  - 2.0
+  - 3.0
+  trend_ema:
+  - 34
+  - 50
+  - 89
+  stop_atr_mult:
+  - 1.0
+  - 1.5
+  - 2.0
+  min_trend_strength:
+  - 0.02
+  - 0.05
+  - 0.08
+entry_logic: Enter long when price has pulled back pullback_depth_atr from trend_ema
+  but remains above the EMA, AND current bar closes above previous bar high (momentum
+  confirmation), AND trend_ema slope exceeds min_trend_strength over last 10 bars.
+  Mirror logic for short entries below bearish trend.
+exit_logic: Exit on stop loss at entry price minus stop_atr_mult * ATR, OR when price
+  crosses back through trend_ema in opposite direction, OR after maximum hold period
+  of 8 bars (2 hours) without profit target hit.
+base_config:
+  strategy_class: pullback
+  strategy_config:
+    pullback_depth_atr: 2.0
+    trend_ema: 50
+    stop_atr_mult: 1.5
+    min_trend_strength: 0.05
+    atr_period: 14
+    max_hold_bars: 8
+    risk_pct: 0.15
+  data_source:
+    exchange: bitget
+    pair: BTC-USDT
+    resolution: 15m
+    instrument_type: perp
+  initial_equity: '500'
+  leverage: 1
+  seed: 42
+  step_interval_s: 900
+  warmup_bars: 100
+required_tests:
+- test_adapter_compiles
+- test_no_lookahead_in_entry
+metadata:
+  author: llm_exploration
+  version: '1.0'
+lifecycle: candidate

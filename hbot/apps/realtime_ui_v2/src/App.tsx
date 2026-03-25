@@ -35,6 +35,9 @@ const BacktestPage = lazy(() =>
 const ResearchPage = lazy(() =>
   import("./components/ResearchPage").then((module) => ({ default: module.ResearchPage })),
 );
+const MlFeaturesPanel = lazy(() =>
+  import("./components/MlFeaturesPanel").then((module) => ({ default: module.MlFeaturesPanel })),
+);
 
 function App() {
   useRealtimeTransport();
@@ -135,6 +138,14 @@ function App() {
           <ViewErrorBoundary label="Research">
             <Suspense fallback={<section className="panel panel-span-12"><div className="panel-loading">Loading research…</div></section>}>
               <ResearchPage />
+            </Suspense>
+          </ViewErrorBoundary>
+        ) : null}
+
+        {review.activeView === "ml" ? (
+          <ViewErrorBoundary label="ML Features">
+            <Suspense fallback={<section className="panel panel-span-12"><div className="panel-loading">Loading ML features…</div></section>}>
+              <MlFeaturesPanel />
             </Suspense>
           </ViewErrorBoundary>
         ) : null}

@@ -123,7 +123,8 @@ class StartupMixin:
             int(getattr(self.config, "bot7_adx_period", 0) or 0) * 2,
         ]
         required = max([period for period in bot_periods if period > 0] or [30])
-        return max(5, required + 5)
+        resolution = getattr(self, "_resolution_minutes", 1)
+        return max(5, (required + 5) * resolution)
 
     def _history_seed_policy(self):
         return runtime_seed_policy(default_min_bars=self._required_seed_bars())

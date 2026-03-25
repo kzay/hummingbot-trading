@@ -52,11 +52,11 @@ class ReportGenerator:
             lines.append(f"| Metric | Value |")
             lines.append(f"|--------|-------|")
             lines.append(f"| Sharpe Ratio | {bt.sharpe_ratio:.3f} |")
-            lines.append(f"| Total Trades | {bt.total_trades} |")
+            lines.append(f"| Closed Trades | {bt.closed_trade_count} |")
             lines.append(f"| Max Drawdown | {bt.max_drawdown_pct:.2f}% |")
-            lines.append(f"| Net P&L | {bt.net_pnl:.2f} |")
-            if hasattr(bt, "maker_fill_ratio"):
-                lines.append(f"| Maker Ratio | {bt.maker_fill_ratio:.2f} |")
+            net = float(bt.realized_net_pnl_quote)
+            lines.append(f"| Net P&L (realized) | {net:.2f} |")
+            lines.append(f"| Maker Ratio | {bt.maker_fill_ratio:.2f} |")
             lines.append("")
 
         # Sweep results

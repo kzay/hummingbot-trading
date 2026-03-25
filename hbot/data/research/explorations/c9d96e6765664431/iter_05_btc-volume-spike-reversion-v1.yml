@@ -1,0 +1,54 @@
+name: btc-volume-spike-reversion-v1
+hypothesis: BTC-USDT 15m bars exhibit mean-reversion after volume spikes above 2x
+  recent average. High volume often marks temporary exhaustion or stop-hunting, creating
+  short-term  reversal opportunities. Simple EMA-based market making with tighter
+  spreads during  normal volume and wider spreads after volume spikes captures this
+  reversion while  avoiding adverse selection during genuine breakouts.
+adapter_mode: simple
+parameter_space:
+  ema_period:
+  - 20
+  - 50
+  - 100
+  spread_mult:
+  - 0.8
+  - 1.5
+  - 2.5
+  volume_spike_threshold:
+  - 1.5
+  - 2.0
+  - 3.0
+  position_size_pct:
+  - 0.15
+  - 0.25
+  - 0.35
+entry_logic: Calculate volume_avg as 20-period SMA of volume. When current bar volume
+  >  volume_spike_threshold * volume_avg, widen spread to spread_mult * 1.5 to  avoid
+  adverse fills. Otherwise use normal spread_mult. Place buy quote at  EMA(ema_period)
+  - spread and sell quote at EMA(ema_period) + spread.
+exit_logic: Market-making quotes naturally provide exits. Force flatten position if  unrealized
+  loss exceeds 3% of equity or if position size exceeds  position_size_pct of equity
+  on either side.
+base_config:
+  strategy_class: simple
+  strategy_config:
+    ema_period: 50
+    spread_mult: 1.5
+    max_position_pct: 0.25
+  data_source:
+    exchange: bitget
+    pair: BTC-USDT
+    resolution: 15m
+    instrument_type: perp
+  initial_equity: '500'
+  leverage: 1
+  seed: 42
+  step_interval_s: 900
+  warmup_bars: 60
+required_tests:
+- test_adapter_compiles
+- test_no_lookahead_in_entry
+metadata:
+  author: llm_exploration
+  version: '1.0'
+lifecycle: candidate

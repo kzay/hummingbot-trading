@@ -1,0 +1,59 @@
+name: btc-rsi-pullback-momentum-v1
+hypothesis: BTC-USDT perpetual exhibits momentum continuation after brief pullbacks
+  in trending markets. When price pulls back 1-2 ATR from recent highs/lows while
+  RSI shows oversold/overbought relief (RSI 30-70 range), subsequent momentum resumption
+  provides profitable directional entries with 3:1 risk-reward targeting trend continuation
+  over 8-24 hour holding periods.
+adapter_mode: pullback_v2
+parameter_space:
+  htf_trend_period:
+  - 50
+  - 100
+  - 200
+  ltf_entry_rsi:
+  - 25
+  - 35
+  - 45
+  confirmation_bars:
+  - 1
+  - 2
+  - 3
+  pullback_depth_atr:
+  - 1.0
+  - 1.5
+  - 2.0
+entry_logic: 'Enter long when: (1) HTF EMA(htf_trend_period) is rising, (2) price
+  has pulled back pullback_depth_atr * ATR(14) from recent 20-bar high, (3) RSI(14)
+  recovers above ltf_entry_rsi after being below it, (4) wait confirmation_bars for
+  momentum confirmation. Enter short with inverse conditions when HTF EMA is falling
+  and price bounces from recent 20-bar low.'
+exit_logic: Exit at 3:1 reward-risk target (3 * pullback_depth_atr * ATR from entry)
+  or stop loss at 1 * pullback_depth_atr * ATR against position. Also exit if HTF
+  trend reverses (EMA slope changes direction) or after maximum 16 bars to prevent
+  overnight exposure.
+base_config:
+  strategy_class: pullback_v2
+  strategy_config:
+    htf_trend_period: 100
+    ltf_entry_rsi: 35
+    confirmation_bars: 2
+    pullback_depth_atr: 1.5
+    max_hold_bars: 16
+    risk_reward_ratio: 3.0
+  data_source:
+    exchange: bitget
+    pair: BTC-USDT
+    resolution: 15m
+    instrument_type: perp
+  initial_equity: '500'
+  leverage: 1
+  seed: 42
+  step_interval_s: 900
+  warmup_bars: 200
+required_tests:
+- test_adapter_compiles
+- test_no_lookahead_in_entry
+metadata:
+  author: llm_exploration
+  version: '1.0'
+lifecycle: candidate
