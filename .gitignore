@@ -36,3 +36,8 @@ htmlcov/
 # Ad-hoc screenshots at repo root (Playwright / manual captures)
 screenshot*.png
 screenshot*.js
+
+# ---- Large data files (never push to git) ----
+hbot/data/bot*/desk_events*.jsonl
+hbot/data/research/explorations/*/run.log
+hbot/reports/verification/paper_exchange_command_journal_latest.json
