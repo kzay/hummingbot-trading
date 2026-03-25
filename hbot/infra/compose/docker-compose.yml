@@ -58,6 +58,9 @@ x-kzay-env: &kzay-env
   HB_MARKET_DEPTH_LEVELS: ${HB_MARKET_DEPTH_LEVELS:-20}
   HB_STRATEGY_HOT_PATH_REPORT_PATH: ${HB_STRATEGY_HOT_PATH_REPORT_PATH:-/workspace/hbot/reports/verification/strategy_hot_path_latest.json}
   HB_BRIDGE_LATENCY_REPORT_PATH: ${HB_BRIDGE_LATENCY_REPORT_PATH:-/workspace/hbot/reports/verification/hb_bridge_hot_path_latest.json}
+  # ---- V3 Trading Desk (shadow mode by default, disabled unless per-bot override) ----
+  V3_DESK_ENABLED: ${V3_DESK_ENABLED:-false}
+  V3_DESK_MODE: ${V3_DESK_MODE:-shadow}
 
 # ---- Hummingbot base anchor ----
 x-kzay-base: &kzay-base
@@ -120,6 +123,12 @@ services:
       HB_BITGET_WS_MESSAGE_TIMEOUT_S: "120"
       HB_BITGET_WS_MAX_CONSEC_TIMEOUTS: "6"
       HB_BITGET_WS_TIMEOUT_RETRY_SLEEP_S: "1.0"
+      # ---- V3 Trading Desk ----
+      V3_DESK_ENABLED: ${V3_DESK_ENABLED:-true}
+      V3_DESK_MODE: ${V3_DESK_MODE:-shadow}
+      V3_DESK_BOT_ID: "bot1"
+      V3_STRATEGY: "bot1_baseline"
+      INSTANCE_NAME: "bot1"
     healthcheck:
       # Restart only when both minute and heartbeat are stale.
       # If heartbeat is still fresh, allow minute-csv lag grace to avoid false
@@ -380,6 +389,12 @@ services:
       BOT_POLICY_ROLE: paper_validation
       BOT_POLICY_MODE: paper_only
       BOT_POLICY_VERSION: multi_bot_policy_v1
+      # ---- V3 Trading Desk ----
+      V3_DESK_ENABLED: ${V3_DESK_ENABLED:-true}
+      V3_DESK_MODE: ${V3_DESK_MODE:-shadow}
+      V3_DESK_BOT_ID: "bot5"
+      V3_STRATEGY: "bot5_ift_jota"
+      INSTANCE_NAME: "bot5"
     healthcheck:
       test:
         [
@@ -443,6 +458,12 @@ services:
       BOT_POLICY_ROLE: paper_validation
       BOT_POLICY_MODE: paper_only
       BOT_POLICY_VERSION: multi_bot_policy_v1
+      # ---- V3 Trading Desk ----
+      V3_DESK_ENABLED: ${V3_DESK_ENABLED:-true}
+      V3_DESK_MODE: ${V3_DESK_MODE:-shadow}
+      V3_DESK_BOT_ID: "bot6"
+      V3_STRATEGY: "bot6_cvd_divergence"
+      INSTANCE_NAME: "bot6"
     healthcheck:
       test:
         [
@@ -506,6 +527,12 @@ services:
       BOT_POLICY_ROLE: paper_validation
       BOT_POLICY_MODE: paper_only
       BOT_POLICY_VERSION: multi_bot_policy_v1
+      # ---- V3 Trading Desk ----
+      V3_DESK_ENABLED: ${V3_DESK_ENABLED:-true}
+      V3_DESK_MODE: ${V3_DESK_MODE:-shadow}
+      V3_DESK_BOT_ID: "bot7"
+      V3_STRATEGY: "bot7_pullback"
+      INSTANCE_NAME: "bot7"
     healthcheck:
       test:
         [
