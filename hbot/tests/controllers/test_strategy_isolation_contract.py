@@ -309,9 +309,15 @@ def test_v3_signal_modules_have_no_framework_imports() -> None:
         "simulation.",
     )
     # Only check signal-related files (not the framework itself)
+    # Infrastructure files that legitimately import from hummingbot/services
+    infra_files = {
+        "__init__.py", "data_surface.py", "migration_shim.py",
+        "trading_desk.py", "telemetry.py", "desk_integration.py",
+        "order_submitter.py",
+    }
     signal_files = [
         p for p in v3_dir.rglob("*.py")
-        if p.name not in ("__init__.py", "data_surface.py", "migration_shim.py", "trading_desk.py", "telemetry.py")
+        if p.name not in infra_files
         and "risk" not in str(p.relative_to(v3_dir))
         and "execution" not in str(p.relative_to(v3_dir))
     ]

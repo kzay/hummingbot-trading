@@ -49,6 +49,7 @@ class V3DeskIntegration:
         self._bot_id = bot_id
         self._legacy = legacy_strategy
         self._desk: Any = None
+        self._submitter: Any = None
         self._initialized = False
         self._init_error: str = ""
         self._tick_count: int = 0
@@ -89,6 +90,17 @@ class V3DeskIntegration:
         try:
             self._desk.tick()
             self._tick_count += 1
+            # In active mode, flush pending actions into the controller's pipeline
+            if self._submitter is not None:
+                actions = self._submitter.flush()
+                if actions:
+                    controller = self._find_controller()
+                    if controller is not None:
+                        buf = getattr(controller, "_pending_v3_actions", None)
+                        if buf is None:
+                            controller._pending_v3_actions = list(actions)
+                        else:
+                            buf.extend(actions)
         except Exception:
             logger.exception("V3 desk tick error (tick=%d)", self._tick_count)
 
@@ -185,13 +197,19 @@ class V3DeskIntegration:
 
         # Build the desk
         # In shadow mode: no order submitter (observation only)
-        # In active mode: TODO wire to HB connector or paper desk
+        # In active mode: wire to HB executor framework
         submitter = None
         if self._mode == "active":
-            logger.warning(
-                "V3 active mode: order submission not yet wired. "
-                "Running in dry-run (signals computed but not executed)."
-            )
+            try:
+                from controllers.runtime.v3.order_submitter import HBOrderSubmitter
+                submitter = HBOrderSubmitter(controller)
+                self._submitter = submitter
+                logger.info("V3 active mode: HBOrderSubmitter wired to controller")
+            except ImportError:
+                logger.warning(
+                    "V3 active mode: HBOrderSubmitter unavailable (hummingbot not installed). "
+                    "Running in dry-run."
+                )
 
         self._desk = TradingDesk(
             strategy=strategy,

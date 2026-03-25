@@ -2203,6 +2203,13 @@ class V2WithControllers(StrategyV2Base):
                     getattr(getattr(controller, "config", None), "id", "unknown"),
                     exc_info=True,
                 )
+        # ── Merge V3 desk actions (active mode only) ──
+        if self._v3_desk is not None and self._v3_desk.mode == "active":
+            for controller in self.controllers.values():
+                v3_actions = getattr(controller, "_pending_v3_actions", None)
+                if v3_actions:
+                    self._controller_actions_buffer.extend(v3_actions)
+                    controller._pending_v3_actions = []
         force_log = any(
             str(getattr(getattr(action, "executor_config", None), "level_id", "")) == "position_rebalance"
             for action in self._controller_actions_buffer
