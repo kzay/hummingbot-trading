@@ -193,6 +193,59 @@ class TestDirectionalAdapter:
         actions = adapter.manage_trailing(pos, sig)
         assert actions == []
 
+    def test_trailing_inactive_to_tracking(self):
+        adapter = DirectionalExecutionAdapter(
+            trail_activate_atr_mult=Decimal("1.0"),
+            trail_offset_atr_mult=Decimal("0.5"),
+        )
+        adapter._trail_entry_price = Decimal("64000")
+        adapter._trail_entry_side = "buy"
+        pos = PositionSnapshot(base_amount=Decimal("0.01"), avg_entry_price=Decimal("64000"))
+        # ATR=350, mid=65000 → pnl_pct = 1000/64000 ≈ 0.0156
+        # activate_threshold = 1.0 * 350 / 65000 ≈ 0.0054
+        # pnl_pct > activate → tracking
+        sig = TradingSignal(family="directional", direction="buy", metadata={"atr": Decimal("350")})
+        adapter.manage_trailing(pos, sig, mid=Decimal("65000"))
+        assert adapter.trail_state == "tracking"
+
+    def test_trailing_tracking_to_triggered(self):
+        adapter = DirectionalExecutionAdapter(
+            trail_activate_atr_mult=Decimal("1.0"),
+            trail_offset_atr_mult=Decimal("0.5"),
+        )
+        adapter._trail_entry_price = Decimal("64000")
+        adapter._trail_entry_side = "buy"
+        adapter._trail_state = "tracking"
+        adapter._trail_hwm = Decimal("65500")
+        pos = PositionSnapshot(base_amount=Decimal("0.01"), avg_entry_price=Decimal("64000"))
+        # trail_offset = 0.5 * 350 = 175
+        # retrace = 65500 - 65300 = 200 > 175 → triggered
+        sig = TradingSignal(family="directional", direction="buy", metadata={"atr": Decimal("350")})
+        actions = adapter.manage_trailing(pos, sig, mid=Decimal("65300"))
+        assert any(hasattr(a, "action") and a.action == "close_position" for a in actions)
+        assert adapter.trail_state == "inactive"  # Reset after trigger
+
+    def test_partial_take_at_1r(self):
+        adapter = DirectionalExecutionAdapter(partial_tp_ratio=Decimal("0.33"))
+        adapter._trail_entry_price = Decimal("64000")
+        adapter._trail_entry_side = "buy"
+        adapter._trail_sl_distance = Decimal("0.008")  # SL at 0.8%
+        pos = PositionSnapshot(base_amount=Decimal("0.01"), avg_entry_price=Decimal("64000"))
+        # pnl_pct = (64600-64000)/64000 ≈ 0.0094 > 0.008 → partial take
+        sig = TradingSignal(family="directional", direction="buy", metadata={"atr": Decimal("350")})
+        actions = adapter.manage_trailing(pos, sig, mid=Decimal("64600"))
+        assert any(hasattr(a, "action") and a.action == "partial_reduce" for a in actions)
+        assert adapter._partial_taken is True
+
+    def test_trailing_disabled(self):
+        adapter = DirectionalExecutionAdapter(trailing_enabled=False)
+        adapter._trail_entry_price = Decimal("64000")
+        adapter._trail_entry_side = "buy"
+        pos = PositionSnapshot(base_amount=Decimal("0.01"))
+        sig = TradingSignal(family="directional", direction="buy", metadata={"atr": Decimal("350")})
+        actions = adapter.manage_trailing(pos, sig, mid=Decimal("65000"))
+        assert actions == []
+
 
 # ── Hybrid tests ─────────────────────────────────────────────────────
 
