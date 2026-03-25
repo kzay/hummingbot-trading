@@ -75,7 +75,7 @@
 
 - [x] 10.1 Create `controllers/bots/bot7/pullback_signal_source.py` — wrap existing `pullback_signals.py` functions in `StrategySignalSource` protocol
 - [x] 10.2 Register `bot7_pullback` in `STRATEGY_REGISTRY` with `execution_family="directional"`
-- [ ] 10.3 Migrate trailing stop logic from controller to `DirectionalExecutionAdapter.manage_trailing()`
+- [x] 10.3 Migrate trailing stop logic from controller to `DirectionalExecutionAdapter.manage_trailing()`
 - [ ] 10.4 Run shadow mode comparing shim vs native signals for bot7 — validate equivalence
 - [ ] 10.5 Cut over bot7 to native signal source
 

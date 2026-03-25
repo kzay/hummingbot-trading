@@ -232,6 +232,7 @@ class V3DeskIntegration:
         from controllers.runtime.v3.risk.bot_gate import BotRiskConfig, BotRiskGate
         from controllers.runtime.v3.risk.desk_risk_gate import DeskRiskGate
         from controllers.runtime.v3.risk.portfolio_gate import PortfolioRiskGate
+        from controllers.runtime.v3.risk.regime_gate import RegimeRiskGate
         from controllers.runtime.v3.risk.signal_gate import SignalRiskConfig, SignalRiskGate
 
         cfg = getattr(controller, "config", None)
@@ -239,6 +240,7 @@ class V3DeskIntegration:
         # Extract risk thresholds from controller config
         bot_config = BotRiskConfig()
         signal_config = SignalRiskConfig()
+        regime_gate_enabled = False
         if cfg is not None:
             from decimal import Decimal
             def _dec(attr, default):
@@ -256,13 +258,31 @@ class V3DeskIntegration:
                 min_net_edge_bps=_dec("min_net_edge_bps", signal_config.min_net_edge_bps),
                 edge_resume_bps=_dec("edge_resume_bps", signal_config.edge_resume_bps),
             )
+            regime_gate_enabled = bool(getattr(cfg, "regime_risk_gate_enabled", False))
 
         # Portfolio gate uses Redis if bus client is available
         redis_client = getattr(self._legacy, "_bus_client", None)
 
+        # Regime gate: enforces regime-dependent constraints on strategy
+        # selection, sizing, and risk limits.  Opt-in via config flag.
+        regime_gate = None
+        if regime_gate_enabled:
+            from controllers.ml.regime_policy import RegimePolicy
+            regime_policy_path = getattr(cfg, "regime_policy_path", None)
+            if regime_policy_path:
+                try:
+                    policy = RegimePolicy.from_json(regime_policy_path)
+                except Exception as exc:
+                    logger.warning("Failed to load regime policy from %s: %s", regime_policy_path, exc)
+                    policy = RegimePolicy()
+            else:
+                policy = RegimePolicy()
+            regime_gate = RegimeRiskGate(policy=policy)
+
         return DeskRiskGate(
             portfolio=PortfolioRiskGate(redis_client=redis_client),
             bot=BotRiskGate(bot_config),
+            regime=regime_gate,
             signal=SignalRiskGate(signal_config),
         )
 
