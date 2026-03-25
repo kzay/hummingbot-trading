@@ -960,6 +960,12 @@ class V2WithControllers(StrategyV2Base):
         self._install_executor_dispatch_trace()
         self._init_external_bus()
         self._install_internal_paper_adapters()
+        # ── V3 TradingDesk (behind V3_DESK_ENABLED env var) ──
+        try:
+            from controllers.runtime.v3.desk_integration import V3DeskIntegration
+            self._v3_desk = V3DeskIntegration.from_env(self)
+        except Exception:
+            self._v3_desk = None
 
     @staticmethod
     def _action_level_id(action: Any) -> str:
@@ -1572,6 +1578,11 @@ class V2WithControllers(StrategyV2Base):
         super_on_tick_ms = (time.perf_counter() - _t_super) * 1000.0
         self._latency_tracker.observe("strategy_super_on_tick_ms", super_on_tick_ms)
         self._observe_controller_hot_path_metrics()
+        # ── V3 desk tick (after kernel has computed state) ──
+        if self._v3_desk is not None:
+            _t_v3 = time.perf_counter()
+            self._v3_desk.tick()
+            self._latency_tracker.observe("v3_desk_tick_ms", (time.perf_counter() - _t_v3) * 1000.0)
         self._observe_hb_framework_overhead(super_on_tick_ms)
         _t_desk2 = time.perf_counter()
         self._tick_paper_adapters()

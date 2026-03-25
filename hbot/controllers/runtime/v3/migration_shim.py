@@ -195,8 +195,9 @@ class StrategyMigrationShim:
         """Delegate to legacy controller's config if available."""
         cfg = getattr(self._ctrl, "config", None)
         if cfg is not None:
-            # Most strategies need ~200 bars for BB/SMA
-            return getattr(cfg, "warmup_bars", 200)
+            val = getattr(cfg, "warmup_bars", None)
+            if isinstance(val, int):
+                return val
         return 200
 
     def telemetry_schema(self) -> TelemetrySchema:
