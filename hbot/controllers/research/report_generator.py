@@ -2,7 +2,8 @@
 
 Produces a structured report with candidate summary, backtest metrics,
 sweep highlights, walk-forward OOS table, robustness score breakdown,
-and lifecycle recommendation.
+gate results, overfitting flags, validation tier, replay eligibility,
+paper status, and lifecycle recommendation.
 """
 from __future__ import annotations
 
@@ -30,33 +31,105 @@ class ReportGenerator:
         """Generate a Markdown report and write it to output_path."""
         lines: list[str] = []
         score = evaluation_result.score_breakdown
+        gate_report = getattr(evaluation_result, "gate_report", None)
+        validation_tier = getattr(evaluation_result, "validation_tier", "candle_only")
 
         lines.append(f"# Evaluation Report: {candidate.name}")
         lines.append(f"**Generated**: {datetime.now(UTC).strftime('%Y-%m-%d %H:%M UTC')}")
         lines.append(f"**Run ID**: {evaluation_result.run_id}")
+        lines.append(f"**Validation Tier**: {validation_tier}")
         lines.append("")
 
         # Candidate summary
         lines.append("## Candidate Summary")
         lines.append(f"- **Hypothesis**: {candidate.hypothesis}")
         lines.append(f"- **Adapter**: {candidate.adapter_mode}")
+        # Governed fields
+        if getattr(candidate, "strategy_family", ""):
+            lines.append(f"- **Strategy Family**: {candidate.strategy_family}")
+        if getattr(candidate, "template_id", ""):
+            lines.append(f"- **Template**: {candidate.template_id}")
+        if getattr(candidate, "required_data", []):
+            lines.append(f"- **Required Data**: {', '.join(candidate.required_data)}")
+        if getattr(candidate, "market_conditions", ""):
+            lines.append(f"- **Market Conditions**: {candidate.market_conditions}")
+        lines.append(f"- **Expected Trade Frequency**: {getattr(candidate, 'expected_trade_frequency', 'medium')}")
         lines.append(f"- **Entry**: {candidate.entry_logic}")
         lines.append(f"- **Exit**: {candidate.exit_logic}")
-        lines.append(f"- **Parameters**: {len(candidate.parameter_space)} tunable")
+        n_params = len(
+            getattr(candidate, "effective_search_space", None) or
+            getattr(candidate, "parameter_space", {})
+        )
+        lines.append(f"- **Parameters**: {n_params} tunable")
         lines.append("")
+
+        # Replay eligibility
+        lines.append("## Validation Tier")
+        if validation_tier == "replay_validated":
+            lines.append("**REPLAY VALIDATED** — Candidate has passed replay-grade validation.")
+            lines.append("May be considered for automatic paper promotion subject to score threshold.")
+        else:
+            lines.append("**CANDLE ONLY** — Candidate has only candle-harness validation.")
+            lines.append("Not eligible for automatic paper promotion. Replay data required.")
+        lines.append("")
+
+        # Quality gates
+        if gate_report is not None:
+            lines.append("## Quality Gates")
+            gate_pass = gate_report.hard_gates_pass
+            lines.append(f"**Hard Gates**: {'PASS' if gate_pass else 'FAIL'}")
+            lines.append("")
+            lines.append("| Gate | Result | Value | Threshold | Detail |")
+            lines.append("|------|--------|-------|-----------|--------|")
+            for g in gate_report.hard_gates:
+                result_str = "PASS" if g.passed else "FAIL"
+                lines.append(
+                    f"| {g.name} | {result_str} | "
+                    f"{g.value if g.value is not None else '-'} | "
+                    f"{g.threshold if g.threshold is not None else '-'} | "
+                    f"{g.reason} |"
+                )
+            lines.append("")
+
+            if gate_report.overfit_flags:
+                lines.append("## Overfitting Defenses")
+                lines.append("| Defense | Flagged | Detail |")
+                lines.append("|---------|---------|--------|")
+                for f in gate_report.overfit_flags:
+                    flagged_str = "YES" if f.flagged else "no"
+                    lines.append(f"| {f.name} | {flagged_str} | {f.detail} |")
+                if gate_report.complexity_penalty > 0:
+                    lines.append(f"\n**Complexity penalty**: {gate_report.complexity_penalty:.2f} applied to composite score.")
+                lines.append("")
 
         # Backtest metrics
         bt = evaluation_result.backtest_result
         if bt:
             lines.append("## Backtest Metrics")
-            lines.append(f"| Metric | Value |")
-            lines.append(f"|--------|-------|")
+            lines.append("| Metric | Value |")
+            lines.append("|--------|-------|")
             lines.append(f"| Sharpe Ratio | {bt.sharpe_ratio:.3f} |")
             lines.append(f"| Closed Trades | {bt.closed_trade_count} |")
             lines.append(f"| Max Drawdown | {bt.max_drawdown_pct:.2f}% |")
             net = float(bt.realized_net_pnl_quote)
             lines.append(f"| Net P&L (realized) | {net:.2f} |")
             lines.append(f"| Maker Ratio | {bt.maker_fill_ratio:.2f} |")
+            try:
+                lines.append(f"| Profit Factor | {bt.profit_factor:.3f} |")
+            except AttributeError:
+                pass
+            lines.append("")
+
+        # Replay results
+        if evaluation_result.replay_result:
+            ry = evaluation_result.replay_result
+            lines.append("## Replay-Grade Validation")
+            try:
+                lines.append(f"- **Replay Sharpe**: {ry.sharpe_ratio:.3f}")
+                lines.append(f"- **Replay Net PnL**: {float(ry.realized_net_pnl_quote):.2f}")
+                lines.append(f"- **Replay Trades**: {ry.closed_trade_count}")
+            except AttributeError:
+                lines.append("(replay metrics unavailable)")
             lines.append("")
 
         # Sweep results
@@ -110,7 +183,7 @@ class ReportGenerator:
         if wf and wf.warnings:
             lines.append("## Warnings")
             for w in wf.warnings:
-                lines.append(f"- ⚠ {w}")
+                lines.append(f"- {w}")
             lines.append("")
 
         # Recommendation
@@ -122,6 +195,20 @@ class ReportGenerator:
                 lines.append("**REVISE**: Strategy shows promise but needs improvement in weak areas.")
             else:
                 lines.append("**PASS**: Strategy meets robustness criteria for paper trading consideration.")
+
+            # Paper eligibility note
+            if validation_tier == "replay_validated" and score.total_score >= 0.65:
+                lines.append("")
+                lines.append(
+                    "> **Paper eligible**: Candidate passed replay validation and composite "
+                    f"score {score.total_score:.3f} >= 0.65. Run paper workflow to generate artifact."
+                )
+            elif validation_tier == "candle_only":
+                lines.append("")
+                lines.append(
+                    "> **Not paper eligible**: Candle-only validation. "
+                    "Run replay-grade validation before paper promotion."
+                )
             lines.append("")
 
         content = "\n".join(lines)

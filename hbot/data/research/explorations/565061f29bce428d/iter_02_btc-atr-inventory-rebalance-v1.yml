@@ -1,0 +1,54 @@
+name: btc-atr-inventory-rebalance-v1
+hypothesis: BTC-USDT perpetual exhibits predictable mean-reversion patterns around
+  fair value after volatility spikes. Market-making with ATR-based spread adjustment
+  and aggressive inventory rebalancing during low-volatility periods captures spread
+  while minimizing adverse selection during trending moves.
+adapter_mode: atr_mm
+parameter_space:
+  atr_period:
+  - 10
+  - 20
+  - 30
+  spread_mult:
+  - 1.2
+  - 2.0
+  - 3.0
+  inv_target:
+  - 0.2
+  - 0.5
+  - 0.8
+  vol_scalar:
+  - 0.8
+  - 1.2
+  - 1.8
+entry_logic: Place bid/ask quotes at mid price +/- (spread_mult * ATR(atr_period)
+  * vol_scalar). Increase spread_mult by 50% when current bar ATR exceeds 1.5x rolling
+  average to avoid adverse fills during volatility spikes.
+exit_logic: Aggressively rebalance inventory when position exceeds inv_target of equity
+  by tightening spread on heavy side. Force flatten if position reaches 90% of max
+  allowed exposure.
+base_config:
+  strategy_class: atr_mm
+  strategy_config:
+    atr_period: 20
+    spread_mult: 2.0
+    inv_target: 0.5
+    vol_scalar: 1.2
+    max_position_pct: 0.8
+  data_source:
+    exchange: bitget
+    pair: BTC-USDT
+    resolution: 15m
+    instrument_type: perp
+  initial_equity: '500'
+  leverage: 1
+  seed: 42
+  step_interval_s: 900
+  warmup_bars: 60
+required_tests:
+- test_adapter_compiles
+- test_no_lookahead_in_entry
+metadata:
+  author: llm_exploration
+  version: '1.0'
+lifecycle: candidate

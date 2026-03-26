@@ -59,8 +59,8 @@ class MlSignalConfig:
     use_ml_sizing: bool = False
     base_size_quote: Decimal = Decimal("200")
     max_levels: int = 3
-    base_spread_pct: Decimal = Decimal("0.0025")
-    spread_step_pct: Decimal = Decimal("0.0015")
+    base_spread_pct: Decimal = Decimal("0.0020")
+    spread_step_pct: Decimal = Decimal("0.0010")
 
     # Position targets
     target_net_base_pct: Decimal = Decimal("0.04")

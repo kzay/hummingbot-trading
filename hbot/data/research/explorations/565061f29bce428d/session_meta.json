@@ -1,0 +1,25 @@
+{
+  "status": "running",
+  "pid": 26432,
+  "log_path": "/workspace/hbot/data/research/explorations/565061f29bce428d/run.log",
+  "created_at": "2026-03-26T17:46:05.791097+00:00",
+  "launch_params": {
+    "provider": "anthropic",
+    "iterations": 5,
+    "temperature": 0.7,
+    "adapters": [
+      "atr_mm",
+      "atr_mm_v2",
+      "smc_mm",
+      "combo_mm",
+      "pullback",
+      "pullback_v2",
+      "momentum_scalper",
+      "directional_mm",
+      "simple"
+    ],
+    "skip_sweep": false,
+    "skip_walkforward": false,
+    "extra_context": ""
+  }
+}

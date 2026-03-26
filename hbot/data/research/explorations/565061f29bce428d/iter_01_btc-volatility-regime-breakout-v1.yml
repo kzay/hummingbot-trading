@@ -1,0 +1,61 @@
+name: btc-volatility-regime-breakout-v1
+hypothesis: BTC-USDT exhibits distinct volatility regimes on 15m timeframes. During
+  low-volatility  periods (ATR < 20th percentile of 100-bar lookback), breakouts above/below
+  Bollinger  Bands signal regime shifts with strong directional persistence lasting
+  3-8 bars.  Entry on breakout confirmation with tight ATR-based stops captures early
+  momentum  while limiting whipsaw losses during high-volatility periods.
+adapter_mode: momentum_scalper
+parameter_space:
+  burst_threshold:
+  - 1.5
+  - 2.0
+  - 2.5
+  hold_bars:
+  - 3
+  - 5
+  - 8
+  trail_atr:
+  - 0.8
+  - 1.2
+  - 1.8
+  vol_filter_percentile:
+  - 15
+  - 20
+  - 25
+entry_logic: Enter long when price closes above upper Bollinger Band (20-period, 2
+  std)  AND current ATR(14) is below vol_filter_percentile of 100-bar ATR history  AND
+  momentum burst exceeds burst_threshold * ATR. Enter short on lower  band breakout
+  with same volatility filter. Require breakout confirmation  on bar close to avoid
+  false signals.
+exit_logic: Exit after hold_bars periods OR when trailing stop triggered at  trail_atr
+  * ATR(14) from peak favorable price. Hard stop at 2.5 * ATR  from entry to limit
+  maximum loss per trade.
+base_config:
+  strategy_class: momentum_scalper
+  strategy_config:
+    burst_threshold: 2.0
+    hold_bars: 5
+    trail_atr: 1.2
+    vol_filter_percentile: 20
+    bb_period: 20
+    bb_std: 2.0
+    atr_period: 14
+    lookback_bars: 100
+    max_stop_atr: 2.5
+  data_source:
+    exchange: bitget
+    pair: BTC-USDT
+    resolution: 15m
+    instrument_type: perp
+  initial_equity: '500'
+  leverage: 1
+  seed: 42
+  step_interval_s: 900
+  warmup_bars: 120
+required_tests:
+- test_adapter_compiles
+- test_no_lookahead_in_entry
+metadata:
+  author: llm_exploration
+  version: '1.0'
+lifecycle: candidate
