@@ -1,0 +1,13 @@
+{
+  "candidate_name": "btc-atr-inventory-rebalance-v1",
+  "current_state": "rejected",
+  "history": [
+    {
+      "from": "candidate",
+      "to": "rejected",
+      "timestamp": "2026-03-26T19:40:47.716660+00:00",
+      "reason": "exploration score 0.119 < 0.35"
+    }
+  ],
+  "gate_results": {}
+}
