@@ -1,4 +1,4 @@
-"""Phase-one strategy family/template registry with bounded search contracts.
+"""Strategy family/template registry with bounded search contracts.
 
 Each registered family defines:
 - Supported adapters for that family
@@ -47,7 +47,7 @@ class FamilyTemplate:
 
 @dataclass
 class StrategyFamily:
-    """Definition of a phase-one strategy family."""
+    """Definition of a strategy family."""
 
     name: str
     description: str
@@ -59,6 +59,10 @@ class StrategyFamily:
     parameter_bounds: list[ParameterBounds]
     invalid_combinations: list[str]  # human-readable rule descriptions
     templates: list[FamilyTemplate] = field(default_factory=list)
+    regime_gate_required: bool = False
+    """When True, the candidate MUST specify a regime filter or regime_window.
+    Used to enforce that mean-reversion strategies cannot be submitted without
+    an explicit trend regime gate."""
 
     def check_bounds(self, search_space: dict[str, Any]) -> list[str]:
         """Check that all numeric values in search_space respect family bounds.
@@ -282,7 +286,8 @@ _MEAN_REVERSION = StrategyFamily(
     name="mean_reversion",
     description=(
         "Enter against recent price movement expecting reversion to a moving "
-        "average or statistical mean. Typically requires spread control."
+        "average or statistical mean. Requires an explicit trend-regime gate to "
+        "prevent catastrophic losses in strongly trending markets."
     ),
     supported_adapters=["atr_mm", "atr_mm_v2", "smc_mm", "ta_composite", "simple"],
     required_data=[],
@@ -297,35 +302,46 @@ _MEAN_REVERSION = StrategyFamily(
         ParameterBounds("target_atr", 0.5, 3.0, "target ATR multiple"),
         ParameterBounds("hold_bars", 1, 48, "max hold bars"),
         ParameterBounds("atr_period", 10, 50, "ATR period"),
+        ParameterBounds("regime_window", 20, 200, "trend regime detection window"),
     ],
     invalid_combinations=[
         "stop_atr_mult >= tp_atr_mult (stop above target)",
         "band_threshold < 1.0 (entries too close to mean, no edge)",
+        "no regime gate (mean_reversion WITHOUT regime filter is a blowup source in trending markets)",
     ],
     templates=[
         FamilyTemplate(
-            template_id="mean_reversion_zscore",
-            description="Enter when price z-score exceeds threshold; exit on mean cross",
+            template_id="mean_reversion_zscore_regime_gated",
+            description=(
+                "Enter when price z-score exceeds threshold, ONLY in non-trending regime. "
+                "Regime gate is mandatory — ungated MR is rejected at validation."
+            ),
             primary_adapters=["ta_composite", "atr_mm"],
-            required_params=["zscore_window", "zscore_threshold"],
+            required_params=["zscore_window", "zscore_threshold", "regime_window"],
             default_search_space={
                 "zscore_window": [15, 20, 30],
                 "zscore_threshold": [1.5, 2.0, 2.5],
                 "stop_atr_mult": [1.0, 1.5, 2.0],
+                "regime_window": [50, 100, 150],
             },
         ),
         FamilyTemplate(
-            template_id="mean_reversion_mm",
-            description="Market-making style mean reversion with inventory control",
+            template_id="mean_reversion_mm_regime_gated",
+            description=(
+                "Market-making style mean reversion with inventory control and regime gate. "
+                "Pauses quoting during trending regimes to prevent directional inventory bleed."
+            ),
             primary_adapters=["atr_mm", "atr_mm_v2"],
-            required_params=["atr_period", "spread_multiplier"],
+            required_params=["atr_period", "spread_multiplier", "regime_window"],
             default_search_space={
                 "atr_period": [10, 14, 20],
                 "spread_multiplier": [1.5, 2.5, 3.5],
                 "inventory_target_base": [0.3, 0.5, 0.7],
+                "regime_window": [50, 100, 150],
             },
         ),
     ],
+    regime_gate_required=True,
 )
 
 _REGIME_CONDITIONED_MOMENTUM = StrategyFamily(
@@ -406,6 +422,154 @@ _FUNDING_DISLOCATION = StrategyFamily(
 )
 
 
+_BASIS_CARRY = StrategyFamily(
+    name="basis_carry",
+    description=(
+        "Delta-neutral and semi-directional carry trades on the perpetual futures "
+        "basis and persistent funding yield. Mechanically distinct from the "
+        "funding_dislocation directional family: this family collects carry, "
+        "not funding mean-reversion."
+    ),
+    supported_adapters=["simple", "atr_mm", "ta_composite"],
+    required_data=["funding", "spot"],
+    default_complexity_budget=4,
+    per_trade_risk_min_pct=0.10,  # carry trades are lower volatility
+    per_trade_risk_max_pct=0.50,
+    parameter_bounds=[
+        ParameterBounds("holding_period", 4, 96, "carry holding period in bars"),
+        ParameterBounds("funding_threshold", 0.0001, 0.01, "absolute funding rate threshold"),
+        ParameterBounds("basis_threshold", 0.0005, 0.05, "absolute basis threshold"),
+        ParameterBounds("hedge_ratio", 0.80, 1.20, "delta hedge ratio [0.8, 1.2]"),
+        ParameterBounds("rebalance_bars", 1, 24, "hedge rebalance frequency"),
+    ],
+    invalid_combinations=[
+        "hedge_ratio < 0.8 (incomplete delta hedge; significant directional risk)",
+        "hedge_ratio > 1.2 (over-hedged; reverse directional exposure)",
+        "holding_period < 4 (too short to collect meaningful carry)",
+        "funding_threshold < 0.0001 (threshold below noise floor)",
+    ],
+    templates=[
+        FamilyTemplate(
+            template_id="basis_carry_funding_yield",
+            description=(
+                "Collect perpetual funding yield by holding a hedged long/short "
+                "position sized by current funding rate magnitude."
+            ),
+            primary_adapters=["simple"],
+            required_params=["funding_threshold", "hedge_ratio", "holding_period"],
+            default_search_space={
+                "funding_threshold": [0.0003, 0.0005, 0.001],
+                "hedge_ratio": [0.95, 1.0, 1.05],
+                "holding_period": [8, 16, 32],
+            },
+        ),
+        FamilyTemplate(
+            template_id="basis_carry_delta_neutral_grid",
+            description=(
+                "Grid-style carry collection with delta-neutral rebalancing. "
+                "Profits from bid/ask spread + carry on both sides."
+            ),
+            primary_adapters=["atr_mm"],
+            required_params=["basis_threshold", "rebalance_bars"],
+            default_search_space={
+                "basis_threshold": [0.001, 0.002, 0.005],
+                "rebalance_bars": [4, 8, 16],
+                "spread_multiplier": [1.0, 1.5, 2.0],
+            },
+        ),
+        FamilyTemplate(
+            template_id="basis_carry_semi_directional",
+            description=(
+                "Semi-directional carry: tilt hedge ratio toward positive basis "
+                "when funding strongly positive, or short basis when negative."
+            ),
+            primary_adapters=["ta_composite"],
+            required_params=["funding_threshold", "basis_threshold", "hedge_ratio"],
+            default_search_space={
+                "funding_threshold": [0.0005, 0.001, 0.002],
+                "basis_threshold": [0.002, 0.005, 0.01],
+                "hedge_ratio": [0.85, 0.95, 1.05, 1.15],
+            },
+        ),
+    ],
+)
+
+_RELATIVE_VALUE = StrategyFamily(
+    name="relative_value",
+    description=(
+        "Multi-leg spread and ratio trading across correlated assets. "
+        "Profits from spread convergence, ratio mean-reversion, or structural "
+        "mispricings between related instruments. Requires multi-asset data."
+    ),
+    supported_adapters=["simple", "ta_composite"],
+    required_data=["multi_asset"],
+    default_complexity_budget=5,
+    per_trade_risk_min_pct=0.15,
+    per_trade_risk_max_pct=0.60,
+    parameter_bounds=[
+        ParameterBounds("entry_zscore", 1.0, 4.0, "spread z-score entry threshold"),
+        ParameterBounds("exit_zscore", 0.0, 2.0, "spread z-score exit threshold"),
+        ParameterBounds("zscore_lookback", 20, 500, "lookback for spread z-score"),
+        ParameterBounds("hedge_ratio", 0.5, 2.0, "cross-asset hedge ratio"),
+        ParameterBounds("hold_bars", 4, 96, "max hold bars"),
+        ParameterBounds("rebalance_bars", 1, 24, "hedge rebalance frequency"),
+    ],
+    invalid_combinations=[
+        "entry_zscore <= exit_zscore (entry threshold must exceed exit threshold)",
+        "hedge_ratio < 0.5 (unbalanced spread; too much directional exposure)",
+        "hedge_ratio > 2.0 (unbalanced spread in opposite direction)",
+        "zscore_lookback < 20 (too short for reliable spread distribution)",
+    ],
+    templates=[
+        FamilyTemplate(
+            template_id="relative_value_btc_eth_ratio",
+            description=(
+                "Trade BTC/ETH price ratio mean-reversion. "
+                "Enter when ratio z-score exceeds threshold; exit on mean reversion."
+            ),
+            primary_adapters=["simple", "ta_composite"],
+            required_params=["entry_zscore", "exit_zscore", "zscore_lookback"],
+            default_search_space={
+                "entry_zscore": [1.5, 2.0, 2.5],
+                "exit_zscore": [0.0, 0.5, 1.0],
+                "zscore_lookback": [50, 100, 200],
+                "hedge_ratio": [0.8, 1.0, 1.2],
+            },
+        ),
+        FamilyTemplate(
+            template_id="relative_value_spot_perp_spread",
+            description=(
+                "Spot/perp spread arbitrage: trade when spot-perp premium "
+                "deviates from expected funding cost. Excludes funding yield "
+                "component (use basis_carry for that)."
+            ),
+            primary_adapters=["simple"],
+            required_params=["entry_zscore", "zscore_lookback", "hedge_ratio"],
+            default_search_space={
+                "entry_zscore": [1.5, 2.0, 2.5, 3.0],
+                "zscore_lookback": [30, 60, 120],
+                "hedge_ratio": [0.95, 1.0, 1.05],
+                "hold_bars": [8, 16, 32],
+            },
+        ),
+        FamilyTemplate(
+            template_id="relative_value_cross_venue_basis",
+            description=(
+                "Cross-venue basis arbitrage: trade temporary price differences "
+                "for the same instrument across two venues."
+            ),
+            primary_adapters=["simple"],
+            required_params=["entry_zscore", "exit_zscore"],
+            default_search_space={
+                "entry_zscore": [1.0, 1.5, 2.0],
+                "exit_zscore": [0.0, 0.25, 0.5],
+                "hold_bars": [4, 8, 16],
+            },
+        ),
+    ],
+)
+
+
 # ---------------------------------------------------------------------------
 # Registry
 # ---------------------------------------------------------------------------
@@ -417,6 +581,8 @@ FAMILY_REGISTRY: dict[str, StrategyFamily] = {
     "mean_reversion": _MEAN_REVERSION,
     "regime_conditioned_momentum": _REGIME_CONDITIONED_MOMENTUM,
     "funding_dislocation": _FUNDING_DISLOCATION,
+    "basis_carry": _BASIS_CARRY,
+    "relative_value": _RELATIVE_VALUE,
 }
 
 SUPPORTED_FAMILIES = frozenset(FAMILY_REGISTRY.keys())

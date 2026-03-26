@@ -64,7 +64,7 @@ def _check_adapter_consistency(candidate: StrategyCandidate) -> None:
 
 
 def _check_family(candidate: StrategyCandidate) -> None:
-    """Reject unsupported or explicitly deferred phase-one families."""
+    """Reject unsupported families and enforce family-level constraints."""
     family_name = candidate.strategy_family
     if not family_name:
         # Legacy candidate — no family declared, allow through with a warning
@@ -84,7 +84,41 @@ def _check_family(candidate: StrategyCandidate) -> None:
     if not is_supported_family(family_name):
         raise CandidateValidationError(
             f"Unknown strategy family: '{family_name}'. "
-            f"Supported phase-one families: {sorted(FAMILY_REGISTRY.keys())}"
+            f"Supported families: {sorted(FAMILY_REGISTRY.keys())}"
+        )
+
+    # Enforce regime gate requirement for families that need it
+    family = FAMILY_REGISTRY.get(family_name)
+    if family and family.regime_gate_required:
+        _check_regime_gate(candidate)
+
+
+def _check_regime_gate(candidate: StrategyCandidate) -> None:
+    """Enforce that mean-reversion (and other gated) families declare a regime filter.
+
+    A candidate passes if ANY of the following are present:
+    - 'regime_window' in search_space or constraints
+    - 'regime_filter' key in search_space or constraints
+    - 'trend_filter' key in search_space or constraints
+    - evaluation_rules contains 'regime' (documents a regime gate in the rules)
+    """
+    search = candidate.effective_search_space
+    constraints = getattr(candidate, "constraints", {}) or {}
+    evaluation_rules = getattr(candidate, "evaluation_rules", {}) or {}
+
+    has_regime_param = any(
+        "regime" in k or "trend_filter" in k
+        for k in list(search.keys()) + list(constraints.keys())
+    )
+    has_regime_rule = any("regime" in str(v).lower() for v in evaluation_rules.values())
+
+    if not has_regime_param and not has_regime_rule:
+        raise CandidateValidationError(
+            f"Candidate '{candidate.name}' uses family 'mean_reversion' but declares "
+            "no regime gate. Mean-reversion strategies without a trend regime filter "
+            "are a known blowup source in trending markets and are rejected at this "
+            "stage. Add 'regime_window' (e.g., 100 bars) to your search_space or "
+            "document the trend-gate mechanism in evaluation_rules."
         )
 
 
@@ -115,6 +149,35 @@ def _check_required_data(
                     f"(required_data includes 'funding') but no funding dataset "
                     f"was found. Either supply funding data or remove the funding "
                     f"dependency from the candidate definition."
+                )
+        elif data_type == "spot":
+            # Spot data must exist (OHLCV candles for the spot instrument)
+            spot_paths = [
+                Path("hbot/data/historical/bitget_spot"),
+                Path("hbot/data/historical/spot"),
+                Path("data/historical/spot"),
+            ]
+            has_spot = any(p.exists() and any(p.iterdir()) for p in spot_paths if p.exists())
+            if not has_spot:
+                raise CandidateValidationError(
+                    f"Candidate '{candidate.name}' requires spot OHLCV data "
+                    f"(required_data includes 'spot') but no spot dataset was found. "
+                    f"basis_carry and relative_value strategies need spot price series "
+                    f"alongside perp data."
+                )
+        elif data_type == "multi_asset":
+            # Multi-asset: need at least two tradeable instruments in the catalog
+            catalog_paths = [
+                Path("hbot/data/historical/catalog.json"),
+                Path("data/historical/catalog.json"),
+            ]
+            has_catalog = any(p.exists() for p in catalog_paths)
+            if not has_catalog:
+                raise CandidateValidationError(
+                    f"Candidate '{candidate.name}' requires multi-asset data "
+                    f"(required_data includes 'multi_asset') but no data catalog "
+                    f"was found at hbot/data/historical/catalog.json. "
+                    f"relative_value strategies require at least two instruments."
                 )
 
 

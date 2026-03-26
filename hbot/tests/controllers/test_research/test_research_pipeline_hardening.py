@@ -915,9 +915,10 @@ class TestFamilyRegistry:
         from controllers.research.family_registry import get_family
         family = get_family("mean_reversion")
         assert len(family.templates) >= 1
-        template = family.get_template("mean_reversion_zscore")
+        # Templates were renamed to enforce regime gate requirement
+        template = family.get_template("mean_reversion_zscore_regime_gated")
         assert template is not None
-        assert template.template_id == "mean_reversion_zscore"
+        assert template.template_id == "mean_reversion_zscore_regime_gated"
 
     def test_bounds_check_rejects_out_of_range_value(self):
         from controllers.research.family_registry import get_family
@@ -936,3 +937,156 @@ class TestFamilyRegistry:
         family = get_family("trend_continuation")
         violations = family.check_monotonicity({"fast_ema": [100], "slow_ema": [50]})
         assert violations
+
+
+# ---------------------------------------------------------------------------
+# Family registry phase 2 — basis_carry, relative_value, mean_reversion gate
+# ---------------------------------------------------------------------------
+
+class TestBasisCarryFamily:
+    """basis_carry family definitions and constraint enforcement."""
+
+    def test_basis_carry_registered(self):
+        from controllers.research.family_registry import FAMILY_REGISTRY
+        assert "basis_carry" in FAMILY_REGISTRY
+
+    def test_basis_carry_requires_funding_and_spot(self):
+        from controllers.research.family_registry import get_family
+        family = get_family("basis_carry")
+        assert "funding" in family.required_data
+        assert "spot" in family.required_data
+
+    def test_basis_carry_has_three_templates(self):
+        from controllers.research.family_registry import get_family
+        family = get_family("basis_carry")
+        assert len(family.templates) == 3
+        ids = {t.template_id for t in family.templates}
+        assert "basis_carry_funding_yield" in ids
+        assert "basis_carry_delta_neutral_grid" in ids
+        assert "basis_carry_semi_directional" in ids
+
+    def test_basis_carry_hedge_ratio_bounds(self):
+        from controllers.research.family_registry import get_family
+        family = get_family("basis_carry")
+        # Hedge ratio must be in [0.80, 1.20]
+        violations = family.check_bounds({"hedge_ratio": [0.5]})  # below 0.80
+        assert violations
+        violations_ok = family.check_bounds({"hedge_ratio": [0.95, 1.0, 1.05]})
+        assert not violations_ok
+
+    def test_basis_carry_lower_risk_budget_than_directional(self):
+        from controllers.research.family_registry import get_family
+        carry = get_family("basis_carry")
+        directional = get_family("trend_continuation")
+        # Carry strategies have lower max per-trade risk
+        assert carry.per_trade_risk_max_pct < directional.per_trade_risk_max_pct
+
+
+class TestRelativeValueFamily:
+    """relative_value family definitions and constraint enforcement."""
+
+    def test_relative_value_registered(self):
+        from controllers.research.family_registry import FAMILY_REGISTRY
+        assert "relative_value" in FAMILY_REGISTRY
+
+    def test_relative_value_requires_multi_asset(self):
+        from controllers.research.family_registry import get_family
+        family = get_family("relative_value")
+        assert "multi_asset" in family.required_data
+
+    def test_relative_value_has_three_templates(self):
+        from controllers.research.family_registry import get_family
+        family = get_family("relative_value")
+        assert len(family.templates) == 3
+        ids = {t.template_id for t in family.templates}
+        assert "relative_value_btc_eth_ratio" in ids
+        assert "relative_value_spot_perp_spread" in ids
+        assert "relative_value_cross_venue_basis" in ids
+
+    def test_relative_value_entry_zscore_bounds(self):
+        from controllers.research.family_registry import get_family
+        family = get_family("relative_value")
+        violations = family.check_bounds({"entry_zscore": [0.5]})  # below 1.0
+        assert violations
+        violations_ok = family.check_bounds({"entry_zscore": [1.5, 2.0, 2.5]})
+        assert not violations_ok
+
+    def test_relative_value_hedge_ratio_wider_bounds(self):
+        from controllers.research.family_registry import get_family
+        family = get_family("relative_value")
+        # RV allows hedge ratios up to 2.0 (wider than carry)
+        violations = family.check_bounds({"hedge_ratio": [1.5, 2.0]})
+        assert not violations
+        violations_out = family.check_bounds({"hedge_ratio": [2.5]})
+        assert violations_out
+
+
+class TestMeanReversionRegimeGate:
+    """mean_reversion family MUST have a regime gate — enforced at validation."""
+
+    def _make_mr_candidate(self, tmp_path: Path, with_regime: bool) -> "StrategyCandidate":
+        import yaml as _yaml
+        search: dict = {"zscore_window": [15, 20, 30], "zscore_threshold": [1.5, 2.0]}
+        if with_regime:
+            search["regime_window"] = [50, 100, 150]
+        data = {
+            "name": "mr-test-v1",
+            "hypothesis": "Mean reversion on BTC",
+            "adapter_mode": "atr_mm",
+            "parameter_space": {"atr_period": [14]},
+            "search_space": search,
+            "entry_logic": "Enter on z-score extreme",
+            "exit_logic": "Exit on mean reversion",
+            "base_config": {
+                "strategy_class": "atr_mm",
+                "strategy_config": {},
+                "data_source": {
+                    "exchange": "bitget",
+                    "pair": "BTC-USDT",
+                    "resolution": "15m",
+                    "instrument_type": "perp",
+                },
+                "initial_equity": "500",
+            },
+            "lifecycle": "candidate",
+            "schema_version": 2,
+            "strategy_family": "mean_reversion",
+            "template_id": "mean_reversion_zscore_regime_gated",
+            "required_data": [],
+        }
+        path = tmp_path / "mr.yml"
+        path.write_text(_yaml.dump(data))
+        return StrategyCandidate.from_yaml(path)
+
+    def test_mean_reversion_without_regime_gate_raises(self, tmp_path):
+        from controllers.research.candidate_validator import (
+            CandidateValidationError,
+            validate_candidate,
+        )
+        c = self._make_mr_candidate(tmp_path, with_regime=False)
+        with pytest.raises(CandidateValidationError, match="regime"):
+            validate_candidate(c)
+
+    def test_mean_reversion_with_regime_window_passes(self, tmp_path):
+        from controllers.research.candidate_validator import validate_candidate
+        c = self._make_mr_candidate(tmp_path, with_regime=True)
+        # Should not raise
+        validate_candidate(c)
+
+    def test_mean_reversion_family_has_regime_gate_required_flag(self):
+        from controllers.research.family_registry import get_family
+        family = get_family("mean_reversion")
+        assert family.regime_gate_required is True
+
+    def test_trend_continuation_has_no_regime_gate_required(self):
+        from controllers.research.family_registry import get_family
+        family = get_family("trend_continuation")
+        assert family.regime_gate_required is False
+
+    def test_mean_reversion_regime_gated_templates_have_regime_window(self):
+        from controllers.research.family_registry import get_family
+        family = get_family("mean_reversion")
+        for template in family.templates:
+            assert "regime_window" in template.required_params, (
+                f"Template '{template.template_id}' must require regime_window"
+            )

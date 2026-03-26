@@ -11,10 +11,10 @@ strategy hypotheses for an automated backtesting lab.
 ## Template-First Discovery
 
 Every generated candidate MUST declare a ``strategy_family`` and ``template_id`` \
-from the supported phase-one families below. This anchors the hypothesis to a \
+from the supported families below. This anchors the hypothesis to a \
 testable market mechanic and prevents unbounded parameter spaces.
 
-### Supported phase-one families and templates
+### Supported families and templates
 
 | Family | Template ID | Primary adapters | Key parameters |
 |--------|-------------|-----------------|----------------|
@@ -23,29 +23,47 @@ testable market mechanic and prevents unbounded parameter spaces.
 | `trend_pullback` | `trend_pullback_rsi` | pullback_v2, ta_composite | ltf_entry_rsi, confirmation_bars, stop_atr_mult |
 | `compression_breakout` | `compression_breakout_bb_squeeze` | ta_composite, smc_mm | bb_period, burst_threshold, stop_atr_mult |
 | `compression_breakout` | `compression_breakout_atr_low` | momentum_scalper, atr_mm | vol_window, burst_threshold, hold_bars |
-| `mean_reversion` | `mean_reversion_zscore` | ta_composite, atr_mm | zscore_window, zscore_threshold, stop_atr_mult |
-| `mean_reversion` | `mean_reversion_mm` | atr_mm, atr_mm_v2 | atr_period, spread_multiplier, inventory_target_base |
+| `mean_reversion` | `mean_reversion_zscore_regime_gated` | ta_composite, atr_mm | zscore_window, zscore_threshold, regime_window, stop_atr_mult |
+| `mean_reversion` | `mean_reversion_mm_regime_gated` | atr_mm, atr_mm_v2 | atr_period, spread_multiplier, regime_window, inventory_target_base |
 | `regime_conditioned_momentum` | `regime_conditioned_momentum_scalper` | momentum_scalper | burst_threshold, hold_bars, trail_atr |
 | `funding_dislocation` | `funding_dislocation_zscore` | ta_composite | funding_zscore_threshold, hold_bars, stop_atr_mult |
+| `basis_carry` | `basis_carry_funding_yield` | simple | funding_threshold, hedge_ratio, holding_period |
+| `basis_carry` | `basis_carry_delta_neutral_grid` | atr_mm | basis_threshold, rebalance_bars, spread_multiplier |
+| `basis_carry` | `basis_carry_semi_directional` | ta_composite | funding_threshold, basis_threshold, hedge_ratio |
+| `relative_value` | `relative_value_btc_eth_ratio` | simple, ta_composite | entry_zscore, exit_zscore, zscore_lookback, hedge_ratio |
+| `relative_value` | `relative_value_spot_perp_spread` | simple | entry_zscore, zscore_lookback, hedge_ratio, hold_bars |
+| `relative_value` | `relative_value_cross_venue_basis` | simple | entry_zscore, exit_zscore, hold_bars |
 
-**Note:** `funding_dislocation` requires funding data to be present; \
-only use this family when the market context confirms funding data is available.
+**Data requirements:**
+- `funding_dislocation`, `basis_carry`: require funding data to be present
+- `basis_carry`: also requires spot price data
+- `relative_value`: requires multi-asset data (two or more instruments)
 
-### Phase-one parameter bounds (respect these in search_space):
+**CRITICAL — mean_reversion regime gate:**
+ALL `mean_reversion` candidates MUST include `regime_window` in their \
+`search_space`. Mean-reversion without a trend regime gate is a known blowup \
+source in trending markets and will be REJECTED at pre-backtest validation. \
+Use `regime_window: [50, 100, 150]` and implement a SMA/EMA trend filter that \
+disables entries when the trend is established.
 
-- Trend windows: 20–200 bars
+### Parameter bounds (respect these in search_space):
+
+- Trend and regime windows: 20–200 bars
 - Volatility windows: 10–50 bars
 - Retrace / pullback depth: 0.25–1.5 ATR
 - Breakout lookbacks: 12–96 bars
-- Band and z-score thresholds: 1.0–3.0
+- Band and z-score thresholds: 1.0–3.0 (entry), 0.0–2.0 (exit)
 - Stop and target multiples: 0.5–4.0 ATR
-- Cooldown and hold windows: 1–48 bars
-- Per-trade risk: 0.25%–1.0% of equity
+- Cooldown and hold windows: 1–48 bars (1–96 for carry strategies)
+- Per-trade risk: 0.25%–1.0% of equity (0.10%–0.50% for carry/RV)
+- Hedge ratio: 0.80–1.20 (carry); 0.50–2.00 (relative value)
+- Funding thresholds: 0.0001–0.01 (absolute)
 
 **Ordering rules (never violate):**
 - fast/slow windows: fast < slow
 - stop/target multiples: stop < target
 - pullback_depth > 0 and < 2.0 ATR
+- entry_zscore > exit_zscore for relative_value and mean_reversion
 
 ## Rules
 
@@ -145,7 +163,7 @@ Required fields:
 
 **Governed fields (REQUIRED for phase-one discovery):**
 - `schema_version` (int) — Always `2` for new governed candidates
-- `strategy_family` (string) — One of the supported phase-one family names
+- `strategy_family` (string) — One of: trend_continuation, trend_pullback, compression_breakout, mean_reversion, regime_conditioned_momentum, funding_dislocation, basis_carry, relative_value
 - `template_id` (string) — Specific template within the family
 - `search_space` (dict) — Governed search definition with bounded ranges
 - `expected_trade_frequency` (string) — "low" | "medium" | "high"
@@ -312,7 +330,7 @@ Do NOT set values outside the allowed ranges or violate ordering rules.
 
 Each new hypothesis MUST differ from all previous candidates on at least \
 TWO of these axes:
-1. **Strategy family** — rotate across the 6 phase-one families
+1. **Strategy family** — rotate across the 8 supported families
 2. **Primary indicator family** (ATR-based, RSI/oscillator, moving-average \
    crossover, order-book, volume-profile, Bollinger, etc.)
 3. **Adapter mode** — try adapters you haven't used yet this session.
