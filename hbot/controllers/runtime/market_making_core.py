@@ -263,8 +263,12 @@ class MarketMakingRuntimeAdapter:
         level = controller.get_level_from_level_id(level_id)
         trade_type = controller.get_trade_type_from_level_id(level_id)
         spreads, amounts_quote = self._runtime_spreads_and_amounts_in_quote(trade_type)
-        reference_price = to_decimal(controller.processed_data["reference_price"])
-        spread_in_pct = spreads[int(level)] * to_decimal(controller.processed_data["spread_multiplier"])
+        reference_price = to_decimal(controller.processed_data.get("reference_price", 0))
+        if reference_price <= _ZERO:
+            reference_price = to_decimal(getattr(controller, "_last_mid", 0))
+        if reference_price <= _ZERO:
+            raise ValueError("No reference price available — connector not ready")
+        spread_in_pct = spreads[int(level)] * to_decimal(controller.processed_data.get("spread_multiplier", 1))
         side_multiplier = Decimal("-1") if trade_type == TradeType.BUY else Decimal("1")
         order_price = reference_price * (1 + side_multiplier * spread_in_pct)
         return order_price, amounts_quote[int(level)] / order_price
