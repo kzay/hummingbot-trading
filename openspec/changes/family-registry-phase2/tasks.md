@@ -39,7 +39,7 @@
 
 ## 6. Tests
 
-- [ ] 6.1 Add `TestBasisCarryFamily` class: test family is registered, `get_family` returns correct type, `required_data` includes `["funding", "spot"]`, neutral template exists, bounds reject out-of-range `carry_threshold`, bounds reject `delta_exposure > 0.25`
-- [ ] 6.2 Add `TestRelativeValueFamily` class: test family is registered, `required_data` includes `["multi_asset"]`, ratio template exists, bounds reject `hedge_ratio < 0.5`, bounds reject `hedge_ratio > 2.0`, bounds reject `zscore_threshold < 1.0`
-- [ ] 6.3 Add `TestMeanReversionRegimeGate` class: ungated candidate raises `CandidateValidationError`, candidate with `regime_ema` passes, candidate with `htf_ema` passes, candidate with `trend_filter_period` passes, non-mean_reversion family without regime param is unaffected
-- [ ] 6.4 Add `TestMeanReversionTemplateRename` class: `mean_reversion_zscore_regime_filtered` template exists, `mean_reversion_zscore` (old name) returns `None`, `regime_ema` is in renamed template's `required_params`
+- [x] 6.1 Add `TestBasisCarryFamily` class: test family is registered, `get_family` returns correct type, `required_data` includes `["funding", "spot"]`, neutral template exists, bounds reject out-of-range `carry_threshold`, bounds reject `delta_exposure > 0.25`
+- [x] 6.2 Add `TestRelativeValueFamily` class: test family is registered, `required_data` includes `["multi_asset"]`, ratio template exists, bounds reject `hedge_ratio < 0.5`, bounds reject `hedge_ratio > 2.0`, bounds reject `zscore_threshold < 1.0`
+- [x] 6.3 Add `TestMeanReversionRegimeGate` class: ungated candidate raises `CandidateValidationError`, candidate with `regime_ema` passes, candidate with `htf_ema` passes, candidate with `trend_filter_period` passes, non-mean_reversion family without regime param is unaffected
+- [x] 6.4 Add `TestMeanReversionTemplateRename` class: `mean_reversion_zscore_regime_gated` template exists, `mean_reversion_zscore` (old name) returns `None`, `regime_window` is in renamed template's `required_params`

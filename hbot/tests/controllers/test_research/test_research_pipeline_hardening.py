@@ -981,6 +981,55 @@ class TestBasisCarryFamily:
         # Carry strategies have lower max per-trade risk
         assert carry.per_trade_risk_max_pct < directional.per_trade_risk_max_pct
 
+    def test_basis_carry_funding_threshold_bounds(self):
+        from controllers.research.family_registry import get_family
+        family = get_family("basis_carry")
+        # funding_threshold must be within [0.0001, 0.01]
+        violations = family.check_bounds({"funding_threshold": [0.05]})  # above 0.01
+        assert violations
+        violations_ok = family.check_bounds({"funding_threshold": [0.0005, 0.001]})
+        assert not violations_ok
+
+    def test_basis_carry_neutral_template_retrievable(self):
+        from controllers.research.family_registry import get_family
+        family = get_family("basis_carry")
+        t = family.get_template("basis_carry_funding_yield")
+        assert t is not None
+        assert t.template_id == "basis_carry_funding_yield"
+
+    def test_basis_carry_validator_rejects_missing_required_data(self, tmp_path):
+        """Validator raises when basis_carry candidate omits funding or spot."""
+        import yaml as _yaml
+        from controllers.research.candidate_validator import (
+            CandidateValidationError,
+            validate_candidate,
+        )
+        data = {
+            "name": "carry-no-data-v1",
+            "hypothesis": "Carry test",
+            "adapter_mode": "simple",
+            "parameter_space": {},
+            "search_space": {"funding_threshold": [0.0005], "hedge_ratio": [1.0], "holding_period": [16]},
+            "entry_logic": "Carry entry",
+            "exit_logic": "Carry exit",
+            "base_config": {
+                "strategy_class": "simple",
+                "strategy_config": {},
+                "data_source": {"exchange": "bitget", "pair": "BTC-USDT", "resolution": "15m", "instrument_type": "perp"},
+                "initial_equity": "500",
+            },
+            "lifecycle": "candidate",
+            "schema_version": 2,
+            "strategy_family": "basis_carry",
+            "template_id": "basis_carry_funding_yield",
+            "required_data": ["spot"],  # missing "funding"
+        }
+        path = tmp_path / "carry.yml"
+        path.write_text(_yaml.dump(data))
+        c = StrategyCandidate.from_yaml(path)
+        with pytest.raises(CandidateValidationError, match="funding"):
+            validate_candidate(c)
+
 
 class TestRelativeValueFamily:
     """relative_value family definitions and constraint enforcement."""
@@ -1019,6 +1068,45 @@ class TestRelativeValueFamily:
         assert not violations
         violations_out = family.check_bounds({"hedge_ratio": [2.5]})
         assert violations_out
+
+    def test_relative_value_ratio_template_retrievable(self):
+        from controllers.research.family_registry import get_family
+        family = get_family("relative_value")
+        t = family.get_template("relative_value_btc_eth_ratio")
+        assert t is not None
+
+    def test_relative_value_validator_rejects_missing_multi_asset(self, tmp_path):
+        """Validator raises when relative_value candidate omits multi_asset."""
+        import yaml as _yaml
+        from controllers.research.candidate_validator import (
+            CandidateValidationError,
+            validate_candidate,
+        )
+        data = {
+            "name": "rv-no-data-v1",
+            "hypothesis": "RV test",
+            "adapter_mode": "simple",
+            "parameter_space": {},
+            "search_space": {"entry_zscore": [1.5, 2.0], "zscore_lookback": [50, 100], "hedge_ratio": [1.0]},
+            "entry_logic": "RV entry",
+            "exit_logic": "RV exit",
+            "base_config": {
+                "strategy_class": "simple",
+                "strategy_config": {},
+                "data_source": {"exchange": "bitget", "pair": "BTC-USDT", "resolution": "15m", "instrument_type": "perp"},
+                "initial_equity": "500",
+            },
+            "lifecycle": "candidate",
+            "schema_version": 2,
+            "strategy_family": "relative_value",
+            "template_id": "relative_value_btc_eth_ratio",
+            "required_data": [],  # missing "multi_asset"
+        }
+        path = tmp_path / "rv.yml"
+        path.write_text(_yaml.dump(data))
+        c = StrategyCandidate.from_yaml(path)
+        with pytest.raises(CandidateValidationError, match="multi_asset"):
+            validate_candidate(c)
 
 
 class TestMeanReversionRegimeGate:
@@ -1090,3 +1178,98 @@ class TestMeanReversionRegimeGate:
             assert "regime_window" in template.required_params, (
                 f"Template '{template.template_id}' must require regime_window"
             )
+
+    def _make_mr_candidate_with_param(self, tmp_path: Path, param_name: str) -> "StrategyCandidate":
+        import yaml as _yaml
+        data = {
+            "name": "mr-param-test-v1",
+            "hypothesis": "Mean reversion gated test",
+            "adapter_mode": "atr_mm",
+            "parameter_space": {},
+            "search_space": {"zscore_threshold": [2.0], param_name: [50, 100]},
+            "entry_logic": "Enter on z-score",
+            "exit_logic": "Exit on mean",
+            "base_config": {
+                "strategy_class": "atr_mm",
+                "strategy_config": {},
+                "data_source": {"exchange": "bitget", "pair": "BTC-USDT", "resolution": "15m", "instrument_type": "perp"},
+                "initial_equity": "500",
+            },
+            "lifecycle": "candidate",
+            "schema_version": 2,
+            "strategy_family": "mean_reversion",
+            "template_id": "mean_reversion_zscore_regime_gated",
+            "required_data": [],
+        }
+        path = tmp_path / f"mr_{param_name}.yml"
+        path.write_text(_yaml.dump(data))
+        return StrategyCandidate.from_yaml(path)
+
+    def test_htf_ema_passes_regime_gate(self, tmp_path):
+        from controllers.research.candidate_validator import validate_candidate
+        c = self._make_mr_candidate_with_param(tmp_path, "htf_ema")
+        validate_candidate(c)  # should not raise
+
+    def test_trend_filter_passes_regime_gate(self, tmp_path):
+        from controllers.research.candidate_validator import validate_candidate
+        c = self._make_mr_candidate_with_param(tmp_path, "trend_filter_period")
+        validate_candidate(c)  # should not raise
+
+    def test_non_mr_family_unaffected_without_regime_param(self, tmp_path):
+        """trend_continuation without any regime param must not raise CandidateValidationError."""
+        import yaml as _yaml
+        from controllers.research.candidate_validator import validate_candidate
+        data = {
+            "name": "tc-no-regime-v1",
+            "hypothesis": "Trend continuation",
+            "adapter_mode": "pullback",
+            "parameter_space": {},
+            "search_space": {"pullback_depth_atr": [0.5, 1.0], "trend_ema": [100], "stop_atr_mult": [1.5]},
+            "entry_logic": "Pullback entry",
+            "exit_logic": "Pullback exit",
+            "base_config": {
+                "strategy_class": "pullback",
+                "strategy_config": {},
+                "data_source": {"exchange": "bitget", "pair": "BTC-USDT", "resolution": "15m", "instrument_type": "perp"},
+                "initial_equity": "500",
+            },
+            "lifecycle": "candidate",
+            "schema_version": 2,
+            "strategy_family": "trend_continuation",
+            "template_id": "trend_continuation_pullback",
+            "required_data": [],
+        }
+        path = tmp_path / "tc_no_regime.yml"
+        path.write_text(_yaml.dump(data))
+        c = StrategyCandidate.from_yaml(path)
+        validate_candidate(c)  # must not raise
+
+
+class TestMeanReversionTemplateRename:
+    """Verify old template IDs are gone and new regime-gated IDs exist."""
+
+    def test_gated_zscore_template_exists(self):
+        from controllers.research.family_registry import get_family
+        family = get_family("mean_reversion")
+        assert family.get_template("mean_reversion_zscore_regime_gated") is not None
+
+    def test_gated_mm_template_exists(self):
+        from controllers.research.family_registry import get_family
+        family = get_family("mean_reversion")
+        assert family.get_template("mean_reversion_mm_regime_gated") is not None
+
+    def test_old_zscore_template_id_returns_none(self):
+        from controllers.research.family_registry import get_family
+        family = get_family("mean_reversion")
+        assert family.get_template("mean_reversion_zscore") is None
+
+    def test_old_mm_template_id_returns_none(self):
+        from controllers.research.family_registry import get_family
+        family = get_family("mean_reversion")
+        assert family.get_template("mean_reversion_mm") is None
+
+    def test_regime_window_in_zscore_template_required_params(self):
+        from controllers.research.family_registry import get_family
+        family = get_family("mean_reversion")
+        t = family.get_template("mean_reversion_zscore_regime_gated")
+        assert "regime_window" in t.required_params
