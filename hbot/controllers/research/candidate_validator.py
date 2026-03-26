@@ -87,10 +87,21 @@ def _check_family(candidate: StrategyCandidate) -> None:
             f"Supported families: {sorted(FAMILY_REGISTRY.keys())}"
         )
 
-    # Enforce regime gate requirement for families that need it
     family = FAMILY_REGISTRY.get(family_name)
-    if family and family.regime_gate_required:
-        _check_regime_gate(candidate)
+    if family:
+        # Enforce regime gate requirement for families that need it
+        if family.regime_gate_required:
+            _check_regime_gate(candidate)
+
+        # Enforce that the candidate explicitly declares all family-required data types
+        candidate_data = set(getattr(candidate, "required_data", None) or [])
+        missing = [d for d in family.required_data if d not in candidate_data]
+        if missing:
+            raise CandidateValidationError(
+                f"Candidate '{candidate.name}' uses family '{family_name}' which requires "
+                f"{family.required_data} declared in required_data, but is missing: {missing}. "
+                f"Add these to the candidate's required_data list."
+            )
 
 
 def _check_regime_gate(candidate: StrategyCandidate) -> None:
