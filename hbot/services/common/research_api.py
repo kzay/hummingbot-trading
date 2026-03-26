@@ -3,6 +3,7 @@
 Endpoints exposing strategy research lab outputs and exploration launch:
   GET  /api/research/candidates                          — list all candidates
   GET  /api/research/candidates/{name}                   — candidate detail
+  GET  /api/research/leaderboard                         — ranked candidates
   GET  /api/research/reports/{candidate_name}/{run_id}   — evaluation report (markdown)
   GET  /api/research/explorations                        — list exploration sessions
   POST /api/research/explorations                        — launch a new exploration
@@ -12,6 +13,8 @@ Endpoints exposing strategy research lab outputs and exploration launch:
 
 The routes are mounted by whichever Starlette service owns research traffic.
 They read file-backed research state directly from the workspace.
+
+Storage root: hbot/data/research (override via RESEARCH_DATA_DIR env var).
 """
 from __future__ import annotations
 
@@ -33,12 +36,15 @@ from typing import Any
 
 logger = logging.getLogger(__name__)
 
-_RESEARCH_DIR = Path(os.environ.get("RESEARCH_DATA_DIR", "data/research"))
+# Unified storage root — same default as all controller code
+_RESEARCH_DIR = Path(os.environ.get("RESEARCH_DATA_DIR", "hbot/data/research"))
 _CANDIDATES_DIR = _RESEARCH_DIR / "candidates"
 _LIFECYCLE_DIR = _RESEARCH_DIR / "lifecycle"
 _EXPERIMENTS_DIR = _RESEARCH_DIR / "experiments"
 _REPORTS_DIR = _RESEARCH_DIR / "reports"
 _EXPLORATIONS_DIR = _RESEARCH_DIR / "explorations"
+_PAPER_RUNS_DIR = _RESEARCH_DIR / "paper_runs"
+_PAPER_ARTIFACTS_DIR = _RESEARCH_DIR / "paper_artifacts"
 
 _SAFE_NAME_RE = re.compile(r"^[\w\-]+$")
 _MAX_CONCURRENT_EXPLORATIONS = int(os.environ.get("RESEARCH_MAX_CONCURRENT", "1"))
@@ -48,7 +54,7 @@ _VALID_PROVIDERS = frozenset({"anthropic", "openai"})
 _VALID_ADAPTERS = frozenset({
     "atr_mm", "atr_mm_v2", "smc_mm", "combo_mm",
     "pullback", "pullback_v2", "momentum_scalper",
-    "directional_mm", "simple",
+    "directional_mm", "simple", "ta_composite",
 })
 
 # ---------------------------------------------------------------------------
@@ -150,6 +156,7 @@ def _spawn_exploration(
         "--reports-dir", str(_REPORTS_DIR),
         "--experiments-dir", str(_EXPERIMENTS_DIR),
         "--lifecycle-dir", str(_LIFECYCLE_DIR),
+        "--candidates-dir", str(_CANDIDATES_DIR),
     ]
     if skip_sweep:
         cmd.append("--skip-sweep")
@@ -175,7 +182,6 @@ def _spawn_exploration(
         "pid": proc.pid,
         "log_path": str(log_path),
         "created_at": datetime.now(UTC).isoformat(),
-        # Preserve launch params for re-run
         "launch_params": {
             "provider": provider,
             "iterations": iterations,
@@ -223,7 +229,7 @@ def _spawn_exploration(
             try:
                 log_fh.close()
             except Exception:
-                pass  # Justification: best-effort cleanup — log handle close must not raise
+                pass  # Justification: best-effort cleanup
 
     t = threading.Thread(target=_wait_for_completion, daemon=True, name=f"explore-wait-{session_id}")
     t.start()
@@ -305,19 +311,29 @@ def _read_experiments(candidate_name: str) -> list[dict[str, Any]]:
     return _read_jsonl(path)
 
 
-def _best_score_from_experiments(experiments: list[dict[str, Any]]) -> tuple[float | None, str | None]:
+def _best_experiment(experiments: list[dict[str, Any]]) -> dict[str, Any]:
+    """Return the experiment with the highest robustness score."""
+    best: dict[str, Any] = {}
     best_score: float | None = None
-    best_rec: str | None = None
     for exp in experiments:
         score = exp.get("robustness_score")
         if score is not None:
             if best_score is None or float(score) > best_score:
                 best_score = float(score)
-                best_rec = exp.get("recommendation")
-    return best_score, best_rec
+                best = exp
+    return best
+
+
+def _best_score_from_experiments(experiments: list[dict[str, Any]]) -> tuple[float | None, str | None]:
+    best = _best_experiment(experiments)
+    return (
+        best.get("robustness_score"),
+        best.get("recommendation"),
+    )
 
 
 def _scan_candidates() -> list[dict[str, Any]]:
+    """Scan candidates directory; include governed metadata when available."""
     results: list[dict[str, Any]] = []
     if not _CANDIDATES_DIR.exists():
         return results
@@ -329,7 +345,8 @@ def _scan_candidates() -> list[dict[str, Any]]:
         lifecycle = _read_lifecycle(name)
         experiments = _read_experiments(name)
         best_score, best_rec = _best_score_from_experiments(experiments)
-        results.append({
+        best_exp = _best_experiment(experiments)
+        entry: dict[str, Any] = {
             "name": name,
             "hypothesis": data.get("hypothesis", ""),
             "adapter_mode": data.get("adapter_mode", ""),
@@ -337,7 +354,14 @@ def _scan_candidates() -> list[dict[str, Any]]:
             "best_score": best_score,
             "best_recommendation": best_rec,
             "experiment_count": len(experiments),
-        })
+            # Governed fields (present when schema_version >= 2)
+            "strategy_family": data.get("strategy_family", ""),
+            "template_id": data.get("template_id", ""),
+            "schema_version": data.get("schema_version", 1),
+            "validation_tier": best_exp.get("validation_tier", ""),
+            "paper_status": best_exp.get("paper_status", ""),
+        }
+        results.append(entry)
     results.sort(key=lambda c: (c["best_score"] is None, -(c["best_score"] or 0)))
     return results
 
@@ -358,12 +382,18 @@ def _get_candidate_detail(name: str) -> dict[str, Any] | None:
     lifecycle = _read_lifecycle(name)
     experiments = _read_experiments(name)
     best_score, best_rec = _best_score_from_experiments(experiments)
+    best_exp = _best_experiment(experiments)
     report_path = ""
     if experiments:
         last_run_id = experiments[-1].get("run_id", "")
         candidate_report = _REPORTS_DIR / _safe_name(name) / last_run_id[:8] / "report.md"
         if candidate_report.exists():
             report_path = str(candidate_report)
+
+    # Load paper run status
+    paper_runs = _read_paper_runs(name)
+    active_paper_runs = [r for r in paper_runs if r.get("status") == "active"]
+
     return {
         "name": data.get("name", name),
         "hypothesis": data.get("hypothesis", ""),
@@ -371,6 +401,7 @@ def _get_candidate_detail(name: str) -> dict[str, Any] | None:
         "entry_logic": data.get("entry_logic", ""),
         "exit_logic": data.get("exit_logic", ""),
         "parameter_space": data.get("parameter_space", {}),
+        "search_space": data.get("search_space", {}),
         "base_config": data.get("base_config", {}),
         "required_tests": data.get("required_tests", []),
         "metadata": data.get("metadata", {}),
@@ -379,7 +410,93 @@ def _get_candidate_detail(name: str) -> dict[str, Any] | None:
         "best_score": best_score,
         "best_recommendation": best_rec,
         "latest_report_path": report_path,
+        # Governed fields
+        "schema_version": data.get("schema_version", 1),
+        "strategy_family": data.get("strategy_family", ""),
+        "template_id": data.get("template_id", ""),
+        "required_data": data.get("required_data", []),
+        "market_conditions": data.get("market_conditions", ""),
+        "expected_trade_frequency": data.get("expected_trade_frequency", "medium"),
+        # Best experiment governance data
+        "validation_tier": best_exp.get("validation_tier", ""),
+        "gate_results": best_exp.get("gate_results"),
+        "score_breakdown": best_exp.get("score_breakdown"),
+        "stress_results": best_exp.get("stress_results"),
+        "artifact_paths": best_exp.get("artifact_paths"),
+        "paper_run_id": best_exp.get("paper_run_id"),
+        "paper_status": best_exp.get("paper_status", ""),
+        "paper_vs_backtest": best_exp.get("paper_vs_backtest"),
+        # Paper run summaries
+        "paper_runs": paper_runs,
+        "active_paper_runs": len(active_paper_runs),
     }
+
+
+def _read_paper_runs(candidate_name: str) -> list[dict[str, Any]]:
+    safe = _safe_name(candidate_name)
+    run_dir = _PAPER_RUNS_DIR / safe
+    if not run_dir.exists():
+        return []
+    results = []
+    for f in sorted(run_dir.glob("*.json")):
+        data = _read_json(f)
+        if data:
+            results.append(data)
+    return results
+
+
+def _build_leaderboard(
+    filter_tier: str | None = None,
+    include_research_only: bool = True,
+) -> list[dict[str, Any]]:
+    """Build a ranked leaderboard of research candidates.
+
+    Args:
+        filter_tier: If set, only include candidates with this validation_tier.
+        include_research_only: If False, exclude candle_only candidates.
+
+    Returns a list of candidate summaries sorted by best_score descending.
+    """
+    candidates = _scan_candidates()
+    ranked: list[dict[str, Any]] = []
+
+    for c in candidates:
+        tier = c.get("validation_tier", "")
+        if filter_tier and tier != filter_tier:
+            continue
+        if not include_research_only and tier == "candle_only":
+            continue
+        score = c.get("best_score")
+        if score is None:
+            continue
+
+        # Determine leaderboard category
+        if tier == "replay_validated":
+            category = "replay_validated"
+        elif tier == "candle_only":
+            category = "research_only"
+        else:
+            category = "unvalidated"
+
+        ranked.append({
+            "name": c["name"],
+            "strategy_family": c.get("strategy_family", ""),
+            "adapter_mode": c.get("adapter_mode", ""),
+            "lifecycle": c.get("lifecycle", "candidate"),
+            "best_score": score,
+            "best_recommendation": c.get("best_recommendation", ""),
+            "validation_tier": tier,
+            "category": category,
+            "paper_status": c.get("paper_status", ""),
+            "experiment_count": c.get("experiment_count", 0),
+        })
+
+    ranked.sort(key=lambda x: (
+        # Sort: replay_validated first, then research_only; within tier by score
+        0 if x["category"] == "replay_validated" else 1,
+        -(x["best_score"] or 0),
+    ))
+    return ranked
 
 
 def _scan_explorations() -> list[dict[str, Any]]:
@@ -405,7 +522,6 @@ def _scan_explorations() -> list[dict[str, Any]]:
                 best_score = sr.get("best_observed_score")
                 best_candidate = sr.get("best_observed_candidate", "")
 
-        # Merge in-memory subprocess status; fall back to persisted meta
         with _exploration_meta_lock:
             meta = _exploration_meta.get(session_id)
         if meta:
@@ -426,7 +542,6 @@ def _scan_explorations() -> list[dict[str, Any]]:
         if meta and meta.get("created_at"):
             created_at = meta["created_at"]
 
-        # Pull launch_params from in-memory first, fall back to disk meta
         launch_params: dict[str, Any] | None = None
         if meta and meta.get("launch_params"):
             launch_params = meta["launch_params"]
@@ -453,7 +568,6 @@ def _get_exploration_detail(session_id: str) -> dict[str, Any] | None:
     session_dir = _EXPLORATIONS_DIR / session_id
     if not session_dir.is_dir():
         return None
-    # Pull persisted launch params so the UI can offer a re-run
     disk_meta = _read_json(session_dir / "session_meta.json") or {}
     launch_params = disk_meta.get("launch_params")
 
@@ -473,6 +587,8 @@ def _get_exploration_detail(session_id: str) -> dict[str, Any] | None:
             iterations.append({
                 "file": f.name,
                 "name": data.get("name", ""),
+                "strategy_family": data.get("strategy_family", ""),
+                "template_id": data.get("template_id", ""),
                 "score": data.get("score"),
                 "recommendation": data.get("recommendation"),
             })
@@ -490,7 +606,6 @@ def _parse_iteration_yaml(path: Path) -> dict[str, Any]:
     is_blueprint = bool(adapter_mode and data.get("new_adapter_description"))
     hypothesis_full = data.get("hypothesis", "")
     hypothesis = hypothesis_full[:117] + "..." if len(hypothesis_full) > 120 else hypothesis_full
-    # Parameter space: only serialise values (lists/scalars), skip anything too large
     raw_ps = data.get("parameter_space", {}) or {}
     param_space: dict[str, Any] = {}
     if isinstance(raw_ps, dict):
@@ -501,6 +616,8 @@ def _parse_iteration_yaml(path: Path) -> dict[str, Any]:
         "candidate_name": data.get("name", path.stem),
         "adapter_mode": adapter_mode,
         "is_blueprint": is_blueprint,
+        "strategy_family": data.get("strategy_family", ""),
+        "template_id": data.get("template_id", ""),
         "hypothesis": hypothesis,
         "hypothesis_full": hypothesis_full,
         "entry_logic": data.get("entry_logic", ""),
@@ -550,6 +667,19 @@ def create_research_routes(auth_check):
         if detail is None:
             return _json_response({"error": "Candidate not found"}, 404)
         return _json_response(detail)
+
+    async def get_leaderboard(request: Request) -> Response:
+        denied = auth_check(request)
+        if denied:
+            return denied
+        params = dict(request.query_params)
+        filter_tier = params.get("tier")
+        include_research_only = params.get("include_research_only", "true").lower() != "false"
+        ranked = _build_leaderboard(
+            filter_tier=filter_tier,
+            include_research_only=include_research_only,
+        )
+        return _json_response({"leaderboard": ranked, "count": len(ranked)})
 
     async def get_report(request: Request) -> Response:
         denied = auth_check(request)
@@ -683,11 +813,9 @@ def create_research_routes(auth_check):
                         seen_files.add(f.name)
                         parsed = _parse_iteration_yaml(f)
                         yield f"event: iteration\ndata: {json.dumps(parsed)}\n\n"
-                # Accept either result file as the completion signal
                 finish_file = result_file if result_file.exists() else (summary_file if summary_file.exists() else None)
                 if finish_file is not None:
                     sr = _read_json(finish_file) or {}
-                    # Iteration count: prefer explicit field, else count iter YMLs
                     iter_count = sr.get("total_iterations") or sr.get("iterations")
                     if isinstance(iter_count, list):
                         iter_count = len(iter_count)
@@ -715,6 +843,7 @@ def create_research_routes(auth_check):
     return [
         Route("/api/research/candidates", list_candidates, methods=["GET"]),
         Route("/api/research/candidates/{name:path}", get_candidate, methods=["GET"]),
+        Route("/api/research/leaderboard", get_leaderboard, methods=["GET"]),
         Route("/api/research/reports/{candidate_name}/{run_id}", get_report, methods=["GET"]),
         Route("/api/research/explorations", explorations_endpoint, methods=["GET", "POST"]),
         Route("/api/research/explorations/{session_id}", get_exploration, methods=["GET"]),

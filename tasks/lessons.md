@@ -1,268 +1,137 @@
-# Regime Detection System — Technical Lessons & Architecture Findings
+# Research Pipeline Hardening — Technical Findings & Architecture Notes
 
-## Critical Finding: Label Semantic Mismatch
+## Research Quality Risks
 
-**Severity: HIGH — affects all downstream trading decisions when ML override is active.**
+### Risk 1: Candidate Contracts Are Too Loose (HIGH)
 
-The regime model predicts `fwd_vol_bucket_15m` (forward 15-minute volatility buckets):
-- Class 0 → low volatility
-- Class 1 → normal volatility
-- Class 2 → elevated volatility
-- Class 3 → extreme volatility
+**Finding:** `StrategyCandidate` has no `strategy_family`, `template_id`, `search_space`, `constraints`, `required_data`, or `promotion_policy` fields. Any free-form YAML can be evaluated without a prior validity check.
 
-But `REGIME_LABEL_MAP` in `research.py:36` maps these to **directional** regime names:
-- 0 → `"neutral_low_vol"` (reasonable)
-- 1 → `"neutral_high_vol"` (reasonable)
-- 2 → `"up"` (WRONG — this is elevated vol, not uptrend)
-- 3 → `"down"` (WRONG — this is extreme vol, not downtrend)
+**Consequence:** The LLM exploration path can produce syntactically valid candidates that are semantically unconstrained — windows inverted, stops above targets, families with no data support. These consume backtest compute and produce misleading scores.
 
-**Consequence:** When the ML model predicts class 2 ("elevated vol"), the system enters
-`"up"` regime with `one_sided="buy_only"` and `target_base_pct=0.60`. The model is not
-predicting direction at all — it's predicting volatility. Feature importance confirms this:
-the top 7 features are all volatility/time features. No directional features (return_*,
-trend_alignment_*, rsi_*) appear in the top 15.
-
-This means the ML regime override randomly biases the system long or short based on
-volatility predictions, not directional forecasts.
+**Fix:** Added governed fields to `StrategyCandidate` with backward-compatible loading. Pre-backtest validator (`candidate_validator.py`) rejects invalid combinations before any compute is consumed.
 
 ---
 
-## Finding: Feature Importance Dominated by Volatility & Time
+### Risk 2: Storage Root Drift (MEDIUM)
 
-Top 15 features by aggregate importance (all stability=1.0 except noted):
-1. `realized_vol_4h` — 1780.4
-2. `atr_pctl_24h` — 1773.6
-3. `hour_cos` — 1764.6
-4. `hour_sin` — 1750.0
-5. `minutes_since_funding` — 1662.4
-6. `vol_of_vol` — 1225.0
-7. `atr_pctl_7d` — 1055.8
-8. `adx_1m` — 857.2
-9. `atr_5m` — 846.8
-10. `day_sin` — 837.0
-11. `garman_klass_vol` — 808.2
-12. `realized_vol_1h` — 800.2
-13. `wr_1m_p50` — 799.4
-14. `atr_ratio_5m_1m` — 692.4 (stability 0.6)
-15. `parkinson_vol` — 650.8 (stability 0.8)
+**Finding:** `services/common/research_api.py` defaults to `data/research`; all controller code defaults to `hbot/data/research`. On environments where `RESEARCH_DATA_DIR` is not explicitly set, the API reads a different directory than the controllers write.
 
-**Implication:** The model is effectively a time-of-day × volatility-level classifier.
-This is useful for sizing/risk decisions but does NOT predict direction.
+**Consequence:** Candidates written by the exploration engine are invisible to the API. Lifecycle state written by the orchestrator is unreadable by the dashboard.
+
+**Fix:** Changed `_RESEARCH_DIR` default to `hbot/data/research`. Documented the env var override for deployment contexts.
 
 ---
 
-## Finding: CVD Feature is Non-Stationary
+### Risk 3: LLM-First Discovery Produces Unconstrained Hypotheses (HIGH)
 
-`feature_pipeline.py:333`:
-```python
-out["cvd"] = aligned["cvd"].cumsum().reset_index(drop=True)
-```
+**Finding:** The exploration system instructs the LLM to generate free-form YAML. No template, no family anchor, no bounded parameter contract. The LLM can invent parameter names that do not exist in the adapter, propose funding strategies without funding data, or produce windows that break monotonicity assumptions.
 
-CVD (cumulative volume delta) grows unboundedly over time. LightGBM can handle this
-via split-based learning, but the feature's distribution shifts dramatically across
-the dataset. A windowed or differenced CVD would be more robust.
+**Consequence:** High parse-error rates, adapter mismatches, and semantically broken candidates that survive YAML parsing but fail silently in evaluation.
+
+**Fix:** Added `family_registry.py` with 6 phase-one families and bounded search contracts. Exploration prompts updated to anchor on family/template before parameter generation.
 
 ---
 
-## Finding: Redundant Features
+### Risk 4: Candle Harness Results Treated Too Optimistically (HIGH)
 
-1. **`annualized_funding`** = `funding_rate * 3 * 365` — perfect linear transform.
-   LightGBM sees identical splits on both features. Wasted column.
+**Finding:** The orchestrator runs a single backtest on the candle harness, scores it, and the lifecycle manager can promote candidates directly to `paper` based on the robustness score alone. The candle harness does not model fills, latency, or funding with replay realism.
 
-2. **4h candle features are NaN** — `assemble_dataset()` does not load `candles_4h`,
-   so `return_4h`, `atr_4h`, `close_in_range_4h`, `body_ratio_4h` are all NaN.
-   LightGBM handles NaN natively but these contribute nothing meaningful.
-   (`realized_vol_4h` is computed from 1m candles, so it IS available.)
+**Consequence:** Candidates promoted to paper trading without replay-grade validation may show dramatic performance degradation due to fill model differences.
 
-3. **Multiple volatility measures are highly correlated:**
-   `realized_vol_4h`, `atr_pctl_24h`, `atr_pctl_7d`, `garman_klass_vol`,
-   `parkinson_vol`, `vol_of_vol` — all measure current volatility level.
-   Not harmful for trees but adds noise for importance interpretation.
+**Fix:** Introduced `validation_tier`: candle-only candidates are marked `candle_only` and blocked from auto-paper promotion. Only candidates that pass replay-grade validation (`replay_validated`) may be auto-promoted.
 
 ---
 
-## Finding: No Direction in Regime Model
+### Risk 5: No Hard Reject Gates Before Ranking (HIGH)
 
-The rule-based `RegimeDetector` uses EMA trend for direction (up/down) and ATR band
-for volatility. The ML model replaces this but only predicts volatility — losing all
-directional signal. There is a separate `direction` model type in the pipeline but
-it is not composed with the regime model at inference time.
+**Finding:** The current pipeline ranks all candidates by composite robustness score. A candidate with negative net PnL, 40% drawdown, or only 5 trades can still receive a score and be recommended if its OOS degradation ratio happens to be favorable.
 
-**Fix:** Compose volatility prediction + direction prediction into a 2D regime at
-inference time, or create a proper composite label.
+**Consequence:** Broken strategies can appear in leaderboard and promotion queues.
+
+**Fix:** Added `quality_gates.py` with hard gates: positive net PnL, max drawdown ≤ 20%, profit factor ≥ 1.15, OOS Sharpe ≥ 0.5, OOS degradation ≥ 0.6, DSR > 0, minimum trade counts by frequency tier. Gates run before ranking. Failures are persisted in the manifest.
 
 ---
 
-## Finding: Model Quality is Moderate
+### Risk 6: No Overfitting Defenses (HIGH)
 
-- OOS accuracy: 58.8% (4-class problem)
-- Baseline (majority class): 46.7%
-- Improvement: +12.1pp — passes deployment gates
-- Accuracy improves with more training data (57.7% → 59.5% across folds)
+**Finding:** The robustness scorer penalizes high OOS degradation ratio and high parameter CV but does not check for period concentration, trade concentration, or parameter fragility explicitly.
 
-This is a reasonable volatility classifier but would not be strong enough as a
-standalone directional predictor. The improvement over baseline is real but modest.
+**Consequence:** A strategy that made 80% of its PnL in one month, or whose score collapses if a single parameter moves by one tick, can score well and reach paper trading.
+
+**Fix:** Added explicit overfitting defenses: period concentration (no single month > 50% of PnL), trade concentration (no single trade > 15% of PnL), parameter fragility (neighbors must retain ≥ 80% of center score), complexity penalty (> 6 parameters). All defenses are persisted as named flags in the manifest.
 
 ---
 
-## Finding: No Per-Class Metrics
+### Risk 7: Paper Promotion Is a Label, Not a Workflow (HIGH)
 
-The pipeline only tracks overall accuracy. Missing:
-- Confusion matrix (which classes are confused)
-- Per-class precision/recall/F1
-- Calibration curves (are predicted probabilities trustworthy)
-- Class distribution in train vs test
+**Finding:** `lifecycle_manager.py` can transition a candidate from `candidate` to `paper` by changing a field in a JSON file. There is no deployable paper artifact, no paper-run record, no divergence monitoring.
 
----
+**Consequence:** "Paper" status is meaningless as a quality signal. Operators have no way to tell whether a paper-promoted candidate is actually running, or whether it has drifted from its validated parameters.
 
-## Finding: No Regime-to-Action Mapping Layer
-
-The connection between regime prediction and trading behavior is scattered:
-- `RegimeSpec` in `core.py` defines spread/sizing per regime (hardcoded 5 specs)
-- Bot7 has a simple regime gate (only trades in up/down)
-- No systematic mapping of regime → allowed strategies → sizing → risk limits
-
-This makes it hard to reason about what the system does in each regime and to
-adjust behavior without touching multiple files.
+**Fix:** Created `paper_workflow.py` with: deployable paper artifact generation, research-owned paper run records keyed by candidate + experiment run, paper-vs-backtest divergence monitoring across 7 dimensions, and downgrade/rejection logic with persisted breach reasons.
 
 ---
 
-## Finding: Missing Change-of-State Features
+## Realism Risks
 
-All features are absolute levels. Missing:
-- Volatility change (is vol rising or falling?)
-- Funding rate change (is sentiment shifting?)
-- Momentum acceleration (is trend strengthening or weakening?)
-- Regime transition indicators (how long in current regime?)
+### Replay vs Candle Harness Gap
 
-These "delta" features capture regime *transitions* which are arguably more
-important for trading than regime *levels*.
+The candle harness synthesizes an order book from OHLCV data and uses simplified fill models. The replay harness uses actual recorded market events for fills. The difference in realized slippage, fill quality, and adverse selection can be material — particularly for directional adapters where entry timing matters.
 
----
+**Mitigation:** Staging validation so that replay-grade validation is required before paper eligibility. Storing `validation_tier` in the manifest so operators can see which candidates have been replay-tested.
 
-## Direction Model Results (2026-03-25)
+### Fee Sensitivity
 
-**The direction model FAILS deployment gates** — 48.5% accuracy on binary up/down
-classification (threshold: 55%). This is essentially random.
+Walk-forward evaluation runs with fee stress multipliers of 1.0×, 1.5×, 2.0×, 3.0×. Candidates that fail at 1.5× fees are too marginal for production. The hard gate requires positive performance under the standard fee model; the overfitting defense checks parameter fragility more broadly.
 
-- Top features are identical to the regime model (all volatility/time)
-- No directional features provide meaningful predictive power
-- **Confirms:** short-term BTC 15m direction is not predictable from these features
+### Funding Cost for Long-Hold Strategies
 
-**Implication for composite regime:**
-The composite resolver falls back to the rule-based EMA trend direction when
-no direction model passes gates. This is the correct behavior.
+Candidates with `expected_trade_frequency: low` or hold periods > 8 hours must be evaluated with realistic funding costs. The `funding_dislocation` family requires funding data to be present; without it, the candidate is marked data-unavailable and blocked from evaluation.
 
 ---
 
-## Dead Feature Pruning
+## Assumptions and Unknowns
 
-14 features were 100% NaN. Added automatic NaN-column pruning to `_get_feature_cols()`
-so dead features are excluded from training automatically.
+### Assumptions
+
+1. **File-backed storage is sufficient.** The research pipeline uses YAML + JSONL + JSON files. This is appropriate for the current scale (hundreds of candidates, thousands of experiment runs). If the candidate universe grows to tens of thousands, a database migration should be considered.
+
+2. **Phase-one families cover the practical search space.** The 6 families (`trend_continuation`, `trend_pullback`, `compression_breakout`, `mean_reversion`, `regime_conditioned_momentum`, `funding_dislocation`) cover the viable strategy space given the current data architecture. Open-interest and liquidation-driven families are deferred pending data availability.
+
+3. **Candle harness is accurate enough for fast pruning.** The candle harness is not replay-grade, but it is faster by an order of magnitude. The two-tier validation approach assumes that candidates which fail on the candle harness would also fail on replay — i.e., that candle results are conservative. This assumption could break for strategies that depend heavily on fill timing.
+
+4. **Divergence thresholds can start wide and tighten.** The initial paper-vs-backtest divergence bands are configurable but set conservatively. The risk is false positives (good candidates downgraded) rather than false negatives (bad candidates retained), because operators review paper-downgrade events.
+
+### Unknowns
+
+1. **How wide should fill-quality divergence bands be?** Fill quality in paper trading can differ from simulation by 5–25% depending on market conditions. The appropriate threshold depends on strategy type and has not been empirically calibrated yet.
+
+2. **Should leaderboard default to paper-eligible only?** Showing all retained candidates vs. only replay-validated candidates is a UI decision. Both views have value; the leaderboard endpoint supports both via filter.
+
+3. **When should legacy candidates be force-upgraded?** Legacy YAML files (schema_version: 1) will accumulate warnings in logs but remain functional. A migration trigger has not been defined.
 
 ---
 
-## Architecture Strengths
+## Architecture Strengths Preserved
 
-1. **Clean separation between offline/online paths** — same `compute_features()`
-   for research and live service.
-2. **Purged walk-forward CV** — proper de Prado-style validation with embargo.
-3. **Deployment gates** — automated quality checks before model promotion.
-4. **Feature stability tracking** — measures which features are consistently important.
-5. **Indicator dual implementation** — Decimal for live trading precision, float for ML batch.
-6. **Anti-flap regime hold** — prevents rapid regime switching on noise.
-7. **ML override with TTL** — graceful fallback to rule-based detection.
-8. **Immutable snapshots** — frozen dataclasses prevent state mutation bugs.
+1. **Engines are unchanged.** The candle harness, replay harness, sweep runner, and walk-forward runner are not modified. All governance is layered above them.
 
----
+2. **File-backed research state.** All research artifacts (candidates, manifests, lifecycle, paper runs, reports) remain in `hbot/data/research`. No database dependency introduced.
 
----
+3. **Backward compatibility.** Existing YAML candidates load without modification. The governed fields are all optional with sensible defaults.
 
-## Retrain Results (2026-03-25)
+4. **Append-only manifests.** The hypothesis registry remains append-only JSONL. Richer fields are added without breaking existing manifest readers.
 
-### Before vs After
-
-| Metric | Old Model | New Model | Delta |
-|--------|-----------|-----------|-------|
-| OOS Accuracy | 58.83% | 59.07% | **+0.24pp** |
-| Baseline (majority) | 46.69% | 46.69% | — |
-| Improvement over base | +12.14pp | +12.38pp | +0.24pp |
-| Features | 72 | 76 | +4 |
-| Deployment gates | PASS | PASS | — |
-
-### Per-Class Metrics (Last Fold)
-
-| Regime | Precision | Recall | F1 | Support |
-|--------|-----------|--------|------|---------|
-| vol_low | 0.626 | 0.554 | 0.588 | 28,732 |
-| vol_normal | 0.602 | 0.731 | 0.660 | 50,487 |
-| vol_elevated | 0.555 | 0.451 | 0.498 | 21,776 |
-| vol_extreme | 0.535 | 0.237 | 0.329 | 6,376 |
-
-**Key insight:** vol_extreme is hard to predict (F1=0.33) due to class imbalance (6.16% of
-data). The model is conservative about predicting extreme vol — high precision (0.535) but
-low recall (0.237). This is actually desirable for a risk system: we'd rather miss some
-extreme events than trigger false alarms.
-
-### Regime Separation Validated
-
-The forward volatility analysis confirms the model genuinely separates volatility regimes:
-
-| Regime | 15m Fwd Vol (mean) | Ratio vs vol_low |
-|--------|-------------------|-------------------|
-| vol_low | 0.000326 | 1.0x |
-| vol_normal | 0.000481 | 1.5x |
-| vol_elevated | 0.000790 | 2.4x |
-| vol_extreme | 0.001192 | 3.7x |
-
-The regimes are monotonically ordered — each successive regime has meaningfully
-higher forward volatility. This proves the regime predictions have real economic
-content and should be trusted for sizing/risk decisions.
-
-### Transition Matrix (Regime Stability)
-
-| From \ To | vol_low | vol_normal | vol_elevated | vol_extreme |
-|-----------|---------|------------|--------------|-------------|
-| vol_low | **94.2%** | 5.8% | 0.03% | 0.02% |
-| vol_normal | 2.6% | **95.6%** | 1.7% | 0.2% |
-| vol_elevated | 0.03% | 6.5% | **90.3%** | 3.1% |
-| vol_extreme | 0.1% | 1.4% | 20.2% | **78.2%** |
-
-Mean persistence: **89.6%** — regimes are highly stable (change ~1 in 10 bars on average).
-Normal vol is most sticky (95.6%), extreme vol least (78.2% — tends to decay to elevated).
-
-### New Feature Contribution
-
-`vol_change_ratio` entered top 15 features, replacing `parkinson_vol`. The vol_change
-group contributes 754.6 aggregate importance — meaningful but behind volatility (6860)
-and temporal (5778) groups.
-
-### Data Quality Issues Found
-
-14 features are 100% NaN:
-- 4h candle features (return_4h, atr_4h, etc.) — **need to load 4h data in assemble_dataset()**
-- Microstructure features (cvd, flow_imbalance, etc.) — trades data exists but isn't loaded
-- LS ratio features — no data available
-
-Funding rate is 91.6% NaN — only 99 observations covering a small time range.
-
-**Action items (completed):**
-1. ~~Load 4h candles in assemble_dataset()~~ — Done (resample from 1m). Result: +2 features,
-   but **no accuracy improvement** (59.06% vs 59.07%). The 4h candle features are redundant
-   with `realized_vol_4h` and `atr_pctl_24h/7d` which already capture the same information
-   from 1m data. Keeping them for feature completeness but they don't drive model quality.
-2. Trades data — only 4000 rows available (sparse). Microstructure features remain NaN.
-   Need continuous trade recording to activate these.
-3. Funding data — only 99 observations. Need historical backfill to activate funding features.
+5. **Modular governance.** Each governance layer (`candidate_validator`, `family_registry`, `quality_gates`, `paper_workflow`) is a separate module with a clear responsibility. Adding a new family or adjusting a gate threshold requires editing one file.
 
 ---
 
 ## Architecture Risks
 
-1. **Single model for final deployment** — only the last CV fold's model is saved.
-   Standard practice but misses opportunity to ensemble across folds.
-2. **No model monitoring** — no drift detection, no performance tracking post-deployment.
-3. **Confidence threshold is low** — `ml_confidence_threshold=0.5` for a 4-class
-   problem means the model can be less confident than random and still override.
-4. **No regime persistence estimate** — model predicts current regime but not
-   how long it will last or probability of transition.
+1. **Replay data availability is uneven.** Some candidates may pass candle validation but lack replay inputs — they will be retained as research artifacts but blocked from auto-paper. This creates a class of candidates that are theoretically attractive but operationally blocked. Resolution requires expanding replay data coverage.
+
+2. **Score complexity.** The expanded ranking now combines 9+ components. Component breakdowns are persisted, but the composite score is still a single number. Operators need to understand which components drove a high or low score. The report generator exposes all components explicitly.
+
+3. **Paper divergence requires live monitoring.** The divergence tracking in `paper_workflow.py` compares paper outcomes to backtest expectations, but it requires that paper run results are written back to the research layer. This integration point is defined but requires the paper engine to write structured results to `hbot/data/research/paper_runs/`.
+
+4. **Family registry is not adaptive.** The 6 phase-one families are hardcoded with fixed bounds. Adding a new family requires a code change to `family_registry.py`. A config-driven registry would be more flexible but is out of scope for this change.

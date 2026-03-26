@@ -41,3 +41,8 @@ screenshot*.js
 hbot/data/bot*/desk_events*.jsonl
 hbot/data/research/explorations/*/run.log
 hbot/reports/verification/paper_exchange_command_journal_latest.json
+
+# ---- Runtime-generated service reports (change every tick) ----
+hbot/reports/ops_scheduler/heartbeat.json
+hbot/reports/policy/portfolio_allocator_latest.json
+hbot/reports/policy/portfolio_allocator_state_latest.json

@@ -1,96 +1,113 @@
-# Regime Detection System — Improvement Plan
+# Research Pipeline Hardening — Work Plan
 
 ## Audit Summary
 
 | Area | Status | Notes |
 |------|--------|-------|
-| Feature pipeline | Good architecture, some redundancy | 77 features, clean separation |
-| Label generation | **Critical mismatch** | Vol buckets mapped as directional regimes |
-| Training pipeline | Solid | Purged walk-forward CV, deployment gates |
-| Inference pipeline | Works but semantic bug | ML override applies wrong regime names |
-| Rule-based detector | Sound | EMA+ATR with anti-flap, 5 regimes |
-| Regime-to-action | Missing | No systematic mapping layer |
-| Validation | Incomplete | No per-class metrics, no calibration |
-| Feature diagnostics | Missing | No correlation/drift/staleness tools |
+| Candidate contract | Weak | Missing family, template, search_space, constraints, promotion policy |
+| Storage roots | Drifted | API uses `data/research`; controllers use `hbot/data/research` |
+| Discovery workflow | LLM-first | No template anchoring, no family registry, unconstrained search |
+| Experiment manifests | Thin | Missing gate results, validation tier, stress results, paper fields |
+| Validation pipeline | Single-pass | No staged tiers; candle results treated too optimistically |
+| Paper promotion | Label-only | No deployable artifacts, no paper-run tracking, no divergence monitoring |
+| API surface | Partial | Missing strategy_family, validation_tier, gate_results, leaderboard |
+| Overfitting defenses | Absent | No period/trade concentration checks, no fragility signals |
 
 ---
 
-## Phase 1: Fix Critical Issues
+## Phase 1 (Incremental) — Candidate Contract and Storage
 
-### P0.1 — Fix Label Semantic Mismatch
-- [x] Rename REGIME_LABEL_MAP to reflect actual vol predictions
-- [x] Map: 0→vol_low, 1→vol_normal, 2→vol_elevated, 3→vol_extreme
-- [x] Update inference engine and signal consumer to use correct names
-- [x] Update RegimeSpec keys to match new naming
+### 1.1 — Unify Storage Root
+- [x] Fix `_RESEARCH_DIR` default in `services/common/research_api.py` → `hbot/data/research`
+- [x] Confirm all controller defaults (`exploration_session.py`, `experiment_orchestrator.py`) already use `hbot/data/research`
 
-### P0.2 — Build Composite Regime Inference
-- [x] At inference time, combine vol prediction + direction hint
-- [x] Produce 2D regime: (vol_state, direction_state) → regime name
-- [x] Map composite to practical trading regimes:
-  - vol_low + up → trend_up_calm
-  - vol_low + down → trend_down_calm
-  - vol_low + neutral → neutral_compression
-  - vol_normal + up → trend_up
-  - vol_normal + down → trend_down
-  - vol_normal + neutral → neutral
-  - vol_elevated + any → volatile (reduce size)
-  - vol_extreme + any → shock (widen/halt)
+### 1.2 — Extend StrategyCandidate (Additive)
+- [x] Add governed fields: `schema_version`, `strategy_family`, `template_id`, `search_space`, `constraints`, `required_data`, `market_conditions`, `expected_trade_frequency`, `evaluation_rules`, `promotion_policy`, `complexity_budget`
+- [x] Preserve backward compatibility in `from_yaml` / `to_yaml`
+- [x] Mark legacy YAML with `schema_version: 1` on load; governed YAML uses `schema_version: 2`
+
+### 1.3 — Normalize Search Space
+- [x] Add `effective_search_space` property: prefers `search_space`, falls back to `parameter_space`
+- [x] Update orchestrator sweep/walk-forward to use `effective_search_space`
+
+### 1.4 — Persist Richer Manifests
+- [x] Extend `HypothesisRegistry.record_experiment()` with: `recommendation`, `score_breakdown`, `gate_results`, `validation_tier`, `stress_results`, `artifact_paths`, `paper_run_id`, `paper_status`, `paper_vs_backtest`, `candidate_hash`, `strategy_family`, `template_id`
 
 ---
 
-## Phase 2: Feature Improvements
+## Phase 2 (Incremental) — Template-First Discovery
 
-### P1.1 — Remove/Fix Redundant Features
-- [x] Remove `annualized_funding` (linear transform of funding_rate)
-- [x] Remove NaN-only 4h candle features from feature list (or load 4h data)
-- [x] Window CVD feature (rolling 60-bar delta instead of cumsum)
+### 2.1 — Family/Template Registry
+- [x] Create `controllers/research/family_registry.py` with 6 phase-one families: `trend_continuation`, `trend_pullback`, `compression_breakout`, `mean_reversion`, `regime_conditioned_momentum`, `funding_dislocation`
+- [x] Define bounded search contracts per family
+- [x] Add invalid-combination detection
 
-### P1.2 — Add Change-of-State Features
-- [x] `vol_change_1h` — 1h realized vol minus 4h realized vol (acceleration)
-- [x] `funding_rate_zscore` — rolling z-score of funding rate
-- [x] `atr_acceleration` — ATR change rate (current / lagged)
-- [x] `momentum_exhaustion` — RSI divergence from price trend
+### 2.2 — Pre-Backtest Candidate Validator
+- [x] Create `controllers/research/candidate_validator.py`
+- [x] Validate: adapter consistency, supported family, required-data availability, invalid parameter combos, complexity budget, family-specific risk budgets
 
-### P1.3 — Add Feature Diagnostics
-- [x] Correlation heatmap generation (grouped by feature category)
-- [x] Feature drift detection (train vs recent distribution shift)
-- [x] Missing/stale data detection per feature
+### 2.3 — Template-Backed Exploration
+- [x] Update `exploration_prompts.py` to include family/template context
+- [x] Update `exploration_session.py` to write canonical artifacts to central candidates registry
 
 ---
 
-## Phase 3: Model & Validation Improvements
+## Phase 3 (Incremental) — Validation and Ranking
 
-### P2.1 — Add Per-Class Metrics
-- [x] Confusion matrix per CV fold
-- [x] Per-class precision, recall, F1
-- [x] Class distribution analysis
-- [x] Probability calibration curves
+### 3.1 — Staged Validation Tiers
+- [x] Add `validation_tier` tracking to `ExperimentOrchestrator`: `candle_only` vs `replay_validated`
+- [x] Block candle-only candidates from auto-paper promotion
 
-### P2.2 — Regime Validation Framework
-- [x] Per-regime forward return analysis
-- [x] Regime transition probability matrix
-- [x] Regime persistence statistics
-- [x] Strategy performance conditioned by predicted regime
+### 3.2 — Hard Reject Gates
+- [x] Create `controllers/research/quality_gates.py`
+- [x] Implement default gates: net PnL, drawdown, profit factor, OOS Sharpe, OOS degradation, DSR, trade-count floor by frequency
 
----
+### 3.3 — Overfitting Defenses
+- [x] Period concentration check (single month ≤ 50% of total PnL)
+- [x] Trade concentration check (single trade ≤ 15% of total PnL)
+- [x] Parameter fragility check (neighbors retain ≥ 80% of center score)
+- [x] Complexity penalty (> 6 tunable parameters)
 
-## Phase 4: Regime-to-Action Layer
-
-### P3.1 — Build Configurable Regime Policy
-- [x] Define regime_policy.py with per-regime action rules
-- [x] For each regime: allowed_strategies, sizing_mult, risk_limits
-- [x] Load from config (YAML/JSON), not hardcoded
-- [x] Connect to v3 risk gate and strategy selection
+### 3.4 — Expanded Ranking
+- [x] Extend `RobustnessScorer` with: return, drawdown, profit factor, OOS stability, regime stability, stress resilience, trade-count adequacy, simplicity, paper alignment
 
 ---
 
-## Phase 5: Backtest & Validate
+## Phase 4 (Structural) — Paper Validation Workflow
 
-### P4.1 — Before/After Comparison
-- [ ] Run current model metrics as baseline
-- [ ] Run improved model with fixed labels + new features
-- [ ] Compare: accuracy, per-class F1, regime stability
-- [ ] Analyze: per-regime forward returns with new labels
+### 4.1 — Paper Artifact Generation
+- [x] Create `controllers/research/paper_workflow.py`
+- [x] Generate deployable paper artifacts for paper-eligible candidates
+- [x] Include: pinned parameters, expected conditions, risk budget, backtest bands
+
+### 4.2 — Paper Run Records
+- [x] Track paper runs as research-owned records keyed by candidate + experiment run
+
+### 4.3 — Divergence Monitoring
+- [x] Compare paper behavior to backtest expectations across: timing, fills, slippage, trade count, PnL, regime exposure, operational failures
+
+### 4.4 — Downgrade / Reject Logic
+- [x] Downgrade or reject candidates breaching configured divergence bands
+- [x] Record specific breach dimension in rejection reason
+
+---
+
+## Phase 5 (Structural) — API, Reporting, and Tests
+
+### 5.1 — API Updates
+- [x] Fix storage root in research API
+- [x] Extend candidate list/detail with governed fields
+- [x] Add `/api/research/leaderboard` endpoint
+- [x] Exploration sessions write canonical candidates to central registry
+
+### 5.2 — Richer Reports
+- [x] Update `ReportGenerator` to include: family, required data, validation tier, gates, stress results, replay eligibility, paper status
+
+### 5.3 — Tests
+- [x] Unit tests: legacy loading, governed validation, invalid-combo rejection, complexity penalties, manifest serialization
+- [x] Orchestrator tests: staged validation, gate enforcement, replay eligibility, paper-artifact creation
+- [x] Lifecycle tests: promotion gating, divergence-based downgrade logic
+- [x] API regression tests: richer candidate detail, leaderboard response
 
 ---
 
@@ -98,21 +115,17 @@
 
 | Date | Change | Impact |
 |------|--------|--------|
-| 2026-03-25 | Initial audit complete | Identified critical label mismatch |
-| 2026-03-25 | Fixed label semantic mismatch | Vol predictions no longer trigger wrong directional trades |
-| 2026-03-25 | Added composite regime resolver | Vol + direction → operating regime, correct semantics |
-| 2026-03-25 | Created regime_policy.py | Clean, configurable regime→action mapping layer |
-| 2026-03-25 | Fixed CVD feature (windowed) | Non-stationary cumsum replaced with rolling 60-bar sum |
-| 2026-03-25 | Removed annualized_funding | Eliminated redundant linear transform of funding_rate |
-| 2026-03-25 | Added 5 change-of-state features | vol_change_ratio, atr_acceleration, momentum_exhaustion, funding_rate_zscore, basis_zscore |
-| 2026-03-25 | Added per-class metrics to CV | Confusion matrix, precision/recall/F1 per class per fold |
-| 2026-03-25 | Created feature_diagnostics.py | Correlation, drift (PSI), missing data, group importance |
-| 2026-03-25 | Created regime_validation.py | Forward returns/vol by regime, transitions, persistence, calibration |
-| 2026-03-25 | Wired validation into training | Auto-generates validation report in model metadata |
-| 2026-03-25 | Wired composite regime into signal_service | Direction from rule-based detector composes with vol model |
-| 2026-03-25 | Enhanced ml_feature_service | Publishes composite_regime when both models available |
-| 2026-03-25 | Updated signal_consumer | Prefers composite regime, falls back to vol-only mapping |
-| 2026-03-25 | Created regime_gate.py | New risk layer enforces regime policy constraints |
-| 2026-03-25 | Updated DeskRiskGate | Accepts optional regime layer (portfolio→bot→regime→signal) |
-| 2026-03-25 | Updated test_research.py | Fixed label assertions, added per-class metric tests |
-| 2026-03-25 | Created retrain_and_compare.py | Script for before/after comparison with full reporting |
+| 2026-03-26 | Initial research-pipeline audit complete | Identified contract gaps, storage drift, missing governance layer |
+| 2026-03-26 | Unified storage root to hbot/data/research | Eliminates API/controller path drift |
+| 2026-03-26 | Extended StrategyCandidate with governed fields | Additive, backward-compatible; schema_version distinguishes legacy from governed |
+| 2026-03-26 | Added effective_search_space normalization | Orchestrator uses unified search definition |
+| 2026-03-26 | Created family_registry.py | 6 phase-one families with bounded search contracts |
+| 2026-03-26 | Created candidate_validator.py | Pre-backtest validation: adapter, family, data, combos, budget |
+| 2026-03-26 | Extended HypothesisRegistry manifests | Gate results, validation tier, stress, paper fields persisted |
+| 2026-03-26 | Created quality_gates.py | Hard reject gates + overfitting defenses |
+| 2026-03-26 | Added staged validation tiers to orchestrator | candle_only vs replay_validated; candle-only blocked from auto-paper |
+| 2026-03-26 | Created paper_workflow.py | Deployable paper artifacts, paper-run records, divergence tracking, downgrade logic |
+| 2026-03-26 | Updated research API | Unified root, richer payloads, leaderboard endpoint |
+| 2026-03-26 | Updated ReportGenerator | Includes family, gates, stress, paper status in reports |
+| 2026-03-26 | Updated exploration prompts/session | Template-first discovery; sessions write to central candidates registry |
+| 2026-03-26 | Added test suite | Unit, orchestrator, lifecycle, and API regression tests |

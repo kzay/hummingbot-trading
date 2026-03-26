@@ -1,5 +1,9 @@
 """Composite robustness scoring for strategy candidates.
 
+Expanded to combine return, drawdown, profit factor, OOS stability,
+regime stability, stress resilience, trade-count adequacy, simplicity,
+and paper alignment when available.
+
 Replaces single-metric ranking with a weighted multi-component score
 that penalises overfitting signals: IS/OOS gap, parameter instability,
 fee sensitivity, regime fragility, and selection bias.
@@ -30,12 +34,16 @@ class ScoreBreakdown:
 
 
 _DEFAULT_WEIGHTS = {
-    "oos_sharpe": 0.25,
-    "oos_degradation": 0.20,
-    "param_stability": 0.15,
-    "fee_stress": 0.15,
-    "regime_stability": 0.15,
-    "dsr_pass": 0.10,
+    "oos_sharpe": 0.20,
+    "oos_degradation": 0.15,
+    "param_stability": 0.12,
+    "fee_stress": 0.12,
+    "regime_stability": 0.10,
+    "dsr_pass": 0.08,
+    "profit_factor": 0.08,
+    "drawdown": 0.08,
+    "trade_count": 0.05,
+    "simplicity": 0.02,
 }
 
 
@@ -44,7 +52,7 @@ def _clamp(v: float, lo: float = 0.0, hi: float = 1.0) -> float:
 
 
 class RobustnessScorer:
-    """Compute composite robustness score from walk-forward and sweep data."""
+    """Compute composite robustness score from walk-forward, sweep, and gate data."""
 
     def __init__(self, weights: dict[str, float] | None = None) -> None:
         w = dict(weights or _DEFAULT_WEIGHTS)
@@ -64,20 +72,27 @@ class RobustnessScorer:
             - base_sharpe: float  (for fee normalisation)
             - regime_oos_degradation: dict[str, float]
             - deflated_sharpe: float
+            - profit_factor: float (optional, from backtest)
+            - max_drawdown_pct: float (optional, from backtest)
+            - trade_count: int (optional, from backtest)
+            - complexity_penalty: float (optional, from quality_gates)
+            - replay_sharpe: float (optional, paper alignment proxy)
         """
         components: dict[str, ComponentScore] = {}
         available_weight = 0.0
-        available_components: dict[str, float] = {}
 
+        # --- OOS Sharpe ---
         oos_sharpe_val = metrics.get("mean_oos_sharpe", 0.0)
         norm_oos = _clamp(oos_sharpe_val / 3.0)
         components["oos_sharpe"] = ComponentScore(oos_sharpe_val, norm_oos, self._weights.get("oos_sharpe", 0), 0)
 
+        # --- OOS Degradation ---
         oos_deg = metrics.get("oos_degradation_ratio", 0.0)
         threshold = metrics.get("oos_threshold", 0.5)
         norm_deg = 1.0 if oos_deg >= threshold else _clamp(oos_deg / max(threshold, 1e-6))
         components["oos_degradation"] = ComponentScore(oos_deg, norm_deg, self._weights.get("oos_degradation", 0), 0)
 
+        # --- Parameter Stability ---
         param_cv = metrics.get("param_cv", {})
         if param_cv:
             mean_cv = sum(param_cv.values()) / len(param_cv) if param_cv else 0
@@ -89,6 +104,7 @@ class RobustnessScorer:
             norm_param, self._weights.get("param_stability", 0), 0,
         )
 
+        # --- Fee Stress ---
         fee_sharpes = metrics.get("fee_stress_sharpes")
         base_sharpe = metrics.get("base_sharpe", metrics.get("mean_oos_sharpe", 1.0))
         if fee_sharpes and base_sharpe and abs(base_sharpe) > 1e-6:
@@ -104,6 +120,7 @@ class RobustnessScorer:
             self._weights.get("fee_stress", 0), 0,
         )
 
+        # --- Regime Stability ---
         regime_oos = metrics.get("regime_oos_degradation", {})
         overall_oos = metrics.get("mean_oos_sharpe", 0.0)
         if regime_oos and abs(overall_oos) > 1e-6:
@@ -116,10 +133,49 @@ class RobustnessScorer:
             norm_regime, self._weights.get("regime_stability", 0), 0,
         )
 
+        # --- Deflated Sharpe ---
         dsr = metrics.get("deflated_sharpe", 0.0)
         norm_dsr = 1.0 if dsr > 0 else 0.0
         components["dsr_pass"] = ComponentScore(dsr, norm_dsr, self._weights.get("dsr_pass", 0), 0)
 
+        # --- Profit Factor (expanded) ---
+        pf = metrics.get("profit_factor", 0.0)
+        if pf > 0:
+            # Normalise: 1.0 → 0.0, 1.15 → ~0.3, 2.0 → 1.0 (clamped)
+            norm_pf = _clamp((pf - 1.0) / 1.0)
+        else:
+            norm_pf = 0.0
+        components["profit_factor"] = ComponentScore(
+            pf, norm_pf, self._weights.get("profit_factor", 0), 0,
+        )
+
+        # --- Drawdown (expanded) ---
+        dd = metrics.get("max_drawdown_pct", 100.0)
+        if dd > 0:
+            # 0% dd → 1.0, 20% → 0.0 (gate threshold), deeper → penalised further
+            norm_dd = _clamp(1.0 - dd / 20.0)
+        else:
+            norm_dd = 1.0
+        components["drawdown"] = ComponentScore(
+            dd, norm_dd, self._weights.get("drawdown", 0), 0,
+        )
+
+        # --- Trade Count Adequacy (expanded) ---
+        trade_count = metrics.get("trade_count", 0)
+        # Normalise vs. the medium-frequency minimum (40); capped at 200
+        norm_tc = _clamp(trade_count / 200.0)
+        components["trade_count"] = ComponentScore(
+            float(trade_count), norm_tc, self._weights.get("trade_count", 0), 0,
+        )
+
+        # --- Simplicity (complexity penalty) ---
+        complexity_penalty = metrics.get("complexity_penalty", 0.0)
+        norm_simplicity = _clamp(1.0 - complexity_penalty / 0.30)
+        components["simplicity"] = ComponentScore(
+            complexity_penalty, norm_simplicity, self._weights.get("simplicity", 0), 0,
+        )
+
+        # Redistribute weight from unavailable components
         if available_weight > 0:
             remaining = 1.0 - available_weight
             if remaining > 0:

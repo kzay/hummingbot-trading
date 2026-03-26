@@ -3,11 +3,12 @@ import { useShallow } from "zustand/react/shallow";
 
 import { useDashboardStore } from "../store/useDashboardStore";
 
+// The regime model predicts forward volatility levels, not direction.
 const REGIME_LABELS: Record<number, string> = {
-  0: "Neutral (Low Vol)",
-  1: "Neutral (High Vol)",
-  2: "Trending Up",
-  3: "Trending Down",
+  0: "Low Volatility",
+  1: "Normal Volatility",
+  2: "Elevated Volatility",
+  3: "Extreme Volatility",
 };
 
 const DIRECTION_LABELS: Record<number, string> = {
@@ -28,14 +29,23 @@ const FEATURE_GROUPS: Record<string, string[]> = {
     "realized_vol_15m", "realized_vol_1h", "realized_vol_4h",
     "parkinson_vol", "garman_klass_vol", "vol_of_vol",
     "atr_pctl_24h", "atr_pctl_7d", "range_expansion",
+    "vol_change_ratio", "atr_acceleration", "momentum_exhaustion",
   ],
   "Momentum": [
     "bb_position_1m", "rsi_1m", "adx_1m",
     "trend_alignment_1m_5m", "trend_alignment_1m_15m", "trend_alignment_1m_1h",
+    "wr_1m_p14", "wr_1m_p50", "wr_extreme_1m",
+    "wr_divergence_1m_5m", "wr_divergence_1m_1h",
+    "vol_regime_agreement",
+  ],
+  "Microstructure": [
+    "cvd", "flow_imbalance", "large_trade_ratio",
+    "trade_arrival_rate", "vwap_deviation",
   ],
   "Sentiment": [
-    "funding_rate", "funding_momentum", "annualized_funding",
+    "funding_rate", "funding_momentum", "funding_rate_zscore",
     "ls_ratio", "ls_ratio_momentum",
+    "basis", "basis_momentum", "basis_zscore",
   ],
   "Temporal": [
     "hour_sin", "hour_cos", "day_sin", "day_cos",
@@ -78,7 +88,13 @@ function PredictionCard({ modelType, pred, version }: {
   let displayLabel: string;
   let displayValue: string;
 
-  if (isClassifier) {
+  if (modelType === "composite_regime") {
+    // Composite regime: show the resolved operating regime name
+    displayLabel = String(pred.regime ?? "unknown");
+    const volConf = Number(pred.vol_confidence ?? 0);
+    const dirConf = Number(pred.dir_confidence ?? 0);
+    displayValue = `vol:${(volConf * 100).toFixed(0)}% dir:${(dirConf * 100).toFixed(0)}%`;
+  } else if (isClassifier) {
     const cls = Number(pred.class);
     if (modelType === "regime") {
       displayLabel = REGIME_LABELS[cls] ?? `Class ${cls}`;

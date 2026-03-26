@@ -229,6 +229,16 @@ ADAPTER_REGISTRY: dict[str, AdapterEntry] = {
         adapter_class="TaCompositeAdapter",
         config_class="TaCompositeConfig",
     ),
+    "ml_signal": AdapterEntry(
+        module_path="controllers.backtesting.ml_signal_adapter",
+        adapter_class="MlSignalAdapter",
+        config_class="MlSignalAdapterConfig",
+        decimal_attrs=(
+            "base_size_quote", "sl_atr_mult", "tp_atr_mult", "max_daily_loss_pct",
+        ),
+        int_attrs=("max_levels", "leverage", "max_hold_bars", "atr_period", "feature_warmup_bars"),
+        bool_attrs=("use_ml_sizing",),
+    ),
 }
 
 _RUNTIME_ENTRY = AdapterEntry(

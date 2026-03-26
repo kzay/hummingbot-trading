@@ -41,6 +41,7 @@ _DEFAULT_OUTPUT_DIR = "hbot/data/research/explorations"
 _DEFAULT_REPORTS_DIR = "hbot/data/research/reports"
 _DEFAULT_EXPERIMENTS_DIR = "hbot/data/research/experiments"
 _DEFAULT_LIFECYCLE_DIR = "hbot/data/research/lifecycle"
+_DEFAULT_CANDIDATES_DIR = "hbot/data/research/candidates"
 
 _MAX_PARSE_RETRIES = 1
 
@@ -79,9 +80,11 @@ class SessionConfig:
     reports_dir: str = _DEFAULT_REPORTS_DIR
     experiments_dir: str = _DEFAULT_EXPERIMENTS_DIR
     lifecycle_dir: str = _DEFAULT_LIFECYCLE_DIR
+    candidates_dir: str = _DEFAULT_CANDIDATES_DIR
     skip_sweep: bool = False
     skip_walkforward: bool = False
     auto_lifecycle: bool = True
+    write_to_central_registry: bool = True
 
 
 @dataclass
@@ -144,6 +147,14 @@ def _parse_candidate_yaml(raw_yaml: str) -> StrategyCandidate:
     lifecycle_str = data.pop("lifecycle", "candidate")
     lifecycle = StrategyLifecycle(lifecycle_str)
 
+    # Detect governed vs legacy
+    has_governed = bool(
+        data.get("strategy_family") or
+        data.get("search_space") or
+        int(data.get("schema_version", 0)) >= 2
+    )
+    schema_version = int(data.get("schema_version", 2 if has_governed else 1))
+
     return StrategyCandidate(
         name=data["name"],
         hypothesis=data["hypothesis"],
@@ -156,6 +167,17 @@ def _parse_candidate_yaml(raw_yaml: str) -> StrategyCandidate:
         metadata=data.get("metadata", {}),
         lifecycle=lifecycle,
         new_adapter_description=data.get("new_adapter_description", ""),
+        schema_version=schema_version,
+        strategy_family=data.get("strategy_family", ""),
+        template_id=data.get("template_id", ""),
+        search_space=data.get("search_space", {}),
+        constraints=data.get("constraints", []),
+        required_data=data.get("required_data", []),
+        market_conditions=data.get("market_conditions", ""),
+        expected_trade_frequency=data.get("expected_trade_frequency", "medium"),
+        evaluation_rules=data.get("evaluation_rules", {}),
+        promotion_policy=data.get("promotion_policy", {}),
+        complexity_budget=int(data.get("complexity_budget", 6)),
     )
 
 
@@ -495,6 +517,10 @@ class ExplorationSession:
         yaml_path = session_dir / f"iter_{iteration:02d}_{candidate.name}.yml"
         candidate.to_yaml(str(yaml_path))
 
+        # Write canonical copy to central candidates registry
+        if self._config.write_to_central_registry:
+            self._write_to_candidates_registry(candidate)
+
         adapter = candidate.adapter_mode
 
         if adapter not in _KNOWN_ADAPTER_MODES:
@@ -627,6 +653,25 @@ class ExplorationSession:
         ]
         response = self._client.chat(messages, temperature=max(0.2, temperature - 0.2))
         return _extract_yaml_block(response)
+
+    def _write_to_candidates_registry(self, candidate: StrategyCandidate) -> None:
+        """Write a canonical copy of the candidate to the central registry.
+
+        This ensures exploration-generated candidates are visible through the
+        research API without depending on the session-local directory alone.
+        """
+        try:
+            registry_dir = Path(self._config.candidates_dir)
+            registry_dir.mkdir(parents=True, exist_ok=True)
+            safe_name = candidate.name.replace("/", "_").replace("\\", "_")
+            dest = registry_dir / f"{safe_name}.yml"
+            candidate.to_yaml(str(dest))
+            logger.info("Candidate '%s' written to central registry at %s", candidate.name, dest)
+        except Exception as exc:
+            logger.warning(
+                "Failed to write candidate '%s' to central registry: %s",
+                candidate.name, exc,
+            )
 
     def _call_llm(self, action: str, temperature: float | None = None) -> str:
         cfg = self._config

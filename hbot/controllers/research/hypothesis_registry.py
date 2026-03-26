@@ -65,9 +65,22 @@ class HypothesisRegistry:
         result_path: str,
         robustness_score: float | None = None,
         extra: dict[str, Any] | None = None,
+        # Governed manifest fields
+        recommendation: str | None = None,
+        score_breakdown: dict[str, Any] | None = None,
+        gate_results: dict[str, Any] | None = None,
+        validation_tier: str | None = None,
+        stress_results: dict[str, Any] | None = None,
+        artifact_paths: dict[str, str] | None = None,
+        paper_run_id: str | None = None,
+        paper_status: str | None = None,
+        paper_vs_backtest: dict[str, Any] | None = None,
+        strategy_family: str | None = None,
+        template_id: str | None = None,
+        candidate_hash: str | None = None,
     ) -> dict[str, Any]:
         """Append an immutable experiment manifest and return it."""
-        manifest = {
+        manifest: dict[str, Any] = {
             "run_id": str(uuid.uuid4()),
             "candidate_name": candidate_name,
             "timestamp_utc": datetime.now(UTC).isoformat(),
@@ -79,6 +92,32 @@ class HypothesisRegistry:
             "result_path": result_path,
             "robustness_score": robustness_score,
         }
+        # Governed fields — only include when provided so manifests remain
+        # readable by older tooling that reads any subset of fields.
+        if recommendation is not None:
+            manifest["recommendation"] = recommendation
+        if score_breakdown is not None:
+            manifest["score_breakdown"] = score_breakdown
+        if gate_results is not None:
+            manifest["gate_results"] = gate_results
+        if validation_tier is not None:
+            manifest["validation_tier"] = validation_tier
+        if stress_results is not None:
+            manifest["stress_results"] = stress_results
+        if artifact_paths is not None:
+            manifest["artifact_paths"] = artifact_paths
+        if paper_run_id is not None:
+            manifest["paper_run_id"] = paper_run_id
+        if paper_status is not None:
+            manifest["paper_status"] = paper_status
+        if paper_vs_backtest is not None:
+            manifest["paper_vs_backtest"] = paper_vs_backtest
+        if strategy_family is not None:
+            manifest["strategy_family"] = strategy_family
+        if template_id is not None:
+            manifest["template_id"] = template_id
+        if candidate_hash is not None:
+            manifest["candidate_hash"] = candidate_hash
         if extra:
             manifest["extra"] = extra
 

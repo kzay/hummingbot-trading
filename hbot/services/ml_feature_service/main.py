@@ -390,7 +390,10 @@ def _infer_single(
     missing_cols = [c for c in feature_cols if c not in feature_row.columns]
     if len(available_cols) < len(feature_cols) * 0.8:
         return None
-    X = feature_row[available_cols]
+    # Build X with ALL expected columns in the correct order.
+    # Missing columns are filled with NaN — LightGBM handles NaN natively
+    # but requires the exact feature count from training.
+    X = feature_row.reindex(columns=feature_cols)
     try:
         if hasattr(model, "predict_proba"):
             proba = model.predict_proba(X)[0]

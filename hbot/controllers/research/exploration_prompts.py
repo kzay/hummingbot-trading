@@ -8,6 +8,45 @@ SYSTEM_PROMPT = """\
 You are a quantitative strategy researcher generating falsifiable trading \
 strategy hypotheses for an automated backtesting lab.
 
+## Template-First Discovery
+
+Every generated candidate MUST declare a ``strategy_family`` and ``template_id`` \
+from the supported phase-one families below. This anchors the hypothesis to a \
+testable market mechanic and prevents unbounded parameter spaces.
+
+### Supported phase-one families and templates
+
+| Family | Template ID | Primary adapters | Key parameters |
+|--------|-------------|-----------------|----------------|
+| `trend_continuation` | `trend_continuation_pullback` | pullback, pullback_v2 | pullback_depth_atr, trend_ema, stop_atr_mult |
+| `trend_continuation` | `trend_continuation_htf` | atr_mm_v2, pullback_v2 | htf_ema, stop_atr_mult, vol_scalar |
+| `trend_pullback` | `trend_pullback_rsi` | pullback_v2, ta_composite | ltf_entry_rsi, confirmation_bars, stop_atr_mult |
+| `compression_breakout` | `compression_breakout_bb_squeeze` | ta_composite, smc_mm | bb_period, burst_threshold, stop_atr_mult |
+| `compression_breakout` | `compression_breakout_atr_low` | momentum_scalper, atr_mm | vol_window, burst_threshold, hold_bars |
+| `mean_reversion` | `mean_reversion_zscore` | ta_composite, atr_mm | zscore_window, zscore_threshold, stop_atr_mult |
+| `mean_reversion` | `mean_reversion_mm` | atr_mm, atr_mm_v2 | atr_period, spread_multiplier, inventory_target_base |
+| `regime_conditioned_momentum` | `regime_conditioned_momentum_scalper` | momentum_scalper | burst_threshold, hold_bars, trail_atr |
+| `funding_dislocation` | `funding_dislocation_zscore` | ta_composite | funding_zscore_threshold, hold_bars, stop_atr_mult |
+
+**Note:** `funding_dislocation` requires funding data to be present; \
+only use this family when the market context confirms funding data is available.
+
+### Phase-one parameter bounds (respect these in search_space):
+
+- Trend windows: 20–200 bars
+- Volatility windows: 10–50 bars
+- Retrace / pullback depth: 0.25–1.5 ATR
+- Breakout lookbacks: 12–96 bars
+- Band and z-score thresholds: 1.0–3.0
+- Stop and target multiples: 0.5–4.0 ATR
+- Cooldown and hold windows: 1–48 bars
+- Per-trade risk: 0.25%–1.0% of equity
+
+**Ordering rules (never violate):**
+- fast/slow windows: fast < slow
+- stop/target multiples: stop < target
+- pullback_depth > 0 and < 2.0 ATR
+
 ## Rules
 
 1. **Falsifiability** — Every hypothesis MUST predict a specific, observable \
@@ -104,7 +143,20 @@ Required fields:
 - `exit_logic` (string) — Plain-English exit conditions
 - `base_config` (dict) — Backtest configuration (see below)
 
+**Governed fields (REQUIRED for phase-one discovery):**
+- `schema_version` (int) — Always `2` for new governed candidates
+- `strategy_family` (string) — One of the supported phase-one family names
+- `template_id` (string) — Specific template within the family
+- `search_space` (dict) — Governed search definition with bounded ranges
+- `expected_trade_frequency` (string) — "low" | "medium" | "high"
+- `required_data` (list) — Data inputs needed, e.g. `["funding"]`
+- `market_conditions` (string) — When the hypothesis holds, e.g. "trending market"
+
 Optional fields:
+- `constraints` (list of strings) — Additional invalid-combination rules
+- `evaluation_rules` (dict) — Gate threshold overrides
+- `promotion_policy` (dict) — Promotion requirement overrides
+- `complexity_budget` (int) — Max tunable parameters (default: 6)
 - `required_tests` (list of strings) — Validation test names
 - `metadata` (dict) — Author, version, notes
 - `lifecycle` (string) — Always "candidate" for new entries
@@ -249,12 +301,18 @@ mechanically express your hypothesis.
 
 {rejection_history}\
 
+### Template-first requirement
+
+You MUST select a ``strategy_family`` and ``template_id`` from the \
+phase-one family table in the system prompt. Set ``schema_version: 2``. \
+The ``search_space`` must respect the family's parameter bounds. \
+Do NOT set values outside the allowed ranges or violate ordering rules.
+
 ### Diversity requirements
 
 Each new hypothesis MUST differ from all previous candidates on at least \
 TWO of these axes:
-1. **Market mechanic** (mean-reversion, momentum, breakout, volatility \
-   regime, microstructure, seasonality, etc.)
+1. **Strategy family** — rotate across the 6 phase-one families
 2. **Primary indicator family** (ATR-based, RSI/oscillator, moving-average \
    crossover, order-book, volume-profile, Bollinger, etc.)
 3. **Adapter mode** — try adapters you haven't used yet this session.

@@ -1,0 +1,38 @@
+strategy_class: ml_signal
+strategy_config:
+  adapter_mode: ml_signal
+  base_size_quote: "500"
+  max_levels: 1
+  max_position_pct: "0.15"
+  leverage: 1
+  sl_atr_mult: "2.5"
+  tp_atr_mult: "4.0"
+  max_hold_bars: 240
+  max_daily_loss_pct: "0.03"
+  cooldown_s: 120.0
+  trail_activation_r: "1.5"
+  trail_offset_atr: "0.75"
+  direction_high_confidence: 0.70
+  direction_med_confidence: 0.60
+  adverse_confidence_threshold: 0.60
+  regime_min_confidence: 0.40
+  use_ml_sizing: false
+  atr_period: 14
+  feature_warmup_bars: 300
+
+data_source:
+  exchange: bitget
+  pair: BTC-USDT
+  resolution: 1m
+  instrument_type: perp
+  data_path: data/historical/bitget/BTC-USDT/1m/data.parquet
+  start_date: "2025-06-01"
+  end_date: "2025-08-01"
+
+initial_equity: "5000"
+leverage: 1
+seed: 42
+step_interval_s: 60
+warmup_bars: 300
+fill_model: queue
+output_dir: reports/backtest

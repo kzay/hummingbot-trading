@@ -255,6 +255,10 @@ class BacktestHarness:
         # --- Build adapter ---
         adapter = self._build_adapter(config, desk, instrument_id, instrument_spec)
 
+        # --- Pre-compute features for ML adapters (if supported) ---
+        if callable(getattr(adapter, "set_all_candles", None)):
+            adapter.set_all_candles(candles)
+
         # --- Warmup: feed candles to PriceBuffer ---
         warmup_candles = candles[:config.warmup_bars]
         adapter.warmup(warmup_candles)

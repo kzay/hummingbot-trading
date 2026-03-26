@@ -265,9 +265,13 @@ kelly_max_order_quote: 200
 kelly_min_order_quote: 10
 
 # ── ML regime classifier (ROAD-10) ────────────────────────────────
-# Disabled by default. Enable after training regime_classifier_v1.joblib.
 ml_regime_enabled: false
 ml_regime_override_ttl_s: 30.0
+
+# ── ML feature service (predictions via hb.ml_features.v1) ───────
+ml_features_enabled: true
+ml_regime_override_enabled: false
+ml_confidence_threshold: 0.60
 
 # ── Adverse fill classifier (ROAD-11) ─────────────────────────────
 # Disabled by default. Enable after training adverse_classifier_v1.joblib.
