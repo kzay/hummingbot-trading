@@ -1,0 +1,13 @@
+{
+  "candidate_name": "btc-volume-divergence-momentum-v1",
+  "current_state": "rejected",
+  "history": [
+    {
+      "from": "candidate",
+      "to": "rejected",
+      "timestamp": "2026-03-26T04:50:37.487078+00:00",
+      "reason": "exploration score 0.335 < 0.35"
+    }
+  ],
+  "gate_results": {}
+}

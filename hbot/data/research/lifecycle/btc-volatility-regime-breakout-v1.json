@@ -1,0 +1,13 @@
+{
+  "candidate_name": "btc-volatility-regime-breakout-v1",
+  "current_state": "rejected",
+  "history": [
+    {
+      "from": "candidate",
+      "to": "rejected",
+      "timestamp": "2026-03-25T23:52:04.425382+00:00",
+      "reason": "exploration score 0.331 < 0.35"
+    }
+  ],
+  "gate_results": {}
+}

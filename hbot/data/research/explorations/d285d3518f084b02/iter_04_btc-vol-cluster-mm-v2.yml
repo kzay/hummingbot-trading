@@ -1,0 +1,56 @@
+name: btc-vol-cluster-mm-v2
+hypothesis: BTC-USDT exhibits volatility clustering where high-vol periods are followed
+  by continued high volatility, creating predictable bid-ask expansion opportunities.
+  During vol expansion phases (current ATR > 1.5x historical average), wider spreads
+  capture premium while inventory limits prevent adverse selection. The strategy profits
+  from volatility mean-reversion within the clustering regime.
+adapter_mode: atr_mm_v2
+parameter_space:
+  vol_scalar:
+  - 1.2
+  - 1.8
+  - 2.5
+  htf_ema:
+  - 50
+  - 100
+  - 200
+  trend_bias:
+  - 0.0
+  - 0.3
+  - 0.6
+  atr_period:
+  - 10
+  - 20
+entry_logic: Place quotes at mid +/- vol_scalar * ATR when current ATR exceeds 1.5x
+  the htf_ema-period average ATR, indicating vol expansion regime. Apply trend_bias
+  skew to quote placement based on htf_ema slope direction.
+exit_logic: Reduce inventory aggressively when position exceeds target via asymmetric
+  pricing. Exit all positions when ATR drops below 0.8x historical average, signaling
+  vol regime change.
+base_config:
+  strategy_class: atr_mm_v2
+  strategy_config:
+    vol_scalar: 1.8
+    htf_ema: 100
+    trend_bias: 0.3
+    atr_period: 14
+    max_position_pct: 0.15
+    inventory_target: 0.05
+  data_source:
+    exchange: bitget
+    pair: BTC-USDT
+    resolution: 15m
+    instrument_type: perp
+  initial_equity: '500'
+  leverage: 1
+  seed: 42
+  step_interval_s: 900
+  warmup_bars: 60
+required_tests:
+- test_adapter_compiles
+- test_no_lookahead_in_entry
+metadata:
+  author: llm_exploration
+  version: '2.0'
+  notes: Pivot from failed pullback to vol-regime MM after catastrophic results
+lifecycle: candidate

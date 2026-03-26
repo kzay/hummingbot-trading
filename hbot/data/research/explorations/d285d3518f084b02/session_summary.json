@@ -1,0 +1,54 @@
+{
+  "total_iterations": 5,
+  "best_observed_score": 0.3348820851294637,
+  "best_observed_candidate": "btc-volume-divergence-momentum-v1",
+  "best_recommendation": "reject",
+  "total_tokens_used": 24594,
+  "iterations": [
+    {
+      "iteration": 1,
+      "action": "generate",
+      "candidate_name": "btc-volatility-regime-mm-v1",
+      "score": 0.3243085322014932,
+      "recommendation": "reject",
+      "report_path": "/workspace/hbot/data/research/reports/btc-volatility-regime-mm-v1/b5131feb/report.md",
+      "error": null
+    },
+    {
+      "iteration": 2,
+      "action": "generate",
+      "candidate_name": "btc-momentum-burst-scalper-v1",
+      "score": 0.3215028630944878,
+      "recommendation": "reject",
+      "report_path": "/workspace/hbot/data/research/reports/btc-momentum-burst-scalper-v1/6b5e4d6d/report.md",
+      "error": null
+    },
+    {
+      "iteration": 3,
+      "action": "generate",
+      "candidate_name": "btc-pullback-trend-continuation-v1",
+      "score": 0.32637945036474464,
+      "recommendation": "reject",
+      "report_path": "/workspace/hbot/data/research/reports/btc-pullback-trend-continuation-v1/d9fca48b/report.md",
+      "error": null
+    },
+    {
+      "iteration": 4,
+      "action": "revise",
+      "candidate_name": "btc-vol-cluster-mm-v2",
+      "score": 0.12499999999999999,
+      "recommendation": "reject",
+      "report_path": "/workspace/hbot/data/research/reports/btc-vol-cluster-mm-v2/eafc3cc9/report.md",
+      "error": null
+    },
+    {
+      "iteration": 5,
+      "action": "revise",
+      "candidate_name": "btc-volume-divergence-momentum-v1",
+      "score": 0.3348820851294637,
+      "recommendation": "reject",
+      "report_path": "/workspace/hbot/data/research/reports/btc-volume-divergence-momentum-v1/ccec4d0a/report.md",
+      "error": null
+    }
+  ]
+}

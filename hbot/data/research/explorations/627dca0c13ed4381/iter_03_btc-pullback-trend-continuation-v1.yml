@@ -1,0 +1,56 @@
+name: btc-pullback-trend-continuation-v1
+hypothesis: BTC-USDT perpetual exhibits reliable trend continuation after shallow
+  pullbacks in strong trending environments. When price pulls back 0.5-1.5 ATR from
+  recent highs during an uptrend (or lows during downtrend), entries at pullback completion
+  with tight ATR-based stops capture the resumption move with positive risk-adjusted
+  returns.
+adapter_mode: pullback
+parameter_space:
+  pullback_depth_atr:
+  - 0.5
+  - 1.0
+  - 1.5
+  trend_ema_period:
+  - 21
+  - 34
+  - 55
+  stop_atr_mult:
+  - 1.0
+  - 1.5
+  - 2.0
+  min_trend_strength:
+  - 0.02
+  - 0.05
+  - 0.08
+entry_logic: Enter long when price is above trend_ema AND has pulled back pullback_depth_atr
+  from recent swing high AND shows signs of resuming upward (higher low formation).
+  Enter short when price is below trend_ema AND has pulled back pullback_depth_atr
+  from recent swing low AND shows signs of resuming downward (lower high formation).
+  Only trade when trend strength (price distance from EMA as % of ATR) exceeds min_trend_strength.
+exit_logic: Exit on stop loss at entry +/- stop_atr_mult * ATR(14). Exit on profit
+  target at 2x stop distance. Exit if trend EMA is breached in opposite direction.
+  Maximum hold period of 8 bars (2 hours) to avoid overnight risk.
+base_config:
+  strategy_class: pullback
+  strategy_config:
+    pullback_depth_atr: 1.0
+    trend_ema_period: 34
+    stop_atr_mult: 1.5
+    min_trend_strength: 0.05
+  data_source:
+    exchange: bitget
+    pair: BTC-USDT
+    resolution: 15m
+    instrument_type: perp
+  initial_equity: '500'
+  leverage: 1
+  seed: 42
+  step_interval_s: 900
+  warmup_bars: 60
+required_tests:
+- test_adapter_compiles
+- test_no_lookahead_in_entry
+metadata:
+  author: llm_exploration
+  version: '1.0'
+lifecycle: candidate

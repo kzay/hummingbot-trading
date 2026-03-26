@@ -266,6 +266,27 @@ def compute_volatility_features(candles_1m: pd.DataFrame) -> pd.DataFrame:
     median_range = bar_range.rolling(60, min_periods=60).median()
     out["range_expansion"] = bar_range / median_range.replace(0, np.nan)
 
+    # ── Change-of-state features ──────────────────────────────────
+    # Vol acceleration: is volatility rising or falling?
+    rv_short = out["realized_vol_15m"]
+    rv_long = out["realized_vol_4h"]
+    out["vol_change_ratio"] = rv_short / rv_long.replace(0, np.nan)
+
+    # ATR acceleration: current ATR vs lagged ATR (15-bar lag)
+    out["atr_acceleration"] = atr_vals / atr_vals.shift(15).replace(0, np.nan)
+
+    # Momentum exhaustion: RSI divergence from price trend
+    rsi_14 = ind.rsi(close, 14)
+    price_slope = close.rolling(20, min_periods=10).apply(
+        lambda s: (s.iloc[-1] - s.iloc[0]) / (s.iloc[0] + 1e-10) if len(s) > 1 else 0.0,
+        raw=False,
+    )
+    rsi_slope = rsi_14.rolling(20, min_periods=10).apply(
+        lambda s: s.iloc[-1] - s.iloc[0] if len(s) > 1 else 0.0,
+        raw=False,
+    )
+    out["momentum_exhaustion"] = price_slope * 100 - rsi_slope
+
     return pd.DataFrame(out)
 
 
@@ -330,7 +351,9 @@ def compute_microstructure_features(
         tolerance=60_000,
     )
 
-    out["cvd"] = aligned["cvd"].cumsum().reset_index(drop=True)
+    # Windowed CVD (60-bar rolling sum) — avoids unbounded cumulative sum
+    raw_cvd = aligned["cvd"].reset_index(drop=True)
+    out["cvd"] = raw_cvd.rolling(60, min_periods=1).sum()
     out["flow_imbalance"] = np.where(
         aligned["total_volume"] > 0,
         aligned["buy_volume"] / aligned["total_volume"],
@@ -381,11 +404,14 @@ def compute_sentiment_features(
         rate = f_aligned["rate"].reset_index(drop=True)
         out["funding_rate"] = rate
         out["funding_momentum"] = rate.diff(3)
-        out["annualized_funding"] = rate * 3 * 365
+        # Rolling z-score of funding rate
+        rate_mean = rate.rolling(480, min_periods=60).mean()
+        rate_std = rate.rolling(480, min_periods=60).std()
+        out["funding_rate_zscore"] = (rate - rate_mean) / rate_std.replace(0, np.nan)
     else:
         out["funding_rate"] = nan_s
         out["funding_momentum"] = nan_s
-        out["annualized_funding"] = nan_s
+        out["funding_rate_zscore"] = nan_s
 
     # LS ratio features
     if ls_ratio is not None and not ls_ratio.empty:
@@ -421,9 +447,13 @@ def compute_sentiment_features(
         basis = (mark_c - idx_c) / idx_c.replace(0, np.nan)
         out["basis"] = basis
         out["basis_momentum"] = basis.diff(3)
+        basis_mean = basis.rolling(480, min_periods=60).mean()
+        basis_std = basis.rolling(480, min_periods=60).std()
+        out["basis_zscore"] = (basis - basis_mean) / basis_std.replace(0, np.nan)
     else:
         out["basis"] = nan_s
         out["basis_momentum"] = nan_s
+        out["basis_zscore"] = nan_s
 
     return pd.DataFrame(out)
 

@@ -1,0 +1,13 @@
+{
+  "candidate_name": "btc-pullback-trend-continuation-v1",
+  "current_state": "rejected",
+  "history": [
+    {
+      "from": "candidate",
+      "to": "rejected",
+      "timestamp": "2026-03-25T20:42:22.741444+00:00",
+      "reason": "exploration score 0.330 < 0.35"
+    }
+  ],
+  "gate_results": {}
+}

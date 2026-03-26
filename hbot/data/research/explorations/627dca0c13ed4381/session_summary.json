@@ -1,0 +1,54 @@
+{
+  "total_iterations": 5,
+  "best_observed_score": 0.3370868590695363,
+  "best_observed_candidate": "btc-simple-momentum-burst-v1",
+  "best_recommendation": "reject",
+  "total_tokens_used": 20240,
+  "iterations": [
+    {
+      "iteration": 1,
+      "action": "generate",
+      "candidate_name": "<llm_error>",
+      "score": null,
+      "recommendation": null,
+      "report_path": "",
+      "error": "Error code: 529 - {'type': 'error', 'error': {'type': 'overloaded_error', 'message': 'Overloaded'}, 'request_id': 'req_011CZQGBs6S5CTE6M8nLbEMc'}"
+    },
+    {
+      "iteration": 2,
+      "action": "generate",
+      "candidate_name": "btc-volatility-regime-momentum-v1",
+      "score": 0.3343930307051409,
+      "recommendation": "reject",
+      "report_path": "/workspace/hbot/data/research/reports/btc-volatility-regime-momentum-v1/13b40a25/report.md",
+      "error": null
+    },
+    {
+      "iteration": 3,
+      "action": "generate",
+      "candidate_name": "btc-pullback-trend-continuation-v1",
+      "score": 0.3302128533169232,
+      "recommendation": "reject",
+      "report_path": "/workspace/hbot/data/research/reports/btc-pullback-trend-continuation-v1/9ad66d1c/report.md",
+      "error": null
+    },
+    {
+      "iteration": 4,
+      "action": "revise",
+      "candidate_name": "btc-regime-filtered-mm-v1",
+      "score": 0.16689314595391305,
+      "recommendation": "reject",
+      "report_path": "/workspace/hbot/data/research/reports/btc-regime-filtered-mm-v1/ac3a1115/report.md",
+      "error": null
+    },
+    {
+      "iteration": 5,
+      "action": "revise",
+      "candidate_name": "btc-simple-momentum-burst-v1",
+      "score": 0.3370868590695363,
+      "recommendation": "reject",
+      "report_path": "/workspace/hbot/data/research/reports/btc-simple-momentum-burst-v1/21a10b38/report.md",
+      "error": null
+    }
+  ]
+}

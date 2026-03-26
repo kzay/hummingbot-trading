@@ -97,6 +97,11 @@ class PriceBuffer:
         return self._resolution_minutes
 
     @property
+    def bar_count(self) -> int:
+        """Number of 1-minute bars currently in the buffer."""
+        return self._bar_count
+
+    @property
     def _indicator_bars(self) -> deque[MinuteBar] | list[MinuteBar]:
         """Return bars at the configured resolution for indicator computation.
 

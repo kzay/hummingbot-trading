@@ -108,6 +108,21 @@ STRATEGY_REGISTRY: dict[str, StrategyEntry] = {
         ),
         int_attrs=("sma_fast_period", "sma_slow_period", "adx_period", "signal_score_threshold"),
     ),
+
+    # Bot7 ML signal-driven strategy
+    "bot7_ml_signal": StrategyEntry(
+        module_path="controllers.bots.bot7.ml_signal_source",
+        signal_class="MlSignalSource",
+        config_class="MlSignalConfig",
+        execution_family="hybrid",
+        risk_profile="moderate",
+        decimal_attrs=(
+            "base_size_quote", "base_spread_pct", "spread_step_pct",
+            "target_net_base_pct",
+        ),
+        int_attrs=("max_levels",),
+        bool_attrs=("use_ml_sizing",),
+    ),
 }
 
 

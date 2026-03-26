@@ -33,7 +33,16 @@ _MODEL_TYPE_TARGETS = {
 
 _CLASSIFICATION_TYPES = {"regime", "direction", "adverse"}
 
+# Vol-bucket labels — the regime model predicts *forward volatility level*,
+# NOT price direction.  See tasks/lessons.md for the full audit.
 REGIME_LABEL_MAP: dict[int, str] = {
+    0: "vol_low",
+    1: "vol_normal",
+    2: "vol_elevated",
+    3: "vol_extreme",
+}
+
+_LEGACY_REGIME_LABEL_MAP: dict[int, str] = {
     0: "neutral_low_vol",
     1: "neutral_high_vol",
     2: "up",
@@ -42,7 +51,7 @@ REGIME_LABEL_MAP: dict[int, str] = {
 
 _LABEL_MAPS: dict[str, dict[int, str]] = {
     "regime": REGIME_LABEL_MAP,
-    "direction": {0: "down", 1: "up"},
+    "direction": {-1: "down", 0: "neutral", 1: "up"},
     "adverse": {0: "normal", 1: "adverse"},
 }
 
@@ -176,12 +185,25 @@ _LABEL_COLS = {
 
 
 def _get_feature_cols(dataset: pd.DataFrame) -> list[str]:
-    return [
+    """Return feature columns, excluding labels and fully-NaN columns."""
+    candidates = [
         c for c in dataset.columns
         if c not in _LABEL_COLS
         and not c.startswith("fwd_")
         and not c.startswith("tradability_")
     ]
+    # Drop columns that are 100% NaN — they carry zero information
+    # and waste model capacity.
+    dropped = []
+    kept = []
+    for c in candidates:
+        if dataset[c].isna().all():
+            dropped.append(c)
+        else:
+            kept.append(c)
+    if dropped:
+        logger.info("Dropped %d all-NaN features: %s", len(dropped), dropped)
+    return kept
 
 
 def purged_walk_forward_cv(

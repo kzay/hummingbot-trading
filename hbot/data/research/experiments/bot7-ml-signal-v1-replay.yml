@@ -1,0 +1,100 @@
+mode: replay
+strategy_module: controllers.epp_v2_4_bot7_ml
+strategy_class: EppV24Bot7MlController
+start_date: "2026-02-22"
+end_date: "2026-03-14"
+step_interval_s: 60
+warmup_bars: 300
+warmup_duration: "6h"
+initial_equity: 5000
+seed: 42
+output_dir: reports/replay/bot7_ml_v1
+fill_model: latency_aware
+
+data:
+  exchange: bitget
+  pair: BTC-USDT
+  instrument_type: perp
+  catalog_dir: data/historical
+  candles_resolution: 1m
+  candles_path: data/historical/bitget/BTC-USDT/1m/data.parquet
+  trades_path: data/historical/bitget/BTC-USDT/trades/data.parquet
+  funding_path: data/historical/bitget/BTC-USDT/funding/data.parquet
+
+strategy_config:
+  controller_name: epp_v2_4_bot7_ml
+  controller_type: market_making
+  connector_name: bitget_perpetual
+  connector_type: perp
+  trading_pair: BTC-USDT
+
+  total_amount_quote: 800
+  buy_spreads:
+    - 0.0015
+    - 0.0025
+    - 0.0035
+  sell_spreads:
+    - 0.0015
+    - 0.0025
+    - 0.0035
+  buy_amounts_pct:
+    - 34
+    - 33
+    - 33
+  sell_amounts_pct:
+    - 34
+    - 33
+    - 33
+  executor_refresh_time: 60
+  cooldown_time: 15
+  leverage: 1
+  position_mode: ONEWAY
+  max_order_notional_quote: 400
+  stop_loss: 0.0050
+  take_profit: 0.0090
+  time_limit: 7200
+  take_profit_order_type: LIMIT
+  skip_rebalance: true
+
+  fee_mode: manual
+  fee_profile: vip0
+  require_fee_resolution: true
+  spot_fee_pct: 0.0002
+  slippage_est_pct: 0.00005
+
+  # ML thresholds
+  ml_direction_high_confidence: 0.70
+  ml_direction_med_confidence: 0.60
+  ml_adverse_confidence_threshold: 0.60
+  ml_regime_min_confidence: 0.40
+  ml_use_sizing_model: false
+  ml_base_size_quote: 200
+  ml_max_levels: 3
+  ml_base_spread_pct: 0.0015
+  ml_spread_step_pct: 0.0010
+  ml_target_net_base_pct: 0.04
+  ml_fallback_regime: neutral_low_vol
+  ml_exchange: bitget
+  ml_pair: BTC-USDT
+
+  # Edge gate — relax for replay (synthetic books have wider slippage)
+  shared_edge_gate_enabled: false
+  min_net_edge_bps: 0
+  adaptive_params_enabled: false
+
+  # Regime detection
+  trend_eps_pct: 0.0006
+  high_vol_band_pct: 0.0065
+  shock_drift_30s_pct: 0.0020
+  shock_drift_atr_multiplier: 1.10
+  sample_interval_s: 10
+  indicator_resolution: "1m"
+
+  # Risk
+  perp_target_net_base_pct: 0.0
+  min_base_pct: 0.0
+  max_base_pct: 0.40
+  max_total_notional_quote: 800
+  max_daily_loss_pct_hard: 0.020
+  max_drawdown_pct_hard: 0.035
+  max_daily_turnover_x_hard: 10.0

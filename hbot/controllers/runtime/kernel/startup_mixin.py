@@ -16,6 +16,8 @@ from typing import Any
 from controllers.runtime.kernel.config import _ZERO, _BALANCE_EPSILON, _canonical_connector_name
 from platform_lib.execution.fee_provider import FeeResolver
 from platform_lib.market_data.market_history_policy import runtime_seed_policy, status_meets_policy
+from platform_lib.market_data.ccxt_ohlcv_bar_reader import ccxt_rest_bar_reader, _pair_to_ccxt_symbol
+from controllers.backtesting.data_store import resolve_data_path
 from platform_lib.market_data.market_history_provider_impl import MarketHistoryProviderImpl
 from platform_lib.market_data.market_history_types import MarketBarKey
 from platform_lib.core.utils import to_decimal
@@ -111,7 +113,7 @@ class StartupMixin:
 
     def _get_history_provider(self):
         if self._history_provider is None and (self._history_provider_enabled() or self._history_seed_enabled()):
-            self._history_provider = MarketHistoryProviderImpl()
+            self._history_provider = MarketHistoryProviderImpl(rest_reader=ccxt_rest_bar_reader)
         return self._history_provider
 
     def _required_seed_bars(self) -> int:
@@ -121,6 +123,10 @@ class StartupMixin:
             int(getattr(self.config, "bot7_bb_period", 0) or 0),
             int(getattr(self.config, "bot7_rsi_period", 0) or 0),
             int(getattr(self.config, "bot7_adx_period", 0) or 0) * 2,
+            int(getattr(self.config, "pb_bb_period", 0) or 0),
+            int(getattr(self.config, "pb_rsi_period", 0) or 0),
+            int(getattr(self.config, "pb_adx_period", 0) or 0) * 2,
+            int(getattr(self.config, "pb_trend_sma_period", 0) or 0),
         ]
         required = max([period for period in bot_periods if period > 0] or [30])
         resolution = getattr(self, "_resolution_minutes", 1)
@@ -169,71 +175,241 @@ class StartupMixin:
                 pass  # tick-level price sampling — non-critical
 
     def _maybe_seed_price_buffer(self, now: float) -> None:
-        if self._history_seed_attempted or not self._history_seed_enabled():
+        if self._history_seed_attempted:
             return
         self._history_seed_attempted = True
-        provider = self._get_history_provider()
-        if provider is None:
-            self._history_seed_status = "disabled"
-            self._history_seed_reason = "provider_unavailable"
-            return
-        connector_name = _canonical_connector_name(str(getattr(self.config, "connector_name", "") or "").strip())
-        if not connector_name:
-            self._history_seed_status = "empty"
-            self._history_seed_reason = "connector_name_missing"
-            return
-        trading_pair = str(getattr(self.config, "trading_pair", "") or "").strip()
-        policy = self._history_seed_policy()
-        source_order = list(policy.preferred_sources or ["quote_mid"])
-        if not bool(policy.allow_fallback):
-            source_order = source_order[:1]
         started = _time_mod.perf_counter()
-        try:
-            status = None
-            for source in source_order:
-                self._price_buffer.seed_bars([], reset=True)
-                attempt_status = provider.seed_price_buffer(
-                    self._price_buffer,
-                    MarketBarKey(
-                        connector_name=connector_name,
-                        trading_pair=trading_pair,
-                        bar_source=source,
-                    ),
-                    bars_needed=int(policy.min_bars_before_trading),
-                    now_ms=int(now * 1000.0),
-                )
-                status = attempt_status
-                if status_meets_policy(attempt_status, policy):
-                    break
-            if status is None:
-                self._history_seed_status = "empty"
-                self._history_seed_reason = "no_history_sources_attempted"
-                return
-            if not status_meets_policy(status, policy):
-                self._price_buffer.seed_bars([], reset=True)
+
+        # --- Phase 1: parquet + API bridge (always attempted) -------------
+        parquet_seeded = self._try_seed_from_parquet(now)
+        if parquet_seeded:
             self._history_seed_latency_ms = (_time_mod.perf_counter() - started) * 1000.0
-            self._history_seed_status = str(status.status)
-            self._history_seed_reason = str(status.degraded_reason or "")
-            self._history_seed_source = str(status.source_used or "")
-            self._history_seed_bars = int(status.bars_returned or 0)
-            logger.info(
-                "History seed result status=%s bars=%s source=%s latency_ms=%.1f reason=%s pair=%s",
-                self._history_seed_status,
-                self._history_seed_bars,
-                self._history_seed_source or "none",
-                self._history_seed_latency_ms,
-                self._history_seed_reason or "none",
-                self.config.trading_pair,
+            return
+
+        # --- Phase 2: full REST fetch (fallback) --------------------------
+        rest_seeded = self._try_seed_from_rest(now)
+        if rest_seeded:
+            self._history_seed_latency_ms = (_time_mod.perf_counter() - started) * 1000.0
+            return
+
+        # --- Both paths failed — bot must NOT trade on empty indicators ---
+        self._history_seed_latency_ms = (_time_mod.perf_counter() - started) * 1000.0
+        if self._history_seed_status not in ("rejected",):
+            self._history_seed_status = "failed"
+        logger.error(
+            "SEED FAILED for %s — no gapless history available. "
+            "Bot will not trade until buffer warms up from live ticks. "
+            "status=%s reason=%s pair=%s",
+            getattr(self.config, "connector_name", "?"),
+            self._history_seed_status,
+            self._history_seed_reason,
+            getattr(self.config, "trading_pair", "?"),
+        )
+
+    def seed_ok(self) -> bool:
+        """Return True only if the price buffer was seeded with gapless data."""
+        return self._history_seed_status == "ok"
+
+    def _try_seed_from_rest(self, now: float) -> bool:
+        """Fetch full history from exchange REST API and validate for gaps."""
+        if not self._history_seed_enabled():
+            self._history_seed_reason = "rest_seed_disabled"
+            return False
+        connector_name = _canonical_connector_name(str(getattr(self.config, "connector_name", "") or "").strip())
+        trading_pair = str(getattr(self.config, "trading_pair", "") or "").strip()
+        if not connector_name or not trading_pair:
+            self._history_seed_reason = "connector_or_pair_missing"
+            return False
+
+        bars_needed = self._required_seed_bars()
+        now_ms = int(now * 1000.0)
+        try:
+            df = self._fetch_bridge_bars(
+                connector_name, trading_pair,
+                since_ms=now_ms - bars_needed * 60_000,
+                until_ms=now_ms,
             )
         except Exception as exc:
-            self._history_seed_latency_ms = (_time_mod.perf_counter() - started) * 1000.0
-            self._history_seed_status = "degraded"
-            self._history_seed_reason = str(exc)
+            self._history_seed_reason = f"rest_fetch_error: {exc}"
+            logger.warning("REST seed fetch failed for %s: %s", trading_pair, exc)
+            return False
+
+        if df is None or df.empty:
+            self._history_seed_reason = "rest_returned_empty"
+            return False
+
+        df = df.tail(bars_needed).reset_index(drop=True)
+        return self._validate_and_seed(df, now_ms, source_label="rest_api")
+
+    # ------------------------------------------------------------------
+    # Shared validation + seeding
+    # ------------------------------------------------------------------
+
+    def _validate_and_seed(self, df, now_ms: int, source_label: str) -> bool:
+        """Validate DataFrame has zero internal gaps and seed PriceBuffer.
+
+        Checks:
+        1. Every consecutive bar is exactly 60_000 ms apart (no holes).
+        2. Last bar is within 2 minutes of *now_ms* (trailing freshness).
+        3. All OHLC values are finite and positive.
+
+        Returns True if seeding succeeded.
+        """
+        import pandas as pd
+        trading_pair = str(getattr(self.config, "trading_pair", "") or "")
+
+        df = df.sort_values("timestamp_ms").drop_duplicates(subset=["timestamp_ms"]).reset_index(drop=True)
+        ts = df["timestamp_ms"].values
+        if len(ts) < 2:
+            self._history_seed_status = "rejected"
+            self._history_seed_reason = f"{source_label}_too_few_bars"
+            return False
+
+        # Zero-gap check: every consecutive pair must be exactly 60s apart
+        deltas_ms = ts[1:] - ts[:-1]
+        max_delta_ms = int(deltas_ms.max())
+        if max_delta_ms > 60_000:
+            gap_min = max_delta_ms // 60_000
             logger.warning(
-                "History seed failed for %s; continuing with live warmup.",
-                self.config.trading_pair,
-                exc_info=True,
+                "Seed REJECTED (%s) for %s: internal gap of %d min",
+                source_label, trading_pair, gap_min,
             )
+            self._history_seed_status = "rejected"
+            self._history_seed_reason = f"{source_label}_gap_{gap_min}m"
+            return False
+
+        # Trailing freshness: last bar within 2 min of now
+        trailing_min = (now_ms - int(ts[-1])) // 60_000
+        if trailing_min > 2:
+            logger.warning(
+                "Seed REJECTED (%s) for %s: trailing gap %d min",
+                source_label, trading_pair, trailing_min,
+            )
+            self._history_seed_status = "rejected"
+            self._history_seed_reason = f"{source_label}_trailing_{trailing_min}m"
+            return False
+
+        # Convert to MinuteBar and seed
+        from controllers.price_buffer import MinuteBar
+        bars = []
+        for row in df.itertuples(index=False):
+            bars.append(MinuteBar(
+                ts_minute=int(row.timestamp_ms) // 1000,
+                open=Decimal(str(row.open)),
+                high=Decimal(str(row.high)),
+                low=Decimal(str(row.low)),
+                close=Decimal(str(row.close)),
+            ))
+
+        if not bars:
+            return False
+
+        seeded = self._price_buffer.seed_bars(bars, reset=True)
+        self._history_seed_status = "ok"
+        self._history_seed_source = source_label
+        self._history_seed_bars = seeded
+        self._history_seed_reason = ""
+        logger.info(
+            "Seed OK (%s) for %s: %d gapless bars",
+            source_label, trading_pair, seeded,
+        )
+        return True
+
+    def _try_seed_from_parquet(self, now: float) -> bool:
+        """Seed PriceBuffer from local parquet + API bridge for the gap.
+
+        Mirrors the ML feature service pattern: load bulk history from
+        parquet (instant), then fetch only the small gap since the last
+        parquet row from the exchange API.  Returns True if seeding
+        succeeded with zero internal gaps.
+        """
+        base_dir = os.getenv("HISTORICAL_DATA_DIR", "data/historical")
+        connector_name = _canonical_connector_name(
+            str(getattr(self.config, "connector_name", "") or "").strip()
+        )
+        trading_pair = str(getattr(self.config, "trading_pair", "") or "").strip()
+        if not connector_name or not trading_pair:
+            return False
+
+        parquet_path = resolve_data_path(connector_name, trading_pair, "1m", base_dir)
+        if not parquet_path.exists():
+            logger.debug("No parquet at %s for %s — skipping parquet seed", parquet_path, trading_pair)
+            return False
+
+        try:
+            import pandas as pd
+            df = pd.read_parquet(parquet_path)
+            if df.empty:
+                return False
+        except Exception as exc:
+            logger.debug("Parquet read failed for %s: %s", trading_pair, exc)
+            return False
+
+        bars_needed = self._required_seed_bars()
+        df = df.sort_values("timestamp_ms").tail(bars_needed).reset_index(drop=True)
+        last_parquet_ts = int(df["timestamp_ms"].max())
+        now_ms = int(now * 1000.0)
+        gap_minutes = max(0, (now_ms - last_parquet_ts) // 60_000)
+
+        # Bridge the gap from exchange API if parquet is stale
+        source_label = "parquet"
+        if gap_minutes > 1:
+            try:
+                bridge_since_ms = last_parquet_ts - 5 * 60_000  # 5-min overlap for dedup
+                bridge_df = self._fetch_bridge_bars(connector_name, trading_pair, bridge_since_ms, now_ms)
+                if bridge_df is not None and not bridge_df.empty:
+                    parquet_rows = len(df)
+                    combined = pd.concat([df, bridge_df], ignore_index=True)
+                    combined = combined.drop_duplicates(subset=["timestamp_ms"]).sort_values("timestamp_ms")
+                    df = combined.tail(bars_needed).reset_index(drop=True)
+                    source_label = "parquet_bridge"
+                    logger.info(
+                        "Parquet+bridge for %s: %d parquet + %d bridge bars, gap was %d min",
+                        trading_pair, parquet_rows, len(bridge_df), gap_minutes,
+                    )
+                else:
+                    logger.warning("Bridge returned empty for %s — gap of %d min remains", trading_pair, gap_minutes)
+                    self._history_seed_status = "rejected"
+                    self._history_seed_reason = f"bridge_empty_gap_{gap_minutes}m"
+                    return False
+            except Exception as exc:
+                logger.warning("Bridge fetch failed for %s: %s", trading_pair, exc)
+                self._history_seed_status = "rejected"
+                self._history_seed_reason = f"bridge_error_gap_{gap_minutes}m"
+                return False
+
+        return self._validate_and_seed(df, now_ms, source_label=source_label)
+
+    def _fetch_bridge_bars(
+        self, exchange_id: str, trading_pair: str, since_ms: int, until_ms: int,
+    ):
+        """Fetch 1m candles from exchange API to bridge the parquet gap."""
+        import pandas as pd
+        try:
+            import ccxt
+        except ImportError:
+            return None
+        exchange_cls = getattr(ccxt, exchange_id, None)
+        if exchange_cls is None:
+            return None
+        ex = exchange_cls({"enableRateLimit": True, "options": {"defaultType": "swap"}})
+        symbol = _pair_to_ccxt_symbol(trading_pair, swap=True)
+
+        all_bars: list[list] = []
+        cursor_ms = since_ms
+        while cursor_ms < until_ms:
+            batch = ex.fetch_ohlcv(symbol, "1m", since=cursor_ms, limit=200)
+            if not batch:
+                break
+            all_bars.extend(batch)
+            cursor_ms = batch[-1][0] + 60_000
+            if len(batch) < 200:
+                break
+            _time_mod.sleep(0.3)
+
+        if not all_bars:
+            return None
+        return pd.DataFrame(all_bars, columns=["timestamp_ms", "open", "high", "low", "close", "volume"])
 
     # ------------------------------------------------------------------
     # Orphan order cleanup

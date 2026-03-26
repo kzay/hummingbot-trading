@@ -1,0 +1,55 @@
+name: btc-pullback-trend-continuation-v1
+hypothesis: BTC-USDT shows reliable trend continuation after shallow pullbacks in
+  strong trends. When price pulls back 1-2 ATR from trend highs but stays above the
+  50-period EMA, buying the pullback with tight stops yields positive Sharpe as the
+  trend resumes. This exploits institutional re-entry behavior during healthy corrections.
+adapter_mode: pullback
+parameter_space:
+  pullback_depth_atr:
+  - 1.0
+  - 1.5
+  - 2.0
+  trend_ema:
+  - 34
+  - 50
+  - 89
+  stop_atr_mult:
+  - 1.2
+  - 1.8
+  - 2.5
+  min_trend_strength:
+  - 0.02
+  - 0.04
+  - 0.06
+entry_logic: Enter long when price has pulled back pullback_depth_atr from recent
+  highs but remains above trend_ema, AND the EMA slope indicates uptrend strength
+  exceeding min_trend_strength. Only trade pullbacks in established uptrends.
+exit_logic: Exit on stop loss at entry - stop_atr_mult * ATR, or when price breaks
+  below trend_ema on a closing basis, or after maximum hold period if no clear trend
+  resumption occurs.
+base_config:
+  strategy_class: pullback
+  strategy_config:
+    pullback_depth_atr: 1.5
+    trend_ema: 50
+    stop_atr_mult: 1.8
+    min_trend_strength: 0.04
+    max_hold_bars: 20
+    risk_pct: 0.08
+  data_source:
+    exchange: bitget
+    pair: BTC-USDT
+    resolution: 15m
+    instrument_type: perp
+  initial_equity: '500'
+  leverage: 1
+  seed: 42
+  step_interval_s: 900
+  warmup_bars: 100
+required_tests:
+- test_adapter_compiles
+- test_no_lookahead_in_entry
+metadata:
+  author: llm_exploration
+  version: '1.0'
+lifecycle: candidate

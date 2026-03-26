@@ -1,0 +1,13 @@
+{
+  "candidate_name": "btc-momentum-burst-scalper-v1",
+  "current_state": "rejected",
+  "history": [
+    {
+      "from": "candidate",
+      "to": "rejected",
+      "timestamp": "2026-03-26T02:43:14.292592+00:00",
+      "reason": "exploration score 0.322 < 0.35"
+    }
+  ],
+  "gate_results": {}
+}

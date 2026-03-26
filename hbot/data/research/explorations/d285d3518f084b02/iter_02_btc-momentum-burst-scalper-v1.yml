@@ -1,0 +1,56 @@
+name: btc-momentum-burst-scalper-v1
+hypothesis: BTC-USDT 15m bars exhibit short-lived momentum bursts following volume
+  spikes above 1.5x rolling average. Directional entries on burst confirmation with
+  tight ATR-based stops capture momentum before mean-reversion kicks in within 3-8
+  bars, yielding positive Sharpe over rolling 30-day windows.
+adapter_mode: momentum_scalper
+parameter_space:
+  burst_threshold:
+  - 1.5
+  - 2.0
+  - 2.5
+  hold_bars:
+  - 3
+  - 5
+  - 8
+  trail_atr:
+  - 0.5
+  - 1.0
+  - 1.5
+  volume_lookback:
+  - 10
+  - 20
+  - 30
+entry_logic: Enter long when current bar volume exceeds volume_lookback-period rolling
+  average by burst_threshold factor AND price closes above previous bar high. Enter
+  short when volume spike occurs AND price closes below previous bar low. Only one
+  position at a time.
+exit_logic: Exit after hold_bars completed bars OR when trailing stop triggered at
+  trail_atr * ATR(14) distance from favorable high/low. No profit target - rely on
+  time-based exit or trail stop to capture momentum decay.
+base_config:
+  strategy_class: momentum_scalper
+  strategy_config:
+    burst_threshold: 2.0
+    hold_bars: 5
+    trail_atr: 1.0
+    volume_lookback: 20
+    position_size_pct: 0.15
+    max_position_pct: 0.2
+  data_source:
+    exchange: bitget
+    pair: BTC-USDT
+    resolution: 15m
+    instrument_type: perp
+  initial_equity: '500'
+  leverage: 1
+  seed: 42
+  step_interval_s: 900
+  warmup_bars: 60
+required_tests:
+- test_adapter_compiles
+- test_no_lookahead_in_entry
+metadata:
+  author: llm_exploration
+  version: '1.0'
+lifecycle: candidate

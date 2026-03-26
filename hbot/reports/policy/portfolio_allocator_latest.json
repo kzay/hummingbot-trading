@@ -1,5 +1,5 @@
 {
-  "ts_utc": "2026-03-25T18:38:44.827999+00:00",
+  "ts_utc": "2026-03-26T13:28:46.822129+00:00",
   "status": "pass",
   "reasons": [],
   "allocator_enabled": true,
@@ -18,11 +18,11 @@
     "eth_variance": 5.592090780632603e-07,
     "overrides_applied": 2
   },
-  "total_equity_quote": 1088.0031211162889,
+  "total_equity_quote": 1088.8952683652203,
   "daily_goal_intent_republish_s": 1800.0,
   "rebalance_cooldown_hours": 168.0,
   "state_path": "/workspace/hbot/reports/policy/portfolio_allocator_state_latest.json",
-  "rebalance_signature": "[[\"bot1\",0.68781683,748.34686306],[\"bot3\",0.31218317,339.65625806]]",
+  "rebalance_signature": "[[\"bot1\",0.68781683,748.96049695],[\"bot3\",0.31218317,339.93477141]]",
   "rebalance_intents_published": 0,
   "rebalance_intents_suppressed_unchanged": 0,
   "rebalance_intents_suppressed_cooldown": 0,
@@ -36,8 +36,8 @@
     "distribution": "allocation_weighted",
     "apply_only_portfolio_action_enabled": false,
     "target_pct_total_equity": 0.6,
-    "target_quote_total_equity": 6.528018726697733,
-    "target_quote_distributed": 6.528018726697734,
+    "target_quote_total_equity": 6.533371610191322,
+    "target_quote_distributed": 6.533371610191322,
     "min_bot_target_pct": 0.0,
     "max_bot_target_pct": 3.0,
     "clamp_applied_count": 0,
@@ -45,38 +45,38 @@
       {
         "bot": "bot1",
         "weight": 0.6878168348344116,
-        "equity_quote": 981.9936576899848,
-        "target_pnl_pct_raw": 0.4572413623219671,
-        "daily_pnl_target_pct": 0.4572413623219671,
-        "daily_pnl_target_quote": 4.490081178337001,
+        "equity_quote": 982.8858049389162,
+        "target_pnl_pct_raw": 0.45720092396675466,
+        "daily_pnl_target_pct": 0.45720092396675466,
+        "daily_pnl_target_quote": 4.493762981718798,
         "portfolio_action_enabled": true
       },
       {
         "bot": "bot3",
         "weight": 0.31218316516558847,
         "equity_quote": 106.0094634263041,
-        "target_pnl_pct_raw": 1.922410964543247,
-        "daily_pnl_target_pct": 1.922410964543247,
-        "daily_pnl_target_quote": 2.037937548360733,
+        "target_pnl_pct_raw": 1.9239873144819981,
+        "daily_pnl_target_pct": 1.9239873144819981,
+        "daily_pnl_target_quote": 2.039608628472524,
         "portfolio_action_enabled": false
       }
     ],
-    "goal_scope_equity_quote": 1088.0031211162889,
+    "goal_scope_equity_quote": 1088.8952683652203,
     "distribution_effective": "allocation_weighted"
   },
   "proposals": [
     {
       "bot": "bot1",
-      "equity_quote": 981.9936576899848,
+      "equity_quote": 982.8858049389162,
       "variance_proxy": 3.1285922847860444e-07,
       "variance_source": "diversification_report",
       "symbol_bucket": "btc",
       "max_alloc_pct": 1.0,
       "allocation_pct": 0.6878168348344116,
-      "target_notional_quote": 748.3468630561667,
+      "target_notional_quote": 748.960496953133,
       "portfolio_action_enabled": true,
-      "daily_pnl_target_pct": 0.4572413623219671,
-      "daily_pnl_target_quote": 4.490081178337001
+      "daily_pnl_target_pct": 0.45720092396675466,
+      "daily_pnl_target_quote": 4.493762981718798
     },
     {
       "bot": "bot3",
@@ -86,10 +86,10 @@
       "symbol_bucket": "eth",
       "max_alloc_pct": 0.31218316516558847,
       "allocation_pct": 0.31218316516558847,
-      "target_notional_quote": 339.6562580601222,
+      "target_notional_quote": 339.93477141208734,
       "portfolio_action_enabled": false,
-      "daily_pnl_target_pct": 1.922410964543247,
-      "daily_pnl_target_quote": 2.037937548360733
+      "daily_pnl_target_pct": 1.9239873144819981,
+      "daily_pnl_target_quote": 2.039608628472524
     }
   ]
 }

@@ -7,7 +7,25 @@ from services.signal_service.model_loader import LoadedModel
 
 logger = logging.getLogger(__name__)
 
+VOL_REGIME_LABELS = ["vol_low", "vol_normal", "vol_elevated", "vol_extreme"]
+
 REGIME_LABELS = ["neutral_low_vol", "neutral_high_vol", "up", "down", "high_vol_shock"]
+
+_COMPOSITE_REGIME_MAP: dict[tuple[str, str], str] = {
+    ("vol_low", "up"): "up", ("vol_low", "down"): "down",
+    ("vol_low", "neutral"): "neutral_low_vol", ("vol_low", ""): "neutral_low_vol",
+    ("vol_normal", "up"): "up", ("vol_normal", "down"): "down",
+    ("vol_normal", "neutral"): "neutral_low_vol", ("vol_normal", ""): "neutral_low_vol",
+    ("vol_elevated", "up"): "neutral_high_vol", ("vol_elevated", "down"): "neutral_high_vol",
+    ("vol_elevated", "neutral"): "neutral_high_vol", ("vol_elevated", ""): "neutral_high_vol",
+    ("vol_extreme", "up"): "high_vol_shock", ("vol_extreme", "down"): "high_vol_shock",
+    ("vol_extreme", "neutral"): "high_vol_shock", ("vol_extreme", ""): "high_vol_shock",
+}
+
+
+def resolve_composite_regime(vol_label: str, direction_hint: str = "") -> str:
+    """Map (vol_prediction, direction_hint) -> operating regime name."""
+    return _COMPOSITE_REGIME_MAP.get((vol_label, direction_hint or ""), "neutral_low_vol")
 
 
 def run_inference(loaded: LoadedModel, feature_vector: list[float], feature_map: dict[str, float]) -> tuple[float, float, int]:
@@ -52,17 +70,17 @@ def predict_regime(
     loaded: LoadedModel,
     feature_vector: list[float],
     regime_labels: list[str] | None = None,
+    direction_hint: str = "",
 ) -> tuple[str, float, int]:
     """Predict regime from a classifier model.
 
-    Returns: (regime_str, confidence, latency_ms)
-
-    For sklearn classifiers: uses predict_proba to get the top class and confidence.
-    Falls back gracefully for non-classifier models.
+    Returns ``(regime_str, confidence, latency_ms)``.
+    Uses VOL_REGIME_LABELS by default, then composes with direction_hint
+    via resolve_composite_regime() to produce an operating regime name.
     """
-    labels = regime_labels or REGIME_LABELS
+    labels = regime_labels or VOL_REGIME_LABELS
     start_ms = int(time.time() * 1000)
-    regime_str = "neutral_low_vol"
+    vol_label = "vol_low"
     confidence = 0.0
 
     try:
@@ -76,30 +94,31 @@ def predict_regime(
                     cls = model.classes_[best_idx]
                     if isinstance(cls, (int, float)):
                         idx = int(cls)
-                        regime_str = labels[idx] if 0 <= idx < len(labels) else "neutral_low_vol"
+                        vol_label = labels[idx] if 0 <= idx < len(labels) else "vol_low"
                     else:
-                        regime_str = str(cls)
+                        vol_label = str(cls)
                 elif best_idx < len(labels):
-                    regime_str = labels[best_idx]
+                    vol_label = labels[best_idx]
             elif hasattr(model, "predict"):
                 pred = model.predict([feature_vector])[0]
                 if isinstance(pred, (int, float)):
                     idx = int(pred)
-                    regime_str = labels[idx] if 0 <= idx < len(labels) else "neutral_low_vol"
+                    vol_label = labels[idx] if 0 <= idx < len(labels) else "vol_low"
                 else:
-                    regime_str = str(pred)
+                    vol_label = str(pred)
                 confidence = 0.5
         elif loaded.runtime == "custom_python":
             if hasattr(model, "predict_regime"):
-                regime_str, confidence = model.predict_regime(feature_vector)
+                vol_label, confidence = model.predict_regime(feature_vector)
             elif hasattr(model, "predict"):
                 pred = model.predict(feature_vector)
-                regime_str = str(pred)
+                vol_label = str(pred)
                 confidence = 0.5
     except Exception:
-        regime_str = "neutral_low_vol"
+        vol_label = "vol_low"
         confidence = 0.0
 
+    regime_str = resolve_composite_regime(vol_label, direction_hint)
     latency_ms = int(time.time() * 1000) - start_ms
     return regime_str, max(0.0, min(1.0, confidence)), latency_ms
 

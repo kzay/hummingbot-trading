@@ -38,7 +38,7 @@ try:
 except ImportError:  # pragma: no cover
     _orjson = None  # type: ignore[assignment]
 
-from concurrent.futures import ThreadPoolExecutor
+from concurrent.futures import ThreadPoolExecutor, wait as _futures_wait
 
 from simulation.bridge.signal_consumer import (  # noqa: F401
     _check_hard_stop_transitions,
@@ -160,7 +160,7 @@ logger = logging.getLogger(__name__)
 # CONCURRENCY: shared thread pool for non-blocking Redis I/O.
 # Tasks submitted here must not mutate _bridge_state dicts/sets directly.
 _REDIS_IO_POOL: ThreadPoolExecutor = ThreadPoolExecutor(
-    max_workers=int(os.getenv("HB_BRIDGE_REDIS_IO_WORKERS", "3")),
+    max_workers=int(os.getenv("HB_BRIDGE_REDIS_IO_WORKERS", "5")),
     thread_name_prefix="hb_bridge_redis",
 )
 
@@ -176,6 +176,7 @@ def _bridge_shutdown() -> None:
 
 _atexit.register(_bridge_shutdown)
 
+_BRIDGE_IO_TIMEOUT_S: float = float(os.getenv("HB_BRIDGE_IO_TIMEOUT_S", "0.25"))
 _PAPER_ORDER_TRACE_ENABLED: bool = os.getenv("HB_PAPER_ORDER_TRACE_ENABLED", "true").lower() in {"1", "true", "yes"}
 _PAPER_ORDER_TRACE_COOLDOWN_S: float = max(0.5, float(os.getenv("HB_PAPER_ORDER_TRACE_COOLDOWN_S", "1.0")))
 # CONCURRENCY: read-modify-write from main thread only; races benign (worst case: extra/skipped trace log).
@@ -992,12 +993,20 @@ def drive_desk_tick(
     strategy: Any,
     desk: PaperDesk,
     now_ns: int | None = None,
+    *,
+    io_only: bool = False,
 ) -> None:
     """Call from strategy on_tick() to drive the desk.
 
     Drives all engines, then converts fill/cancel/reject events into
     HB events and fires them on the correct controller. This is what
     makes fills appear in fills.csv and the metrics pipeline.
+
+    When *io_only=True*, only the parallel Redis I/O phase runs (signal
+    consumption, guard checks, ML features, etc.) — the expensive
+    desk.tick() simulation and HB event firing are skipped.  Use this
+    for the pre-controller drain pass so controllers see fresh data
+    without paying the simulation cost twice per tick.
     """
     started = time.perf_counter()
 
@@ -1011,26 +1020,33 @@ def drive_desk_tick(
     else:
         _fut_adverse = None
 
-    for label, fut in [
+    _labeled_futures = [
         ("signal_consumption", _fut_sig),
         ("guard_state_check", _fut_guard),
         ("paper_exchange_events", _fut_pe),
         ("ml_features", _fut_ml),
         ("adverse_inference", _fut_adverse),
-    ]:
-        if fut is None:
-            continue
-        try:
-            fut.result(timeout=0.5)
-        except TimeoutError:
+    ]
+    _active = {fut: label for label, fut in _labeled_futures if fut is not None}
+    if _active:
+        _done, _not_done = _futures_wait(_active.keys(), timeout=_BRIDGE_IO_TIMEOUT_S)
+        for fut in _done:
+            try:
+                fut.result(timeout=0)
+            except Exception as exc:
+                logger.warning("%s failed (non-critical): %s", _active[fut], exc)
+        for fut in _not_done:
             _LATENCY_TRACKER.observe("bridge_io_timeout_count", 1)
-            logger.warning("%s timed out after 0.5s", label)
-        except Exception as exc:
-            logger.warning("%s failed (non-critical): %s", label, exc)
+            logger.warning("%s still running after %.2fs deadline", _active[fut], _BRIDGE_IO_TIMEOUT_S)
     _LATENCY_TRACKER.observe("bridge_parallel_io_ms", (time.perf_counter() - _t_io) * 1000.0)
 
+    if io_only:
+        _LATENCY_TRACKER.observe("hb_bridge_desk_tick_ms", (time.perf_counter() - started) * 1000.0)
+        _LATENCY_TRACKER.flush(extra={"io_only": True})
+        return
+
     try:
-        bridges: dict = getattr(strategy, "_paper_desk_v2_bridges", {})
+        bridges: dict = dict(getattr(strategy, "_paper_desk_v2_bridges", {}) or {})
         _t_sync = time.perf_counter()
         for conn_name, bridge in bridges.items():
             bridge_iid = bridge.get("instrument_id")

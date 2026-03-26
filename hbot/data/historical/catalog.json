@@ -449,5 +449,41 @@
     "file_size_bytes": 19877995,
     "sha256": "09e7270aa6861f6919b154e2746f4f7dabb9bba233beb983d518f919bb8ae7c5",
     "registered_at": "2026-03-25T13:22:25.358215+00:00"
+  },
+  {
+    "exchange": "bitget",
+    "pair": "BTC-USDT",
+    "resolution": "1m",
+    "start_ms": 1735689600000,
+    "end_ms": 1774488300000,
+    "row_count": 646646,
+    "file_path": "/workspace/hbot/data/historical/bitget/BTC-USDT/1m/data.parquet",
+    "file_size_bytes": 19907260,
+    "sha256": "823a3beb2bb7fca27a798481a6705faef9828e8b719110d5d32ac538a02ddfe5",
+    "registered_at": "2026-03-26T01:26:31.452462+00:00"
+  },
+  {
+    "exchange": "bitget",
+    "pair": "BTC-USDT",
+    "resolution": "1m",
+    "start_ms": 1735689600000,
+    "end_ms": 1774510080000,
+    "row_count": 647009,
+    "file_path": "/workspace/hbot/data/historical/bitget/BTC-USDT/1m/data.parquet",
+    "file_size_bytes": 19917172,
+    "sha256": "2f3fa2c98743fd0cece77070c6a9cc00846320735179e1487ad9ec7ca6b2dfb8",
+    "registered_at": "2026-03-26T07:28:42.882347+00:00"
+  },
+  {
+    "exchange": "bitget",
+    "pair": "BTC-USDT",
+    "resolution": "1m",
+    "start_ms": 1735689600000,
+    "end_ms": 1774531740000,
+    "row_count": 647370,
+    "file_path": "/workspace/hbot/data/historical/bitget/BTC-USDT/1m/data.parquet",
+    "file_size_bytes": 19927897,
+    "sha256": "7140ba62f81f4052168c921d8132a7a02cb8ee5b7c0eb9f7566f4cb8daf611bc",
+    "registered_at": "2026-03-26T13:30:16.004840+00:00"
   }
 ]

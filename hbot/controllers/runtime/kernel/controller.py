@@ -598,6 +598,13 @@ class SharedRuntimeKernel(FillHandlerMixin, RiskMixin, TelemetryMixin, AutoCalib
         if mid <= 0:
             return
         self._maybe_seed_price_buffer(now)
+        if not self.seed_ok() and self._price_buffer.bar_count < self._required_seed_bars():
+            # Not seeded and buffer hasn't warmed up from live ticks yet —
+            # skip trading logic, only accumulate live price samples.
+            buffer_price = self._get_price_for_buffer()
+            if buffer_price > _ZERO:
+                self._price_buffer.add_sample(now, buffer_price)
+            return
         buffer_price = self._get_price_for_buffer()
         if buffer_price > _ZERO:
             self._price_buffer.add_sample(now, buffer_price)

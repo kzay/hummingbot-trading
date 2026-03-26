@@ -1,0 +1,57 @@
+name: btc-volume-divergence-momentum-v1
+hypothesis: BTC-USDT shows predictable momentum continuation when price makes new
+  highs/lows but volume fails to confirm (bearish/bullish divergence). These divergences
+  signal exhaustion and imminent reversal. Strategy enters counter-trend positions
+  after divergence confirmation with tight stops and momentum-based exits.
+adapter_mode: pullback_v2
+parameter_space:
+  htf_trend_period:
+  - 20
+  - 34
+  - 55
+  ltf_entry_rsi:
+  - 25
+  - 35
+  - 45
+  confirmation_bars:
+  - 2
+  - 3
+  - 4
+  stop_atr_mult:
+  - 1.0
+  - 1.5
+  - 2.0
+entry_logic: 'Enter long when price makes new low but volume is declining (bullish
+  divergence): price < lowest low of htf_trend_period bars AND current volume < average
+  volume of same period AND RSI < ltf_entry_rsi. Wait confirmation_bars for price
+  stabilization before entry. Enter short on opposite conditions.'
+exit_logic: Exit on stop-loss at stop_atr_mult * ATR(14) from entry price. Take profit
+  when RSI crosses back above 50 (long) or below 50 (short), indicating momentum shift
+  completion. Maximum hold time 8 hours to avoid overnight risk.
+base_config:
+  strategy_class: pullback_v2
+  strategy_config:
+    htf_trend_period: 34
+    ltf_entry_rsi: 35
+    confirmation_bars: 3
+    stop_atr_mult: 1.5
+    max_hold_minutes: 480
+    volume_lookback: 34
+    rsi_exit_level: 50
+  data_source:
+    exchange: bitget
+    pair: BTC-USDT
+    resolution: 15m
+    instrument_type: perp
+  initial_equity: '500'
+  leverage: 1
+  seed: 42
+  step_interval_s: 900
+  warmup_bars: 60
+required_tests:
+- test_adapter_compiles
+- test_no_lookahead_in_entry
+metadata:
+  author: llm_exploration
+  version: '1.0'
+lifecycle: candidate

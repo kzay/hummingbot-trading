@@ -1,0 +1,13 @@
+{
+  "candidate_name": "btc-vol-cluster-mm-v2",
+  "current_state": "rejected",
+  "history": [
+    {
+      "from": "candidate",
+      "to": "rejected",
+      "timestamp": "2026-03-26T04:02:55.354582+00:00",
+      "reason": "exploration score 0.125 < 0.35"
+    }
+  ],
+  "gate_results": {}
+}

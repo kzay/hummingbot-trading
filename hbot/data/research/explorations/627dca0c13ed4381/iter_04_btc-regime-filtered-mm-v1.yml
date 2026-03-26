@@ -1,0 +1,59 @@
+name: btc-regime-filtered-mm-v1
+hypothesis: BTC-USDT perpetual exhibits predictable mean-reversion during low-volatility
+  regimes but momentum continuation during high-volatility regimes. A market-making
+  strategy that widens spreads during high ATR periods (>1.5x 20-period average) and
+  tightens during low ATR periods (<0.8x average) captures both behaviors while avoiding
+  adverse selection during breakouts.
+adapter_mode: atr_mm_v2
+parameter_space:
+  vol_scalar:
+  - 0.8
+  - 1.2
+  - 1.8
+  htf_ema_period:
+  - 50
+  - 100
+  - 200
+  trend_bias_strength:
+  - 0.1
+  - 0.3
+  - 0.5
+  regime_threshold:
+  - 1.2
+  - 1.5
+  - 2.0
+entry_logic: Place quotes at mid +/- (vol_scalar * ATR(14)) distance. When current
+  ATR exceeds regime_threshold * SMA(ATR, 20), widen spreads by 50% to avoid adverse
+  fills during breakouts. Apply trend_bias_strength skew toward HTF EMA direction
+  when price is more than 1 ATR away from htf_ema_period EMA.
+exit_logic: Reduce inventory via aggressive pricing when position exceeds 70% of max
+  equity allocation. Hard stop at 2x ATR from average fill price. Flatten all positions
+  if drawdown exceeds 15% to preserve capital during regime shifts.
+base_config:
+  strategy_class: atr_mm_v2
+  strategy_config:
+    atr_period: 14
+    vol_scalar: 1.2
+    htf_ema_period: 100
+    trend_bias_strength: 0.3
+    regime_threshold: 1.5
+    max_position_pct: 0.8
+    inventory_target: 0.7
+  data_source:
+    exchange: bitget
+    pair: BTC-USDT
+    resolution: 15m
+    instrument_type: perp
+  initial_equity: '500'
+  leverage: 1
+  seed: 42
+  step_interval_s: 900
+  warmup_bars: 200
+required_tests:
+- test_adapter_compiles
+- test_no_lookahead_in_entry
+metadata:
+  author: llm_exploration
+  version: '1.0'
+  revision_of: btc-pullback-trend-continuation-v1
+lifecycle: candidate

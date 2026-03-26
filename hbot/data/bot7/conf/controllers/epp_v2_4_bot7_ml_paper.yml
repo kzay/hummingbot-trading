@@ -1,0 +1,154 @@
+# Bot7 - Pure ML Signal Strategy (paper engine)
+# Regime-aware market making with optional directional bias from ML models.
+# No hand-crafted indicator gates — ML models are the signal source.
+id: epp_v2_4_bot7_ml_paper
+controller_name: epp_v2_4_bot7_ml
+controller_type: market_making
+
+connector_name: bitget_perpetual
+connector_type: perp
+trading_pair: BTC-USDT
+
+total_amount_quote: 800
+buy_spreads: "0.0015,0.0025,0.0035"
+sell_spreads: "0.0015,0.0025,0.0035"
+buy_amounts_pct: "34,33,33"
+sell_amounts_pct: "34,33,33"
+executor_refresh_time: 60
+cooldown_time: 15
+leverage: 1
+position_mode: ONEWAY
+max_order_notional_quote: 400
+stop_loss: 0.0050
+take_profit: 0.0090
+time_limit: 7200
+take_profit_order_type: LIMIT
+skip_rebalance: true
+position_rebalance_min_base_mult: 5.0
+ghost_position_guard_enabled: true
+
+variant: ml_a
+enabled: true
+no_trade: false
+instance_name: bot7_ml
+log_dir: /home/hummingbot/logs
+
+# ── Fees ───────────────────────────────────────────────────────────────
+fee_mode: manual
+fee_profile: vip0
+require_fee_resolution: true
+spot_fee_pct: 0.0002
+slippage_est_pct: 0.00005
+turnover_cap_x: 20.0
+turnover_penalty_step: 0.0001
+
+# ── Regime detection ───────────────────────────────────────────────────
+edge_state_hold_s: 75
+trend_eps_pct: 0.0006
+high_vol_band_pct: 0.0065
+shock_drift_30s_pct: 0.0020
+shock_drift_atr_multiplier: 1.10
+
+# ── Resolution ─────────────────────────────────────────────────────────
+sample_interval_s: 10
+price_buffer_source: mark
+indicator_resolution: "1m"
+
+# ── ML confidence thresholds ──────────────────────────────────────────
+# direction_v1 is 48.5% accurate — 0.70 threshold means it rarely biases
+# direction, so the strategy defaults to symmetric MM grid. This is correct.
+ml_direction_high_confidence: 0.70
+ml_direction_med_confidence: 0.60
+ml_adverse_confidence_threshold: 0.60
+ml_regime_min_confidence: 0.40
+
+# ── ML sizing ─────────────────────────────────────────────────────────
+# sizing_v1 has negative R² — disabled until retrained.
+ml_use_sizing_model: false
+ml_base_size_quote: 200
+ml_max_levels: 3
+ml_base_spread_pct: 0.0015
+ml_spread_step_pct: 0.0010
+
+# ── ML position targets ──────────────────────────────────────────────
+ml_target_net_base_pct: 0.04
+ml_fallback_regime: neutral_low_vol
+ml_exchange: bitget
+ml_pair: BTC-USDT
+
+# ── ML features integration ──────────────────────────────────────────
+ml_features_enabled: true
+ml_regime_override_enabled: true
+ml_direction_hint_enabled: true
+ml_sizing_hint_enabled: false
+ml_confidence_threshold: 0.40
+
+# ── Regime spec overrides (ALL 5 regimes enabled) ────────────────────
+# Unlike pullback which disabled 3 regimes, ML strategy trades in all.
+regime_specs_override:
+  neutral_low_vol:
+    one_sided: "off"
+    spread_min: "0.0015"
+    spread_max: "0.0050"
+    levels_min: 1
+    levels_max: 3
+    refresh_s: 30
+    target_base_pct: "0.0"
+    fill_factor: "0.70"
+  neutral_high_vol:
+    one_sided: "off"
+    spread_min: "0.0025"
+    spread_max: "0.0070"
+    levels_min: 1
+    levels_max: 2
+    refresh_s: 20
+    target_base_pct: "0.0"
+    fill_factor: "0.50"
+  up:
+    one_sided: "off"
+    spread_min: "0.0012"
+    spread_max: "0.0045"
+    levels_min: 1
+    levels_max: 3
+    refresh_s: 30
+    target_base_pct: "0.0"
+    fill_factor: "0.80"
+  down:
+    one_sided: "off"
+    spread_min: "0.0012"
+    spread_max: "0.0045"
+    levels_min: 1
+    levels_max: 3
+    refresh_s: 30
+    target_base_pct: "0.0"
+    fill_factor: "0.80"
+  high_vol_shock:
+    one_sided: "off"
+    spread_min: "0.0040"
+    spread_max: "0.0100"
+    levels_min: 0
+    levels_max: 1
+    refresh_s: 15
+    target_base_pct: "0.0"
+    fill_factor: "0.30"
+
+# ── Risk limits ───────────────────────────────────────────────────────
+perp_target_net_base_pct: 0.0
+min_base_pct: 0.0
+max_base_pct: 0.40
+max_total_notional_quote: 800
+max_daily_loss_pct_hard: 0.020
+max_drawdown_pct_hard: 0.035
+max_daily_turnover_x_hard: 10.0
+max_active_executors: 8
+
+# ── Paper engine ──────────────────────────────────────────────────────
+paper_engine:
+  paper_equity_quote: 5000
+  paper_realism_profile: balanced
+  paper_seed: 42
+  paper_reset_state_on_startup: false
+  paper_fill_model: latency_aware
+  paper_latency_ms: 120
+  paper_slippage_bps: 1.0
+  paper_adverse_selection_bps: 1.2

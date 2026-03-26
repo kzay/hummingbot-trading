@@ -840,7 +840,7 @@ class V2WithControllersConfig(StrategyV2ConfigBase):
     redis_db: int = int(os.getenv("REDIS_DB", "0"))
     redis_password: str | None = os.getenv("REDIS_PASSWORD")
     redis_consumer_group: str = os.getenv("REDIS_CONSUMER_GROUP", DEFAULT_CONSUMER_GROUP)
-    event_poll_ms: int = int(os.getenv("EVENT_POLL_MS", "1000"))
+    event_poll_ms: int = int(os.getenv("EVENT_POLL_MS", "0"))
     bus_soft_pause_on_outage: bool = os.getenv("BUS_SOFT_PAUSE_ON_OUTAGE", "false").lower() in {"1", "true", "yes"}
 
 
@@ -1566,7 +1566,7 @@ class V2WithControllers(StrategyV2Base):
         self._write_watchdog_heartbeat(reason="tick_start")
         self._install_internal_paper_adapters()
         _t_desk1 = time.perf_counter()
-        self._tick_paper_adapters()
+        self._tick_paper_adapters(io_only=True)
         self._latency_tracker.observe("paper_desk_tick_1_ms", (time.perf_counter() - _t_desk1) * 1000.0)
         if not self._preflight_checked:
             self._run_preflight_once()
@@ -2329,12 +2329,16 @@ class V2WithControllers(StrategyV2Base):
             self.logger().warning(f"Paper Engine v2 install failed: {exc}")
             return False
 
-    def _tick_paper_adapters(self):
-        """Drive Paper Engine v2 tick on each HB on_tick cycle."""
+    def _tick_paper_adapters(self, *, io_only: bool = False):
+        """Drive Paper Engine v2 tick on each HB on_tick cycle.
+
+        When *io_only=True*, only drain Redis streams (signals, ML
+        features, exchange events) without running the desk simulation.
+        """
         if self._paper_desk_v2 is not None:
             try:
                 from simulation.bridge.hb_bridge import drive_desk_tick
-                drive_desk_tick(self, self._paper_desk_v2)
+                drive_desk_tick(self, self._paper_desk_v2, io_only=io_only)
             except Exception as exc:
                 self.logger().debug(f"Paper desk tick failed: {exc}")
 

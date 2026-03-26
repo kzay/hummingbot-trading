@@ -629,8 +629,10 @@ class EppV24Config(MarketMakingControllerConfigBase):
         description="Consume predictions from hb.ml_features.v1 stream",
     )
     ml_confidence_threshold: float = Field(
-        default=0.5,
-        description="Minimum confidence to act on ML predictions",
+        default=0.60,
+        description="Minimum confidence to act on ML predictions. "
+        "For the 4-class regime model, random baseline is 0.25; "
+        "0.60 requires meaningful conviction before overriding.",
     )
     ml_regime_override_enabled: bool = Field(
         default=False,
@@ -643,6 +645,17 @@ class EppV24Config(MarketMakingControllerConfigBase):
     ml_sizing_hint_enabled: bool = Field(
         default=False,
         description="Accept sizing multiplier hints from ML feature service",
+    )
+
+    # Regime risk gate (v3 trading desk)
+    regime_risk_gate_enabled: bool = Field(
+        default=False,
+        description="Enable regime-aware risk layer in v3 TradingDesk. "
+        "Enforces per-regime constraints on strategy selection, sizing, and risk limits.",
+    )
+    regime_policy_path: str | None = Field(
+        default=None,
+        description="Path to regime_policy.json. Uses built-in defaults if not set.",
     )
 
     # Adverse selection classifier (ROAD-11)
